@@ -3,6 +3,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { normalizeUserBackgroundImage } from "../../state/user-background-image.js";
 import { getUserBackground } from "../../state/user-background.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -18,9 +19,11 @@ let client: GatewayClient;
 let context: GatewayRequestContext;
 let connected: boolean;
 let broadcast: ReturnType<typeof vi.fn>;
-beforeEach(() => {
+let releaseProfileCatalog: (() => void) | undefined;
+beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("background-rpc-"));
   const profile = ensureProfileForEmail("reader@example.test");
+  releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
   client = {
     connId: "background-client",
     authenticatedUserProfile: {
@@ -48,6 +51,8 @@ beforeEach(() => {
   vi.mocked(normalizeUserBackgroundImage).mockReset().mockResolvedValue(normalized);
 });
 afterEach(() => {
+  releaseProfileCatalog?.();
+  releaseProfileCatalog = undefined;
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });

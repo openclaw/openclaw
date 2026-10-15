@@ -3,19 +3,23 @@
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as configSerialization from "../config/runtime-config-snapshot-match.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
-  loadPreparedModelRuntimeSnapshot,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
-  rejectPendingPreparedModelRuntimeReplacement,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 
@@ -271,30 +275,6 @@ describe("prepared model runtime snapshots", () => {
     ]);
   });
 
-  it("does not let a superseded reload reject the current replacement gate", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const initialConfig = {};
-    const latestConfig = configFor();
-    await refreshPreparedModelRuntimeSnapshots(initialConfig);
-
-    const supersededGate = markPreparedModelRuntimeSnapshotsStale("test superseded reload", {
-      waitForReplacement: true,
-    });
-    markPreparedModelRuntimeSnapshotsStale("test current reload", { waitForReplacement: true });
-    rejectPendingPreparedModelRuntimeReplacement(
-      supersededGate,
-      new Error("superseded reload cancelled"),
-    );
-    const read = prepareModelRuntimeSnapshot({
-      ...fixture.agentInput("default", latestConfig),
-      workspaceDir: "/tmp/unused-workspace",
-    });
-    const refresh = refreshPreparedModelRuntimeSnapshots(latestConfig);
-
-    await expect(read).resolves.toMatchObject({ config: latestConfig });
-    await refresh;
-  });
-
   it("builds credential-free command owners separately from runtime owners", async () => {
     const config = {};
     const agentDir = fixture.state.agentDir("credential-free");
@@ -351,6 +331,56 @@ describe("prepared model runtime snapshots", () => {
     await secondLease[Symbol.asyncDispose]();
   });
 
+  it("reuses publication fingerprints across fleet catalog reads without caching mutable projections", async () => {
+    const stringify = vi.spyOn(configSerialization, "stableConfigStringify");
+    try {
+      for (const size of [8, 16]) {
+        const config: OpenClawConfig = {
+          agents: {
+            entries: Object.fromEntries(
+              Array.from({ length: size }, (_, index) => [`agent-${index}`, { name: "original" }]),
+            ),
+          },
+        };
+        setRuntimeConfigSnapshot(config);
+        const input = {
+          ...inputFor(`read-only-fleet-${size}`, config),
+          agentId: "agent-0",
+          readOnly: true,
+        };
+        const snapshot = await publishPreparedModelRuntimeSnapshot(input, {
+          catalogMode: "static",
+        });
+        stringify.mockClear();
+        for (let request = 0; request < 16; request++) {
+          expect(getPreparedModelCatalogOwnerSnapshot(input)).toBe(snapshot);
+        }
+        expect(stringify.mock.calls.filter(([value]) => value === config)).toHaveLength(0);
+
+        const projected = structuredClone(config);
+        expect(getPreparedModelCatalogOwnerSnapshot({ ...input, config: projected })).toBe(
+          snapshot,
+        );
+        projected.agents!.entries!["agent-0"]!.name = "projected";
+        expect(
+          getPreparedModelCatalogOwnerSnapshot({ ...input, config: projected }),
+        ).toBeUndefined();
+
+        config.agents!.entries!["agent-0"]!.name = "republished";
+        setRuntimeConfigSnapshot(config);
+        expect(getPreparedModelCatalogOwnerSnapshot(input)).toBeUndefined();
+        const replacement = await publishPreparedModelRuntimeSnapshot(input, {
+          catalogMode: "static",
+        });
+        expect(replacement).not.toBe(snapshot);
+        expect(getPreparedModelCatalogOwnerSnapshot(input)).toBe(replacement);
+      }
+    } finally {
+      clearRuntimeConfigSnapshot();
+      stringify.mockRestore();
+    }
+  });
+
   it("keeps replacement readers blocked when an earlier refresh is superseded", async () => {
     mocks.configuredAgentIds = ["default"];
     const initialConfig = {};
@@ -392,35 +422,6 @@ describe("prepared model runtime snapshots", () => {
       await Promise.allSettled([skipped, latest, read]);
     }
   });
-  it("rebinds unpublished read-only activation to the committed replacement config", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const initialConfig = {};
-    const latestConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
-
-    markPreparedModelRuntimeSnapshotsStale("test read-only replacement", {
-      waitForReplacement: true,
-    });
-    const read = loadPreparedModelRuntimeSnapshot({
-      ...fixture.agentInput("default", initialConfig),
-      workspaceDir: "/tmp/dynamic-read-only-workspace",
-      readOnly: true,
-    });
-    markPreparedModelRuntimeSnapshotsStale("test superseding read-only replacement", {
-      waitForReplacement: true,
-    });
-    expect(
-      getPreparedModelRuntimeSnapshot(fixture.agentInput("default", latestConfig)),
-    ).toBeUndefined();
-    const refresh = refreshPreparedModelRuntimeSnapshots(latestConfig);
-
-    await expect(read).resolves.toMatchObject({
-      config: latestConfig,
-      workspaceDir: "/tmp/dynamic-read-only-workspace",
-    });
-    await refresh;
-  });
-
   it.each(["workspace", "config"] as const)(
     "deduplicates standalone activation while publishing a changed %s",
     async (changed) => {

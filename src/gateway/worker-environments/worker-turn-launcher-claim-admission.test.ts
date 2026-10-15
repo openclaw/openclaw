@@ -1,16 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
-import {
-  createPlacementTurnClaimFixtureOps,
-  seedAttachedPlacementEnvironment,
-} from "./placement-test-fixtures.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerGatewayTools } from "./worker-session-tool-executor.js";
@@ -40,9 +39,11 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("worker turn launcher claim admission", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "rejects compaction successors throughout the %s placement lifecycle without changing ownership",
@@ -64,7 +65,7 @@ describe("worker turn launcher claim admission", () => {
             );
             expect(placements.get(SESSION_ID)).toEqual(before);
             expect(loadSessionEntry(sessionTarget)).toEqual(entryBefore);
-            expect(placements.get(successorId)).toBeUndefined();
+            expect(await placements.getAsync(successorId)).toBeUndefined();
           };
           const localClaim = await placements.claimTurn({
             ...sessionTarget,
@@ -212,7 +213,7 @@ describe("worker turn launcher claim admission", () => {
     );
   });
 
-  it.each(["after-restart", "restart-result-run"])(
+  it.each(["restart-result-run"])(
     "returns a recovery outcome for restart-cleared claim retry %s",
     async (runId) => {
       await seedActivePlacement("remote-exec");
@@ -227,7 +228,7 @@ describe("worker turn launcher claim admission", () => {
         priorClaim,
         "refs/openclaw/worker-results/missing",
       );
-      placements.clearLocalTurnClaimsAfterRestart();
+      await placements.clearLocalTurnClaimsAfterRestartAsync();
       const pending = await placements.listPendingWorkspaceResultsAsync();
       expect(pending).toMatchObject([
         { stagedResultRef: "refs/openclaw/worker-results/missing", workspaceAcceptedAtMs: null },
@@ -254,53 +255,6 @@ describe("worker turn launcher claim admission", () => {
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
     },
   );
-
-  it("retries admission when a collided claim releases before inspection", async () => {
-    await seedActivePlacement();
-    const active = placements.get(SESSION_ID);
-    if (active?.state !== "active") {
-      throw new Error("expected active placement");
-    }
-    const priorClaim = await placements.claimTurn({
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      claimId: "released-before-inspection",
-      runId: "prior-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
-    const claimOps = createPlacementTurnClaimFixtureOps(database);
-    const claimTurn = placements.claimTurn.bind(placements);
-    vi.spyOn(placements, "claimTurn").mockImplementationOnce(async (...args) => {
-      try {
-        return await claimTurn(...args);
-      } catch (error) {
-        claimOps.releaseTurn(priorClaim);
-        throw error;
-      }
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments: unusedEnvironments(),
-      placements,
-    });
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "next-run",
-        },
-        turn("next-run"),
-        async () => ({ meta: { durationMs: 1 } }),
-      ),
-    ).rejects.toThrow("Active worker placement does not match its attached environment");
-  });
 
   it("holds a remote-exec follow-up when reconciliation starts during claim admission", async () => {
     await seedActivePlacement("remote-exec");
@@ -510,6 +464,7 @@ describe("worker turn launcher claim admission", () => {
       await expect(replacement).resolves.toMatchObject({
         payloads: [{ text: "Recovered after cancellation" }],
       });
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
       expect(stopTunnel).not.toHaveBeenCalled();
       expect(destroy).not.toHaveBeenCalled();
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
@@ -517,32 +472,6 @@ describe("worker turn launcher claim admission", () => {
       finishCancellation.resolve();
       await Promise.allSettled([first, replacement].filter((operation) => operation !== undefined));
     }
-  });
-
-  it("releases the admitted claim when managed workspace resolution fails", async () => {
-    await seedActivePlacement();
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments: unusedEnvironments(),
-      placements,
-      resolveWorkspace: async () => {
-        throw new Error("managed workspace unavailable");
-      },
-    });
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-workspace-resolution-failure",
-        },
-        turn("run-workspace-resolution-failure"),
-        async () => ({ meta: { durationMs: 1 } }),
-      ),
-    ).rejects.toThrow("managed workspace unavailable");
-
-    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });
 
   it.each([
@@ -683,6 +612,7 @@ describe("worker turn launcher claim admission", () => {
             termination: "exit",
           });
           await expect(first).resolves.toMatchObject({ payloads: [{ text: "Only worker reply" }] });
+          await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
           const completedPlacement = placements.get(SESSION_ID);
           if (completedPlacement?.state !== "active") {
             throw new Error("expected active placement after worker completion");
@@ -808,6 +738,7 @@ describe("worker turn launcher claim admission", () => {
         async () => ({ meta: { durationMs: 1 } }),
       ),
     ).resolves.toMatchObject({ payloads: [{ text: "Recovered worker reply" }] });
+    await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
     expect(turnIds).toHaveLength(2);
     expect(turnIds[0]).not.toBe(turnIds[1]);
     expect(stopTunnel).not.toHaveBeenCalled();

@@ -15,15 +15,15 @@ import {
 } from "./chat-spawned-subagent.ts";
 
 export type ChatSubagentWait = {
-  /** When the parent handed off; null when loaded history cannot place it. */
-  startedAt: number | null;
+  /** The persisted end of the parent’s latest turn, independent of loaded history. */
+  startedAt: number;
   /** The handed-off run, so the wait stays that run's live status. */
   runId?: string;
   /** Unfinished direct subagents; 0 until the pane's own child query has answered. */
   runningCount: number;
   /** Unfinished child sessions that are not subagents; the wait names none of them. */
   sessionCount?: number;
-  child?: { key: string; label: string };
+  child?: { key: string; label: string; startedAt?: number | null };
 };
 
 export type ChatSubagentActivity = {
@@ -70,14 +70,30 @@ export function projectSubagentStatus(
 ) {
   const session = input.selectedSession;
   const eligible = session && !session.archived && session.hasActiveSubagentRun === true;
-  const shouldWait =
+  // Descendant activity alone is not a parent wait: plugin-owned children can
+  // belong to a session that has never executed. Every settled parent turn has
+  // a lifecycle end; a partial row must not invent that boundary from transcript text.
+  const parentIdle =
     eligible && !input.runActive && !input.runWorking && !isSessionRunActive(session);
-  const pending = shouldWait ? pendingSessionsYield(input.messages) : null;
-  const yieldedAt = pending?.timestamp ?? null;
-  const handoffAt =
-    yieldedAt !== null && typeof session?.startedAt === "number" && yieldedAt > session.startedAt
-      ? yieldedAt
+  const endedAt = session?.endedAt;
+  const waitStartedAt =
+    parentIdle &&
+    typeof endedAt === "number" &&
+    Number.isFinite(endedAt) &&
+    endedAt > 0 &&
+    endedAt >= (session?.startedAt ?? 0)
+      ? endedAt
       : null;
+  const pending = waitStartedAt !== null ? pendingSessionsYield(input.messages) : null;
+  const yieldedAt = pending?.timestamp ?? null;
+  const handoffRunId =
+    yieldedAt !== null &&
+    typeof session?.startedAt === "number" &&
+    yieldedAt > session.startedAt &&
+    waitStartedAt !== null &&
+    yieldedAt <= waitStartedAt
+      ? pending?.runId
+      : undefined;
   const unfinished = eligible ? unfinishedChildren(session, input) : [];
   // Dashboard children count as sessions, never named subagents.
   const children = unfinished.filter((row) => !isDashboardSessionKey(row.key));
@@ -114,17 +130,10 @@ export function projectSubagentStatus(
         });
   // A hydrated roster with no unfinished children ends the wait.
   const wait: ChatSubagentWait | null =
-    shouldWait && (!hydrated || unfinished.length > 0)
+    waitStartedAt !== null && (!hydrated || unfinished.length > 0)
       ? {
-          // The yield's transcript row can predate the handoff by its whole wrapping
-          // step; the parent's run end is the handoff itself.
-          startedAt:
-            handoffAt !== null &&
-            typeof session.endedAt === "number" &&
-            session.endedAt >= handoffAt
-              ? session.endedAt
-              : handoffAt,
-          ...(handoffAt !== null && pending?.runId ? { runId: pending.runId } : {}),
+          startedAt: waitStartedAt,
+          ...(handoffRunId ? { runId: handoffRunId } : {}),
           runningCount: hydrated ? running : 0,
           ...(hydrated && unfinished.length > running
             ? { sessionCount: unfinished.length - running }
@@ -134,6 +143,7 @@ export function projectSubagentStatus(
                 child: {
                   key: child.key,
                   label: resolveSessionDisplayName(child.key, child),
+                  startedAt: child.startedAt,
                 },
               }
             : {}),
@@ -148,7 +158,7 @@ export function projectSubagentStatus(
     wait,
     // Only a loaded handoff places the wait inside its run; search omits it.
     placedWait:
-      !searchFiltering && wait?.runId && wait.startedAt !== null
+      !searchFiltering && wait?.runId
         ? { startedAt: wait.startedAt, runId: wait.runId }
         : undefined,
     running,
@@ -163,6 +173,7 @@ export function projectSubagentStatus(
             wait.sessionCount,
             wait.child?.key,
             wait.child?.label,
+            wait.child?.startedAt,
             listed,
           ]
         : [running, listed],

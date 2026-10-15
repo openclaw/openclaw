@@ -51,11 +51,14 @@ type LazyElement = readonly [tagName: string, loadModule: () => Promise<unknown>
 const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
   region: [
     "openclaw-chat-sidebar-region",
-    () => import("./components/chat-sidebar-region.runtime.ts"),
+    () => import("./components/chat-sidebar-region.runtime.tsx"),
   ],
   // Not a slot key: the detail slot also renders tool output and status
   // templates synchronously, so only its panel branch waits for this element.
-  "detail-panel": ["openclaw-chat-detail-panel", () => import("./components/chat-detail-panel.ts")],
+  "detail-panel": [
+    "openclaw-chat-detail-panel",
+    () => import("./components/chat-detail-panel.tsx"),
+  ],
   terminal: [
     "openclaw-terminal-panel",
     () => import("../../components/terminal/terminal-panel-registration.ts"),
@@ -66,19 +69,19 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
   ],
   browser: ["openclaw-browser-panel", () => import("../../components/browser/browser-panel.ts")],
   desktop: ["openclaw-desktop-panel", () => import("../../components/desktop/desktop-panel.ts")],
-  portal: ["openclaw-portals-page", () => import("../portals/portals-page.ts")],
-  companion: ["openclaw-chat-session-rail", () => import("./components/chat-session-rail.ts")],
+  portal: ["openclaw-portals-page", () => import("../portals/portals-page.tsx")],
+  companion: ["openclaw-chat-session-rail", () => import("./components/chat-session-rail.tsx")],
   processes: [
     "openclaw-chat-processes-panel",
-    () => import("./components/chat-processes-panel.ts"),
+    () => import("./components/chat-processes-panel.tsx"),
   ],
   subagents: [
     "openclaw-chat-subagents-panel",
-    () => import("./components/chat-subagents-panel.ts"),
+    () => import("./components/chat-subagents-panel.tsx"),
   ],
   discussion: [
     "openclaw-session-discussion",
-    () => import("./components/session-discussion-panel.ts"),
+    () => import("./components/session-discussion-panel.tsx"),
   ],
 };
 
@@ -181,6 +184,7 @@ export function renderSidebarRegion(params: {
   narrow: boolean;
   /** The layout given is a narrow pane's view of the saved one; see presentNarrowSidebarLayout. */
   sideFocusLocked?: boolean;
+  sideFocusManaged?: boolean;
   sideFocusOrigin?: () => HTMLElement | null;
   panelDefinitions?: SidebarPanelDefinition[];
   header?: TemplateResult | typeof nothing;
@@ -211,6 +215,10 @@ export function renderSidebarRegion(params: {
   const main = sidebarMainPanel(params.layout);
   const chatMain = !main || main.slot === "conversation";
   const column = params.layout.columns[0];
+  // The successful outlet belongs to Solid; its cleanup must not eject a Lit child marker.
+  const rightRuntime = regionError
+    ? html`<div class="sidebar-region__right-runtime">${regionError}</div>`
+    : html`<div class="sidebar-region__right-runtime"></div>`;
   return html`<div
     class="sidebar-region ${params.background ? "sidebar-region--background" : ""} ${collapsed ? "sidebar-region--narrow" : ""} ${
       params.layout.expanded ? "sidebar-region--expanded" : ""
@@ -247,12 +255,13 @@ export function renderSidebarRegion(params: {
                   panel.slot !== "conversation" && isSidebarSlotVisible(params.layout, panel.slot),
               )
               .map(
-                (panel) => html`<div
-                  class="side-panel__panel"
-                  data-region=${panel.id === params.layout.mainPanelId ? "main" : "side"}
-                >
-                  ${panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading}
-                </div>`,
+                (panel) =>
+                  html`<div
+                    class="side-panel__panel"
+                    data-region=${panel.id === params.layout.mainPanelId ? "main" : "side"}
+                  >
+                    ${panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading}
+                  </div>`,
               )
           : null
         : html`<openclaw-chat-sidebar-region
@@ -264,6 +273,7 @@ export function renderSidebarRegion(params: {
             .callbacks=${params.callbacks}
             .narrow=${params.narrow}
             .sideFocusLocked=${params.sideFocusLocked === true}
+            .sideFocusManaged=${params.sideFocusManaged === true}
             .sideFocusOrigin=${params.sideFocusOrigin}
             .availableWidth=${params.availableWidth}
           ></openclaw-chat-sidebar-region>`
@@ -278,7 +288,7 @@ export function renderSidebarRegion(params: {
     >
       ${params.primary}
     </div>
-    <div class="sidebar-region__right-runtime">${regionError ?? null}</div>
+    ${rightRuntime}
   </div>`;
 }
 

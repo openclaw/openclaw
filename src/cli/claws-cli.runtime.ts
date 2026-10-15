@@ -47,7 +47,7 @@ import {
   CLAW_OUTPUT_STABILITY,
   type ClawAddPlan,
 } from "../claws/types.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
 import {
@@ -259,7 +259,7 @@ async function runClawsAddCommandLocal(
     return;
   }
 
-  const config = getRuntimeConfig();
+  const config = await captureRuntimeConfigAsyncReader()();
   const listedMcpServers = await listConfiguredMcpServers();
   if (!listedMcpServers.ok) {
     runtime.error(listedMcpServers.error);
@@ -513,14 +513,19 @@ async function runClawsRemoveCommandLocal(
     return;
   }
   const selected = opts.removeReferenced ?? [];
-  if (opts.removeUnused && selected.length > 0) {
-    runtime.error("Choose either --remove-unused or --remove-referenced, not both.");
-    runtime.exit(1);
-    return;
-  }
-  if (opts.forceReferenced && selected.length === 0) {
-    runtime.error("--force-referenced requires at least one --remove-referenced selector.");
-    runtime.exit(1);
+  const optionError =
+    opts.removeUnused && selected.length > 0
+      ? "Choose either --remove-unused or --remove-referenced, not both."
+      : opts.forceReferenced && selected.length === 0
+        ? "--force-referenced requires at least one --remove-referenced selector."
+        : undefined;
+  if (optionError) {
+    emitClawFailure(runtime, opts.json, optionError, {
+      schemaVersion: CLAW_REMOVE_PLAN_SCHEMA_VERSION,
+      stability: CLAW_OUTPUT_STABILITY,
+      ok: false,
+      error: { code: "invalid_cleanup_options", message: optionError },
+    });
     return;
   }
   const referencedCleanup = selected.length
@@ -630,7 +635,7 @@ async function runClawsExportCommandLocal(
       throw new ClawExportError("mcp_config_unavailable", listedMcpServers.error);
     }
     const result = await exportClawAgent(agentId, opts.out, {
-      config: getRuntimeConfig(),
+      config: await captureRuntimeConfigAsyncReader()(),
       sourceMcpServers: listedMcpServers.mcpServers,
       ...(opts.bootstrap ? { bootstrapPath: opts.bootstrap } : {}),
     });

@@ -199,7 +199,7 @@ describe("gateway method registry", () => {
         descriptor.profileAccess === "required",
       );
     }
-    expect(registry.requiresAuthenticatedProfile("users.self")).toBe(false);
+    expect(registry.requiresAuthenticatedProfile("users.self")).toBe(true);
     expect(registry.requiresAuthenticatedProfile("status")).toBe(false);
     // talk.config projects the caller's profile accent; a pending GitHub
     // identity sync must complete before the handler runs.

@@ -208,19 +208,14 @@ export function collectExplicitCliErrorText(parsed: Record<string, unknown>): st
     if (text) {
       return unwrapCliErrorText(text);
     }
-    const nested = readNestedErrorMessage(parsed);
-    if (nested) {
-      return unwrapCliErrorText(nested);
-    }
-    if (subtype) {
-      return `Claude CLI result subtype ${subtype}.`;
-    }
-    return "CLI result was marked as an error.";
   }
 
   const nested = readNestedErrorMessage(parsed);
   if (nested) {
     return unwrapCliErrorText(nested);
+  }
+  if (isResultError) {
+    return subtype ? `Claude CLI result subtype ${subtype}.` : "CLI result was marked as an error.";
   }
 
   if (parsed.type === "assistant") {
@@ -385,6 +380,15 @@ export function isClaudeSubagentRecord(parsed: Record<string, unknown>): boolean
   return parsed.parent_tool_use_id != null;
 }
 
+// User text can be replayed stdin; only the hook's rejection notification is a boundary.
+export function isClaudeStopHookFeedbackRecord(parsed: Record<string, unknown>): boolean {
+  return (
+    parsed.type === "system" &&
+    parsed.subtype === "notification" &&
+    parsed.key === "stop-hook-error"
+  );
+}
+
 const CLAUDE_FOREGROUND_AGENT_TOOL_NAMES = new Set(["Agent", "Task"]);
 
 export function isClaudeForegroundAgentToolName(name: string): boolean {
@@ -542,34 +546,27 @@ export function parseClaudeCliJsonlResult(params: {
   sessionId?: string;
   usage?: CliUsage;
 }): CliOutput | null {
-  if (!supportsCliJsonlToolEvents(params)) {
+  if (!supportsCliJsonlToolEvents(params) || params.parsed.type !== "result") {
     return null;
   }
-  if (params.parsed.type === "result") {
-    const terminalFailure = isClaudeStreamJsonDialect(params)
-      ? readClaudeTerminalFailure(params.parsed)
-      : undefined;
-    const errorText = resolveCliTerminalErrorText(params.parsed, terminalFailure);
-    if (errorText) {
-      return {
-        text: "",
-        sessionId: params.sessionId,
-        usage: params.usage,
-        errorText,
-        ...(terminalFailure ? { terminalFailure } : {}),
-      };
-    }
+  const terminalFailure = isClaudeStreamJsonDialect(params)
+    ? readClaudeTerminalFailure(params.parsed)
+    : undefined;
+  const errorText = resolveCliTerminalErrorText(params.parsed, terminalFailure);
+  let text = "";
+  if (!errorText) {
     if (typeof params.parsed.result !== "string") {
       return null;
     }
     // Tool-only turns may have an empty result and still carry continuity and usage.
-    return {
-      text: unwrapNestedCliResultText(params.parsed.result).trim(),
-      sessionId: params.sessionId,
-      usage: params.usage,
-    };
+    text = unwrapNestedCliResultText(params.parsed.result).trim();
   }
-  return null;
+  return {
+    text,
+    sessionId: params.sessionId,
+    usage: params.usage,
+    ...(errorText ? { errorText, ...(terminalFailure ? { terminalFailure } : {}) } : {}),
+  };
 }
 
 // A tool-split turn streams pre-tool answer text the terminal result envelope

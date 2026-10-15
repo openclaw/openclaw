@@ -14,6 +14,7 @@ import { sendXReply, XPartialReplyError, type XVisibleWorkSession } from "./repl
 import { getXRuntime } from "./runtime.js";
 import { XBudgetExceededError } from "./spend.js";
 import { normalizeXReplyTarget } from "./target.js";
+import { openXWorkOrigins } from "./work-origin.js";
 
 function rethrowReplyAuthorizationError(cause: unknown): never {
   if (cause instanceof XAllowlistChangedError) {
@@ -45,6 +46,7 @@ export async function sendXDelivery(params: {
   senderTier?: XSenderTier;
   visibleWorkSessions?: XVisibleWorkSession[];
   assertDirectAdapterHandoff?: () => void;
+  sessionKey?: string | null;
 }) {
   if (params.mediaUrl || params.mediaUrls?.length) {
     throw new PlatformMessageNotDispatchedError(
@@ -64,6 +66,9 @@ export async function sendXDelivery(params: {
   }
   const readConfig = createRuntimeConfigReader(params.cfg);
   const runtime = getXRuntime();
+  const origin = params.sessionKey
+    ? await openXWorkOrigins(runtime).lookup(params.sessionKey)
+    : undefined;
   const assertHandoff = () => {
     try {
       params.signal?.throwIfAborted();
@@ -81,23 +86,22 @@ export async function sendXDelivery(params: {
       );
     }
   };
-  let prepared: {
-    account: ReturnType<typeof resolveXAccount>;
-    api: XApiClient;
-    mention: XPost;
-  };
+  let account: ReturnType<typeof resolveXAccount>;
+  let api: XApiClient;
+  let mention: XPost;
   try {
-    const resolvedAccount = resolveXAccount(params.cfg, params.accountId);
-    const resolvedApi = await getXApi(resolvedAccount.accountId, params.cfg);
+    account = resolveXAccount(params.cfg, params.accountId ?? origin?.accountId);
+    api = await getXApi(account.accountId, params.cfg);
     assertHandoff();
     const resolvedMention =
       params.mention ??
       (
         await resolveXRecipient({
-          api: resolvedApi,
+          api,
           post: replyToId,
-          userId: resolvedAccount.userId,
+          userId: account.userId,
           signal: params.signal,
+          allowQuote: !origin || replyToId === origin.postId,
         })
       )?.post;
     if (!resolvedMention) {
@@ -106,7 +110,17 @@ export async function sendXDelivery(params: {
         { cause: undefined, retryable: false },
       );
     }
-    prepared = { account: resolvedAccount, api: resolvedApi, mention: resolvedMention };
+    mention = resolvedMention;
+    if (
+      origin &&
+      (origin.accountId !== account.accountId ||
+        (replyToId !== origin.postId && mention.conversation_id !== origin.conversationId))
+    ) {
+      throw new PlatformMessageNotDispatchedError(
+        `This X work session may reply only to its origin post (${origin.postUrl}) or a bot mention in that conversation.`,
+        { cause: undefined, retryable: false },
+      );
+    }
   } catch (cause) {
     if (cause instanceof PlatformMessageNotDispatchedError) {
       throw cause;
@@ -116,7 +130,6 @@ export async function sendXDelivery(params: {
       { cause, retryable: !(cause instanceof XBudgetExceededError) && !params.signal?.aborted },
     );
   }
-  const { account, api, mention } = prepared;
   const assertActive = async () => {
     assertHandoff();
     const cfg = readConfig();
@@ -163,6 +176,7 @@ export async function sendXDelivery(params: {
     assertCurrent();
     return assertCurrent;
   };
+  const logger = runtime.logging.getChildLogger({ channel: "x", accountId: account.accountId });
   try {
     const result = await sendXReply({
       api,
@@ -173,9 +187,7 @@ export async function sendXDelivery(params: {
       signal: params.signal,
       assertActive,
     });
-    getXRuntime()
-      .logging.getChildLogger({ channel: "x", accountId: account.accountId })
-      .info(`reply posts=${result.postIds.join(",")}`);
+    logger.info(`reply posts=${result.postIds.join(",")}`);
     return {
       channel: "x" as const,
       messageId: result.postIds.at(-1) ?? "",
@@ -184,9 +196,7 @@ export async function sendXDelivery(params: {
     };
   } catch (error) {
     if (error instanceof XPartialReplyError) {
-      getXRuntime()
-        .logging.getChildLogger({ channel: "x", accountId: account.accountId })
-        .warn(`partial reply posts=${error.postIds.join(",")}`);
+      logger.warn(`partial reply posts=${error.postIds.join(",")}`);
       throw createChannelPartialDeliveryError(error, {
         visibleReplySent: true,
         content: error.text,

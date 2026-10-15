@@ -12,7 +12,7 @@ import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 
-const { TEST_STATE_DIR, PREVIOUS_OPENCLAW_STATE_DIR, SANDBOX_REGISTRY_PATH } = vi.hoisted(() => {
+const { TEST_STATE_DIR, PREVIOUS_OPENCLAW_STATE_DIR } = vi.hoisted(() => {
   const nodePath = require("node:path");
   const { mkdtempSync } = require("node:fs");
   const { tmpdir } = require("node:os");
@@ -23,7 +23,6 @@ const { TEST_STATE_DIR, PREVIOUS_OPENCLAW_STATE_DIR, SANDBOX_REGISTRY_PATH } = v
   return {
     TEST_STATE_DIR: baseDir,
     PREVIOUS_OPENCLAW_STATE_DIR: previousStateDir,
-    SANDBOX_REGISTRY_PATH: nodePath.join(baseDir, "containers.json"),
   };
 });
 
@@ -39,6 +38,7 @@ import { sandboxRegistryPublication } from "./registry-publication.js";
 import {
   completeSandboxRegistryReservation,
   readBrowserRegistry,
+  assertSandboxRegistryEntryCurrent,
   assertSandboxBrowserRegistryEntryCurrent,
   readRegisteredSandboxRuntimeIds,
   readRegistry,
@@ -61,7 +61,6 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await fs.rm(path.join(TEST_STATE_DIR, "state"), { recursive: true, force: true });
-  await fs.rm(SANDBOX_REGISTRY_PATH, { force: true });
 });
 
 afterAll(async () => {
@@ -347,30 +346,13 @@ describe("registry race safety", () => {
       await expect(readBrowserRegistry()).resolves.toEqual({
         entries: [browserEntry({ workspaceDir: "/original/workspace", lastUsedAtMs: 2 })],
       });
+      const [selected] = (await readBrowserRegistry()).entries;
+      expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).not.toThrow();
+      await updateBrowserRegistry(browserEntry({ workspaceDir: "/other/workspace" }));
+      expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).toThrow("owner changed");
     } finally {
       hostSql.mockRestore();
     }
-    const [selected] = (await readBrowserRegistry()).entries;
-    expect(selected?.workspaceDir).toBe("/original/workspace");
-    expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).not.toThrow();
-    await updateBrowserRegistry(browserEntry({ workspaceDir: "/other/workspace" }));
-    expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).toThrow("owner changed");
-  });
-
-  it("does not migrate legacy registry files from runtime reads", async () => {
-    // Runtime reads should ignore old monolithic files; explicit doctor/repair
-    // owns migration so normal startup cannot mutate registry layout.
-    const legacyEntry = containerEntry({ containerName: "legacy-container" });
-    await fs.writeFile(
-      SANDBOX_REGISTRY_PATH,
-      `${JSON.stringify({ entries: [legacyEntry] }, null, 2)}\n`,
-      "utf-8",
-    );
-
-    await expect(readRegistry()).resolves.toEqual({ entries: [] });
-    await expect(readRegistryEntry("legacy-container")).resolves.toBeNull();
-    await expect(fs.access(SANDBOX_REGISTRY_PATH)).resolves.toBeUndefined();
-    await expectPathMissing(path.join(TEST_STATE_DIR, "state", "openclaw.sqlite"));
   });
 
   it("captures a Podman target and preserves immutable fields across usage updates", async () => {
@@ -488,12 +470,20 @@ describe("registry race safety", () => {
     const calls = observeMainThreadSql();
     calls.calibrate();
     try {
+      expect(() => assertSandboxRegistryEntryCurrent(original)).toThrow("generation changed");
+      expect(() => assertSandboxRegistryEntryCurrent(replacement)).not.toThrow();
+      expect(() => assertSandboxRegistryEntryCurrent({ ...replacement })).not.toThrow();
+      await updateRegistry({ ...replacement, lastUsedAtMs: 999 });
+      expect(() => assertSandboxRegistryEntryCurrent(replacement)).not.toThrow();
       for (const retired of [false, true]) {
         await expect(completeSandboxRegistryReservation(original, retired)).rejects.toThrow(
           "Sandbox runtime generation changed",
         );
       }
-      await expect(readRegistryEntry(original.containerName)).resolves.toMatchObject(replacement);
+      await expect(readRegistryEntry(original.containerName)).resolves.toMatchObject({
+        ...replacement,
+        lastUsedAtMs: 999,
+      });
       calls.expectIdle();
     } finally {
       calls.restore();

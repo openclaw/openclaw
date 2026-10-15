@@ -131,6 +131,7 @@ describe("processDiscordMessage ack reactions", () => {
       const ctx = await createBaseContext({
         shouldRequireMention: false,
         effectiveWasMentioned: false,
+        discordConfig: { streaming: { mode: "partial", block: { enabled: true } } },
         cfg: {
           messages: { groupChat: { visibleReplies: "message_tool" } },
           session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
@@ -140,7 +141,12 @@ describe("processDiscordMessage ack reactions", () => {
 
       await runProcessDiscordMessage(ctx);
 
-      expect(getLastDispatchReplyOptions()?.typingKeepalive).toBe(false);
+      expectRecordFields(requireRecord(getLastDispatchReplyOptions(), "dispatch reply options"), {
+        sourceReplyDeliveryMode: "message_tool_only",
+        typingKeepalive: false,
+        disableBlockStreaming: true,
+      });
+      expect(createDiscordDraftStream).not.toHaveBeenCalled();
       expect(typingMocks.sendTyping).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
@@ -189,7 +195,9 @@ describe("processDiscordMessage ack reactions", () => {
     { target: "user", args: { to: "user:u1" }, channelId: "dm-u1", messageId: "m1" },
   ])("routes source acknowledgements and tracked $target reactions", async (scenario) => {
     vi.useFakeTimers();
+    const dispatchEntered = createDeferred<void>();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      dispatchEntered.resolve();
       await params?.replyOptions?.onToolStart?.({
         name: "message",
         phase: "start",
@@ -211,6 +219,7 @@ describe("processDiscordMessage ack reactions", () => {
       messageChannelId: "fallback-channel",
     });
     const runPromise = runProcessDiscordMessage(ctx);
+    await dispatchEntered.promise;
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
     await vi.runAllTimersAsync();
     await runPromise;
@@ -236,7 +245,9 @@ describe("processDiscordMessage ack reactions", () => {
 
   it("keeps one acknowledgement through reasoning, tools, compaction, silence, and success", async () => {
     vi.useFakeTimers();
+    const dispatchEntered = createDeferred<void>();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      dispatchEntered.resolve();
       await params?.replyOptions?.onReasoningStream?.({});
       await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
@@ -256,6 +267,7 @@ describe("processDiscordMessage ack reactions", () => {
     });
 
     const runPromise = runProcessDiscordMessage(ctx);
+    await dispatchEntered.promise;
     await vi.runAllTimersAsync();
     await runPromise;
 
@@ -505,25 +517,6 @@ describe("processDiscordMessage session routing and room events", () => {
       expect(guildHistories.get("c1")).toEqual([]);
     },
   );
-
-  it("uses PluralKit original ids for inbound dedupe while preserving the Discord message id", async () => {
-    const ctx = await createBaseContext({
-      canonicalMessageId: "orig-123",
-      message: {
-        id: "proxy-456",
-        channelId: "c1",
-        timestamp: new Date().toISOString(),
-        attachments: [],
-      },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
-      MessageSid: "orig-123",
-      MessageSidFull: "proxy-456",
-    });
-  });
 
   it("prefers bound session keys and sets MessageThreadId for bound thread messages", async () => {
     const threadBindings = await createThreadBindingManager({
@@ -880,30 +873,6 @@ describe("processDiscordMessage session routing", () => {
       accountId: "default",
       mainDmOwnerPin: { ownerRecipient: "111", senderRecipient: "222" },
     });
-  });
-
-  it("marks explicit message-tool guild replies as message-tool-only and disables source streaming", async () => {
-    const ctx = await createBaseContext({
-      shouldRequireMention: false,
-      effectiveWasMentioned: false,
-      discordConfig: { streaming: { mode: "partial", block: { enabled: true } } },
-      cfg: {
-        messages: {
-          groupChat: { visibleReplies: "message_tool" },
-        },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
-      route: BASE_CHANNEL_ROUTE,
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expectRecordFields(requireRecord(getLastDispatchReplyOptions(), "dispatch reply options"), {
-      sourceReplyDeliveryMode: "message_tool_only",
-      typingKeepalive: false,
-      disableBlockStreaming: true,
-    });
-    expect(createDiscordDraftStream).not.toHaveBeenCalled();
   });
 });
 

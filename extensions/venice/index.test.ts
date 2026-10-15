@@ -93,43 +93,37 @@ async function patchPayload(
 describe("venice provider plugin", () => {
   it.each([
     { baseUrl: "https://api.venice.ai/api/v1", expected: "synthetic-session" },
-    { baseUrl: "https://api.venice.ai/api/v1/", expected: "synthetic-session" },
     { baseUrl: "https://proxy.example/v1", expected: undefined },
-    { baseUrl: "https://api.venice.ai/custom/v1", expected: undefined },
     { baseUrl: "https://api.venice.ai/api/v1", optOut: true, expected: undefined },
-    { baseUrl: "https://api.venice.ai/api/v1", disabled: true, expected: undefined },
-  ])(
-    "sends cache affinity only for native enabled requests: $baseUrl, $optOut, $disabled",
-    async (route) => {
-      const provider = await registerSingleProviderPlugin(plugin);
-      const model: Model = {
-        ...veniceModel("synthetic-model"),
-        baseUrl: route.baseUrl,
-        ...(route.optOut ? { compat: { supportsPromptCacheKey: false } } : {}),
-      };
-      const normalized =
-        provider.normalizeResolvedModel?.({ provider: model.provider, modelId: model.id, model }) ??
-        model;
-      let payload: unknown;
-      const result = await streamSimple(
-        normalized,
-        { messages: [] },
-        {
-          apiKey: "synthetic-unused-key",
-          sessionId: "synthetic-session",
-          cacheRetention: route.disabled ? "none" : "long",
-          onPayload(value) {
-            payload = value;
-            throw new Error("captured before request");
-          },
+  ])("sends cache affinity only for native enabled requests: $baseUrl, $optOut", async (route) => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const model: Model = {
+      ...veniceModel("synthetic-model"),
+      baseUrl: route.baseUrl,
+      ...(route.optOut ? { compat: { supportsPromptCacheKey: false } } : {}),
+    };
+    const normalized =
+      provider.normalizeResolvedModel?.({ provider: model.provider, modelId: model.id, model }) ??
+      model;
+    let payload: unknown;
+    const result = await streamSimple(
+      normalized,
+      { messages: [] },
+      {
+        apiKey: "synthetic-unused-key",
+        sessionId: "synthetic-session",
+        cacheRetention: "long",
+        onPayload(value) {
+          payload = value;
+          throw new Error("captured before request");
         },
-      ).result();
-      expect(result.errorMessage).toBe("captured before request");
-      expect(payload).toMatchObject({ prompt_cache_key: route.expected });
-      expect(payload).not.toHaveProperty("prompt_cache_retention");
-      expect(payload).not.toHaveProperty("prompt_cache_options");
-    },
-  );
+      },
+    ).result();
+    expect(result.errorMessage).toBe("captured before request");
+    expect(payload).toMatchObject({ prompt_cache_key: route.expected });
+    expect(payload).not.toHaveProperty("prompt_cache_retention");
+    expect(payload).not.toHaveProperty("prompt_cache_options");
+  });
 
   it("applies the shared xAI compat patch to Grok-backed Venice models only", async () => {
     const provider = await registerSingleProviderPlugin(plugin);

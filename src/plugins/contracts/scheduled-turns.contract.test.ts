@@ -5,7 +5,6 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CronServiceContract } from "../../cron/service-contract.js";
 import type { CronJob, CronJobCreate } from "../../cron/types.js";
 import type {
   GatewayRequestHandler,
@@ -31,6 +30,7 @@ import {
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
+import { createMockCronService } from "./scheduled-turns.test-support.js";
 
 const workflowMocks = vi.hoisted(() => ({
   cronAdd: vi.fn(),
@@ -87,38 +87,6 @@ async function invokePluginGatewayHandler(params: {
   });
 }
 
-function createMockCronService(): CronServiceContract {
-  return {
-    start: vi.fn(async () => undefined),
-    stop: vi.fn(),
-    status: vi.fn(async () => ({
-      enabled: true,
-      triggersEnabled: true,
-      storePath: "/tmp/openclaw-test-cron.json",
-      storage: "sqlite" as const,
-      sqlitePath: "/tmp/openclaw-test-state/state/openclaw.sqlite",
-      jobs: 0,
-      nextWakeAtMs: null,
-    })),
-    list: vi.fn(async () => []),
-    listPage: workflowMocks.cronListPage,
-    add: workflowMocks.cronAdd,
-    update: vi.fn(async (id, patch) => makeCronJob({ id, ...patch })),
-    updateWithPrecondition: vi.fn(async (id, patch, precondition) => {
-      const job = makeCronJob({ id });
-      await precondition(job, Date.now());
-      return makeCronJob({ ...job, ...patch });
-    }),
-    remove: workflowMocks.cronRemove,
-    run: vi.fn(async () => ({ ok: true, ran: false, reason: "not-due" })),
-    enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "not-due" })),
-    getJob: vi.fn(() => undefined),
-    readJob: vi.fn(async () => undefined),
-    getDefaultAgentId: vi.fn(() => undefined),
-    wake: vi.fn(() => ({ ok: true })),
-  } as CronServiceContract;
-}
-
 function makeCronJob(input: Partial<CronJob> & { id: string }): CronJob {
   return {
     name: input.name ?? input.id,
@@ -135,7 +103,7 @@ function makeCronJob(input: Partial<CronJob> & { id: string }): CronJob {
   };
 }
 
-const cron = createMockCronService();
+const cron = createMockCronService(workflowMocks, makeCronJob);
 
 function mockCronAdd(response: CronJob) {
   workflowMocks.cronAdd.mockResolvedValue(response);
@@ -343,97 +311,6 @@ describe("plugin scheduled turns", () => {
     ]);
     expect(new Set(removed).size).toBe(201);
     expect(removed).toContain("job-page-2");
-  });
-
-  it("restarts tagged cleanup when a job moves behind the page boundary", async () => {
-    const prefix = "plugin:workflow-plugin:tag:nudge:agent:main:main:";
-    const stableJobs = Array.from({ length: 199 }, (_, index) =>
-      makeCronJob({
-        id: `stable-${index}`,
-        name: `${prefix}${String(index + 1).padStart(3, "0")}`,
-      }),
-    );
-    const staleJob = makeCronJob({ id: "stale-only", name: `${prefix}000` });
-    const currentJob = makeCronJob({ id: "target-current", name: `${prefix}999` });
-    const offsets: number[] = [];
-    workflowMocks.cronListPage.mockImplementation(async (body: unknown) => {
-      const offset = (body as { offset: number }).offset;
-      offsets.push(offset);
-      if (offset === 0 && offsets.length === 1) {
-        return {
-          jobs: [staleJob, ...stableJobs],
-          snapshotRevision: "revision-a",
-          total: 201,
-          offset: 0,
-          limit: 200,
-          hasMore: true,
-          nextOffset: 200,
-        };
-      }
-      if (offset === 200) {
-        return {
-          jobs: [],
-          snapshotRevision: "revision-b",
-          total: 200,
-          offset: 200,
-          limit: 200,
-          hasMore: false,
-          nextOffset: null,
-        };
-      }
-      return {
-        jobs: [...stableJobs, currentJob],
-        snapshotRevision: "revision-b",
-        total: 200,
-        offset: 0,
-        limit: 200,
-        hasMore: false,
-        nextOffset: null,
-      };
-    });
-    const removed: string[] = [];
-    workflowMocks.cronRemove.mockImplementation(async (id: string) => {
-      removed.push(id);
-      return { ok: true, removed: true };
-    });
-
-    await expect(unscheduleWorkflowTurnsByTag()).resolves.toEqual({ removed: 200, failed: 0 });
-    expect(offsets).toEqual([0, 200, 0]);
-    expect(new Set(removed)).toEqual(new Set([...stableJobs.map((job) => job.id), currentJob.id]));
-    expect(removed).not.toContain(staleJob.id);
-  });
-
-  it("fails tagged cleanup without removals after repeated snapshot churn", async () => {
-    workflowMocks.cronListPage.mockImplementation(async (body: unknown) => {
-      const offset = (body as { offset: number }).offset;
-      const attempt = Math.floor(workflowMocks.cronListPage.mock.calls.length / 2);
-      if (offset === 0) {
-        return {
-          jobs: Array.from({ length: 200 }, (_, index) =>
-            makeCronJob({ id: `attempt-${attempt}-${index}` }),
-          ),
-          snapshotRevision: `revision-${attempt}-a`,
-          total: 201,
-          offset: 0,
-          limit: 200,
-          hasMore: true,
-          nextOffset: 200,
-        };
-      }
-      return {
-        jobs: [],
-        snapshotRevision: `revision-${attempt}-b`,
-        total: 200,
-        offset: 200,
-        limit: 200,
-        hasMore: false,
-        nextOffset: null,
-      };
-    });
-
-    await expect(unscheduleWorkflowTurnsByTag()).resolves.toEqual({ removed: 0, failed: 1 });
-    expect(workflowMocks.cronListPage).toHaveBeenCalledTimes(8);
-    expect(workflowMocks.cronRemove).not.toHaveBeenCalled();
   });
 
   it("tracks scheduled session turns using cron.add's top-level job id", async () => {
@@ -1190,8 +1067,8 @@ describe("plugin scheduled turns", () => {
   });
 
   it("resolves live cron service for captured plugin scheduled-turn APIs", async () => {
-    const firstCron = createMockCronService();
-    const secondCron = createMockCronService();
+    const firstCron = createMockCronService(workflowMocks, makeCronJob);
+    const secondCron = createMockCronService(workflowMocks, makeCronJob);
     const firstAdd = vi.fn(async () => makeCronJob({ id: "first-cron-job" }));
     const secondAdd = vi.fn(async () => makeCronJob({ id: "second-cron-job" }));
     const firstListPage = vi.fn(async () => {

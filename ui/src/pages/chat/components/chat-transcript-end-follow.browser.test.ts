@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { page } from "vitest/browser";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
+import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
@@ -73,8 +74,12 @@ afterEach(() => {
   expect(browserErrors).toEqual([]);
 });
 
-async function mountEndFollowFixture() {
+async function mountEndFollowFixture(savedOffset?: number) {
   await page.viewport(1200, 900);
+  saveChatSessionScrollPosition("end-follow-browser", "agent:main:end-follow", {
+    scrollTop: savedOffset ?? 0,
+    anchorToEnd: savedOffset === undefined,
+  });
   const host = new EndFollowFixture();
   fixture = host;
   host.style.cssText = "display: block; width: 800px";
@@ -105,6 +110,71 @@ async function commitTask(host: EndFollowFixture, change: () => void) {
   });
 }
 
+// A measured extent can commit before its corrective scroll is delivered. Wait
+// for that native event and the observer's receipt-retirement frame, not a fixed
+// number of frames counted from the earlier DOM commit.
+async function commitScrollTask(
+  host: EndFollowFixture,
+  thread: HTMLElement,
+  target: number,
+  change: () => void,
+) {
+  const listener = new AbortController();
+  let frame: number | undefined;
+  const scrolled = new Promise<void>((resolve) => {
+    thread.addEventListener(
+      "scroll",
+      () => {
+        if (thread.scrollTop === target) {
+          frame = requestAnimationFrame(() => resolve());
+        }
+      },
+      { signal: listener.signal },
+    );
+  });
+  try {
+    await commitTask(host, change);
+    await scrolled;
+  } finally {
+    listener.abort();
+    if (frame !== undefined) {
+      cancelAnimationFrame(frame);
+    }
+  }
+}
+
+it("paints a saved reader only after its measured range and offset commit together", async () => {
+  const visible: Array<{ top: number; height: number }> = [];
+  let frame = 0;
+  const frames = new Promise<void>((resolve) => {
+    let count = 0;
+    const sample = () => {
+      const thread = fixture?.querySelector<HTMLElement>(".chat-thread");
+      const extent = thread?.querySelector<HTMLElement>(".chat-thread-inner--virtual");
+      if (thread && extent && getComputedStyle(extent).visibility !== "hidden") {
+        visible.push({ top: thread.scrollTop, height: extent.offsetHeight });
+      }
+      if (++count < 24 || visible.length === 0) {
+        frame = requestAnimationFrame(sample);
+      } else {
+        resolve();
+      }
+    };
+    frame = requestAnimationFrame(sample);
+  });
+  try {
+    await mountEndFollowFixture(400);
+    await frames;
+    expect(visible.length).toBeGreaterThan(0);
+    expect(
+      visible.every(({ top, height }) => top === 400 && height === 1300),
+      JSON.stringify(visible),
+    ).toBe(true);
+  } finally {
+    cancelAnimationFrame(frame);
+  }
+});
+
 it.each(["requested", "smooth no-op", "native observation"] as const)(
   "preserves the %s end through same-key row measurement growth",
   async (acquisition) => {
@@ -134,13 +204,13 @@ it.each(["requested", "smooth no-op", "native observation"] as const)(
       await expect.poll(distance).toBe(0);
       if (acquisition === "native observation") {
         await settleFrames();
-        expect(host.transcript.isProgrammaticScroll).toBe(false);
+        await expect.poll(() => host.transcript.isProgrammaticScroll).toBe(false);
       }
     }
 
     const previousMax = thread.scrollHeight - thread.clientHeight;
     const growth = acquisition === "smooth no-op" ? 35 : 48;
-    await commitTask(host, () => {
+    await commitScrollTask(host, thread, previousMax + growth, () => {
       // Reconciliation precedes the observer's measured-extent commit.
       if (acquisition === "requested") {
         host.transcript.scrollToEnd({ behavior: "auto" });
@@ -148,11 +218,10 @@ it.each(["requested", "smooth no-op", "native observation"] as const)(
       host.lastRowHeight += growth;
     });
     await expect.poll(() => extent.offsetHeight).toBe(1300 + growth);
-    await settleFrames();
-    expect(distance()).toBe(0);
     if (acquisition !== "smooth no-op") {
-      expect(host.transcript.isProgrammaticScroll).toBe(false);
+      await expect.poll(() => host.transcript.isProgrammaticScroll).toBe(false);
     }
+    expect(distance()).toBe(0);
     if (acquisition === "requested") {
       expect(thread.scrollHeight - thread.clientHeight - previousMax).toBe(48);
       expect(
@@ -363,8 +432,9 @@ it.each([
       host.transcript.scrollToEnd({ behavior });
       await expect.poll(distance).toBe(0);
     } else {
-      thread.scrollTop = 0;
-      await settleFrames();
+      await new Promise<void>((resolve) => {
+        host.transcript.scrollToOffset(0, () => resolve());
+      });
       let arrived = false;
       const stop = subscribeTranscriptScroll(thread, (event) => {
         if (event.type === "offset" && event.scrolling && distance() === 0) {

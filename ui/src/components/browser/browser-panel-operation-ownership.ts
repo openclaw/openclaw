@@ -1,5 +1,5 @@
-import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { PanelLifecycleController } from "../solid-panel-controller.ts";
 import {
   bindBrowserRequestClient,
   type BrowserRequestClient,
@@ -9,7 +9,10 @@ import {
 } from "./browser-client.ts";
 import type { BrowserRoute, BrowserTabTarget } from "./browser-target.ts";
 
-export interface BrowserPanelControllerHost extends ReactiveControllerHost {
+export interface BrowserPanelControllerHost {
+  addController(controller: PanelLifecycleController): void;
+  removeController(controller: PanelLifecycleController): void;
+  requestUpdate(): void;
   readonly client: GatewayBrowserClient | null;
   readonly sessionKey: string;
   readonly sessionTabs?: readonly BrowserTabTarget[];

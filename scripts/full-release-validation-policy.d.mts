@@ -76,6 +76,10 @@ export interface ReleaseChildSpec {
 }
 export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
+export function isReleaseGhServerError(error: unknown): boolean;
+export function readReleaseJobListing<T>(
+  readListing: (perPage: number, options: { smallerPageFallback: boolean }) => Promise<T>,
+): Promise<T>;
 export function releaseGhRateLimitRetryAt(
   error: unknown,
   now?: number,
@@ -114,7 +118,11 @@ export function releaseCompositeJobsSha256(value: ReleaseRecord): string;
 export function compareReleaseJobsByName(left: { name: string }, right: { name: string }): number;
 export function composeReleaseAttemptJobs(
   attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>,
-  expected: { effectiveRunAttempt: number; plannedRunAttempt: number },
+  expected: {
+    effectiveRunAttempt: number;
+    effectiveRunStatus?: string;
+    plannedRunAttempt: number;
+  },
 ): {
   effectiveRunAttempt: number;
   jobs: ReleaseRecord[];

@@ -85,6 +85,7 @@ export function installRequesterCronAuthorityTestHooks() {
 
   afterEach(async () => {
     cron?.stop();
+    await cron?.waitForIdle();
     revokeRequesterCronAuthority(SESSION);
     await cleanupSessionStateForTest({ stateDir });
     closeOpenClawAgentDatabasesForTest(stateDir);
@@ -324,7 +325,6 @@ export async function createCreatorTransportTools(params: {
         sessionId: SESSION_ID,
         agentHarnessId: "openclaw",
       },
-      () => getAdmittedRunDelegatedAuthority(admitted) !== undefined,
       async () => getGatewayToolCallerIdentity(),
     ),
     "embedded Gateway caller",

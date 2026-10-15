@@ -250,6 +250,7 @@ jobs:
           if [[ "$INSTALL_USER" == "root" ]]; then
             timeout --kill-after=30s 20m docker run --rm -i \
               -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
+              -v "$RUNNER_TEMP/fedora-dnf:/var/log" \
               fedora:44 \
               bash -s <<'CONTAINER'
           set -euo pipefail
@@ -259,10 +260,11 @@ jobs:
           else
             timeout --kill-after=30s 20m docker run --rm -i \
               -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
+              -v "$RUNNER_TEMP/fedora-dnf:/var/log" \
               fedora:44 \
               bash -s <<'CONTAINER'
           set -euo pipefail
-          dnf install -y -q sudo shadow-utils
+          rpm -q sudo shadow-utils >/dev/null 2>&1 || dnf install -y -q sudo shadow-utils
           useradd --create-home --shell /bin/bash installer
           printf '%s\n' 'installer ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/installer
           chmod 0440 /etc/sudoers.d/installer
@@ -280,13 +282,20 @@ jobs:
           CONTAINER
           fi
 
+      - name: Fedora package-manager diagnostics
+        if: failure()
+        run: |
+          if sudo test -f "$RUNNER_TEMP/fedora-dnf/dnf5.log"; then
+            sudo tail -n 200 "$RUNNER_TEMP/fedora-dnf/dnf5.log"
+          fi
+
   macos-installer:
     runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -310,7 +319,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -437,7 +446,7 @@ jobs:
 
       - name: Setup Node.js
         if: steps.changes.outputs.changed == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
 

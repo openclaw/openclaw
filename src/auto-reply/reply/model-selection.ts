@@ -466,17 +466,19 @@ export async function createModelSelectionState(params: {
     sessionKey &&
     sessionEntry.authProfileOverride
   ) {
-    const { ensureAuthProfileStore, prepareAuthProfileProvider } =
+    const { ensureAuthProfileStoreAsync, prepareAuthProfileProvider } =
       await import("../../agents/auth-profiles.runtime.js");
-    const store = ensureAuthProfileStore(
+    const selection = { ...sessionEntry };
+    const authProfileId = sessionEntry.authProfileOverride;
+    const store = await ensureAuthProfileStoreAsync(
       params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined,
       {
         allowKeychainPrompt: false,
-        profileId: sessionEntry.authProfileOverride,
+        profileId: authProfileId,
       },
     );
     logStage("auth-profile-store-loaded", `profiles=${Object.keys(store.profiles).length}`);
-    const profile = store.profiles[sessionEntry.authProfileOverride];
+    const profile = store.profiles[authProfileId];
     const authConfig = resolveModelProviderAuthConfig({ config: cfg, provider, modelId: model });
     const harnessPolicy = resolveAgentHarnessPolicy({
       provider,
@@ -500,7 +502,6 @@ export async function createModelSelectionState(params: {
           credential: profile,
         }),
       );
-    const selection = { ...sessionEntry };
     const assertSelectionCurrent = () => {
       operatorAuthority?.assertCurrent();
       if (

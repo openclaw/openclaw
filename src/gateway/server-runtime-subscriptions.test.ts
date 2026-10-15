@@ -34,6 +34,7 @@ import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js
 import type { AgentEventHandlerOptions } from "./server-chat.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { registerActivitySummaryPublicationTests } from "./server-runtime-subscriptions.activity-summary.test-support.js";
+import { registerSessionPublicationTests } from "./server-runtime-subscriptions.publication.test-support.js";
 import {
   createSubscriptionTestFixture,
   lifecycleState,
@@ -43,7 +44,6 @@ import {
   registerAuditSubscriptionTests,
   registerAssistantTailSubscriptionTests,
 } from "./server-runtime-subscriptions.test-support.js";
-import { registerTranscriptPublicationTests } from "./server-runtime-subscriptions.transcript.test-support.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
 function waitForFast<T>(
@@ -181,9 +181,6 @@ vi.mock("./server-session-events.js", async (importOriginal) => {
         throw new Error("transcript handler failure");
       };
     },
-    createLifecycleEventBroadcastHandler: () => () => {
-      throw new Error("lifecycle handler failure");
-    },
   };
 });
 
@@ -270,7 +267,7 @@ describe("startGatewayEventSubscriptions", () => {
         ensureMaterialized: () => prepared.promise,
         withPreparedExactRows: async (_queries: unknown, consume: (read: unknown) => unknown) => {
           await prepared.promise;
-          return { kind: "complete" as const, value: consume(undefined) };
+          return consume(undefined);
         },
         isCurrent: (record: typeof original) => record === current,
         snapshot: () => ({ row: current ? { key: "agent:main:queued", ...current } : null }),
@@ -956,7 +953,7 @@ describe("startGatewayEventSubscriptions", () => {
     }
   });
 
-  registerTranscriptPublicationTests({
+  registerSessionPublicationTests({
     createParams,
     installHandlerFactory: (factory) => agentEventHandlerMocks.create.mockImplementation(factory),
     start: (params) => {

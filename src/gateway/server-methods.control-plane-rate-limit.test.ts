@@ -33,6 +33,7 @@ describe("gateway control-plane write rate limit", () => {
 
   function buildContext(logWarn = vi.fn()) {
     return {
+      getRuntimeConfig: () => ({}),
       logGateway: {
         warn: logWarn,
       },

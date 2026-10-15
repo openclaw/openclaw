@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import { prepareUserProfileRolePolicyAuthority } from "./user-channel-identity-operations.js";
 import { setCanonicalUserPreferences } from "./user-preferences.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import {
@@ -20,6 +21,7 @@ import {
 } from "./user-profile-github-identity.js";
 import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
+import { getUserProfileDisplay, prepareUserProfileCatalog } from "./user-profile-list.js";
 import {
   readUserProfileDirectory,
   resolveCanonicalCachedGitHubIdentity,
@@ -27,15 +29,15 @@ import {
 import { linkEmail, setAvatar, syncGitHubIdentity } from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
-import {
-  ensureProfileForEmail,
-  ensureProfileForTailscaleIdentity,
-  getUserProfileDisplay,
-} from "./user-profiles.js";
+import { ensureProfileForEmail, ensureProfileForTailscaleIdentity } from "./user-profiles.js";
 import { userProfileOperations } from "./user-profiles.worker.js";
 
+const catalogReleases: Array<() => void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
+    for (const release of catalogReleases.splice(0)) {
+      release();
+    }
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
@@ -274,6 +276,7 @@ describe("multi-account people", () => {
     linkEmail(secondary.email, person.id, options);
     expect(beforeMerge.isCurrent()).toBe(false);
     closeOpenClawStateDatabaseForTest();
+    catalogReleases.push((await prepareUserProfileCatalog(options)).release);
     for (const account of [secondary, primary, secondary]) {
       expect(syncEmailGitHubProfile(account, options)).toMatchObject({
         id: person.id,
@@ -400,6 +403,11 @@ describe("multi-account people", () => {
       id: target.id,
       githubIdentity: { login: "primary-person" },
     });
+    expect(await prepareUserProfileRolePolicyAuthority(older.id, options)).toMatchObject({
+      profileId: target.id,
+      role: null,
+      githubLogin: "primary-person",
+    });
     expect(getProfileAvatar(older.id, options)?.bytes).toEqual(new Uint8Array([4, 5]));
     expect(await readUserProfileDirectory(10, options)).toEqual({
       profiles: [{ id: target.id, logins: ["older-work", "primary-person"] }],
@@ -434,6 +442,10 @@ describe("multi-account people", () => {
       expect(
         (await resolveUserProfileGitHubAttribution([person.id], options)).get(person.id),
       ).toBeNull();
+      expect(await prepareUserProfileRolePolicyAuthority(person.id, options)).toMatchObject({
+        profileId: person.id,
+        githubLogin: null,
+      });
     }
   });
 });

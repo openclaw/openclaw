@@ -77,6 +77,10 @@ if (role === "npm") {
   process.send("ready");
 } else if (role === "openclaw") {
   trace("cli", { args });
+  const config = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
+  assert.equal(config.agents.ownership, "explicit");
+  assert.equal(Object.hasOwn(config.agents, "list"), false);
+  assert.deepEqual(Object.keys(config.agents.entries), ["main", "second"]);
   const orphanSidecar = path.join(
     process.env.OPENCLAW_STATE_DIR,
     "credentials/auth-profiles",

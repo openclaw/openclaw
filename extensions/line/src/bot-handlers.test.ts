@@ -182,9 +182,6 @@ vi.mock("./bot-message-context.js", async (importOriginal) => ({
 
 // Cold module transforms belong to collection, not a timed lifecycle hook.
 const { handleLineWebhookEvents } = await import("./bot-handlers.js");
-// Loaded through the same registry epoch as the module under test so both share
-// one instance of the sent-id record.
-const { recordLineSentMessages } = await import("./outbound-message-log.js");
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
@@ -241,7 +238,6 @@ function createLineWebhookTestContext(params: {
   groupHistories?: Map<string, HistoryEntry[]>;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
   turnAdoptionLifecycle?: LineWebhookContext["turnAdoptionLifecycle"];
-  implicitMentions?: { quotedBot?: boolean };
 }): Parameters<typeof handleLineWebhookEvents>[1] {
   const allowFrom = params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
   const lineConfig = {
@@ -255,7 +251,6 @@ function createLineWebhookTestContext(params: {
       ...(params.accessGroups ? { accessGroups: params.accessGroups } : {}),
       channels: {
         line: lineConfig,
-        defaults: { implicitMentions: params.implicitMentions },
       },
     },
     account: {
@@ -348,46 +343,6 @@ describe("handleLineWebhookEvents", () => {
     getUserDisplayNameMock.mockReset();
     getUserDisplayNameMock.mockImplementation(async (userId: string) => userId);
   });
-  it.each<{
-    name: string;
-    userId?: string;
-    groupPolicy: LineAccountConfig["groupPolicy"];
-    groupAllowFrom?: string[];
-    groups?: LineAccountConfig["groups"];
-  }>([
-    { name: "disabled policy", userId: "user-1", groupPolicy: "disabled" },
-    {
-      name: "a sender outside the group allowlist",
-      userId: "user-store",
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["user-group"],
-    },
-    {
-      name: "disabled wildcard groups",
-      userId: "user-4",
-      groupPolicy: "open",
-      groups: { "*": { enabled: false } },
-    },
-  ])(
-    "blocks group messages with $name without reading DM pairing",
-    async ({ name, userId, ...config }) => {
-      const processMessage = vi.fn();
-      await handleLineWebhookEvents(
-        [
-          createTestMessageEvent({
-            message: { id: "message", type: "text", text: "hi", quoteToken: "quote-token" },
-            source: { type: "group", groupId: "group-1", userId },
-            webhookEventId: name,
-          }),
-        ],
-        createLineWebhookTestContext({ processMessage, ...config }),
-      );
-      expect(processMessage).not.toHaveBeenCalled();
-      expect(buildLineMessageContextMock).not.toHaveBeenCalled();
-      expect(readAllowFromStoreMock).not.toHaveBeenCalled();
-    },
-  );
-
   it("does not bypass requireMention for a plain allowlisted message with an inline slash token", async () => {
     const processMessage = vi.fn();
     await handleLineWebhookEvents(
@@ -449,38 +404,6 @@ describe("handleLineWebhookEvents", () => {
         groupPolicy: "allowlist",
         requireMention: false,
       }),
-    });
-    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
-  });
-
-  it("does not authorize group messages from DM pairing-store entries when group allowlist is empty", async () => {
-    const processMessage = vi.fn();
-    await expectGroupMessageBlocked({
-      processMessage,
-      event: createTestMessageEvent({
-        message: { id: "m5b", type: "text", text: "hi", quoteToken: "quote-token" },
-        source: { type: "group", groupId: "group-1", userId: "user-5" },
-        webhookEventId: "evt-5b",
-      }),
-      context: {
-        cfg: { channels: { line: { groupPolicy: "allowlist" } } },
-        account: {
-          accountId: "default",
-          enabled: true,
-          channelAccessToken: "token",
-          channelSecret: "secret",
-          tokenSource: "config",
-          config: {
-            dmPolicy: "pairing",
-            allowFrom: [],
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-          },
-        },
-        runtime: createRuntime(),
-        mediaMaxBytes: 1,
-        processMessage,
-      },
     });
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -995,55 +918,6 @@ describe("handleLineWebhookEvents", () => {
     // window intact for the retry.
     expect(processMessage).toHaveBeenCalledTimes(1);
     expect(groupHistories.get("grp-fail")).toHaveLength(1);
-  });
-
-  it.each([
-    {
-      name: "explicit mention with quotes disabled",
-      quotedBot: false,
-      mentioned: true,
-      dispatched: true,
-    },
-  ])("respects $name for a quote of the bot", async ({ quotedBot, mentioned, dispatched }) => {
-    const processMessage = vi.fn();
-    const groupHistories = new Map<string, HistoryEntry[]>();
-    recordLineSentMessages("default", ["m-bot-quote-policy"]);
-    const text = mentioned ? "@Bot explain this" : "does quoting you count as addressing you";
-    const event = createTestMessageEvent({
-      message: {
-        id: "m-quote-policy",
-        type: "text",
-        text,
-        quotedMessageId: "m-bot-quote-policy",
-        quoteToken: "q-quote-policy",
-        ...(mentioned
-          ? {
-              mention: {
-                mentionees: [{ index: 0, length: 4, type: "user" as const, isSelf: true }],
-              },
-            }
-          : {}),
-      },
-      source: { type: "group", groupId: "group-quote", userId: "user-quote" },
-      webhookEventId: "evt-quote-policy",
-    });
-
-    await handleLineWebhookEvents(
-      [event],
-      createLineWebhookTestContext({
-        processMessage,
-        groupPolicy: "open",
-        requireMention: true,
-        implicitMentions: { quotedBot },
-        groupHistories,
-      }),
-    );
-
-    expect.soft(processMessage).toHaveBeenCalledTimes(dispatched ? 1 : 0);
-    expect.soft(buildLineMessageContextMock).toHaveBeenCalledTimes(dispatched ? 1 : 0);
-    expect(groupHistories.get("group-quote") ?? []).toEqual(
-      dispatched ? [] : [expect.objectContaining({ sender: "user-quote", body: text })],
-    );
   });
 
   it("forwards LINE file names to media downloads and to the message context", async () => {

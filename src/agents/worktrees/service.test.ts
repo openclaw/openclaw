@@ -7,6 +7,10 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -99,6 +103,7 @@ describe("ManagedWorktreeService", () => {
       runLeaseTesting.resetForTest();
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
       cleanup();
     }),
   );
@@ -601,6 +606,7 @@ describe("ManagedWorktreeService", () => {
 
   describe("run-end cleanup", () => {
     beforeEach(() => {
+      setRuntimeConfigSnapshot({});
       service = new ManagedWorktreeService({ env, now: () => now });
     });
     async function materialize(name: string) {
@@ -763,7 +769,7 @@ describe("ManagedWorktreeService", () => {
         runEndCleanup: { outcome: "retained-unpushed", at: now },
       });
       expect(retained?.removedAt).toBeUndefined();
-      await expect(fs.access(created.path)).resolves.toBeUndefined();
+      await fs.access(created.path);
     });
 
     it("records busy retention while a run lease is live", async () => {
@@ -777,7 +783,7 @@ describe("ManagedWorktreeService", () => {
         runEndCleanup: { outcome: "retained-busy", at: now },
       });
       expect(retained?.removedAt).toBeUndefined();
-      await expect(fs.access(created.path)).resolves.toBeUndefined();
+      await fs.access(created.path);
       await lease.release();
     });
 
@@ -800,7 +806,7 @@ describe("ManagedWorktreeService", () => {
           reason: "synthetic removal claim failure",
         },
       });
-      await expect(fs.access(created.path)).resolves.toBeUndefined();
+      await fs.access(created.path);
       removalClaim.mockRestore();
       await lease.release();
     });
@@ -865,7 +871,17 @@ describe("ManagedWorktreeService", () => {
     it("gc retires an unchanged missing checkout", async () => {
       const created = await fixture("missing");
       await git(repo, "worktree", "remove", "--force", created.path);
-      expect(await service.gc()).toEqual({ ...completedGcResult, orphansRetired: 1 });
+      expect(await service.gc()).toEqual({
+        ...completedGcResult,
+        orphansRetired: 1,
+        packsRemoved: 0,
+        gitMaintenance: {
+          repoRoot: created.repoRoot,
+          stage: "completed",
+          packsBefore: 0,
+          packsAfter: 0,
+        },
+      });
       expect(getRegistryWorktree(env, created.id)).toEqual({ ...created, removedAt: now });
     });
 
@@ -934,7 +950,16 @@ describe("ManagedWorktreeService", () => {
         expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
           "retained user changes\n",
         );
-        expect(result).toEqual(completedGcResult);
+        expect(result).toEqual({
+          ...completedGcResult,
+          packsRemoved: 0,
+          gitMaintenance: {
+            repoRoot: liveIdentity.repoRoot,
+            stage: "completed",
+            packsBefore: 0,
+            packsAfter: 0,
+          },
+        });
       } finally {
         gate.inspect.resolve();
         gate.resume.resolve();

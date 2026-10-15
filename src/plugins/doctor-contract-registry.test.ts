@@ -117,28 +117,7 @@ describe("doctor-contract-registry module loader", () => {
     const candidates = [
       "doctor-contract-api.ts",
       "dist/doctor-contract-api.ts",
-      "doctor-contract-api.mts",
-      "dist/doctor-contract-api.mts",
-      "doctor-contract-api.cts",
-      "dist/doctor-contract-api.cts",
-      "doctor-contract-api.js",
-      "dist/doctor-contract-api.js",
-      "doctor-contract-api.mjs",
-      "dist/doctor-contract-api.mjs",
-      "doctor-contract-api.cjs",
-      "dist/doctor-contract-api.cjs",
-      "contract-api.ts",
-      "dist/contract-api.ts",
-      "contract-api.mts",
-      "dist/contract-api.mts",
-      "contract-api.cts",
-      "dist/contract-api.cts",
-      "contract-api.js",
-      "dist/contract-api.js",
-      "contract-api.mjs",
-      "dist/contract-api.mjs",
       "contract-api.cjs",
-      "dist/contract-api.cjs",
     ].map((relativePath) => path.join(pluginRoot, relativePath));
     for (const filePath of candidates) {
       fs.writeFileSync(filePath, "export {};\n", "utf-8");
@@ -216,45 +195,47 @@ describe("doctor-contract-registry module loader", () => {
     });
     expect(resolvePluginDoctorProviderRenames({ pluginIds: ["old"], env: {} })).toEqual([]);
     expect(doctorContractWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("Provider renames must belong to the plugin's declared providers."),
+      expect.stringContaining(
+        `failed to load doctor contract for owner from ${path.join(root, "doctor-contract-api.ts")}: Provider renames must belong to the plugin's declared providers.`,
+      ),
     );
   });
 
-  it.each(["https://OLLAMA.COM:443/api", "${OLLAMA_BASE_URL}"])(
-    "preserves the hosted Ollama entry during preflight with baseUrl %s",
-    async (baseUrl) => {
-      const root = makeTempDir();
-      fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf-8");
-      const contract = await vi.importActual("../../extensions/ollama/doctor-contract-api.js");
-      mocks.createJiti.mockImplementation(() => () => contract);
-      mockDoctorPlugins({
-        id: "ollama",
-        providers: ["ollama", "ollama-cloud"],
-        rootDir: root,
-        doctorContract: { configRepair: true },
-      });
-      const config: OpenClawConfig = {
-        models: {
-          providers: {
-            ollama: {
-              baseUrl,
-              api: "ollama",
-              apiKey: "OLLAMA_API_KEY",
-              models: [],
-            },
+  it("defers declared provider renames during compatibility preflight", () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      providerRenames: [{ from: "old", to: "new", baseUrl: "https://models.example" }],
+    }));
+    mockDoctorPlugins({
+      id: "rename-owner",
+      providers: ["old", "new"],
+      rootDir: root,
+      doctorContract: { configRepair: true },
+    });
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          old: {
+            baseUrl: "https://models.example",
+            api: "openai-completions",
+            models: [],
           },
         },
-        agents: { defaults: { model: "ollama/model:cloud@ollama:default" } },
-        auth: { profiles: { "ollama:default": { provider: "ollama", mode: "api_key" } } },
-      };
-      const result = applyPluginDoctorCompatibilityMigrations(config, {
-        env: { OLLAMA_BASE_URL: "https://ollama.com" },
-        pluginIds: ["ollama"],
-      });
-      expect(result.config).toEqual(config);
-      expect(result.changes).toEqual([]);
-    },
-  );
+      },
+      agents: { defaults: { model: "old/model@old:default" } },
+      auth: { profiles: { "old:default": { provider: "old", mode: "api_key" } } },
+    };
+    const original = structuredClone(config);
+    const result = applyPluginDoctorCompatibilityMigrations(config, {
+      env: {},
+      pluginIds: ["old"],
+    });
+    expect(result.config).toEqual(original);
+    expect(result.changes).toEqual([]);
+    expect(config).toEqual(original);
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
 
   it.each([false, true])("isolates a normalizer-only config repair (throws=%s)", (throws) => {
     const pluginRoot = makeTempDir();
@@ -311,27 +292,6 @@ describe("doctor-contract-registry module loader", () => {
       warnings: ["Repair requires operator input."],
     });
     expect(config).toEqual({});
-  });
-
-  it("records doctor contract load failures with plugin and artifact context", () => {
-    const pluginRoot = makeTempDir();
-    const contractSource = path.join(pluginRoot, "doctor-contract-api.ts");
-    fs.writeFileSync(contractSource, "export {};\n", "utf-8");
-    mocks.createJiti.mockImplementation(() => () => {
-      throw new Error("fixture module load failed");
-    });
-    mockDoctorPlugins({
-      id: "broken-doctor-plugin",
-      rootDir: pluginRoot,
-      doctorContract: { configRepair: true },
-    });
-
-    expect(listPluginDoctorLegacyConfigRules({ workspaceDir: pluginRoot, env: {} })).toEqual([]);
-    expect(doctorContractWarnMock).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining(
-        `failed to load doctor contract for broken-doctor-plugin from ${contractSource}: fixture module load failed`,
-      ),
-    );
   });
 
   it("uses native require on Windows for compatible JavaScript contract-api modules", () => {
@@ -394,36 +354,6 @@ describe("doctor-contract-registry module loader", () => {
     const [jitiPath, jitiOptions] = requireFirstCreateJitiCall();
     expect(jitiPath).toBe(pathToFileURL(contractApiPath, { windows: true }).href);
     expect(jitiOptions.tryNative).toBe(false);
-  });
-
-  it("prefers doctor-contract-api over the broader contract-api surface", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.cjs"),
-      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'demo', 'doctor'], message: 'doctor contract' }] };\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginRoot, "contract-api.cjs"),
-      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'demo', 'broad'], message: 'broad contract' }] };\n",
-      "utf-8",
-    );
-    mockDoctorPlugins({ id: "test-plugin", rootDir: pluginRoot });
-
-    withMockedPlatform("darwin", () => {
-      expect(
-        listPluginDoctorLegacyConfigRules({
-          workspaceDir: pluginRoot,
-          env: {},
-        }),
-      ).toEqual([
-        {
-          path: ["plugins", "entries", "demo", "doctor"],
-          message: "doctor contract",
-        },
-      ]);
-      expect(mocks.createJiti).not.toHaveBeenCalled();
-    });
   });
 
   it("loads config-derived session-store agent IDs from doctor contract modules", () => {

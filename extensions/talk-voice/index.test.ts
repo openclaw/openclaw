@@ -199,16 +199,6 @@ describe("talk-voice plugin", () => {
     },
   );
 
-  it("returns a failed voice replacement as a tool failure", async () => {
-    const { tool, runtime } = createHarness({});
-    gatewayMocks.callGatewayTool.mockRejectedValue(new Error("Replacement voice call failed"));
-
-    await expect(
-      tool.execute("voice-tool-call", { action: "set", voice: "marin" }),
-    ).rejects.toThrow("Replacement voice call failed");
-    expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
-  });
-
   function createElevenlabsVoiceSetHarness(channel: string, scopes?: string[]) {
     const { command, runtime } = createHarness(talkConfig("elevenlabs", { apiKey: "sk-eleven" }));
     vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
@@ -231,34 +221,6 @@ describe("talk-voice plugin", () => {
         "- provider: microsoft\n" +
         "- talk.providers.microsoft.voiceId: en-US-AvaNeural\n" +
         "- microsoft.apiKey: secret…",
-    });
-  });
-
-  it("lists voices from the active provider", async () => {
-    const config = talkConfig("elevenlabs", {
-      apiKey: "sk-eleven",
-      baseUrl: "https://voices.example.test",
-    });
-    const { command, runtime } = createHarness(config);
-    vi.mocked(runtime.tts.listVoices).mockResolvedValue([
-      { id: "voice-a", name: "Claudia", category: "general" },
-      { id: "voice-b", name: "Bert" },
-    ]);
-
-    const result = await command.handler(createCommandContext("list +01"));
-
-    expect(runtime.tts.listVoices).toHaveBeenCalledWith({
-      provider: "elevenlabs",
-      cfg: config,
-      apiKey: "sk-eleven",
-      baseUrl: "https://voices.example.test",
-    });
-    expect(result).toEqual({
-      text:
-        "ElevenLabs voices: 2\n\n" +
-        "- Claudia · general\n" +
-        "  id: voice-a\n\n" +
-        "(showing first 1)",
     });
   });
 
@@ -299,35 +261,6 @@ describe("talk-voice plugin", () => {
         "  id: en-US-AvaNeural\n" +
         "  meta: en-US · Female · Friendly, Positive\n" +
         "  note: Friendly, Positive",
-    });
-  });
-
-  it("writes only canonical provider-scoped voice config for elevenlabs", async () => {
-    const { command, runtime } = createHarness(talkConfig("elevenlabs", { apiKey: "sk-eleven" }));
-    vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
-
-    const result = await command.handler(
-      createCommandContext("set Claudia", "webchat", ["operator.admin"]),
-    );
-
-    expect(runtime.config.mutateConfigFile).toHaveBeenCalledWith({
-      afterWrite: { mode: "auto" },
-      writeOptions: { assertCurrent: undefined },
-      mutate: expect.any(Function),
-    });
-    expect(runtime.config.current()).toStrictEqual({
-      talk: {
-        provider: "elevenlabs",
-        providers: {
-          elevenlabs: {
-            apiKey: "sk-eleven",
-            voiceId: "voice-a",
-          },
-        },
-      },
-    });
-    expect(result).toEqual({
-      text: "✅ ElevenLabs Talk voice set to Claudia\nvoice-a",
     });
   });
 

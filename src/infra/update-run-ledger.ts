@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { UPDATE_RUN_DRIVER_LIMIT } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
@@ -10,6 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
@@ -36,6 +36,7 @@ import {
   finishUpdateRunRecord,
   isAbandonedUpdateRun,
   isUnacknowledgedPackageOwnerRefusal,
+  type CreateUpdateRunInput,
   type UpdateRunRecord,
   type UpdateRunPhase,
   type UpdateRunStep,
@@ -74,16 +75,9 @@ export { finishUpdateRun, recordUpdateRunDiagnostics } from "./update-run-write.
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 export function createUpdateRun(
-  input: RunPatch & {
-    runId?: string;
-    trigger: UpdateRunRecord["trigger"];
-    supersedeStaleIdentityless?: boolean;
-    /** Preview history must not repair canonical task data. */
-    preview?: boolean;
-    /** Record an already completed repair without publishing a transient running row. */
-    settlement?: { reason: string; detail: string };
-  },
+  input: CreateUpdateRunInput,
   options: LedgerOptions = {},
+  assertCurrent?: (stage: "transaction" | "commit") => void,
 ): UpdateRunRecord {
   const now = Date.now();
   const initial: UpdateRunRecord = {
@@ -171,6 +165,7 @@ export function createUpdateRun(
     },
     options,
     !input.preview,
+    assertCurrent,
   );
 }
 
@@ -435,7 +430,7 @@ export function reconcilePackageOwnerRefusal(
 }
 
 function finishInterruptedRunInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   expected: UpdateRunRecord,
   status: "skipped" | "failed",
   options: LedgerOptions,

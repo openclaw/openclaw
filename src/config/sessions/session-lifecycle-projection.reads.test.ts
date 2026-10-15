@@ -1,14 +1,14 @@
 import { expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { loadSubagentMaintenanceRunsInDatabase } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
+import { resolveStateDir } from "../paths.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { withActor } from "./session-actor-worker.test-support.js";
+import type { SessionLifecycleProjectionCommit } from "./session-lifecycle-projection.types.js";
 import { bindSqliteWorkerBackend } from "./session-lifecycle-projection.worker.js";
+import { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
 
 it("keeps upsert preparation current without a read transaction and retains removal snapshots", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -23,7 +23,7 @@ it("keeps upsert preparation current without a read transaction and retains remo
           { database: database.db, databasePath: database.path },
         ),
     );
-    const input = { removals: [], upsertSessionKeys: [sessionKey], archiveDirectory: state.root };
+    const input = { removals: [], upserts: [{ sessionKey }], archiveDirectory: state.root };
     backend.execute({ type: "prepare", input });
     writeSessionEntry(database, sessionKey, { sessionId: "current", updatedAt: 2 });
     const exec = vi.spyOn(database.db, "exec");
@@ -52,36 +52,78 @@ it("keeps upsert preparation current without a read transaction and retains remo
   });
 });
 
-it("rechecks durable maintenance authority in one statement after an owning-process write", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const shared = openOpenClawStateDatabase();
-    const identity = requireOpenClawStateDatabaseIdentity(shared);
-    const params = {
-      maintenanceRunBasis: {
-        databasePath: shared.path,
-        databaseIdentity: identity.key,
-        databaseBirthtime: identity.birthtime,
-        digest: loadSubagentMaintenanceRunsInDatabase(shared).digest,
-      },
+it("reuses lifecycle actor facts and falls back after another writer or actor restart", async () => {
+  await withActor(async (f) => {
+    const sessionKey = f.target.sessionKey;
+    const original = f.read().entry!;
+    const backend = runWithSqliteWorkerStateContext(
+      { environment: { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() } },
+      () =>
+        bindSqliteWorkerBackend(
+          { agentId: "main" },
+          { database: f.database.db, databasePath: f.database.path },
+        ),
+    );
+    const input = {
+      removals: [],
+      upserts: [{ sessionKey, relatedSessionKeys: [] }],
+      archiveDirectory: "/synthetic/archives",
     };
-    assertSessionSubagentRunsCurrent(params, state.env);
-    const observed = observeHostDataSql();
+    const commit: SessionLifecycleProjectionCommit = {
+      agentId: "main",
+      projected: {
+        deletePlans: [],
+        removals: [],
+        upsertedEntries: [{ sessionKey, expectedEntry: original, entry: original }],
+      },
+      removalPlans: [],
+      materializationFailed: false,
+      maintenance: null,
+    };
+    const reads = trackSqliteStatementExecutions(f.database.db, ["entries"], (sql) =>
+      /\bselect\b[\s\S]*\bfrom "session_nodes"/iu.test(sql) && !/\bcount\(/iu.test(sql)
+        ? "entries"
+        : null,
+    );
     try {
-      assertSessionSubagentRunsCurrent(params, state.env);
-      expect(
-        observed.queries.filter((sql) => /^(?:BEGIN|COMMIT|SAVEPOINT|RELEASE)\b/iu.test(sql)),
-      ).toEqual([]);
-      // Physical rows participate in the guard even when their payload cannot decode.
-      shared.db
-        .prepare(
-          "INSERT INTO subagent_runs (run_id, child_session_key, requester_session_key, created_at, payload_json) VALUES (?, ?, ?, ?, ?)",
-        )
-        .run("new-child", "agent:main:subagent:child", "agent:main:parent", 1, "{}");
-      expect(() => assertSessionSubagentRunsCurrent(params, state.env)).toThrow(
-        "SQLite session state changed while preparing session maintenance",
-      );
+      expect(backend.execute({ type: "prepare", input })).toMatchObject({
+        store: { [sessionKey]: original },
+      });
+      f.commitLifecycle(commit);
+      expect(reads.counts.entries).toBe(0);
+
+      writeSessionEntry(f.database, sessionKey, { ...original, label: "concurrent winner" });
+      expect(backend.execute({ type: "prepare", input })).toMatchObject({
+        store: { [sessionKey]: { label: "concurrent winner" } },
+      });
+      expect(reads.counts.entries).toBeGreaterThan(0);
+      expect(() => f.commitLifecycle(commit)).toThrow(SessionEntryLifecycleUpsertConflictError);
+      expect(f.nativeEntry()?.label).toBe("concurrent winner");
+
+      const current = f.read().entry!;
+      commit.projected.upsertedEntries = [
+        { sessionKey, expectedEntry: current, entry: { ...current, label: "lifecycle winner" } },
+      ];
+      f.hooks.admit = (stage) => {
+        if (stage === "commit") {
+          throw new Error("lifecycle authority revoked");
+        }
+      };
+      expect(() => f.commitLifecycle(commit)).toThrow("lifecycle authority revoked");
+      delete f.hooks.admit;
+      expect(f.read().entry?.label).toBe("concurrent winner");
+      f.commitLifecycle(commit);
+      expect(f.read().entry?.label).toBe("lifecycle winner");
+      const beforeRestart = reads.counts.entries;
+      f.restartActor();
+      expect(backend.execute({ type: "prepare", input })).toMatchObject({
+        store: { [sessionKey]: { label: "lifecycle winner" } },
+      });
+      expect(reads.counts.entries).toBeGreaterThan(beforeRestart);
+      backend.assertSettled?.();
     } finally {
-      observed.restore();
+      reads.restore();
+      await backend.close();
     }
   });
 });

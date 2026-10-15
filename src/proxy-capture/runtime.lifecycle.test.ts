@@ -651,7 +651,10 @@ describe("capture admission generation", () => {
       process.stdout.write(JSON.stringify(released));
     `;
     const child = runRuntimeScript(root, script, ["--expose-gc"]);
-    expect(child.stderr).toBe("");
+    expect(child.stderr.replace(/\(node:\d+\)/g, "(node:PID)")).toBe(
+      "(node:PID) [DEP_PLUGIN_SDK] DeprecationWarning: Plugin SDK: initializeDebugProxyCapture is deprecated; use await initializeDebugProxyCaptureAsync() instead. The legacy contract remains supported during its deprecation period. Final compatibility day: 2026-12-31. Removal ships in the first January 2027 stable release; no SDK major is required.\n" +
+        "(Use `node --trace-deprecation ...` to show where the warning was created)\n",
+    );
     expect(child.status).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual([true, true, true]);
   });

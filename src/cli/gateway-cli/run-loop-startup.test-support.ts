@@ -211,7 +211,10 @@ export function registerGatewayStartupFailureTests(
         const onRestartStartupFailure = vi.fn(async (error: unknown) => {
           triageStarted.resolve();
           expect(error).toBe(startupError);
-          expect(closeSecond).toHaveBeenCalledExactlyOnceWith({ reason: "gateway startup failed" });
+          expect(closeSecond).toHaveBeenCalledExactlyOnceWith({
+            retainSharedState: true,
+            reason: "gateway startup failed",
+          });
           return cleanup === "unavailable"
             ? undefined
             : cleanup === "repair-failed"
@@ -231,6 +234,7 @@ export function registerGatewayStartupFailureTests(
           restart();
           await Promise.race([loopSettled, triageStarted.promise]);
           expect(closeSecond).toHaveBeenCalledExactlyOnceWith({
+            retainSharedState: true,
             reason: "gateway startup failed",
           });
           if (cleanup === "clean") {
@@ -354,4 +358,40 @@ export function registerGatewayStartupFailureTests(
       expect(Buffer.from(reason).toString()).toBe(reason);
     });
   });
+
+  it.each(["stopped daemon", "message-only error", "failed cleanup"] as const)(
+    "retains the startup failure classification for %s",
+    async (kind) => {
+      await withIsolatedSignals(async () => {
+        const { TailscaleBackendStoppedError } =
+          await import("../../infra/tailscale-backend-stopped-error.js");
+        const { GatewayStartupCleanupError } = await import("../../gateway/server-shutdown.js");
+        const stopped = new TailscaleBackendStoppedError();
+        const failure =
+          kind === "stopped daemon"
+            ? stopped
+            : kind === "message-only error"
+              ? new Error(stopped.message)
+              : new GatewayStartupCleanupError(stopped, new Error("cleanup failed"));
+        const completeBoot = vi.fn();
+        const { runGatewayLoop } = await import("./run-loop.js");
+        await expect(
+          runGatewayLoop({
+            start: vi.fn(async () => {
+              throw failure;
+            }),
+            completeBoot,
+          }),
+        ).rejects.toBe(failure);
+        expect(completeBoot).toHaveBeenCalledWith({
+          outcome: "startup_failed",
+          reason:
+            kind === "failed cleanup" ? expect.stringContaining("cleanup failed") : stopped.message,
+          ...(kind === "stopped daemon"
+            ? { startupReason: "gateway.tailscale_backend_stopped" }
+            : {}),
+        });
+      });
+    },
+  );
 }

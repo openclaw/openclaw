@@ -6,7 +6,16 @@ import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
@@ -15,7 +24,11 @@ import {
   type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
-import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import {
   loadSessionEntryReadOnly,
@@ -59,12 +72,16 @@ import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
@@ -317,6 +334,8 @@ type CliContextBudgetTestCase = {
 };
 
 describe("prepareCliRunContext", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-prepare-");
+  const retainedStateDirs: string[] = [];
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
 
   async function withAuthenticatedHistory(
@@ -633,13 +652,25 @@ describe("prepareCliRunContext", () => {
       loadManifestModelCatalog: vi.fn(() => []),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
-    getRuntimeConfigMock.mockReturnValue({});
+    const config: OpenClawConfig = {};
+    getRuntimeConfigMock.mockReturnValue(config);
+    setRuntimeConfigSnapshot(config);
     mockBuildMediaTaskRuntimeContext.mockResolvedValue(undefined);
     ensureSandboxWorkspaceForSessionMock.mockReset();
     ensureSandboxWorkspaceForSessionMock.mockResolvedValue(null);
     // Discovery cases explicitly opt out of the prepared empty catalog.
-    fixture = createCliRunnerPrepareFixture((params) =>
-      prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params }),
+    fixture = createCliRunnerPrepareFixture(
+      (params) => {
+        setRuntimeConfigSnapshot(params.config ?? {});
+        return prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params });
+      },
+      {
+        make() {
+          const dir = sessionDirs.make();
+          retainedStateDirs.push(dir);
+          return dir;
+        },
+      },
     );
   });
 
@@ -658,6 +689,13 @@ describe("prepareCliRunContext", () => {
     setActiveDegradedSecretOwners([]);
     vi.unstubAllEnvs();
     await fixture.cleanup();
+    // A few retained cases keep both broker workers warm below their store capacity.
+    for (const dir of retainedStateDirs.splice(0, retainedStateDirs.length - 4)) {
+      await closeOpenClawStateDatabaseByPathAsync(
+        resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
+      );
+    }
+    clearRuntimeConfigSnapshot();
   });
 
   it.each(["process", "plugin"] as const)(
@@ -1091,6 +1129,7 @@ describe("prepareCliRunContext", () => {
         profileId: authProfileId,
         profileType: refreshedCredential.type,
         credential: refreshedCredential,
+        readCurrentCredential: null,
       };
     });
     setCliRunnerPrepareTestDeps({
@@ -1181,106 +1220,78 @@ describe("prepareCliRunContext", () => {
     },
   );
 
-  it("does not revive a selected managed credential when auth resolution returns null", async () => {
-    const { dir } = fixture.session;
-    const agentDir = path.join(dir, "agents", "main", "agent");
-    const authProfileId = "anthropic:openclaw-managed";
-    const prepareExecution = vi.fn(async () => undefined);
-    fs.mkdirSync(agentDir, { recursive: true });
-    saveAuthProfileStore(
-      createAuthProfileStoreFixture({
-        [authProfileId]: {
-          type: "oauth",
-          provider: "anthropic",
-          access: "expired-access-token",
-          refresh: "expired-refresh-token",
-          expires: Date.now() - 60_000,
-        },
-      }),
-      agentDir,
-    );
-    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
-    setCliRunnerPrepareTestDeps({
-      resolveApiKeyForProfile: vi.fn(async () => null),
-    });
-
-    const preparation = fixture.prepare({
-      sessionKey: "agent:main:main",
-      agentDir,
-      provider: "claude-cli",
-      model: "sonnet",
-      authProfileId,
-      config: {},
-    });
-    await expect(preparation).rejects.toThrow(
-      `could not materialize selected auth profile "${authProfileId}"`,
-    );
-    await expect(preparation).rejects.toMatchObject({
-      name: "CliAuthProfilePreparationError",
-      reason: "auth",
-      profileId: authProfileId,
-      provider: "anthropic",
-      agentDir,
-    });
-    await expect(preparation).rejects.toThrow("openclaw models auth login --provider anthropic");
-    expect(prepareExecution).not.toHaveBeenCalled();
-  });
-
-  it("does not replace an explicit Claude CLI profile with a resolver fallback", async () => {
-    const { dir } = fixture.session;
-    const agentDir = path.join(dir, "agents", "main", "agent");
-    const authProfileId = "anthropic:account-a";
-    const fallbackProfileId = "anthropic:account-b";
-    const prepareExecution = vi.fn(async () => undefined);
-    fs.mkdirSync(agentDir, { recursive: true });
-    saveAuthProfileStore(
-      createAuthProfileStoreFixture({
-        [authProfileId]: {
-          type: "oauth",
-          provider: "anthropic",
-          access: "expired-account-a-access",
-          refresh: "account-a-refresh",
-          expires: Date.now() - 60_000,
-        },
-        [fallbackProfileId]: {
-          type: "oauth",
-          provider: "anthropic",
-          access: "account-b-access",
-          refresh: "account-b-refresh",
-          expires: Date.now() + 60 * 60_000,
-        },
-      }),
-      agentDir,
-    );
-    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
-    setCliRunnerPrepareTestDeps({
-      resolveApiKeyForProfile: vi.fn(async () => ({
-        apiKey: "account-b-access",
+  it.each(["missing", "different-profile"] as const)(
+    "rejects a selected credential when auth resolution returns %s",
+    async (resolution) => {
+      const { dir } = fixture.session;
+      const agentDir = path.join(dir, "agents", "main", "agent");
+      const authProfileId =
+        resolution === "missing" ? "anthropic:openclaw-managed" : "anthropic:account-a";
+      const fallbackProfileId = "anthropic:account-b";
+      const fallbackCredential = {
+        type: "oauth" as const,
         provider: "anthropic",
-        profileId: fallbackProfileId,
-        profileType: "oauth",
-        credential: {
-          type: "oauth",
-          provider: "anthropic",
-          access: "account-b-access",
-          refresh: "account-b-refresh",
-          expires: Date.now() + 60 * 60_000,
-        },
-      })),
-    });
+        access: "account-b-access",
+        refresh: "account-b-refresh",
+        expires: Date.now() + 60 * 60_000,
+      };
+      const prepareExecution = vi.fn(async () => undefined);
+      fs.mkdirSync(agentDir, { recursive: true });
+      saveAuthProfileStore(
+        createAuthProfileStoreFixture({
+          [authProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "expired-access-token",
+            refresh: "expired-refresh-token",
+            expires: Date.now() - 60_000,
+          },
+          ...(resolution === "different-profile"
+            ? { [fallbackProfileId]: fallbackCredential }
+            : {}),
+        }),
+        agentDir,
+      );
+      setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+      setCliRunnerPrepareTestDeps({
+        resolveApiKeyForProfile: vi.fn<typeof resolveApiKeyForProfileImpl>(async () =>
+          resolution === "missing"
+            ? null
+            : {
+                apiKey: fallbackCredential.access,
+                provider: fallbackCredential.provider,
+                profileId: fallbackProfileId,
+                profileType: fallbackCredential.type,
+                credential: fallbackCredential,
+                readCurrentCredential: null,
+              },
+        ),
+      });
 
-    await expect(
-      fixture.prepare({
+      const preparation = fixture.prepare({
         sessionKey: "agent:main:main",
         agentDir,
         provider: "claude-cli",
         model: "sonnet",
         authProfileId,
         config: {},
-      }),
-    ).rejects.toThrow(`resolved as "${fallbackProfileId}"`);
-    expect(prepareExecution).not.toHaveBeenCalled();
-  });
+      });
+      await expect(preparation).rejects.toThrow(
+        resolution === "missing"
+          ? `could not materialize selected auth profile "${authProfileId}"`
+          : `resolved as "${fallbackProfileId}"`,
+      );
+      await expect(preparation).rejects.toMatchObject({
+        name: "CliAuthProfilePreparationError",
+        reason: "auth",
+        profileId: authProfileId,
+        provider: "anthropic",
+        agentDir,
+      });
+      await expect(preparation).rejects.toThrow("openclaw models auth login --provider anthropic");
+      expect(prepareExecution).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
@@ -2756,42 +2767,57 @@ describe("prepareCliRunContext", () => {
   );
 
   it.each([
-    { name: "missing", tools: undefined },
-    { name: "mixed", tools: ["Read", 7] },
-  ])("clears native authority before rejecting a $name runtime snapshot", async ({ tools }) => {
-    const {
-      capture,
-      observe,
-      mintMcpLoopbackClientGrant,
-      projectNativeToolAuthority,
-      captureNativeToolAuthority,
-    } = await prepareNativeAuthority(["read"]);
-    expect(
-      mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.nativeCronCreatorToolAllowlist,
-    ).toBeNull();
-    expect(projectNativeToolAuthority).not.toHaveBeenCalled();
-    expect(captureNativeToolAuthority).not.toHaveBeenCalled();
-    capture.activate("native-capture", () => {});
-    observe(["Read"]);
-    expect(projectNativeToolAuthority).toHaveBeenCalledExactlyOnceWith(["Read"]);
-    expect(captureNativeToolAuthority.mock.calls).toEqual([[null], [["read"]]]);
-    projectNativeToolAuthority.mockClear();
+    {
+      name: "missing runtime snapshot",
+      tools: undefined,
+      invalidProjection: false,
+      error: "invalid tool list",
+    },
+    {
+      name: "mixed runtime snapshot",
+      tools: ["Read", 7],
+      invalidProjection: false,
+      error: "invalid tool list",
+    },
+    {
+      name: "non-canonical backend projection",
+      tools: ["Read", "Bash"],
+      invalidProjection: true,
+      error: 'non-canonical native capability "Bash"',
+    },
+  ])(
+    "clears native authority before rejecting a $name",
+    async ({ tools, invalidProjection, error }) => {
+      const {
+        capture,
+        observe,
+        mintMcpLoopbackClientGrant,
+        projectNativeToolAuthority,
+        captureNativeToolAuthority,
+      } = await prepareNativeAuthority(["read"]);
+      expect(
+        mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.nativeCronCreatorToolAllowlist,
+      ).toBeNull();
+      expect(projectNativeToolAuthority).not.toHaveBeenCalled();
+      expect(captureNativeToolAuthority).not.toHaveBeenCalled();
+      capture.activate("native-capture", () => {});
+      observe(["Read"]);
+      expect(projectNativeToolAuthority).toHaveBeenCalledExactlyOnceWith(["Read"]);
+      expect(captureNativeToolAuthority.mock.calls).toEqual([[null], [["read"]]]);
+      projectNativeToolAuthority.mockClear();
 
-    expect(() => observe(tools)).toThrow("invalid tool list");
-    expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(null);
-    expect(projectNativeToolAuthority).not.toHaveBeenCalled();
-  });
-
-  it("clears native authority before rejecting a non-canonical backend projection", async () => {
-    const { capture, observe, projectNativeToolAuthority, captureNativeToolAuthority } =
-      await prepareNativeAuthority(["read"]);
-    capture.activate("native-capture", () => {});
-    observe(["Read"]);
-    projectNativeToolAuthority.mockReturnValue(["Bash"]);
-
-    expect(() => observe(["Read", "Bash"])).toThrow('non-canonical native capability "Bash"');
-    expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(null);
-  });
+      if (invalidProjection) {
+        projectNativeToolAuthority.mockReturnValue(["Bash"]);
+      }
+      expect(() => observe(tools)).toThrow(error);
+      expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(null);
+      if (invalidProjection) {
+        expect(projectNativeToolAuthority).toHaveBeenCalledExactlyOnceWith(["Read", "Bash"]);
+      } else {
+        expect(projectNativeToolAuthority).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each(["unactivated", "stale"] as const)(
     "rejects native authority updates while capture is %s",
@@ -2992,13 +3018,14 @@ describe("prepareCliRunContext", () => {
           sessionKey: original.sessionKey,
           resetTriggered: false,
         });
-        sourceOperation.bindToolAuthoritySnapshot(
+        await sourceOperation.bindToolAuthoritySnapshotAsync(
           prepareReplyToolAuthority({
             run: { ...original, provider: sourceRoute.provider, traceAuthorized: true },
           }),
         );
       }
-      const toolAuthorityFingerprint = sourceOperation?.bindToolAuthorityRoute(sourceRoute);
+      const toolAuthorityFingerprint =
+        await sourceOperation?.bindToolAuthorityRouteAsync(sourceRoute);
       const context = await fixture.prepare({
         ...original,
         runId,
@@ -3059,12 +3086,12 @@ describe("prepareCliRunContext", () => {
               resetTriggered: false,
             });
             const nextRoute = { provider: "next-policy", model: "next-model" };
-            answeringPlaceholder.bindToolAuthoritySnapshot(
+            await answeringPlaceholder.bindToolAuthoritySnapshotAsync(
               prepareReplyToolAuthority({
                 run: { ...original, ...nextRoute, clientCaps: [] },
               }),
             );
-            answeringPlaceholder.bindToolAuthorityRoute(nextRoute);
+            await answeringPlaceholder.bindToolAuthorityRouteAsync(nextRoute);
             expect(replyRunRegistry.get(original.sessionKey)).toBe(answeringPlaceholder);
           }
           const answer = () =>
@@ -3684,9 +3711,35 @@ describe("prepareCliRunContext", () => {
       checksOrphan: false,
       expected: { mode: "invalidate", invalidatedReason: "auth-profile" },
     },
+    {
+      name: "preserves a Claude native-control resume when the local transcript is absent",
+      sessionId: "native-claude-session",
+      controlOperation: "compact" as const,
+      hasContent: false,
+      hasOrphan: true,
+      checksTranscript: false,
+      checksOrphan: false,
+      expected: { mode: "reuse", sessionId: "native-claude-session" },
+    },
+    {
+      name: "ignores stored CLI session candidates when the backend disables sessions",
+      sessionId: "stale-claude-sid",
+      sessionMode: "none" as const,
+      hasContent: false,
+      hasOrphan: false,
+      checksTranscript: false,
+      checksOrphan: false,
+      expected: { mode: "none" },
+    },
   ])("$name", async (testCase) => {
     const { dir } = fixture.session;
-    setCliBackendForPrepareTest();
+    if (testCase.controlOperation) {
+      setActiveNodeContexts([{ nodeId: "active-mac" }]);
+    }
+    setCliBackendForPrepareTest({
+      sessionMode: testCase.sessionMode,
+      reseedFromRawTranscriptWhenUncompacted: testCase.sessionMode === "none",
+    });
     const transcriptCheck = vi.fn(async () => testCase.hasContent);
     const orphanCheck = vi.fn(async () => testCase.hasOrphan);
     setCliRunnerPrepareTestDeps({
@@ -3701,11 +3754,12 @@ describe("prepareCliRunContext", () => {
 
     const context = await fixture.prepare({
       sessionKey: "agent:main:telegram:direct:peer",
-      prompt: "follow-up",
+      prompt: testCase.controlOperation ? "/compact" : "follow-up",
       provider: "claude-cli",
       model: "opus",
       cliSessionBinding,
       cliSessionId: testCase.sessionId,
+      controlOperation: testCase.controlOperation,
     });
 
     const transcriptArgs = { sessionId: testCase.sessionId, workspaceDir: dir };
@@ -3720,36 +3774,10 @@ describe("prepareCliRunContext", () => {
       expect(orphanCheck).not.toHaveBeenCalled();
     }
     expect(context.reusableCliSession).toEqual(testCase.expected);
-  });
-
-  it("preserves a Claude native-control resume when the local transcript is absent", async () => {
-    setActiveNodeContexts([{ nodeId: "active-mac" }]);
-    setCliBackendForPrepareTest();
-    const transcriptCheck = vi.fn(async () => false);
-    const orphanCheck = vi.fn(async () => true);
-    setCliRunnerPrepareTestDeps({
-      claudeCliSessionTranscriptHasContent: transcriptCheck,
-      claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-    });
-
-    const context = await fixture.prepare({
-      sessionKey: "agent:main:telegram:direct:peer",
-      prompt: "/compact",
-      provider: "claude-cli",
-      model: "opus",
-      cliSessionBinding: { sessionId: "native-claude-session" },
-      cliSessionId: "native-claude-session",
-      controlOperation: "compact",
-    });
-
-    expect(transcriptCheck).not.toHaveBeenCalled();
-    expect(orphanCheck).not.toHaveBeenCalled();
-    expect(context.params.prompt).toBe("/compact");
-    expect(context.systemPrompt).toBe("");
-    expect(context.reusableCliSession).toEqual({
-      mode: "reuse",
-      sessionId: "native-claude-session",
-    });
+    if (testCase.controlOperation) {
+      expect(context.params.prompt).toBe("/compact");
+      expect(context.systemPrompt).toBe("");
+    }
   });
 
   it("keeps old-account history private after replacement and native-session clear", async () => {
@@ -4108,32 +4136,6 @@ describe("prepareCliRunContext", () => {
       expect(context.openClawHistoryPrompt).toContain("earlier warm context");
       expect(context.openClawHistoryPrompt).toContain("warm follow-up");
     });
-  });
-
-  it("ignores stored CLI session candidates when the backend disables sessions", async () => {
-    setCliBackendForPrepareTest({
-      sessionMode: "none",
-      reseedFromRawTranscriptWhenUncompacted: true,
-    });
-    const transcriptCheck = vi.fn(async () => false);
-    const orphanCheck = vi.fn(async () => false);
-    setCliRunnerPrepareTestDeps({
-      claudeCliSessionTranscriptHasContent: transcriptCheck,
-      claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-    });
-
-    const context = await fixture.prepare({
-      sessionKey: "agent:main:telegram:direct:peer",
-      prompt: "stateless ask",
-      provider: "claude-cli",
-      model: "opus",
-      cliSessionBinding: { sessionId: "stale-claude-sid" },
-      cliSessionId: "stale-claude-sid",
-    });
-
-    expect(context.reusableCliSession).toEqual({ mode: "none" });
-    expect(transcriptCheck).not.toHaveBeenCalled();
-    expect(orphanCheck).not.toHaveBeenCalled();
   });
 
   it.each(["prepared", "admitted"] as const)(

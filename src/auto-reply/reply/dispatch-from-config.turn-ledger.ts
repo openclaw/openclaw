@@ -33,7 +33,7 @@ const RAW_REPLY_SEND_METHODS = {
   final: "sendFinalReply",
 } as const;
 
-type LedgerQueuedSend = {
+export type LedgerQueuedSend = {
   queued: boolean;
   outcome?: Promise<ReplyDispatchDeliveryOutcome>;
   hasPendingDelivery?: () => boolean;
@@ -179,7 +179,6 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
     hasObservedDelivery: () => outcomes.has("delivered"),
     canAttemptFallback: () =>
       !mayHaveDelivered() && !pendingDelivery && !outcomes.has("recovery-owned"),
-    hasPendingDelivery: () => pendingDelivery,
     resolveTerminalDelivery: () => terminalDelivery,
   };
 }

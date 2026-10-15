@@ -208,13 +208,13 @@ describe("Feishu Card Action Handler", () => {
     expect(message()?.mentions).toBeUndefined();
   });
 
-  it("does not cache resolved chat type when expiry would exceed a valid Date", async () => {
+  it("does not cache chat types or callback tokens when expiry would exceed a valid Date", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(maxDate);
     getChat.mockResolvedValue({ code: 0, data: { chat_type: "p2p" } });
     const event = cardEvent({ text: "/help" }, { context: { chat_id: "oc_dm_chat_boundary" } });
     await dispatch(event);
-    await dispatch({ ...event, token: "second-token" });
+    await dispatch(event);
     expect(getChat).toHaveBeenCalledTimes(2);
     expect(createFeishuClientMock).toHaveBeenCalledTimes(2);
     expect(handleFeishuMessage).toHaveBeenCalledTimes(2);
@@ -246,15 +246,6 @@ describe("Feishu Card Action Handler", () => {
     expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
     expect(logs).toContain("skipping duplicate card action token");
     expect(logs).not.toContain(event.token);
-  });
-
-  it("does not cache callback tokens when token ttl expiry overflows", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(maxDate);
-    const event = cardEvent({ text: "/help" });
-    await dispatch(event);
-    await dispatch(event);
-    expect(handleFeishuMessage).toHaveBeenCalledTimes(2);
   });
 
   it("rejects empty callback tokens before dispatch", async () => {

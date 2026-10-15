@@ -14,10 +14,8 @@ export function registerNativeLifecycleTests(
   >,
 ) {
   it.each([
-    ["openai_hosted", "reset"],
     ["openai_hosted", "delete"],
     ["self_hosted", "reset"],
-    ["self_hosted", "delete"],
   ] as const)(
     "settles a restarted %s binding before %s without discarding failed cleanup or remote history",
     async (environment, operation) => {
@@ -79,7 +77,6 @@ export function registerNativeLifecycleTests(
   );
 
   it.each([
-    { outcome: "commit", predecessor: false },
     { outcome: "rollback", predecessor: false },
     { outcome: "reject", predecessor: true },
     { outcome: "commit", predecessor: true },

@@ -1,7 +1,7 @@
 // Crabbox owns provider admission and execution; the shared remote-shell backend
 // owns workspace seeding, skills, workdir validation, and file operations.
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import {
   createRemoteShellSandboxBackend,
   createRemoteShellSandboxSession,
@@ -13,6 +13,8 @@ import {
 } from "openclaw/plugin-sdk/sandbox";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
+import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
+import { runCrabboxProcess } from "./crabbox-process.js";
 import type { ResolvedCrabboxSandboxConfig } from "./crabbox-sandbox-config.js";
 import { CRABBOX_SANDBOX_LEASE_ID_PATTERN } from "./crabbox-sandbox-lease.js";
 import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
@@ -29,6 +31,7 @@ type CrabboxSandboxBackendDependencies = {
 type CrabboxSandboxClient = {
   binary: string;
   pluginConfig: ResolvedCrabboxSandboxConfig;
+  acquisition?: Promise<void>;
   execSupport?: Promise<void>;
 };
 
@@ -53,9 +56,18 @@ async function runCrabbox(
   cwd: string | undefined,
   timeoutMs: number,
 ): Promise<SpawnResult> {
+  client.acquisition ??= ensureManagedCrabboxBinary({ binary: client.binary, cwd })
+    .then(({ binary }) => {
+      client.binary = binary;
+    })
+    .catch((error: unknown) => {
+      client.acquisition = undefined;
+      throw error;
+    });
+  await client.acquisition;
   let result: SpawnResult;
   try {
-    result = await runCommandWithTimeout([client.binary, ...args], {
+    result = await runCrabboxProcess([client.binary, ...args], {
       ...(cwd ? { cwd } : {}),
       killProcessTree: true,
       maxOutputBytes: 64 * 1024,

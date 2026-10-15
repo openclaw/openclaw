@@ -8,12 +8,6 @@ type CodeExecutionConfig = {
   timeoutSeconds?: number;
 };
 
-export function readCodeExecutionConfigRecord(
-  config?: CodeExecutionConfig,
-): Record<string, unknown> | undefined {
-  return config && typeof config === "object" ? (config as Record<string, unknown>) : undefined;
-}
-
 export function readPluginCodeExecutionConfig(cfg?: unknown): CodeExecutionConfig | undefined {
   if (!cfg || typeof cfg !== "object") {
     return undefined;
@@ -33,7 +27,7 @@ export function resolveCodeExecutionEnabled(params: {
   auth?: XaiToolAuthContext;
 }): boolean {
   return isXaiToolEnabled({
-    enabled: readCodeExecutionConfigRecord(params.config)?.enabled as boolean | undefined,
+    enabled: params.config?.enabled,
     runtimeConfig: params.runtimeConfig as never,
     sourceConfig: params.sourceConfig as never,
     auth: params.auth,

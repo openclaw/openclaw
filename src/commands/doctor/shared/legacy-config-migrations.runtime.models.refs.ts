@@ -107,7 +107,10 @@ export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boo
   );
 }
 
-type ModelRefNormalizer = (value: string) => string | null;
+type ModelRefNormalizer = (
+  value: string,
+  providerModelPair?: Record<string, unknown>,
+) => string | null;
 
 function rewriteModelRefString(
   value: string,
@@ -337,7 +340,7 @@ function rewriteProviderCatalogModelIds(
         merged = getRecord(result.value) ?? merged;
         changes.push(
           result.conflicts.length > 0
-            ? `Merged ${path}.${providerId}.models.${candidate.index} into model id ${JSON.stringify(row.normalizedId)}; kept canonical values for conflicting fields: ${result.conflicts.toSorted().join(", ")}.`
+            ? `Merged ${path}.${providerId}.models.${candidate.index} into model id ${JSON.stringify(row.normalizedId)}; kept existing values for conflicting fields: ${result.conflicts.toSorted().join(", ")}.`
             : `Merged ${path}.${providerId}.models.${candidate.index} into model id ${JSON.stringify(row.normalizedId)}.`,
         );
       }
@@ -405,7 +408,7 @@ export function rewriteModelRefs(
   const providerModelPair = provider !== undefined && model !== undefined;
   if (provider?.trim() && model !== undefined) {
     const ref = `${provider}/${model}`;
-    const rewritten = normalize(ref);
+    const rewritten = normalize(ref, record);
     if (rewritten && rewritten !== ref) {
       const slash = rewritten.indexOf("/");
       working = {

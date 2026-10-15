@@ -1,11 +1,10 @@
 import crypto from "node:crypto";
-import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   markBeforeAgentRunBlockedPayloads,
@@ -27,6 +26,7 @@ import {
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, refreshQueuedFollowupSession } from "./queue.js";
+import { isInternalSourceReplyChannel } from "./source-reply-delivery-mode.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
   resolveStrandedReplyRecovery,
@@ -58,6 +58,7 @@ export async function completeReplyAgentRun(input: {
     storePath,
   } = context;
   const { autoCompactionCount, runResult, verboseEnabled } = accounting;
+  const { completion } = context;
   const { completedSourceReplyDelivery, guardedReplyPayloads, responseUsageLine } = prepared;
   let { activeSessionEntry } = prepared;
 
@@ -207,11 +208,33 @@ export async function completeReplyAgentRun(input: {
       });
       pendingText = stripped.shouldSkip ? "" : stripped.text || pendingText;
     }
+    // The local source observer confirms the committed answer in chat history.
+    // Its live notification needs no second durable delivery state machine.
+    const canUseLocalTranscript =
+      isInternalSourceReplyChannel(sessionCtx) && !prepared.reminderNoteAppended;
     const sendableFinalPayloads = sourceReplyPolicy.suppressDelivery
       ? []
-      : finalPayloads.filter(
-          (payload) => normalizePendingFinalDeliveryPayloads([payload]).length > 0,
-        );
+      : finalPayloads.filter((payload) => {
+          const metadata = getReplyPayloadMetadata(payload);
+          const committedLocalText =
+            canUseLocalTranscript &&
+            metadata?.localTranscriptDeliveryConfirmed === true &&
+            !metadata.assistantMediaFailures?.length &&
+            !payload.mediaUrl &&
+            !payload.mediaUrls?.length &&
+            !payload.attachments?.length &&
+            !payload.presentation &&
+            !payload.interactive &&
+            !payload.channelData &&
+            !payload.location &&
+            !payload.btw &&
+            !payload.delivery &&
+            !payload.spokenText &&
+            !payload.ttsSupplement &&
+            !metadata?.responsePrefix &&
+            !metadata?.responseUsageLine;
+          return !committedLocalText && normalizePendingFinalDeliveryPayloads([payload]).length > 0;
+        });
     if (sendableFinalPayloads.length > 0) {
       const commandOwner = getCommandOwnerAuthority(followupRun.run);
       const commandOwnerReference = commandOwner
@@ -247,30 +270,18 @@ export async function completeReplyAgentRun(input: {
       });
       // A reset can rebind the key while the model runs; its replacement must
       // never inherit the old run's final or advertise an uncommitted intent.
-      const persistedPendingFinalDelivery = await applySessionEntryOperation(
-        { agentId: followupRun.run.agentId, storePath, sessionKey },
-        {
-          kind: "fields",
-          expected: { sessionId: expectedSessionId },
-          patch: {
-            pendingFinalDelivery: {
-              ...(pendingText && commandOwnerReference === undefined
-                ? { kind: "replayable" as const, text: pendingText }
-                : { kind: "transport-only" as const }),
-              intentId: pendingFinalDeliveryIntentId,
-              deliveries: pendingFinalDeliveries,
-              context: pendingFinalDeliveryContext,
-              createdAt: Date.now(),
-            },
-            updatedAt: Date.now(),
-          },
-        },
-        {
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          workerGuard: {},
-        },
-      );
+      if (!completion) {
+        throw new Error("Pending final delivery has no admitted completion actor");
+      }
+      const persistedPendingFinalDelivery = await completion.complete({
+        ...(pendingText && commandOwnerReference === undefined
+          ? { kind: "replayable" as const, text: pendingText }
+          : { kind: "transport-only" as const }),
+        intentId: pendingFinalDeliveryIntentId,
+        deliveries: pendingFinalDeliveries,
+        context: pendingFinalDeliveryContext,
+        createdAt: Date.now(),
+      });
       if (
         persistedPendingFinalDelivery?.sessionId !== expectedSessionId ||
         persistedPendingFinalDelivery.pendingFinalDelivery?.intentId !==
@@ -278,10 +289,12 @@ export async function completeReplyAgentRun(input: {
       ) {
         throw new Error("pending final delivery session changed or was deleted");
       }
+      activeSessionEntry = persistedPendingFinalDelivery;
     }
   }
+  activeSessionEntry = (await completion?.complete()) ?? activeSessionEntry;
   const result = returnWithQueuedFollowupDrain(
-    finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
+    finalPayloads.length <= 1 ? finalPayloads[0] : finalPayloads,
   );
   scheduleReplySessionMaintenance({ context, accounting, sessionEntry: activeSessionEntry });
   return result;

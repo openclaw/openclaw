@@ -95,9 +95,6 @@
       "model": "gpt-5.5",
       "responseId": "chatcmpl-parity",
       "responseModel": "gpt-5.5-response",
-      "openclawDelivery": {
-        "textPhaseRequiresTerminal": true
-      },
       "usage": {
         "input": 6,
         "output": 4,
@@ -118,6 +115,9 @@
           "cacheRead": 0,
           "cacheWrite": 0,
           "total": 0
+        },
+        "usageReport": {
+          "state": "available"
         }
       },
       "stopReason": "stop"
@@ -211,9 +211,6 @@
       "model": "gpt-5.5",
       "responseId": "chatcmpl-parity",
       "responseModel": "gpt-5.5-response",
-      "openclawDelivery": {
-        "textPhaseRequiresTerminal": true
-      },
       "usage": {
         "input": 6,
         "output": 4,
@@ -235,6 +232,9 @@
           "cacheRead": 0,
           "cacheWrite": 0,
           "total": 0
+        },
+        "usageReport": {
+          "state": "available"
         }
       },
       "stopReason": "stop"

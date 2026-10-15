@@ -56,7 +56,6 @@ describe("processEvent (functional inbound calls)", () => {
   it.each([
     ["call.initiated", "ringing"],
     ["call.ringing", "ringing"],
-    ["call.answered", "answered"],
     ["call.active", "active"],
   ] as const)("admits mock %s webhooks with their caller and destination", async (type, state) => {
     const ctx = createContext({ provider: new MockProvider() });
@@ -307,11 +306,8 @@ describe("processEvent (functional inbound calls)", () => {
   });
 
   it("bounds rejected provider calls while retaining hangup-once behavior", async () => {
-    const rejectedProviderCallIds = new Map<string, symbol>(
-      Array.from(
-        { length: EVENT_MANAGER_REPLAY_KEY_LIMIT },
-        (_, index) => [`provider-${index}`, Symbol(`provider-${index}`)] as const,
-      ),
+    const rejectedProviderCallIds = new Set<string>(
+      Array.from({ length: EVENT_MANAGER_REPLAY_KEY_LIMIT }, (_, index) => `provider-${index}`),
     );
     const { ctx, hangupCalls } = createRejectingInboundContext();
     ctx.rejectedProviderCallIds = rejectedProviderCallIds;

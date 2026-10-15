@@ -1,5 +1,8 @@
 /** Collects core config secret refs during runtime preparation. */
-import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import {
@@ -73,7 +76,15 @@ function collectModelOrSkillAssignments(params: {
         contract: entry,
       } satisfies SecretAssignmentOwner,
     };
-    collect(entry, "apiKey", `${entryPath}.apiKey`, activity);
+    const usesManagedLocalService =
+      isModel && params.context.managedSyntheticAuthProviders?.has(normalizeProviderId(id));
+    collect(entry, "apiKey", `${entryPath}.apiKey`, {
+      ...activity,
+      active: active && !usesManagedLocalService,
+      inactiveReason: usesManagedLocalService
+        ? "managed local services use provider-owned authentication."
+        : activity.inactiveReason,
+    });
     if (!isModel) {
       continue;
     }
@@ -441,6 +452,25 @@ export function collectCoreConfigAssignments(params: {
   context: ResolverContext;
   agentId?: string;
 }): void {
+  const database = params.config.database;
+  if (database?.postgres) {
+    createConfigSecretInputCollector(params)(
+      database.postgres,
+      "connection",
+      "database.postgres.connection",
+      {
+        active: database.engine === "postgres",
+        inactiveReason: "database.engine is not postgres.",
+        owner: {
+          ownerKind: "gateway",
+          ownerId: "database",
+          requiredForGateway: true,
+          disposition: "fail-closed",
+          contract: database,
+        },
+      },
+    );
+  }
   const providers = params.config.models?.providers as Record<string, ProviderLike> | undefined;
   if (providers) {
     collectModelOrSkillAssignments({

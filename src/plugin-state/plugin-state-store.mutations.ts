@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { readPreparedPluginStateNativeBinding } from "./plugin-state-native-binding-codec.js";
 import type {
   PluginStateNativeBindingDeletion,
@@ -13,8 +13,8 @@ import {
   createPluginStateError,
   deleteExpiredPluginStateEntries,
   deletePluginStateEntry,
+  deletePluginStateEntryRow,
   getPluginStateKysely,
-  hasPluginStateEntry,
   insertPluginStateEntryIfAbsent,
   isRetainedPluginStateNamespace,
   parseStoredJson,
@@ -79,7 +79,7 @@ export function restorePluginStateNativeBinding(
 }
 
 export function clearPluginStateNamespace(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string },
 ): void {
   const result = executeSqliteQuerySync(
@@ -107,20 +107,17 @@ export function registerPluginStateEntryIfAbsent(
     path: store.path,
   });
   deleteExpiredPluginStateEntries(store.db, now, params);
-  const existing = hasPluginStateEntry(store.db, { ...params, now });
-  if (existing) {
-    return false;
-  }
-  // The exact expired key can lie beyond the namespace cleanup batch.
-  deletePluginStateEntry(store.db, params);
-  assertCanInsertPluginStateEntry({ store, ...params, now });
+  // The conflict predicate also replaces an expired key beyond the bounded sweep.
   const inserted = insertPluginStateEntryIfAbsent(
     store.db,
     bindPluginStateEntry({ ...params, createdAt: now, expiresAt }),
+    now,
   );
   if (!inserted) {
     return false;
   }
+  // Capacity failure rolls back the insert and its staged receipt together.
+  assertCanInsertPluginStateEntry({ store, ...params, now, additionalEntries: 0 });
   enforcePostRegisterLimits({
     store,
     ...params,
@@ -173,11 +170,10 @@ export function consumePluginStateEntry(
   store: PluginStateDatabase,
   params: { pluginId: string; namespace: string; key: string },
 ): unknown {
-  const row = selectPluginStateEntry(store.db, { ...params, now: Date.now() });
+  const row = deletePluginStateEntryRow(store.db, { ...params, now: Date.now() });
   if (!row) {
     return undefined;
   }
-  deletePluginStateEntry(store.db, params);
   return parseStoredJson(row.value_json, "consume", store.path);
 }
 
@@ -223,14 +219,18 @@ export function movePluginStateEntries(
         path: store.path,
       });
     }
-    insertPluginStateEntryIfAbsent(store.db, {
-      plugin_id: params.pluginId,
-      namespace: params.namespace,
-      entry_key: entry.targetKey,
-      value_json: row.value_json,
-      created_at: row.created_at,
-      expires_at: row.expires_at,
-    });
+    insertPluginStateEntryIfAbsent(
+      store.db,
+      {
+        plugin_id: params.pluginId,
+        namespace: params.namespace,
+        entry_key: entry.targetKey,
+        value_json: row.value_json,
+        created_at: row.created_at,
+        expires_at: row.expires_at,
+      },
+      now,
+    );
     moved += deletePluginStateEntry(store.db, source);
   }
   return moved;

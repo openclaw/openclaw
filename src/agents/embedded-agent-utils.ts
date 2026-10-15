@@ -1,4 +1,5 @@
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 /**
  * Embedded-agent message text utilities.
  * Extracts visible assistant text, reasoning summaries, thinking-tag blocks,
@@ -287,6 +288,10 @@ export type ThinkingTagStreamState = {
   lastMatchEnd: number;
   lastTag?: { type: "open" | "close"; end: number };
 };
+
+export function createAssistantStreamBlockState() {
+  return { thinking: false, final: false, inlineCode: createInlineCodeState() };
+}
 
 export function createThinkingTagStreamState(): ThinkingTagStreamState {
   return {

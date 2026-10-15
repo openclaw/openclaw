@@ -1,4 +1,4 @@
-import { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
+import type { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
@@ -37,8 +37,11 @@ const getNodeConversationState = defineCodexBuildState(
   () => ({ queue: new KeyedAsyncQueue() }),
 );
 
-function isCurrentPublicBinding(binding: PluginConversationBinding): boolean {
-  const inspection = inspectConversationBinding({
+function isCurrentPublicBinding(
+  binding: PluginConversationBinding,
+  inspect: typeof inspectConversationBinding,
+): boolean {
+  const inspection = inspect({
     channel: binding.channel,
     accountId: binding.accountId,
     conversationId: binding.conversationId,
@@ -73,20 +76,25 @@ export async function handleCodexConversationInboundClaim(
       const text = await getNodeConversationState().queue.enqueue(
         `${data.nodeId}:${data.sessionId}`,
         async () => {
-          const { resolveCodexNativeSandboxBlock } = await import("./app-server/sandbox-guard.js");
-          const blocked = resolveCodexNativeSandboxBlock({
+          const { prepareCodexNativeSandboxBlock } = await import("./app-server/sandbox-guard.js");
+          const sandbox = await prepareCodexNativeSandboxBlock({
             config: options.config,
             sessionKey,
             surface: "Codex CLI node conversation binding",
           });
-          if (blocked) {
-            return blocked;
+          using cleanup = { [Symbol.dispose]: sandbox.release };
+          void cleanup;
+          if (sandbox.block) {
+            return sandbox.block;
           }
           const resume = options.resumeCodexCliSessionOnNode;
           if (!resume) {
             return "Codex CLI node binding is unavailable because Gateway node runtime is not attached.";
           }
-          if (!isCurrentPublicBinding(publicBinding)) {
+          const { inspectConversationBinding } =
+            await import("openclaw/plugin-sdk/conversation-binding-inspection-runtime");
+          await sandbox.assertCurrent();
+          if (!isCurrentPublicBinding(publicBinding, inspectConversationBinding)) {
             return "This Codex conversation was detached or changed before its message could run.";
           }
           const resumed = await resume({
@@ -112,9 +120,11 @@ export async function handleCodexConversationInboundClaim(
     const result = await withCodexConversationThreadActivity(data.bindingId, async () => {
       const expected = await pendingExpected;
       const { runBoundTurnWithMissingThreadRecovery } = await import("./conversation-binding.js");
-      const current = options.bindingStore.read(identity);
+      const { inspectConversationBinding } =
+        await import("openclaw/plugin-sdk/conversation-binding-inspection-runtime");
+      const current = await options.bindingStore.readAsync(identity);
       if (
-        !isCurrentPublicBinding(publicBinding) ||
+        !isCurrentPublicBinding(publicBinding, inspectConversationBinding) ||
         (expected &&
           (!current ||
             current.threadId !== expected.threadId ||

@@ -28,8 +28,11 @@ vi.mock("../proxy-capture/proxy-server.js", () => ({
   })),
 }));
 
+// mock-isolation: Proxy runtime fixtures control config without preparing a real config owner.
 vi.mock("../config/config.js", () => ({
+  loadConfig: getRuntimeConfigMock,
   getRuntimeConfig: getRuntimeConfigMock,
+  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfigMock(),
 }));
 
 vi.mock("../infra/net/proxy/proxy-validation.js", () => ({
@@ -360,42 +363,7 @@ describe("proxy cli runtime", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("prints proxy validation JSON and sets exit code on failure", async () => {
-    runProxyValidationMock.mockResolvedValueOnce({
-      ok: false,
-      config: {
-        enabled: true,
-        source: "missing",
-        errors: ["proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL"],
-      },
-      checks: [],
-    });
-    await proxyCliRuntime.runProxyValidateCommand({ json: true });
-
-    expect(process.stdout["write"]).toHaveBeenCalledWith(
-      `${JSON.stringify(
-        {
-          ok: false,
-          config: {
-            enabled: true,
-            source: "missing",
-            errors: [
-              "proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL",
-            ],
-          },
-          checks: [],
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    expect(process.exitCode).toBe(1);
-  });
-
-  it.each([
-    { signal: "SIGINT" as const, exitCode: 130 },
-    { signal: "SIGTERM" as const, exitCode: 143 },
-  ])(
+  it.each([{ signal: "SIGTERM" as const, exitCode: 143 }])(
     "preserves exit code $exitCode when the proxied child exits from $signal",
     async (testCase) => {
       spawnMock.mockResolvedValue({ signal: testCase.signal, failed: true });

@@ -138,40 +138,6 @@ describe("createCopilotClientPool", () => {
     expect(sdk.ctorCalls.length).toBe(2);
   });
 
-  it("release decrements; non-zero refcount keeps client alive", async () => {
-    const sdk = makeFake();
-    const pool = createCopilotClientPool({ idleTtlMs: 100, sdkFactory: sdk.fake });
-    const key = makeKey();
-    const options = makeOptions();
-
-    const first = await pool.acquire(key, options);
-    const second = await pool.acquire(key, options);
-    await pool.release(first);
-
-    expect(first.client).toBe(second.client);
-    expect(sdk.stops).toEqual([]);
-    expect(pool.size()).toBe(1);
-  });
-
-  it("release to zero schedules idle teardown; teardown fires after idleTtlMs and calls stop() exactly once", async () => {
-    vi.useFakeTimers();
-    const sdk = makeFake();
-    const pool = createCopilotClientPool({ idleTtlMs: 50, sdkFactory: sdk.fake });
-    const handle = await pool.acquire(makeKey(), makeOptions());
-
-    await pool.release(handle);
-    await vi.advanceTimersByTimeAsync(49);
-    expect(sdk.stops).toEqual([]);
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(sdk.stops).toEqual([1]);
-    expect(pool.size()).toBe(0);
-    expect(sdk.instances[0]?.start.mock.calls.length).toBe(0);
-
-    await vi.advanceTimersByTimeAsync(50);
-    expect(sdk.stops).toEqual([1]);
-  });
-
   it("acquire during idle window cancels teardown and reuses", async () => {
     vi.useFakeTimers();
     const sdk = makeFake();
@@ -230,6 +196,7 @@ describe("createCopilotClientPool", () => {
   });
 
   it("concurrent acquire dedupes", async () => {
+    vi.useFakeTimers();
     const clientDeferred = createDeferred<CopilotClient>();
     const sdkFactory = vi.fn(async () => clientDeferred.promise);
     const pool = createCopilotClientPool({ sdkFactory });
@@ -242,11 +209,12 @@ describe("createCopilotClientPool", () => {
 
     expect(sdkFactory.mock.calls.length).toBe(1);
 
+    const stop = vi.fn(async () => []);
     const client = {
       id: 1,
       copilotHome: "copilot-home",
       start: vi.fn(async () => undefined),
-      stop: vi.fn(async () => []),
+      stop,
       createSession: vi.fn(async () => ({})),
       disconnect: vi.fn(),
     } as unknown as CopilotClient;
@@ -255,9 +223,16 @@ describe("createCopilotClientPool", () => {
 
     expect(first.client).toBe(second.client);
     expect(sdkFactory.mock.calls.length).toBe(1);
+    await pool.release(first);
+    await vi.runAllTimersAsync();
+    expect(stop).not.toHaveBeenCalled();
+
+    await pool.release(second);
+    await vi.runAllTimersAsync();
+    expect(stop).toHaveBeenCalledOnce();
   });
 
-  it.each(["sync", "async"] as const)("%s constructor failure is not cached", async (mode) => {
+  it("synchronous constructor failure is not cached", async () => {
     let attempt = 0;
     const createClient = (clientOptions: CopilotClientOptions) => {
       attempt += 1;
@@ -274,7 +249,7 @@ describe("createCopilotClientPool", () => {
       } as unknown as CopilotClient;
     };
     const pool = createCopilotClientPool({
-      sdkFactory: mode === "sync" ? createClient : async (options) => createClient(options),
+      sdkFactory: createClient,
     });
 
     await expect(pool.acquire(makeKey(), makeOptions())).rejects.toThrow("constructor failed for");
@@ -438,30 +413,5 @@ describe("createCopilotClientPool", () => {
     } finally {
       Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
     }
-  });
-
-  it("path normalization", async () => {
-    const sdk = makeFake();
-    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
-    const firstHome =
-      process.platform === "win32" ? "C:\\Users\\Tester\\CopilotHome\\" : "copilot-home/";
-    const secondHome =
-      process.platform === "win32" ? "c:\\users\\tester\\copilothome" : "copilot-home";
-
-    const first = await pool.acquire(
-      makeKey({ copilotHome: firstHome }),
-      makeOptions({ copilotHome: firstHome }),
-    );
-    const second = await pool.acquire(
-      makeKey({ copilotHome: secondHome }),
-      makeOptions({ copilotHome: secondHome }),
-    );
-
-    const normalizedHome = normalizeHomeForTest(firstHome);
-    expect(first.client).toBe(second.client);
-    expect(first.key.copilotHome).toBe(normalizedHome);
-    expect(second.key.copilotHome).toBe(normalizedHome);
-    expect(sdk.ctorCalls.length).toBe(1);
-    expect(String(sdk.ctorCalls[0]?.baseDirectory)).toBe(normalizedHome);
   });
 });

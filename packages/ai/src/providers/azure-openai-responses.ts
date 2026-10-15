@@ -5,7 +5,10 @@ import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
-import { resolvePromptCacheKey } from "../transports/openai-transport-shared.js";
+import {
+  resolvePromptCacheKey,
+  withOpenAIErrorResponseHook,
+} from "../transports/openai-transport-shared.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { requireApiKey } from "../utils/required-api-key.js";
@@ -172,7 +175,11 @@ function createClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: headers,
     baseURL: baseUrl,
-    fetch: getAiTransportHost().buildModelFetch({ ...model, baseUrl }),
+    fetch: withOpenAIErrorResponseHook(
+      getAiTransportHost().buildModelFetch({ ...model, baseUrl }) ?? globalThis.fetch,
+      options?.onResponse,
+      model,
+    ),
     maxRetries: 0,
   };
   return isOpenAICompatibleAzureResponsesBaseUrl(baseUrl)

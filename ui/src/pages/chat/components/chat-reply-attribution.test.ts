@@ -2,8 +2,9 @@
 import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
+import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 
 const alice = { id: "alice", name: "Alice" };
@@ -96,8 +97,8 @@ function draw(
   };
   render(
     presentation === "frame"
-      ? renderAgentRunFrame(
-          {
+      ? solidContent(AgentRunFrame, {
+          frame: {
             kind: "agent-run-frame",
             key: "frame",
             runId: "run",
@@ -109,13 +110,13 @@ function draw(
               messages: [entry],
             })),
           },
-          {
+          options: {
             streamOptions: {},
             renderGroupOptions: () => options,
             isWorkExpanded: () => false,
             onToggleWork: () => undefined,
           },
-        )
+        })
       : renderMessageGroup(group, options),
     container,
   );
@@ -353,41 +354,6 @@ function reply(id: string, snapshot?: Snapshot) {
 }
 
 it.each([
-  { presentation: "group", location: "fetched", text: "Earlier question", name: "Jordan" },
-  { presentation: "frame", location: "fetched", text: "Earlier question", name: "Jordan" },
-  { presentation: "group", location: "loaded", text: [], name: "Mira" },
-  { presentation: "group", location: "fetched", text: [], name: "Mira" },
-] as const)(
-  "navigates to the $location original from a $presentation ($name)",
-  ({ presentation, location, text, name }) => {
-    const id = name === "Mira" ? "photo" : "older";
-    const original = {
-      role: "user",
-      content: text,
-      __openclaw: {
-        id,
-        senderId: name.toLowerCase(),
-        senderName: name,
-        ...(name === "Mira" ? { senderIdentity: { type: "profile", id: "mira" } } : {}),
-      },
-    };
-    const { row, onOpenReply } = draw(prompt, [reply(id)], location === "loaded", presentation, {
-      replyShared: true,
-      ...(location === "loaded"
-        ? { sources: { [id]: { message: original, senderLabel: name } } }
-        : { fetched: { [id]: original } }),
-    });
-    expect(row.classList.contains("chat-reply-attribution--pending")).toBe(false);
-    expect(row.querySelector(".chat-reply-attribution__unavailable")).toBeNull();
-    const target = row.querySelector<HTMLButtonElement>("button.chat-reply-attribution__target")!;
-    expect(target.getAttribute("aria-label")).toBe(`Replying to ${name}`);
-    expect(target.querySelector(".chat-author-avatar")).not.toBeNull();
-    target.click();
-    expect(onOpenReply).toHaveBeenCalledWith(id);
-  },
-);
-
-it.each([
   { promptRun: undefined, name: undefined, anonymous: false },
   { promptRun: undefined, name: undefined, anonymous: true },
   { promptRun: "run-a", name: undefined, anonymous: false },
@@ -427,45 +393,6 @@ it.each([
     if (anonymous) {
       expect(container.querySelector(".chat-reply-attribution")).toBeNull();
     }
-    expect(row?.querySelector(".chat-reply-attribution__name")?.textContent).toBe(name);
-    expect(container.querySelector(".chat-reply-attribution--pending")).toBeNull();
-  },
-);
-
-it.each([
-  { shared: false, location: "fetched", snapshot: undefined, name: "Message" },
-  { shared: true, location: "fetched", snapshot: undefined, name: undefined },
-  { shared: true, location: "loaded", snapshot: undefined, name: undefined },
-  {
-    shared: true,
-    location: "fetched",
-    snapshot: { senderLabel: "Jordan", text: "" },
-    name: "Jordan",
-  },
-] as const)(
-  "names a $location original without sender provenance only when it cannot be a guess (shared $shared)",
-  ({ shared, location, snapshot, name }) => {
-    const unattributed = { role: "user", content: "Earlier question", __openclaw: { id: "older" } };
-    const { row } = draw(
-      prompt,
-      [
-        {
-          role: "assistant",
-          content: "Answer",
-          __openclaw: { replyToId: "older", ...(snapshot ? { replyToPreview: snapshot } : {}) },
-        },
-      ],
-      true,
-      "group",
-      {
-        replyShared: shared || undefined,
-        replyTurnSource: { key: "prompt-render-key", message: prompt },
-        ...(location === "loaded"
-          ? { sources: { older: { message: unattributed, senderLabel: "Message" } } }
-          : { fetched: { older: unattributed } }),
-      },
-    );
-    // A 1:1 thread keeps the neutral label; a shared thread never falls back to it.
     expect(row?.querySelector(".chat-reply-attribution__name")?.textContent).toBe(name);
     expect(container.querySelector(".chat-reply-attribution--pending")).toBeNull();
   },

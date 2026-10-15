@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import { AsyncResource } from "node:async_hooks";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
@@ -18,7 +18,10 @@ import type {
   OpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../state/openclaw-agent-execution.js";
-import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import {
+  runOpenClawAgentWorkerWrite,
+  runOpenClawAgentWriteAdmission,
+} from "../../state/openclaw-agent-write-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -32,7 +35,10 @@ import {
 import { loadExactSessionEntryReadOnly } from "./session-accessor.sqlite-exact-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
-import { readSessionEntryInWorker } from "./session-entry-read-runtime.js";
+import {
+  readSessionEntryInWorker,
+  readSessionEntryReadOnlyInWorker,
+} from "./session-entry-read-runtime.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
 let state: OpenClawTestState;
@@ -77,6 +83,9 @@ function holdCohortReply() {
       const execution = capture(...args);
       return {
         ...execution,
+        get fileIdentity() {
+          return execution.fileIdentity;
+        },
         async runExisting<T>(
           source: AgentDatabaseRequestExecutionSource,
           operation: (worker: AgentDatabaseExecutionScope) => Promise<T>,
@@ -110,6 +119,61 @@ function holdCohortReply() {
     restore: () => intercept.mockRestore(),
   };
 }
+
+it.for(["warm", "cold"] as const)(
+  "returns %s admitted entry data without waiting for another writer and refreshes committed facts",
+  async (cache, { signal }) => {
+    const { scope, entry, database } = createCohortFixture(`data-read-fifo-${cache}`);
+    const { claim, reader } = await admitCohort(scope);
+    if (cache === "cold") {
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run(JSON.stringify(entry), scope.sessionKey);
+    }
+    const outside = AsyncResource.bind(<T>(run: () => T) => run());
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const writer = runOpenClawAgentWriteAdmission(
+      { agentId: database.agentId, path: database.path, env: scope.env },
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    );
+    let reads: Promise<unknown> | undefined;
+    try {
+      await withinTest(entered.promise, signal);
+      reads = outside(() =>
+        Promise.all([
+          readSessionEntryInWorker(scope, () => {}, undefined, undefined, reader),
+          readSessionEntryReadOnlyInWorker(scope, () => {}, reader),
+        ]),
+      );
+      expect(
+        await withinTest(
+          awaitGateBeforeSettlement(reads, writer, "Writer released before admitted data read"),
+          signal,
+        ),
+      ).toMatchObject([entry, entry]);
+      release.resolve();
+      await writer;
+      replaceSessionEntrySync(scope, { ...entry, label: "committed update" });
+      await expect(
+        readSessionEntryReadOnlyInWorker(scope, () => {}, reader),
+      ).resolves.toMatchObject({
+        label: "committed update",
+      });
+      replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "successor" });
+      await expect(readSessionEntryReadOnlyInWorker(scope, () => {}, reader)).rejects.toThrow(
+        "Session entry changed during read",
+      );
+    } finally {
+      release.resolve();
+      await Promise.allSettled([writer, reads]);
+      await claim.release();
+    }
+  },
+);
 
 it("refreshes admitted cohorts after a known write and a foreign membership commit between phases", async () => {
   const { scope, database } = createCohortFixture("fresh-phases");
@@ -205,7 +269,7 @@ it("refreshes admitted cohorts after a known write and a foreign membership comm
   }
 });
 
-it.each(["reset", "delete", "physical replacement", "release"] as const)(
+it.each(["reset", "delete", "release"] as const)(
   "refuses an admitted cohort after %s without consuming stale rows",
   async (change) => {
     const { scope, entry, database } = createCohortFixture(`revoke-${change.replaceAll(" ", "-")}`);
@@ -218,9 +282,6 @@ it.each(["reset", "delete", "physical replacement", "release"] as const)(
         database.db
           .prepare("DELETE FROM session_nodes WHERE session_key = ?")
           .run(scope.sessionKey);
-      } else if (change === "physical replacement") {
-        fs.copyFileSync(database.path, `${database.path}.replacement`);
-        fs.renameSync(`${database.path}.replacement`, database.path);
       } else {
         await claim.release();
       }

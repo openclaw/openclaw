@@ -73,7 +73,9 @@ export class FakeWebSocket {
   }
 }
 
-export const isProviderAuthProfileConfiguredMock = vi.fn((_params: { agentDir?: string }) => false);
+export const isProviderAuthProfileConfiguredAsyncMock = vi.fn(
+  async (_params: { agentDir?: string }) => false,
+);
 
 export const resolveApiKeyForProviderMock = vi.fn(
   async (_params: { agentDir?: string }): Promise<{ apiKey: string | undefined }> => ({

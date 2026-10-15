@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as modelRuntime from "../auto-reply/reply/model-runtime-normalization.js";
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -205,14 +206,21 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:concurrent-keyed-session";
 
-  const created = await Promise.all(
-    Array.from({ length: 4 }, () =>
-      directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
-        agentId: "main",
-        key,
-      }),
-    ),
-  );
+  const sql = observeHostDataSql();
+  let created: Awaited<ReturnType<typeof directSessionReq<{ key: string; sessionId: string }>>>[];
+  try {
+    created = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+          agentId: "main",
+          key,
+        }),
+      ),
+    );
+    expect(sql.queries.filter((query) => /\bfrom\s+"?session_nodes\b/i.test(query))).toEqual([]);
+  } finally {
+    sql.restore();
+  }
 
   expect(created.every((result) => result.ok)).toBe(true);
   expect(new Set(created.map((result) => result.payload?.key))).toEqual(new Set([key]));

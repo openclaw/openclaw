@@ -11,6 +11,7 @@ import {
   runManagedCommand,
   signalExitCode,
 } from "./lib/managed-child-process.mts";
+import { pinnedBunEnv, requirePinnedBun } from "./lib/pinned-bun.mts";
 import { resolveTestRuntime } from "./lib/test-runtime.mts";
 
 const LABEL = "agent-plugin-gateway-e2e";
@@ -73,7 +74,6 @@ function startCaptured(
 ): CapturedChild {
   const output = { stderr: "", stdout: "" };
   const stop = new AbortController();
-  const signal = AbortSignal.any([options.signal, stop.signal]);
   let outcome: ChildOutcome | undefined;
   const completion = runManagedCommand({
     bin: command,
@@ -82,7 +82,7 @@ function startCaptured(
     env: options.env,
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
-    signal,
+    signal: AbortSignal.any([options.signal, stop.signal]),
     onSignal: options.onSignal,
     timeoutMs: options.timeoutMs,
     timeoutKillGraceMs: 2_000,
@@ -100,11 +100,8 @@ function startCaptured(
     },
   }).then(
     (code) =>
-      (outcome = signal.aborted
-        ? { error: Object.assign(new Error("Managed command aborted"), { code: "ABORT_ERR" }) }
-        : code === 0
-          ? { code }
-          : { error: childFailure({ label: options.label, output }, code) }),
+      (outcome =
+        code === 0 ? { code } : { error: childFailure({ label: options.label, output }, code) }),
     (error: unknown) => (outcome = { error }),
   );
   return {
@@ -417,10 +414,17 @@ async function main() {
     children.push(mock);
     await waitForHttp(`http://127.0.0.1:${mockPort}/health`, mock, signal);
 
+    const bun = resolveTestRuntime(childEnv) === "bun" ? requirePinnedBun(childEnv) : undefined;
     const gateway = startCaptured(
-      resolveTestRuntime(childEnv) === "bun" ? "bun" : process.execPath,
+      bun ?? process.execPath,
       [entryPath, "gateway", "--port", String(gatewayPort), "--bind", "loopback"],
-      { cwd: repoRoot, env: childEnv, label: "gateway", signal, onSignal: handleSignal },
+      {
+        cwd: repoRoot,
+        env: bun ? { ...childEnv, ...pinnedBunEnv(bun, childEnv) } : childEnv,
+        label: "gateway",
+        signal,
+        onSignal: handleSignal,
+      },
     );
     children.push(gateway);
     await waitForHttp(`http://127.0.0.1:${gatewayPort}/health`, gateway, signal, 120_000);

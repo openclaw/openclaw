@@ -20,7 +20,7 @@ Use a **node host** when your Gateway runs on one machine and you want commands 
 
 Approval note:
 
-- Approval-backed node runs bind exact request context. The exec path prepares a canonical `systemRunPlan` before approval; once granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields, and re-validates the working directory before running.
+- Approval-backed node runs bind exact request context. The exec path prepares a `systemRunPlan` before approval; once granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields, and re-validates the working directory before running.
 - For direct shell/runtime file executions, OpenClaw also best-effort binds one concrete local file operand and denies the run if that file changes before execution.
 - If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command, approval-backed execution is denied instead of pretending full runtime coverage. Use sandboxing, separate hosts, or an explicit trusted allowlist/full workflow for broader interpreter semantics.
 
@@ -46,7 +46,7 @@ For a Cloudflare Access-fronted Gateway:
    openclaw connect https://gateway.example/j/<code> --service
    ```
 
-The canonical node connection keys are `gateway.cloudflareAccess.clientId` and `gateway.cloudflareAccess.clientSecret`; both accept SecretInput values. The environment fallback above persists those keys as env SecretRefs, not copied plaintext. For installed nodes, OpenClaw stores the environment values in the managed service environment file rather than inline in launchd, systemd, or Task Scheduler definitions. Resolved values are bound to the configured Gateway origin and are not followed across redirects. OpenClaw rejects the pair before resolution on plaintext `http://` or `ws://` routes; credential-free loopback and private-network plaintext behavior is unchanged.
+The node connection keys are `gateway.cloudflareAccess.clientId` and `gateway.cloudflareAccess.clientSecret`; both accept SecretInput values. The environment fallback above persists those keys as env SecretRefs, not copied plaintext. For installed nodes, OpenClaw stores the environment values in the managed service environment file rather than inline in launchd, systemd, or Task Scheduler definitions. Resolved values are bound to the configured Gateway origin and are not followed across redirects. OpenClaw rejects the pair before resolution on plaintext `http://` or `ws://` routes; credential-free loopback and private-network plaintext behavior is unchanged.
 
 ### Start a node host (foreground)
 
@@ -138,7 +138,7 @@ openclaw node start
 openclaw node restart
 ```
 
-`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node|bun>` (default: `node`), and `--force` to reinstall. Bun requires version 1.4+ with WAL-reset-safe `node:sqlite` and is an explicit opt-in; Node remains recommended. `node status`, `node stop`, and `node uninstall` are also available.
+`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node|bun>` (default: `node`), and `--force` to reinstall. Bun requires version 1.4.3+ with WAL-reset-safe `node:sqlite` and is an explicit opt-in; Node remains recommended. `node status`, `node stop`, and `node uninstall` are also available.
 
 For `npx openclaw node install` or `npx openclaw connect <join-url> --service`,
 OpenClaw installs the selected release into `<state-dir>/npm` before writing
@@ -166,7 +166,7 @@ before sending another command.
 
 A node started with `--session-host` checks workspace staging before advertising
 session capacity. On Unix, the state directory (`OPENCLAW_STATE_DIR`, or
-`~/.openclaw`) and its canonical ancestors must satisfy the filesystem owner's
+`~/.openclaw`) and its resolved ancestors must satisfy the filesystem owner's
 checks. Group- or world-writable ancestors without sticky protection prevent
 session hosting, even when the `node-host` directory itself is private.
 
@@ -261,10 +261,10 @@ Doctor-owned migration inputs. Stop the node host and run
 removing the old files.
 
 The headless node and macOS app worker check this state before preparing
-capabilities. Pending device auth, exec approvals, or a missing canonical
+capabilities. Pending device auth, exec approvals, or a missing stored
 identity with retired identity data requires Doctor; startup preserves the
 inputs and does not create replacement keys or import execution policy. A valid
-canonical identity keeps precedence over stale `identity/device.json` data.
+stored identity keeps precedence over stale `identity/device.json` data.
 
 ## System commands (node host / mac node)
 
@@ -282,7 +282,7 @@ Notes:
 - `system.run` returns stdout/stderr/exit code in the payload.
 - Shell execution goes through the `exec` tool with `host=node`; the separate `nodes.run` execution path was removed in 2026.3.31. `nodes` remains the direct-RPC surface for explicit node commands.
 - `nodes invoke` does not expose `system.run` or `system.run.prepare`; those stay on the exec path only.
-- The exec path reads the node policy and prepares a canonical `systemRunPlan`. Full/off execution resolves working-directory aliases without adding approval-only script checks. When caller or node policy requires approval binding, stricter path and script checks remain in place. Once an approval is granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields.
+- The exec path reads the node policy and prepares a `systemRunPlan`. Full/off execution resolves working-directory aliases without adding approval-only script checks. When caller or node policy requires approval binding, stricter path and script checks remain in place. Once an approval is granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields.
 - `system.notify` respects notification permission state on the macOS app; supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
 - Unrecognized node `platform` / `deviceFamily` metadata uses a conservative default allowlist that excludes `system.run` and `system.which`. If you intentionally need those commands for an unknown platform, add them explicitly via `gateway.nodes.commands.allow`.
 - A `system.run` request supports `cwd`, an `env` map, `timeoutMs`, and `needsScreenRecording` — these are fields of the request payload carried on the exec path (see above), not `nodes invoke` CLI flags.
@@ -316,3 +316,41 @@ Notes:
 
 - The macOS menubar app connects to the Gateway WS server as a node (so `openclaw nodes …` works against this Mac).
 - In remote mode, the app opens an SSH tunnel for the Gateway port and connects to `localhost`.
+
+## Existing-folder session consent
+
+`nodeHost.workerRuns.folders` is a node-local array of existing directory roots.
+When unset, any existing directory is allowed, except filesystem roots and
+directories overlapping private worker storage. A non-empty list restricts access
+to those roots and their descendants; `[]` explicitly disables existing-folder
+sessions and capability advertising, even when `nodeHost.workerRuns.enabled` is
+true. Configure restrictions on the device, not the Gateway:
+
+```json5
+{
+  nodeHost: {
+    workerRuns: {
+      enabled: true,
+      folders: ["~/src/tries"],
+    },
+  },
+}
+```
+
+Roots and selected folders accept absolute paths or a leading `~`. The node
+resolves both through realpath on every operation. A selected directory must
+remain inside a configured root when restrictions are set; a symlink cannot
+escape that root. Files, missing directories, filesystem roots, and directories
+overlapping OpenClaw's private worker storage are rejected in every mode. Prefer
+narrow roots rather than your home directory when restricting access. Restart a foreground node process after changing its
+local configuration so it advertises the updated consent.
+
+The unrestricted default does not expand the existing session-host exec trust
+boundary: operators can already run agents with exec on this device. This list is
+a folder-selection guardrail for the Gateway's session requests, not an exec
+sandbox or a boundary against a compromised Gateway.
+
+An existing-folder session stays pinned to that device. OpenClaw does not copy,
+reconcile, reset, or remove the selected folder. Worker HOME and metadata use
+private node storage. See [Session hosting](/nodes/session-hosting) for runtime
+support and the New Session flow.

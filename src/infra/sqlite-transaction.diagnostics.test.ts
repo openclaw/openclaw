@@ -5,7 +5,9 @@ import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
+  runSqliteWorkerTransactionSync,
 } from "./sqlite-transaction.js";
+import { exchangeSqliteDatabaseAdmissions } from "./sqlite-worker-database-admission-relay.js";
 import {
   createSqliteWorkerOperationAdmission,
   requestSqliteWorkerOperationAdmission,
@@ -39,6 +41,91 @@ afterEach(() => {
 });
 
 describe("SQLite transaction diagnostics", () => {
+  it.each(["callback", "commit"])("attributes a metadata relay wait during %s", (stage) => {
+    const db = createDatabase();
+    const logger = { warn: vi.fn() };
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
+    vi.spyOn(Atomics, "wait").mockImplementation(() => {
+      expect(db.isTransaction).toBe(true);
+      now += 1_000;
+      admission.service();
+      return "ok";
+    });
+    const exec = db.exec.bind(db);
+    vi.spyOn(db, "exec").mockImplementation((sql) => {
+      if (sql === "COMMIT") {
+        if (stage === "commit") {
+          exchangeSqliteDatabaseAdmissions(admission.port, []);
+        }
+        now += 3;
+      }
+      exec(sql);
+    });
+    try {
+      withSqliteReaderOwner(
+        { operation: "session.actor.appendTranscriptEvent", ownerKind: "worker" },
+        () =>
+          runSqliteImmediateTransactionSync(
+            db,
+            () => {
+              if (stage === "callback") {
+                exchangeSqliteDatabaseAdmissions(admission.port, []);
+              }
+              db.prepare("INSERT INTO entries VALUES ('appended', 'tiny')").run();
+              now += 7;
+            },
+            { logger },
+          ),
+      );
+      expect(readEntries(db)).toEqual(["appended"]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "slow SQLite transaction hold",
+        expect.objectContaining({
+          callbackKind: "application-transaction",
+          elapsedMs: 1_010,
+          phases: {
+            prepareMs: 0,
+            beginMs: 0,
+            sqlMs: 7,
+            hostAdmissionWaitMs: 0,
+            databaseAdmissionWaitMs: 1_000,
+            commitMs: 3,
+          },
+        }),
+      );
+    } finally {
+      admission.finish();
+    }
+  });
+
+  it("waits for transaction admission before BEGIN and still refuses a revoked commit", () => {
+    const db = createDatabase();
+    const phases: Array<[string, boolean]> = [];
+    expect(() =>
+      runSqliteWorkerTransactionSync(
+        {
+          database: db,
+          databasePath: ":memory:",
+          admit(stage) {
+            phases.push([stage, db.isTransaction]);
+            if (stage === "commit") {
+              throw new Error("authority revoked");
+            }
+          },
+        },
+        () => db.prepare("INSERT INTO entries VALUES ('refused', 'value')").run(),
+      ),
+    ).toThrow("authority revoked");
+    expect(phases).toEqual([
+      ["transaction", false],
+      ["commit", true],
+    ]);
+    expect(readEntries(db)).toEqual([]);
+    expect(db.isTransaction).toBe(false);
+  });
+
   it("separates preparation, SQL, host wait and a failed COMMIT", () => {
     const db = createDatabase();
     const logger = { warn: vi.fn() };
@@ -99,6 +186,7 @@ describe("SQLite transaction diagnostics", () => {
             beginMs: 100,
             sqlMs: 50,
             hostAdmissionWaitMs: 700,
+            databaseAdmissionWaitMs: 0,
             commitMs: 500,
           },
         }),

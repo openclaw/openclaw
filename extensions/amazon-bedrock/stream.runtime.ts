@@ -80,7 +80,6 @@ import {
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import {
   asOptionalRecord,
-  isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBedrockRuntimeAuth } from "./aws-credential-refresh.js";
@@ -96,17 +95,14 @@ import {
   supportsBedrockNativeMaxEffort,
 } from "./thinking-policy.js";
 
-type Block = (TextContent | ThinkingContent | ToolCall) & {
-  index?: number;
-  partialJson?: string;
-};
+type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number };
 type BedrockEventSink = { push(event: AssistantMessageEvent): void };
 type ToolArgumentPreviewSchedules = WeakMap<
   ToolCall,
   ReturnType<typeof createToolArgumentPreviewSchedule>
 >;
 type PendingBedrockToolCall = {
-  block: ToolCall & Pick<Block, "partialJson">;
+  block: ToolCall;
   contentIndex: number;
 };
 type BedrockBlockState = {
@@ -361,8 +357,6 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
           output.content = output.content.filter((block) => block.type !== "toolCall");
           for (const block of output.content) {
             delete (block as Block).index;
-            // partialJson is only a streaming scratch buffer; never persist it.
-            delete (block as Block).partialJson;
           }
           if (refusalBuffer) {
             refusalBuffer.discard();
@@ -473,12 +467,11 @@ function handleContentBlockStart(
   const start = event.start;
 
   if (start?.toolUse) {
-    const startArguments = isRecord(start.toolUse) ? start.toolUse.input : undefined;
     const block: Block = {
       type: "toolCall",
       id: start.toolUse.toolUseId || "",
       name: start.toolUse.name || "",
-      arguments: isRecord(startArguments) ? startArguments : {},
+      arguments: {},
       partialJson: "",
       index,
     };

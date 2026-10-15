@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
-import { setConfigValueAtPath } from "../config/config-paths.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolProfileId } from "../config/types.tools.js";
@@ -73,15 +72,11 @@ export function applyLocalSetupWorkspaceConfig(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): OpenClawConfig {
-  const workspaceConflict = resolveOnboardingWorkspaceConflict(
-    baseConfig,
-    workspaceDir,
-    options.env,
-  );
-  const hasRoster = listAgentEntries(baseConfig).length > 0;
   const shouldUpdateWorkspace =
     !options.preserveWorkspace &&
-    (options.allowWorkspaceChange || (!hasRoster && !workspaceConflict));
+    (options.allowWorkspaceChange ||
+      (listAgentEntries(baseConfig).length === 0 &&
+        !resolveOnboardingWorkspaceConflict(baseConfig, workspaceDir, options.env)));
   return {
     ...baseConfig,
     ...(shouldUpdateWorkspace
@@ -107,11 +102,11 @@ export function applyLocalSetupWorkspaceConfig(
 }
 
 export function applySkipBootstrapConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = structuredClone(cfg);
-  setConfigValueAtPath(
-    next as Record<string, unknown>,
-    ["agents", "defaults", "skipBootstrap"],
-    true,
-  );
-  return next;
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: { ...cfg.agents?.defaults, skipBootstrap: true },
+    },
+  };
 }

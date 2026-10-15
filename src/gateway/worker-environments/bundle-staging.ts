@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { root, type Root } from "../../infra/fs-safe.js";
+import { FsSafeError, root, type Root } from "../../infra/fs-safe.js";
 import {
   WORKER_BUNDLE_ARTIFACT_MODE,
   WORKER_BUNDLE_ARTIFACT_PATHS,
@@ -20,28 +20,17 @@ async function stageWorkerDeployArtifact(params: {
   artifactPath: string;
 }): Promise<WorkerBundleHashEntry> {
   const relativeSourcePath = `dist/worker/${params.artifactPath}`;
-  const sourcePath = path.join(params.sourceRoot, relativeSourcePath);
-  let expectedRealPath: string;
-  try {
-    expectedRealPath = await fs.realpath(sourcePath);
-  } catch (error) {
-    throw new Error(
-      `OpenClaw worker deploy artifact is missing; build the running package at ${params.sourceRoot}`,
-      { cause: error },
-    );
-  }
-  const expectedPath = path.resolve(params.sourceRoot, relativeSourcePath);
-  if (expectedRealPath !== expectedPath) {
-    throw new Error(`Unsafe worker deploy artifact: ${relativeSourcePath}`);
-  }
-  const initialStats = await fs.lstat(sourcePath);
-  if (initialStats.isSymbolicLink() || !initialStats.isFile()) {
-    throw new Error(`Unsafe worker deploy artifact: ${relativeSourcePath}`);
-  }
-  const { buffer } = await params.source.read(sourcePath, {
-    symlinks: "reject",
-    hardlinks: "allow",
-  });
+  const { buffer } = await params.source
+    .read(relativeSourcePath, { symlinks: "reject", hardlinks: "allow" })
+    .catch((error: unknown) => {
+      if (error instanceof FsSafeError && error.category === "policy") {
+        throw new Error(`Unsafe worker deploy artifact: ${relativeSourcePath}`, { cause: error });
+      }
+      throw new Error(
+        `OpenClaw worker deploy artifact is missing; build the running package at ${params.sourceRoot}`,
+        { cause: error },
+      );
+    });
   // Stage exactly the hashed bytes so a concurrent rebuild cannot diverge archive and hash.
   await fs.writeFile(path.join(params.stagingRoot, params.artifactPath), buffer, {
     flag: "wx",

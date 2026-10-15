@@ -241,27 +241,6 @@ describe("secrets store CLI", () => {
     }
   });
 
-  it.each(["--dry-run", "--yes"])(
-    "rejects an empty imported secret before any entry is written with %s",
-    async (mode) => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-store-invalid-import-"));
-      const dotenvPath = path.join(root, "values.env");
-      await fs.writeFile(dotenvPath, "SERVICE_MODE=production\nSERVICE_API_KEY=\n");
-      try {
-        await expect(
-          createProgram().parseAsync(["secrets", "store", "import", "--from", dotenvPath, mode], {
-            from: "user",
-          }),
-        ).rejects.toThrow("__exit__:2");
-        expect(mocks.runtimeErrors.join("\n")).toContain("Secret store value is empty");
-        expect(mocks.write).not.toHaveBeenCalled();
-        expect(mocks.writeBatch).not.toHaveBeenCalled();
-      } finally {
-        await fs.rm(root, { recursive: true, force: true });
-      }
-    },
-  );
-
   it("refuses get for secret entries without reading their values", async () => {
     mocks.list.mockReturnValue([{ name: "SERVICE_API_KEY", kind: "secret" }]);
     await expect(

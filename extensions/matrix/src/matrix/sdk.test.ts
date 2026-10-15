@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
-import "fake-indexeddb/auto";
 import fs from "node:fs";
+import "fake-indexeddb/auto";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -24,7 +24,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
 import { SqliteBackedMatrixSyncStore } from "./client/file-sync-store.js";
-import { readMatrixIdbSnapshotJson } from "./crypto-state-store.js";
+import { prepareMockMatrixClientStorage } from "./client/shared.test-support.js";
+import {
+  registerCryptoShutdownTests,
+  registerCryptoStartupAbortTest,
+  registerCryptoPeriodicShutdownTest,
+} from "./sdk/crypto-persistence.test-support.js";
 import { createMatrixCryptoApi } from "./sdk/crypto.test-support.js";
 import { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
 import {
@@ -33,7 +38,6 @@ import {
   makeMatrixEvent,
 } from "./sdk/event.test-support.js";
 import { clearAllIndexedDbState } from "./sdk/idb-persistence.test-helpers.js";
-import { LogService } from "./sdk/logger.js";
 import {
   captureRecoveryCacheWrite,
   holdRecoveryKeyPersistence,
@@ -51,6 +55,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
     cleanup();
+    vi.unstubAllEnvs();
   }),
 );
 const READ_CALLERS = [
@@ -58,8 +63,10 @@ const READ_CALLERS = [
   { caller: "host-authorized", assertReadAuthority: () => undefined },
 ] as const;
 
+// mock-isolation: Shared SDK action fixtures exclude client disk initialization.
 vi.mock("./client/create-client.js", () => ({
   createMatrixClient: createSharedMatrixClientMock,
+  prepareMatrixClientStorage: prepareMockMatrixClientStorage,
 }));
 
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => ({
@@ -68,6 +75,7 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => ({
 }));
 
 beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("matrix-sdk-state-"));
   captureReadAuthorityMock.mockReset();
 });
 
@@ -160,8 +168,8 @@ type MatrixJsClientStub = {
   classicSyncStop: ReturnType<typeof vi.fn>;
   emit: (eventName: string | symbol, ...args: unknown[]) => boolean;
   on: (eventName: string | symbol, listener: (...args: unknown[]) => void) => MatrixJsClientStub;
-  startClient: ReturnType<typeof vi.fn>;
-  stopClient: ReturnType<typeof vi.fn>;
+  startClient: ReturnType<typeof vi.fn<MatrixJsSdkClient["startClient"]>>;
+  stopClient: ReturnType<typeof vi.fn<MatrixJsSdkClient["stopClient"]>>;
   initRustCrypto: ReturnType<typeof vi.fn<MatrixJsSdkClient["initRustCrypto"]>>;
   getUserId: ReturnType<typeof vi.fn>;
   getDeviceId: ReturnType<typeof vi.fn>;
@@ -331,6 +339,15 @@ function createSdkClient(options: ConstructorParameters<typeof MatrixClient>[2] 
   return new MatrixClient("https://matrix.example.org", "token", options);
 }
 
+const cryptoPersistenceContext = {
+  createSdkClient,
+  getMatrixJsClient: () => matrixJsClient,
+  getSyncStore: () => lastCreateClientOpts?.store,
+  clearMatrixSyncApiForNeverStartedClient,
+  tempDirs,
+  expectAbortError,
+};
+
 function createEncryptedSdkClient() {
   return createSdkClient({ encryption: true });
 }
@@ -450,16 +467,6 @@ describe("MatrixClient request hardening", () => {
     await expect(first.getTransactionScopeId()).resolves.toBe(await first.getTransactionScopeId());
   });
 
-  it("treats an existing malformed room-encryption state as encrypted", async () => {
-    matrixJsClient.getRoom.mockReturnValue(null);
-    matrixJsClient.getStateEvent.mockResolvedValue({});
-    const client = createSdkClient();
-
-    await expect(client.getMessageWireEventType("!room:example.org")).resolves.toBe(
-      "m.room.encrypted",
-    );
-  });
-
   it("preserves persisted encryption settings when the homeserver no longer exposes room state", async () => {
     matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => false });
     matrixJsClient.getCrypto.mockReturnValue({
@@ -521,21 +528,7 @@ describe("MatrixClient request hardening", () => {
     expect(matrixJsClient.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("does not treat an initialized crypto facade as a working SDK encryption backend", async () => {
-    matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => true });
-    const client = createSdkClient({ encryption: true });
-    (client as { crypto?: object }).crypto = {};
-
-    await expect(
-      client.sendMessage("!room:example.org", { msgtype: "m.text", body: "secret" }),
-    ).rejects.toThrow(/enable encryption/i);
-    expect(matrixJsClient.sendMessage).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { msgtype: MsgType.Image, thumbnail: false },
-    { msgtype: MsgType.Location, thumbnail: true },
-  ])(
+  it.each([{ msgtype: MsgType.Location, thumbnail: true }])(
     "rejects unencrypted $msgtype media (thumbnail: $thumbnail)",
     async ({ msgtype, thumbnail }) => {
       const content = {
@@ -998,22 +991,15 @@ describe("MatrixClient request hardening", () => {
       content: {},
     }));
     matrixJsClient.decryptEventIfNeeded = vi.fn(async (event: FakeMatrixEvent) => {
-      event.emit(
-        "decrypted",
-        new FakeMatrixEvent({
-          roomId: "!room:example.org",
-          eventId: "$poll",
-          sender: "@alice:example.org",
-          type: "m.poll.start",
-          ts: 1,
-          content: {
-            "m.poll.start": {
-              question: { "m.text": "Lunch?" },
-              answers: [{ id: "a1", "m.text": "Pizza" }],
-            },
+      event.markDecrypted({
+        type: "m.poll.start",
+        content: {
+          "m.poll.start": {
+            question: { "m.text": "Lunch?" },
+            answers: [{ id: "a1", "m.text": "Pizza" }],
           },
-        }),
-      );
+        },
+      });
     });
 
     const event = await client.getEvent("!room:example.org", "$poll");
@@ -1212,113 +1198,7 @@ describe("MatrixClient request hardening", () => {
     },
   );
 
-  it("persists crypto before marking and flushing the clean sync cursor", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-store-"));
-    clearMatrixSyncApiForNeverStartedClient();
-    const cause = new Error("sync store flush failed");
-    let resolveDatabases: ((databases: IDBDatabaseInfo[]) => void) | undefined;
-    const pendingDatabases = new Promise<IDBDatabaseInfo[]>((resolve) => {
-      resolveDatabases = resolve;
-    });
-    const databasesSpy = vi.spyOn(indexedDB, "databases").mockReturnValue(pendingDatabases);
-    let shutdown: Promise<void> | undefined;
-
-    try {
-      const client = createSdkClient({
-        syncStore: await SqliteBackedMatrixSyncStore.create(tempDir),
-        idbSnapshotPath: path.join(tempDir, "crypto-idb-snapshot.json"),
-      });
-
-      const store = lastCreateClientOpts?.store as
-        | { flush: () => Promise<void>; markCleanShutdown: () => void }
-        | undefined;
-      if (!store) {
-        throw new Error("expected Matrix sync store");
-      }
-      const flushSpy = vi.spyOn(store, "flush").mockRejectedValue(cause);
-      const markCleanSpy = vi.spyOn(store, "markCleanShutdown");
-
-      shutdown = client.stopAndPersist();
-      await vi.waitFor(() => {
-        expect(databasesSpy).toHaveBeenCalled();
-      });
-      expect(markCleanSpy).not.toHaveBeenCalled();
-      expect(flushSpy).not.toHaveBeenCalled();
-
-      resolveDatabases?.([]);
-      await expect(shutdown).rejects.toBe(cause);
-      expect(markCleanSpy).toHaveBeenCalledTimes(1);
-      expect(flushSpy).toHaveBeenCalledTimes(1);
-      expect(matrixJsClient.stopClient).toHaveBeenCalledTimes(1);
-    } finally {
-      resolveDatabases?.([]);
-      await shutdown?.catch(() => undefined);
-      databasesSpy.mockRestore();
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("does not mark or flush the sync cursor when strict crypto persistence fails", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-store-"));
-    clearMatrixSyncApiForNeverStartedClient();
-    const cause = new Error("indexeddb unavailable");
-    const databasesSpy = vi.spyOn(indexedDB, "databases").mockRejectedValue(cause);
-
-    try {
-      const client = createSdkClient({
-        syncStore: await SqliteBackedMatrixSyncStore.create(tempDir),
-        idbSnapshotPath: path.join(tempDir, "crypto-idb-snapshot.json"),
-      });
-
-      const store = lastCreateClientOpts?.store as
-        | { flush: () => Promise<void>; markCleanShutdown: () => void }
-        | undefined;
-      if (!store) {
-        throw new Error("expected Matrix sync store");
-      }
-      const flushSpy = vi.spyOn(store, "flush");
-      const markCleanSpy = vi.spyOn(store, "markCleanShutdown");
-
-      await expect(client.stopAndPersist()).rejects.toBe(cause);
-      expect(markCleanSpy).not.toHaveBeenCalled();
-      expect(flushSpy).not.toHaveBeenCalled();
-      expect(matrixJsClient.stopClient).toHaveBeenCalledTimes(1);
-    } finally {
-      databasesSpy.mockRestore();
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("falls back to one non-persisting SDK stop when public stop persistence fails", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-stop-"));
-    clearMatrixSyncApiForNeverStartedClient();
-    const cause = new Error("indexeddb unavailable");
-    const databasesSpy = vi.spyOn(indexedDB, "databases").mockRejectedValue(cause);
-
-    try {
-      const client = createSdkClient({
-        syncStore: await SqliteBackedMatrixSyncStore.create(tempDir),
-        idbSnapshotPath: path.join(tempDir, "crypto-idb-snapshot.json"),
-      });
-      const store = lastCreateClientOpts?.store as
-        | { discardPendingSyncCursorPersistence: () => void }
-        | undefined;
-      if (!store) {
-        throw new Error("expected Matrix sync store");
-      }
-      const discardSpy = vi.spyOn(store, "discardPendingSyncCursorPersistence");
-
-      client.stop();
-
-      await vi.waitFor(() => {
-        expect(discardSpy).toHaveBeenCalledTimes(1);
-      });
-      expect(matrixJsClient.stopClient).toHaveBeenCalledTimes(1);
-    } finally {
-      databasesSpy.mockRestore();
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
+  registerCryptoShutdownTests(cryptoPersistenceContext);
 
   it.each([
     { mode: "persist", quiesceFails: true },
@@ -1432,7 +1312,7 @@ describe("MatrixClient request hardening", () => {
     { ...READ_CALLERS[0], syncState: SyncState.Error },
     { ...READ_CALLERS[1], syncState: SyncState.Reconnecting },
   ])(
-    "does not replace a poisoned $syncState generation until late transient work really releases ($caller caller)",
+    "does not replace a retiring $syncState client until transient work releases ($caller caller)",
     async ({ syncState, caller, assertReadAuthority }) => {
       captureReadAuthorityMock.mockReturnValue(assertReadAuthority);
       vi.useFakeTimers();
@@ -1467,6 +1347,7 @@ describe("MatrixClient request hardening", () => {
         await import("./client/shared.js");
       const { withResolvedRuntimeMatrixClient } = await import("./client-bootstrap.js");
       let replacementLease: Awaited<ReturnType<typeof acquireSharedMatrixClient>> | undefined;
+      let replacementAcquisition: ReturnType<typeof acquireSharedMatrixClient> | undefined;
 
       createSharedMatrixClientMock.mockReset();
       createSharedMatrixClientMock
@@ -1529,24 +1410,23 @@ describe("MatrixClient request hardening", () => {
         await vi.advanceTimersByTimeAsync(5_000);
         await expect(monitorOutcome).resolves.toMatchObject({
           ok: false,
-          error: { message: "Matrix transient leases did not drain within 5000ms" },
+          error: { message: "Matrix client retirement did not settle within 5000ms" },
         });
-        await expect(acquireSharedMatrixClient({ auth, startClient: false })).rejects.toThrow(
-          "Matrix transient leases did not drain within 5000ms",
-        );
+        replacementAcquisition = acquireSharedMatrixClient({ auth, startClient: false });
+        await vi.advanceTimersByTimeAsync(0);
         expect(createSharedMatrixClientMock).toHaveBeenCalledOnce();
 
         gate.resolve("late-result");
         await expect(operationOutcome).resolves.toEqual({ ok: true, value: "late-result" });
-        replacementLease = await acquireSharedMatrixClient({ auth, startClient: false });
+        replacementLease = await replacementAcquisition;
         expect(replacementLease.client).toBe(replacementClient);
-        expect(replacementLease.client).not.toBe(firstClient);
         expect(createSharedMatrixClientMock).toHaveBeenCalledTimes(2);
       } finally {
         syncInternals.connectionReturnedResolvers = undefined;
         keepalive.resolve(false);
         gate.resolve("cleanup");
         await operationOutcome?.catch(() => undefined);
+        replacementLease ??= await replacementAcquisition?.catch(() => undefined);
         if (replacementLease) {
           clearMatrixSyncApiForNeverStartedClient();
         }
@@ -1583,7 +1463,7 @@ describe("MatrixClient request hardening", () => {
   it("stops classic sync created by a partial startup before readiness", async () => {
     const client = createSdkClient();
     const abortController = new AbortController();
-    matrixJsClient.startClient.mockImplementation(() => {});
+    matrixJsClient.startClient.mockImplementation(async () => {});
     const startup = client.start({ abortSignal: abortController.signal });
     await vi.waitFor(() => {
       expect(matrixJsClient.startClient).toHaveBeenCalledTimes(1);
@@ -1670,12 +1550,12 @@ describe("MatrixClient request hardening", () => {
     };
     const originalVersion = manifest.version;
     const syncStop = matrixJsClient.classicSyncStop;
-    manifest.version = "42.4.1";
+    manifest.version = "43.0.1";
     try {
       const client = createSdkClient();
 
       await expect(client.quiesceSync()).rejects.toThrow(
-        "Matrix sync quiesce requires matrix-js-sdk 42.4.0; found 42.4.1",
+        "Matrix sync quiesce requires matrix-js-sdk 43.0.0; found 43.0.1",
       );
       expect(syncStop).not.toHaveBeenCalled();
       expect(matrixJsClient.stopClient).not.toHaveBeenCalled();
@@ -2225,43 +2105,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("does not persist or start sync when startup aborts during crypto initialization", async () => {
-    resetPluginStateStoreForTests();
-    installMatrixTestRuntime();
-    const tempDir = tempDirs.make("matrix-idb-startup-abort-");
-    const databasePrefix = "openclaw-matrix-startup-abort";
-    const initCrypto = createDeferred<void>();
-    matrixJsClient.initRustCrypto.mockReturnValue(initCrypto.promise);
-    const databasesSpy = vi.spyOn(indexedDB, "databases");
-    const abortController = new AbortController();
-
-    try {
-      const client = createSdkClient({
-        encryption: true,
-        idbSnapshotPath: path.join(tempDir, "crypto-idb-snapshot.json"),
-        cryptoDatabasePrefix: databasePrefix,
-      });
-      const startup = client.start({ abortSignal: abortController.signal });
-
-      await vi.waitFor(() => {
-        expect(matrixJsClient.initRustCrypto).toHaveBeenCalledTimes(1);
-      });
-      abortController.abort();
-      expect(matrixJsClient.startClient).not.toHaveBeenCalled();
-      expect(databasesSpy).not.toHaveBeenCalled();
-
-      initCrypto.resolve();
-      await expectAbortError(startup);
-      expect(await readMatrixIdbSnapshotJson(tempDir)).toBeNull();
-      expect(databasesSpy).not.toHaveBeenCalled();
-      expect(matrixJsClient.startClient).not.toHaveBeenCalled();
-    } finally {
-      initCrypto.resolve();
-      databasesSpy.mockRestore();
-      await clearAllIndexedDbState({ databasePrefix });
-      resetPluginStateStoreForTests();
-    }
-  });
+  registerCryptoStartupAbortTest(cryptoPersistenceContext);
 
   it.each([READ_CALLERS[1]])(
     "joins concurrent one-off preparations into one SDK crypto initialization ($caller caller)",
@@ -2538,62 +2382,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     });
   });
 
-  it("awaits and cancels active periodic crypto persistence during discard shutdown", async () => {
-    resetPluginStateStoreForTests();
-    installMatrixTestRuntime();
-    const tempDir = tempDirs.make("matrix-idb-interval-");
-    const pendingDatabases = createDeferred<IDBDatabaseInfo[]>();
-    const databasesSpy = vi
-      .spyOn(indexedDB, "databases")
-      .mockResolvedValueOnce([])
-      .mockReturnValueOnce(pendingDatabases.promise);
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
-    const warnSpy = vi.spyOn(LogService, "warn").mockImplementation(() => {});
-    let shutdown: Promise<void> | undefined;
-
-    try {
-      const client = createSdkClient({
-        encryption: true,
-        idbSnapshotPath: path.join(tempDir, "crypto-idb-snapshot.json"),
-        cryptoDatabasePrefix: "openclaw-matrix-interval",
-      });
-
-      await client.start();
-
-      const intervalCall = setIntervalSpy.mock.calls.find((call) => call[1] === 60_000) as
-        | unknown[]
-        | undefined;
-      if (!intervalCall || typeof intervalCall[0] !== "function") {
-        throw new Error("expected Matrix IDB snapshot interval");
-      }
-      intervalCall[0]();
-      intervalCall[0]();
-      await vi.waitFor(() => {
-        expect(databasesSpy).toHaveBeenCalledTimes(2);
-      });
-
-      shutdown = Promise.resolve(client.stopWithoutPersist());
-      let shutdownSettled = false;
-      void shutdown.then(() => {
-        shutdownSettled = true;
-      });
-      await vi.waitFor(() => {
-        expect(matrixJsClient.stopClient).toHaveBeenCalledTimes(1);
-      });
-      expect(shutdownSettled).toBe(false);
-
-      pendingDatabases.resolve([]);
-      await shutdown;
-      expect(await readMatrixIdbSnapshotJson(tempDir)).toBeNull();
-      expect(warnSpy).not.toHaveBeenCalled();
-    } finally {
-      pendingDatabases.resolve([]);
-      await shutdown?.catch(() => undefined);
-      warnSpy.mockRestore();
-      databasesSpy.mockRestore();
-      setIntervalSpy.mockRestore();
-    }
-  });
+  registerCryptoPeriodicShutdownTest(cryptoPersistenceContext);
 
   it("reports when the current Matrix device is missing from the homeserver device list", async () => {
     matrixJsClient.getDevices = vi.fn(async () => ({

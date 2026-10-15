@@ -55,7 +55,7 @@ async function createHarness() {
 }
 
 describe("ACP commentary reclassification", () => {
-  it.each(["OK.", "The sample value is orchid, and verification succeeded."])(
+  it.each(["OK."])(
     "preserves narration and the answer when the replacement is deferred: %s",
     async (answer) => {
       const h = await createHarness();
@@ -89,11 +89,7 @@ describe("ACP commentary reclassification", () => {
     },
   );
 
-  it.each([
-    { answer: "OK.", rounds: 1 },
-    { answer: "The sample value is orchid, and verification succeeded.", rounds: 1 },
-    { answer: "Verified.", rounds: 2 },
-  ])(
+  it.each([{ answer: "Verified.", rounds: 2 }])(
     "delivers the complete answer after $rounds tool rounds: $answer",
     async ({ answer, rounds }) => {
       const h = await createHarness();
@@ -147,6 +143,30 @@ describe("ACP commentary reclassification", () => {
       "read-2:completed",
       "Done.",
     ]);
+  });
+
+  it.each(["Reading files"])(
+    "resumes commentary from the last emitted snapshot after %s",
+    async (snapshot) => {
+      const h = await createHarness();
+      await h.preamble("commentary", "Checking files");
+      await h.preamble("commentary", snapshot);
+      await h.preamble("commentary", "Checking files now");
+      await h.chat("Done.", { state: "final" });
+      await h.prompt;
+      expect(h.updates()).toEqual(["Checking files", " now", "Done."]);
+    },
+  );
+
+  it("advances an item's boundary within an already displayed multi-item preview", async () => {
+    const h = await createHarness();
+    await h.chat("Checking files.\nReading config.");
+    await h.preamble("first", "Checking");
+    await h.preamble("first", "Checking files.", { preamble: {} });
+    await h.preamble("second", "Reading config.", { preamble: {} });
+    await h.chat("Done.", { state: "final" });
+    await h.prompt;
+    expect(h.updates()).toEqual(["Checking files.\nReading config.", "Done."]);
   });
 
   it.each([

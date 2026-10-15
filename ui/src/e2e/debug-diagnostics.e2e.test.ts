@@ -204,7 +204,7 @@ suite.define(() => {
           .toContain("432 MB");
         await expect
           .poll(() => overlay.locator(".gateway-vital--cpu").textContent())
-          .toContain("25%");
+          .toContain("0.25 cores");
         await page.clock.runFor(10_000);
         await expect.poll(() => overlay.locator(".gateway-vital--cpu polyline").count()).toBe(1);
         if (captureUiProof) {
@@ -238,7 +238,7 @@ suite.define(() => {
           .toContain("432 MB");
         const desktopWidget = await widget.boundingBox();
         expect(desktopWidget).not.toBeNull();
-        expect(desktopWidget!.width).toBeLessThanOrEqual(210);
+        expect(desktopWidget!.width).toBeLessThanOrEqual(240);
         expect(desktopWidget!.height).toBeLessThanOrEqual(100);
         expect(1280 - desktopWidget!.x - desktopWidget!.width).toBeGreaterThanOrEqual(0);
         expect(1280 - desktopWidget!.x - desktopWidget!.width).toBeLessThanOrEqual(32);
@@ -290,7 +290,7 @@ suite.define(() => {
           .toContain("654 MB");
         await expect
           .poll(() => widget.locator(".gateway-vital--cpu").textContent())
-          .toContain("75%");
+          .toContain("0.75 cores");
         await expect
           .poll(async () =>
             Number.parseInt(
@@ -333,7 +333,7 @@ suite.define(() => {
         const cpuTooltip = widget.locator(".gateway-cpu-tooltip");
         const cpuDetail = cpuTooltip.locator(".gateway-cpu-detail");
         const transitionCpuDetail = async (
-          eventName: "wa-after-show" | "wa-after-hide",
+          eventName: "overlay-after-show" | "overlay-after-hide",
           action: () => Promise<void>,
         ) => {
           // Visibility includes closing animations; finish each input mode before starting another.
@@ -379,30 +379,37 @@ suite.define(() => {
             path: path.join(proofDir, "cpu-breakdown-desktop.png"),
           });
         }
-        await transitionCpuDetail("wa-after-hide", () => page.keyboard.press("Escape"));
+        await transitionCpuDetail("overlay-after-hide", () => page.keyboard.press("Escape"));
         await expect.poll(() => cpuDetail.isVisible()).toBe(false);
         expect(await widget.isVisible()).toBe(true);
         await cpuTrigger.blur();
         await page.keyboard.press("Tab");
         await cpuTrigger.focus();
         await expect.poll(() => cpuDetail.isVisible()).toBe(true);
-        await transitionCpuDetail("wa-after-hide", () => page.keyboard.press("Escape"));
+        await transitionCpuDetail("overlay-after-hide", () => page.keyboard.press("Escape"));
         await page.setViewportSize({ height: 844, width: 390 });
         const mobileWidget = await widget.boundingBox();
         expect(mobileWidget).not.toBeNull();
-        expect(mobileWidget!.width).toBeLessThanOrEqual(210);
+        expect(mobileWidget!.width).toBeLessThanOrEqual(240);
         expect(mobileWidget!.height).toBeLessThanOrEqual(100);
         expect(mobileWidget!.x).toBeGreaterThanOrEqual(0);
         expect(mobileWidget!.y).toBeGreaterThanOrEqual(0);
         expect(mobileWidget!.x + mobileWidget!.width).toBeLessThanOrEqual(390);
         expect(mobileWidget!.y + mobileWidget!.height).toBeLessThanOrEqual(844);
+        expect(
+          await widget
+            .locator(".sparkline-tile__label, .sparkline-tile__value")
+            .evaluateAll((elements) =>
+              elements.every((element) => element.scrollWidth <= element.clientWidth),
+            ),
+        ).toBe(true);
         if (captureUiProof) {
           await page.screenshot({
             animations: "disabled",
             path: path.join(proofDir, "system-busyness-minimized-mobile.png"),
           });
         }
-        await transitionCpuDetail("wa-after-show", () => cpuTrigger.tap());
+        await transitionCpuDetail("overlay-after-show", () => cpuTrigger.tap());
         await expect.poll(() => cpuDetail.isVisible()).toBe(true);
         const detailBounds = await cpuDetail.boundingBox();
         expect(detailBounds!.x).toBeGreaterThanOrEqual(0);
@@ -415,7 +422,7 @@ suite.define(() => {
             path: path.join(proofDir, "cpu-breakdown-mobile.png"),
           });
         }
-        await transitionCpuDetail("wa-after-hide", () => cpuTrigger.tap());
+        await transitionCpuDetail("overlay-after-hide", () => cpuTrigger.tap());
         await expect.poll(() => cpuDetail.isVisible()).toBe(false);
         await page.setViewportSize({ height: 1000, width: 1280 });
         for (const scenario of [
@@ -458,7 +465,7 @@ suite.define(() => {
           await page.clock.runFor(10_000);
           await expect
             .poll(() => widget.locator(".gateway-vital--cpu .sparkline-tile__value").textContent())
-            .toContain(`${Math.round(scenario.total * 100)}%`);
+            .toContain(`${scenario.total.toFixed(2)} cores`);
           await expect
             .poll(() => widget.locator(".sparkline-tile__secondary").textContent())
             .toContain(
@@ -490,7 +497,7 @@ suite.define(() => {
             }
             await page.setViewportSize({ width: 1280, height: 1000 });
           }
-          await transitionCpuDetail("wa-after-hide", () => page.keyboard.press("Escape"));
+          await transitionCpuDetail("overlay-after-hide", () => page.keyboard.press("Escape"));
         }
         await widget.getByRole("button", { name: "Expand system busyness" }).click();
         await widget.waitFor({ state: "detached" });
@@ -537,6 +544,12 @@ suite.define(() => {
         await widget.waitFor({ state: "detached" });
         await overlay.getByRole("heading", { name: "Lanes", exact: true }).waitFor();
         await overlay.getByRole("button", { name: "Minimize system busyness" }).click();
+        await widget.waitFor();
+        await widget.evaluate(async (element) => {
+          await new Promise(requestAnimationFrame);
+          await new Promise(requestAnimationFrame);
+          await Promise.all(element.getAnimations().map((animation) => animation.finished));
+        });
         await overlay.getByRole("button", { name: "Close", exact: true }).click();
         await overlay.waitFor({ state: "detached" });
 
@@ -563,16 +576,17 @@ suite.define(() => {
         await page.getByRole("button", { name: /^Open overlay/u }).click();
         await expect
           .poll(() => overlay.locator(".gateway-vital--cpu").textContent())
-          .toContain("50%");
+          .toContain("0.50 cores");
         await overlay.getByRole("button", { name: "Minimize system busyness" }).click();
         await widget.waitFor();
         await gateway.setOnline(false);
         await expect.poll(() => widget.textContent()).toContain("Unavailable");
-        expect(await widget.textContent()).not.toContain("50%");
+        expect(await widget.textContent()).not.toContain("0.50 cores");
         expect(await widget.textContent()).not.toContain("654 MB");
+        await expect.poll(() => snapshots.textContent()).toContain("Offline");
         await expect
           .poll(() => snapshots.textContent())
-          .toMatch(/Offline\s+Connect to the Gateway/u);
+          .toContain("Connect to the Gateway to refresh diagnostics.");
         expect(await refresh.isDisabled()).toBe(true);
         await expect.poll(() => snapshots.textContent()).toContain("diagnostics-e2e");
         await page.setViewportSize({ height: 844, width: 390 });

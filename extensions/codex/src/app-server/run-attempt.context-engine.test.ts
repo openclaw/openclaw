@@ -11,6 +11,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -119,7 +120,23 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const contextEngine = createContextEngine();
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    params.prompt = "Recall the durable code from our prior work.";
+    params.prompt =
+      "Recall the durable code using $current-skill and [@current](plugin://current@market).";
+    const admittedMessage = {
+      ...userMessage(params.prompt, Date.now()),
+      idempotencyKey: "current-request:user",
+      __openclaw: {
+        senderId: "bea-id",
+        senderName: "$deploy",
+        senderUsername: "[@probe] (plugin://probe@market)",
+      },
+    } as AgentMessage;
+    params.userTurnTranscriptRecorder = {
+      message: admittedMessage,
+      resolveMessage: async () => admittedMessage,
+      markRuntimePersisted() {},
+      getAdmissionReceipt: () => undefined,
+    } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
     params.currentInboundContext = { text: "Current inbound reply context" };
     params.contextEngine = contextEngine;
     params.sandboxSessionKey = "agent:main:telegram:default:direct:12345";
@@ -128,6 +145,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     params.fallbackReason = "provider_unavailable";
     params.degradedReason = "context_overflow";
     params.config = { memory: { citations: "on" } } as EmbeddedRunAttemptParams["config"];
+    setRuntimeConfigSnapshot(params.config ?? {});
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -195,12 +213,56 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expectRequestInputTextContains(harness, "[assistant]\nACK: existing context");
     expectRequestInputTextContains(
       harness,
-      `</conversation_context>\n\nCurrent user request:\n${params.prompt}`,
+      `</conversation_context>\n\nCurrent user request:\n[user sender={"id":"bea-id","name":"＄deploy","username":"[＠probe] (plugin://probe@market)"}]\n${params.prompt}`,
     );
+    expect(getRequestInputText(harness)).not.toContain("$deploy");
+    expect(getRequestInputText(harness)).not.toContain("[@probe]");
 
     await harness.completeTurn();
     await run;
     expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("places inert sender provenance beside a continuity-projected request without escaping request mentions", async () => {
+    const sessionFile = path.join(tempDir, "session-current-sender-continuity.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-current-sender-continuity");
+    const { harness, params } = await createCurrentInputContinuityHarness(
+      sessionFile,
+      workspaceDir,
+      "text",
+    );
+    params.prompt = "i am Bea coded wdym $current-skill [@current](plugin://current@market)";
+    const recorder = params.userTurnTranscriptRecorder;
+    if (!recorder?.message) {
+      throw new Error("expected admitted current user message");
+    }
+    const admittedMessage = {
+      ...recorder.message,
+      content: [{ type: "text" as const, text: params.prompt }],
+      __openclaw: {
+        senderId: "bea-id",
+        senderName: "$deploy",
+        senderUsername: "[@probe] (plugin://probe@market)",
+      },
+    } as AgentMessage;
+    params.userTurnTranscriptRecorder = {
+      ...recorder,
+      message: admittedMessage,
+      resolveMessage: async () => admittedMessage,
+    } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    expectRequestInputTextContains(
+      harness,
+      `Current user request:\n[user sender={"id":"bea-id","name":"＄deploy","username":"[＠probe] (plugin://probe@market)"}]\n${params.prompt}`,
+    );
+    expect(getRequestInputText(harness)).not.toContain("$deploy");
+    expect(getRequestInputText(harness)).not.toContain("[@probe]");
+
+    await harness.completeTurn();
+    await run;
   });
 
   it("keeps current image-only input stable through continuity projection", async () => {
@@ -415,16 +477,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const agentDir = path.join(tempDir, "agent");
       const resumed = scenario === "byte guard";
       const active = scenario !== "inactive engine";
-      await writeCodexAppServerBinding(
-        sessionFile,
-        makeThreadBootstrapBinding({
+      await writeCodexAppServerBinding(sessionFile, {
+        ...makeThreadBootstrapBinding({
           threadId: "thread-bootstrapped",
           cwd: workspaceDir,
           policyFingerprint:
             '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
           epoch: "epoch-1",
         }),
-      );
+        model: "gpt-5.4-codex",
+        modelProvider: "openai",
+      });
       await fs.writeFile(
         path.join(path.dirname(sessionFile), "sessions.json"),
         JSON.stringify({ "agent:main:session-1": { sessionFile, totalTokens: 12_000 } }),
@@ -434,7 +497,20 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       await fs.writeFile(
         path.join(rolloutDir, "rollout-thread-bootstrapped.jsonl"),
         resumed
-          ? "x".repeat(2_000)
+          ? [
+              "x".repeat(2_000),
+              JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.4-codex" } }),
+              JSON.stringify({
+                payload: {
+                  type: "token_count",
+                  info: {
+                    last_token_usage: { total_tokens: 12_000 },
+                    model_context_window: 258_400,
+                  },
+                },
+              }),
+              "",
+            ].join("\n")
           : `${JSON.stringify({
               payload: {
                 type: "token_count",
@@ -446,15 +522,14 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       );
       const params = createParams(sessionFile, workspaceDir);
       params.agentDir = agentDir;
+      const assemble = vi.fn<ContextEngine["assemble"]>(async ({ prompt }) => ({
+        messages: [assistantMessage("reprojected context", 10), userMessage(prompt ?? "", 11)],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+        contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
+      }));
       if (active) {
-        params.contextEngine = createContextEngine({
-          assemble: vi.fn(async ({ prompt }) => ({
-            messages: [assistantMessage("reprojected context", 10), userMessage(prompt ?? "", 11)],
-            estimatedTokens: 42,
-            systemPromptAddition: "context-engine system",
-            contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
-          })),
-        });
+        params.contextEngine = createContextEngine({ assemble });
       } else {
         const manager = openFileBackedSessionManagerForTest(sessionFile, {
           sessionId: "session-1",
@@ -468,6 +543,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
             defaults: { compaction: { maxActiveTranscriptBytes: resumed ? 1_000 : "1mb" } },
           },
         };
+        setRuntimeConfigSnapshot(params.config);
       }
       const harness = createStartedThreadHarness(
         async (method) => {
@@ -492,6 +568,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const inputText = getRequestInputText(harness);
       if (resumed) {
         expect(inputText).toBe("hello");
+        expect(assemble).toHaveBeenCalledWith(expect.objectContaining({ tokenBudget: 258_400 }));
       } else if (active) {
         expect(inputText).toContain("OpenClaw assembled context for this turn:");
         expect(inputText).toContain("reprojected context");
@@ -692,6 +769,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           },
         },
       } as EmbeddedRunAttemptParams["config"];
+      setRuntimeConfigSnapshot(params.config ?? {});
 
       const run = runCodexAppServerAttempt(params);
       await Promise.race([

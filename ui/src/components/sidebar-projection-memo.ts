@@ -181,6 +181,7 @@ export function memoizedSidebarSections(
             ? (context.gateway.snapshot.client ?? null)
             : null,
         listSource: context?.sessions ?? null,
+        listLoaded: (roster ? roster.result : host.sessionData.sessionsResult) !== null,
         subtitle: {
           sidebarLiveActivity: host.sidebarLiveActivity,
           showPreview: host.sessionsShowPreview,
@@ -246,6 +247,7 @@ export function memoizedSidebarCatalogs(
       host.hiddenSessionCatalogIds,
       host.sessionsStatusFilter,
       ownerId,
+      host.sessionInvolvingMeFilterActive,
       host.sessionData.sessionsResult,
       host.sessionData.sessionResultsByAgent,
     ],

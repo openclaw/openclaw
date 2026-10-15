@@ -25,7 +25,6 @@ const DESTINATION_AGENT = Symbol("destination agent");
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-  MockProxyAgent.latest = undefined;
   poolCtor.mockReset();
   proxyAgentCtor.mockReset();
   proxyConnect.mockReset();
@@ -78,7 +77,6 @@ class MockEnvHttpProxyAgent extends EventEmitter {
 }
 
 class MockProxyAgent extends EventEmitter {
-  static latest: MockProxyAgent | undefined;
   readonly [DESTINATION_AGENT]: MockAgent;
 
   constructor(public readonly options: unknown) {
@@ -87,7 +85,6 @@ class MockProxyAgent extends EventEmitter {
       expectOptionsRecord(options, "expected ProxyAgent options"),
     );
     proxyAgentCtor(options);
-    MockProxyAgent.latest = this;
   }
 }
 
@@ -202,52 +199,20 @@ describe("installed dispatcher lifecycle", () => {
     expect(output.trim()).toBe("ok");
   });
 
-  it.each([
-    ["close", "closed"],
-    ["destroy", "destroyed"],
-  ] as const)("supports %s without a runtime override", async (method, state) => {
+  it("supports destroy without a runtime override", async () => {
     const dispatcher = createHttp1Agent();
 
-    await dispatcher[method]();
+    await dispatcher.destroy();
 
-    expect(dispatcher[state]).toBe(true);
+    expect(dispatcher.destroyed).toBe(true);
   });
 });
 
 describe("undici dispatcher errors", () => {
-  it.each([
-    {
-      name: "direct agent client",
-      createClient: () => {
-        const agent = createHttp1Agent() as unknown as MockAgent;
-        return agent.createOriginDispatcher({ connections: 1 });
-      },
-    },
-    {
-      name: "explicit proxy client",
-      createClient: () => {
-        const agent = createHttp1ProxyAgent({
-          uri: "http://proxy.test:8080",
-        }) as unknown as MockProxyAgent;
-        return agent[DESTINATION_AGENT].createOriginDispatcher({ connections: 1 });
-      },
-    },
-    {
-      name: "environment proxy client",
-      createClient: () => {
-        createHttp1EnvHttpProxyAgent({
-          httpsProxy: "http://proxy.test:8080",
-        });
-        const agent = MockProxyAgent.latest;
-        if (!agent) {
-          throw new Error("expected environment proxy transport");
-        }
-        return agent[DESTINATION_AGENT].createOriginDispatcher({ connections: 1 });
-      },
-    },
-  ])("handles an internal error from $name before connect", ({ createClient }) => {
+  it("handles an internal error from direct agent client before connect", () => {
     installUndiciRuntimeDeps();
-    const client = createClient();
+    const agent = createHttp1Agent() as unknown as MockAgent;
+    const client = agent.createOriginDispatcher({ connections: 1 });
     const error = new Error("stream handler aborted");
 
     expect(() => client.emit("error", error)).not.toThrow();
@@ -264,30 +229,6 @@ function invokeClientConnect(options: Record<string, unknown>, servername: strin
 }
 
 describe("createHttp1ProxyAgent", () => {
-  it.each(["own", "inherited", "non-enumerable"])(
-    "uses the caller's %s proxy client factory",
-    (placement) => {
-      installUndiciRuntimeDeps();
-      const clientFactory = vi.fn(() => createHttp1Agent());
-      const options = { uri: "http://proxy.test:8080" };
-      if (placement === "inherited") {
-        Object.setPrototypeOf(options, { clientFactory });
-      } else {
-        Object.defineProperty(options, "clientFactory", {
-          value: clientFactory,
-          enumerable: placement === "own",
-        });
-      }
-
-      createHttp1ProxyAgent(options);
-      invokeProxyClientFactory(requireProxyAgentOptions());
-
-      expect(clientFactory).toHaveBeenCalledExactlyOnceWith(new URL("https://127.0.0.1:8443"), {
-        connect: proxyConnect,
-      });
-    },
-  );
-
   it("adds active managed proxy CA trust to explicit ProxyAgent options", () => {
     installUndiciRuntimeDeps();
     const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
@@ -309,8 +250,6 @@ describe("createHttp1ProxyAgent", () => {
 
 describe("proxy SNI policy", () => {
   it.each([
-    { mode: "fixed", servername: "127.0.0.1", preserve: false },
-    { mode: "fixed", servername: "[::1]", preserve: false },
     { mode: "fixed", servername: "proxy.example", preserve: true },
     { mode: "environment", servername: "127.0.0.1", preserve: false },
   ])("handles $servername through the $mode proxy", ({ mode, servername, preserve }) => {

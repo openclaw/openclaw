@@ -85,7 +85,7 @@ function inspectToolSchema(
   }
 
   const schemaPath = `${toolName}.parameters`;
-  const projection = projectRuntimeToolInputSchema(parametersRead.value, schemaPath);
+  const projection = projectRuntimeToolInputSchema(parametersRead.value, schemaPath, toolName);
   const projectionViolations =
     mode === "runtime"
       ? projection.violations

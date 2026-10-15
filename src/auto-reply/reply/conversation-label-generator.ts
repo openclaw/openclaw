@@ -11,11 +11,13 @@ import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-r
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-runtime.js";
 import { resolveAutomaticUtilityRuntimeOverride } from "../../agents/utility-model.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDedupeCache } from "../../infra/dedupe.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const DEFAULT_MAX_LABEL_LENGTH = 128;
-// Reasoning models spend output tokens before emitting the short visible label.
-const CONVERSATION_LABEL_MAX_TOKENS = 4_096;
 const TIMEOUT_MS = 15_000;
+const log = createSubsystemLogger("conversation-label");
+const failureWarnings = createDedupeCache({ ttlMs: 60_000, maxSize: 128 });
 
 type LabelModelPhase = "utility" | "primary fallback";
 type ConversationLabelAttempt = {
@@ -117,12 +119,14 @@ async function runLabelAttempts(
       continue;
     }
     seen.add(key);
+    let modelRef = splitTrailingAuthProfile(attempt.modelRef ?? "").model || "unavailable";
     try {
       const selection = resolveAttemptSelection(params, attempt);
       if (!selection) {
         throw new Error("conversation label model selection unavailable");
       }
       const model = { provider: selection.provider, model: selection.modelId };
+      modelRef = `${selection.runtimeProvider ?? selection.provider}/${selection.modelId}`;
       if (params.operatorAuthority?.modelPolicy?.allows(model) === false) {
         continue;
       }
@@ -167,7 +171,8 @@ async function runLabelAttempts(
         assertCurrent: params.assertCurrent,
         ...(params.operatorAuthority ? { operatorAuthority: params.operatorAuthority } : {}),
         outputTextPolicy: "strict-visible",
-        streamParams: { maxTokens: CONVERSATION_LABEL_MAX_TOKENS },
+        thinkLevel: "off",
+        answerTokenBudget: 4_096,
       });
       assertCurrent();
       const partitioner = createReasoningTagTextPartitioner();
@@ -184,6 +189,14 @@ async function runLabelAttempts(
     } catch {
       assertCurrent();
       failures.push(attempt.phase);
+      if (!failureWarnings.peek(modelRef)) {
+        failureWarnings.check(modelRef);
+        log.warn(
+          `Conversation label generation failed for ${modelRef} (${attempt.phase}). ` +
+            "Check the provider/model configuration or choose another agents.defaults.utilityModel. " +
+            "Further warnings for this model are suppressed for 60 seconds.",
+        );
+      }
     }
   }
   if (failures.length > 0) {

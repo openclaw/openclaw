@@ -63,7 +63,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
     buildEmbeddedForegroundPromptContext: () => ({}),
     runAgentHarnessLlmOutputHook: vi.fn(),
     awaitAgentEndSideEffects: vi.fn(),
-    runAgentEndSideEffects: vi.fn(),
+    runAgentEndSideEffectsAsync: vi.fn(async () => {}),
   };
 });
 
@@ -183,6 +183,41 @@ describe("Agents API agent workspace instructions", () => {
 
     await fixture.run();
     expect(fixture.requests[2]?.agent.instructions).toContain("Plugin system guidance two.");
+  });
+
+  it("keeps ordinary context but grants no Gateway tool authority when forwarding is disabled", async () => {
+    const fixture = await createFixture(
+      { toolAuthorityFingerprint: "fixture-prompt-authority" },
+      { forwarding: { gatewayTools: false, mcpServers: false } },
+    );
+    promptFixture.declarations = toolDeclarations("memory_search", "memory_get");
+    const allowed: boolean[] = [];
+    const recall = vi
+      .fn()
+      .mockImplementation(
+        (_event, ctx: { toolAuthority?: { allows: (name: string) => boolean } }) => {
+          allowed.push(ctx.toolAuthority?.allows("memory_search") ?? true);
+        },
+      );
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => ({ prependContext: "Ordinary plugin context." }),
+        },
+        { hookName: "before_prompt_build", requiresToolAuthority: true, handler: recall },
+      ]),
+    );
+    await fixture.run();
+    expect(allowed).toEqual([false]);
+    expect(promptFixture.turnInputs[0]).toContain("Ordinary plugin context.");
+    expect(fixture.requests[0]?.agent.instructions).toContain("Extra fixture instructions");
+    expect(prepareAgentWorkspaceContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memoryToolRouted: false,
+        memoryTools: expect.objectContaining({ toolNames: [] }),
+      }),
+    );
   });
 
   it("continues without transcript access when no prompt hook needs history", async () => {
@@ -446,7 +481,10 @@ type InstructionRequest = {
   agent: { instructions?: string; reasoning?: { effort: string | null } };
 };
 
-async function createFixture(overrides: Partial<AgentHarnessAttemptParamsV2> = {}) {
+async function createFixture(
+  overrides: Partial<AgentHarnessAttemptParamsV2> = {},
+  pluginConfig: unknown = {},
+) {
   const root = tempDirs.make("openclaw-agentsapi-instructions-");
   const workspace = path.join(root, "gateway-workspace");
   const executionWorkspace = path.join(root, "execution-workspace");
@@ -522,7 +560,7 @@ async function createFixture(overrides: Partial<AgentHarnessAttemptParamsV2> = {
         () => {},
         () => {},
         target,
-        () => ({}),
+        () => pluginConfig,
         new WeakMap(),
       );
       if (result.terminal.kind === "failed") {

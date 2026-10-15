@@ -8,7 +8,7 @@ import type { CodexInferenceProxy } from "./inference-proxy.js";
 import type { CodexInferenceProviderRoutes } from "./inference-routing.js";
 import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
-import type { CodexDynamicToolSpec, JsonObject } from "./protocol.js";
+import type { CodexDynamicToolSpec, CodexServiceTier, JsonObject } from "./protocol.js";
 import type {
   CodexBindingAuthority,
   CodexAppServerBindingStore,
@@ -34,6 +34,8 @@ export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding &
   /** Process-local claim proof; never write this callback into durable binding state. */
   liveThreadOwnership?: CodexAppServerLiveThreadOwnership;
   clearInheritedServiceTier?: true;
+  /** Tier admitted with this attempt's native compaction configuration. */
+  preparedServiceTier?: CodexServiceTier | null;
 };
 
 export type CodexThreadFinalConfigPatchDecision = (
@@ -105,4 +107,5 @@ export type CodexThreadResumePreparation = {
   assertCurrent: () => void;
   dispose: () => void;
   settledSystemError: boolean;
+  waitForUnload: () => Promise<boolean>;
 };

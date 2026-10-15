@@ -36,6 +36,9 @@ export function resolveSessionWorkspace(params: {
   if (!row) {
     return { root: null, label: null };
   }
+  if (row.deviceFolder) {
+    return { root: row.deviceFolder.path, label: pathBasename(row.deviceFolder.path) };
+  }
   if (row.repositoryWorkspaceId) {
     return {
       root: row.execNode ? row.execCwd?.trim() || null : null,

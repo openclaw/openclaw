@@ -1,15 +1,16 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Result } from "@openclaw/normalization-core/result";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../../infra/sqlite-number.js";
 import {
   assertTransactionUsable,
   runSqliteImmediateTransactionSync,
 } from "../../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../../infra/sqlite-worker-contract.js";
 import type { DB } from "../../../state/openclaw-agent-db.generated.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../../state/openclaw-state-db-contract.js";
@@ -33,13 +34,13 @@ export function bindSqliteWorkerBackend(
   _input: undefined,
   context: {
     databasePath: string;
-    database: DatabaseSync;
+    database: EngineConnection;
     admit(stage: "transaction" | "commit"): void;
   },
 ): SqliteWorkerBackend<AcpParentStreamWorkerOperations> {
   const database = context.database;
   const db = getNodeSqliteKysely<Pick<DB, "acp_parent_stream_events">>(database);
-  return {
+  return bindSqliteWorkerDatabase<AcpParentStreamWorkerOperations>(database, {
     execute({ input }) {
       try {
         runSqliteImmediateTransactionSync(
@@ -92,12 +93,5 @@ export function bindSqliteWorkerBackend(
         return { ok: false, error: failure };
       }
     },
-    assertSettled() {
-      assertTransactionUsable(database);
-      if (database.isTransaction) {
-        throw new Error("ACP parent-stream transaction did not settle");
-      }
-    },
-    close() {},
-  };
+  });
 }

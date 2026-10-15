@@ -14,7 +14,12 @@ import {
 } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
+  loadPersistedAuthProfileStoreFromRows,
+  prepareAgentAuthProfileRowsRead,
+} from "../agents/auth-profiles/sqlite-read.js";
+import {
   readPersistedSharedAuthProfileStoreRaw,
+  resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import {
@@ -29,6 +34,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   detectSharedAuthStoreMigration,
@@ -38,11 +44,13 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { authProfileCredentialPublication } from "../state/user-model-account-authority.js";
 import { buildStatusText } from "../status/status-text.js";
 import {
   createOpenClawTestState,
@@ -812,7 +820,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
 
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toEqual([
-      expect.stringContaining("canonical auth profile store changed during legacy migration"),
+      expect.stringContaining("current auth profile store changed during legacy migration"),
     ]);
     expect(fs.existsSync(authPath)).toBe(true);
     expectNoMigratedArchive(authPath);
@@ -1113,7 +1121,41 @@ describe("legacy flat profiles through the canonical auth migration owner", () =
     const legacy = { openai: { apiKey: "sk-openai-flat" } };
     const authPath = await writeLegacyAuthProfilesJson(state, legacy);
 
-    const result = await migrateAuthProfiles({ now: () => 123 });
+    const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
+    const reader = prepareAgentAuthProfileRowsRead({
+      databasePath,
+      agentId: "main",
+      env: state.env,
+    });
+    const authority = reader.captureCredentialAuthority("openai:default")!;
+    authority.observe(undefined);
+    const pendingDenied: boolean[] = [];
+    const unsubscribe = authProfileCredentialPublication.subscribeFacts((change) => {
+      if (change.kind === "pending") {
+        try {
+          authority.readCurrentCredential();
+          pendingDenied.push(false);
+        } catch {
+          pendingDenied.push(true);
+        }
+      }
+    });
+    let result: Awaited<ReturnType<typeof migrateAuthProfiles>>;
+    try {
+      result = await migrateAuthProfiles({ now: () => 123 });
+      const cold = loadPersistedAuthProfileStoreFromRows(await reader.read(), databasePath);
+      expect(authority.readCurrentCredential()).toEqual(cold?.profiles["openai:default"]);
+      expect(authority.readCurrentCredential()).toEqual({
+        type: "api_key",
+        provider: "openai",
+        key: "sk-openai-flat",
+      });
+      expect(pendingDenied.length).toBeGreaterThan(0);
+      expect(pendingDenied.every(Boolean)).toBe(true);
+    } finally {
+      unsubscribe();
+      await reader.dispose();
+    }
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toEqual([expect.stringContaining("Migrated auth profile JSON")]);
@@ -1217,7 +1259,7 @@ describe("maybeRepairOpenAICodexAuthConfig", () => {
     };
 
     expect(result.changes).toStrictEqual([
-      "Migrated legacy auth profile config to canonical providers.",
+      "Migrated legacy auth profile config to current providers.",
     ]);
     expect(result.config.auth?.order).toEqual({
       openai: ["openai:work"],
@@ -1254,7 +1296,7 @@ describe("maybeRepairOpenAICodexAuthConfig", () => {
     };
 
     expect(result.changes).toStrictEqual([
-      "Migrated legacy auth profile config to canonical providers.",
+      "Migrated legacy auth profile config to current providers.",
     ]);
     expect(migrated.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime?.authProfileId).toBe(
       "openai:chatgpt-default",
@@ -1708,14 +1750,19 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
         model: "gpt-5.5",
       },
     );
-    await closeOpenClawAgentDatabasesAsync(state.root);
-    closeOpenClawAgentDatabasesForTest();
     const sqlitePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
-    const database = new DatabaseSync(sqlitePath);
-    database
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: state.env,
+      path: sqlitePath,
+    });
+    database.db
       .prepare("UPDATE session_nodes SET entry_valid = 0 WHERE session_key = ?")
       .run(sessionKey);
-    database.close();
+    // Offline imports revoke shared readiness through the admitted owner before releasing custody.
+    markCanonicalSessionValidationPending(database, [sessionKey]);
+    await closeOpenClawAgentDatabasesAsync(state.root);
+    closeOpenClawAgentDatabasesForTest();
     expect(() =>
       listSessionEntriesReadOnly({ storePath, agentId: "main", env: state.env }),
     ).toThrow("invalid persisted session row requires repair");

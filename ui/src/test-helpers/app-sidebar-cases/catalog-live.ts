@@ -12,11 +12,13 @@ import {
   createGateway,
   createGatewayHarness,
   createSessions,
+  createSessionsHarness,
   mountSidebar,
   mountSessionCatalogSidebar,
   type TestSessionMenu,
 } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session catalog pagination", () => {
   it("ignores a catalog response that settles after the Gateway client changes", async () => {
@@ -132,7 +134,7 @@ describe("AppSidebar session catalog pagination", () => {
       },
     ];
     sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     const section = sidebar.querySelector(`[data-session-section="catalog:${id}"]`);
     expect(section?.querySelector(".sidebar-session-catalog-new")).toBeNull();
@@ -164,22 +166,18 @@ describe("AppSidebar session catalog pagination", () => {
   });
 
   it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const backingSessionKey = "agent:main:claude-bound";
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("main", ["agent:main:main", backingSessionKey]),
-      "panel",
-      {
-        defaultId: "main",
-        mainKey: "agent:main:main",
-        scope: "global",
-        agents: [
-          { id: "main", name: "Main" },
-          { id: "research", name: "Research" },
-        ],
-      },
-    );
+    const sessions = createSessionsHarness("main", ["agent:main:main", backingSessionKey]);
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions, "panel", {
+      defaultId: "main",
+      mainKey: "agent:main:main",
+      scope: "global",
+      agents: [
+        { id: "main", name: "Main" },
+        { id: "research", name: "Research" },
+      ],
+    });
     sidebar.connected = true;
     sidebar.sessionData.sessionCatalogs = [
       {
@@ -218,7 +216,7 @@ describe("AppSidebar session catalog pagination", () => {
     sidebar.sessionData.sessionsResult = backingResult;
     sidebar.sessionData.sessionResultsByAgent = { main: backingResult };
     sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     expect(
       sidebar.querySelectorAll(
@@ -268,10 +266,8 @@ describe("AppSidebar session catalog pagination", () => {
       ...sidebar.sessionData.sessionsResult,
       sessions: runningRows,
     };
-    sidebar.sessionData.sessionsResult = runningResult;
-    sidebar.sessionData.sessionResultsByAgent = { main: runningResult };
-    sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
+    sessions.publish({ result: runningResult });
+    await settleLitElement(sidebar);
 
     const runningCatalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
     expect(
@@ -282,6 +278,62 @@ describe("AppSidebar session catalog pagination", () => {
     expect(
       runningCatalogSection?.querySelector(".sidebar-recent-sessions__head .session-run-spinner"),
     ).not.toBeNull();
+
+    for (const [phase, seq] of [
+      ["finishing", 1],
+      ["start", 2],
+    ] as const) {
+      gateway.publishEvent("agent", {
+        sessionKey: backingSessionKey,
+        runId: "catalog-run",
+        seq,
+        stream: "lifecycle",
+        data: { phase },
+      });
+      await settleLitElement(sidebar);
+      expect(
+        sessions.sessions.state.result?.sessions.find((row) => row.key === backingSessionKey)
+          ?.hasActiveRun,
+      ).toBe(true);
+      const currentSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
+      expect(
+        currentSection?.querySelectorAll(
+          `[data-session-key="${backingSessionKey}"] .sidebar-session-indicator .session-glyph__ring`,
+        ),
+      ).toHaveLength(1);
+      expect(
+        currentSection?.querySelectorAll(".sidebar-recent-sessions__head .session-run-spinner"),
+      ).toHaveLength(1);
+    }
+
+    sessions.publish({
+      result: {
+        ...runningResult,
+        sessions: runningRows.map((row) =>
+          row.key === backingSessionKey
+            ? Object.assign({}, row, {
+                hasActiveRun: false,
+                activeRunIds: [],
+                status: "done" as const,
+              })
+            : row,
+        ),
+      },
+    });
+    await settleLitElement(sidebar);
+    const settledSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
+    expect(settledSection).not.toBeNull();
+    expect(
+      settledSection!.querySelector(`[data-session-key="${backingSessionKey}"]`),
+    ).not.toBeNull();
+    expect(
+      settledSection?.querySelector(
+        `[data-session-key="${backingSessionKey}"] .sidebar-session-indicator .session-glyph__ring`,
+      ),
+    ).toBeNull();
+    expect(
+      settledSection?.querySelector(".sidebar-recent-sessions__head .session-run-spinner"),
+    ).toBeNull();
   });
 
   it("renders catalog groups inside the shared sessions scroller", async () => {
@@ -336,7 +388,7 @@ describe("AppSidebar session catalog pagination", () => {
         agentId: "main",
         catalog,
       } satisfies SessionsCatalogHostEvent);
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
 
       expect(sidebar.textContent).toContain("Fast host");
       expect(request).toHaveBeenCalledTimes(1);
@@ -418,7 +470,7 @@ describe("AppSidebar session catalog pagination", () => {
           ],
         },
       } satisfies SessionsCatalogHostEvent);
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
 
       expect(sidebar.textContent).toContain("Eventually ready");
       pendingTimeout.resolve(finalPage);

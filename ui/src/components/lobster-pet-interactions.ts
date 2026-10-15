@@ -1,4 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { playLobsterPetChirp, type LobsterPetChirpKind } from "./lobster-pet-audio.ts";
 import { prefersReducedMotion } from "./lobster-pet-plans.ts";
 import { LobsterPetTimers } from "./lobster-pet-timers.ts";
@@ -13,24 +12,22 @@ type LobsterInteractionHooks = {
   onHuff: () => void;
 };
 
-export class LobsterPetInteractions implements ReactiveController {
+export class LobsterPetInteractions {
   private readonly timers = new LobsterPetTimers<"grumpyTimer" | "holdTimer">();
   private audioCtx: AudioContext | null = null;
   private pokeTimes: number[] = [];
   private lastGazeAt = 0;
 
   constructor(
-    private readonly host: ReactiveControllerHost & HTMLElement,
+    private readonly host: HTMLElement,
     private readonly hooks: LobsterInteractionHooks,
-  ) {
-    host.addController(this);
-  }
+  ) {}
 
-  hostConnected() {
+  connect() {
     document.addEventListener("pointermove", this.handleGaze, { passive: true });
   }
 
-  hostDisconnected() {
+  dispose() {
     document.removeEventListener("pointermove", this.handleGaze);
     this.handleHoldCancel();
     this.timers.clear("grumpyTimer");

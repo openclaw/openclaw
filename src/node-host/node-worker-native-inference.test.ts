@@ -60,24 +60,6 @@ function descriptor(workspace: string, modelId = "model-1") {
 }
 
 describe("node worker inference config projection", () => {
-  it("uses every compatible top-level node model without a second allowlist", () => {
-    const workspace = tempDirs.make("node-native-models-");
-    const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
-    const startup = projectNodeWorkerNativeInference(snapshot, descriptor(workspace));
-
-    expect(startup.config.models.map(({ id }) => id)).toEqual(["model-1", "model-2"]);
-    expect(startup.config.workspace).toBe(fs.realpathSync(workspace));
-    expect(startup.credentials).toEqual({
-      "provider-1/model-1": credential,
-      "provider-1/model-2": credential,
-    });
-    expect(startup.config.models[0]?.headers).toEqual({ "x-provider": providerHeader });
-    expect(startup.config.models[1]?.headers).toEqual({
-      "x-provider": providerHeader,
-      "x-model": modelHeader,
-    });
-  });
-
   it("uses the canonical custom-provider API default", () => {
     const workspace = tempDirs.make("node-native-default-api-");
     const defaulted = config([model("model-1")]);

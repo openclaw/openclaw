@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { hasLegacyMemoryRecallMetadataColumns } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
+import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
@@ -26,11 +27,15 @@ import {
   withLegacyCanonicalSessionValidationTriggers,
 } from "./openclaw-agent-canonical-validation-migration.js";
 import { withoutCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
+import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
 import {
   CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
   CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
+  AGENT_JSON_PREDICATE_SCHEMA_VERSION,
+  AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
+import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "./openclaw-agent-db-schema-compatibility.js";
 import {
   readExistingAgentSchemaMeta,
@@ -40,16 +45,14 @@ import {
 import {
   ensureSessionAdditiveColumns,
   readSqliteTableColumns,
-  hasPendingSessionConversationRouteContextColumn,
-  hasPendingSessionProjectColumn,
-  hasPendingSessionTranscriptContextEligibilityColumn,
   ensureSessionEntryValidityProjection,
 } from "./openclaw-agent-db-session-migrations.js";
+import { withoutAgentJsonPredicateColumns } from "./openclaw-agent-json-predicate-schema.js";
+import { withoutOutboxEnqueueSequence } from "./openclaw-agent-outbox-sequence-migration.js";
 import {
   LEGACY_PARTICIPANT_OPTIONAL_COLUMNS,
   withLegacySessionParticipantsSchema,
 } from "./openclaw-agent-participants-migration.js";
-import { hasPendingInputConsumptionColumnMigration } from "./openclaw-agent-pending-inputs-schema.js";
 import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
   AGENT_PROGRESS_CARD_SCHEMA_SQL,
@@ -77,10 +80,18 @@ export {
 
 /** Compare historical migration targets against only the representation they support. */
 export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
+  const sequenceSchemaSql =
+    targetVersion < AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION
+      ? withoutOutboxEnqueueSequence(OPENCLAW_AGENT_SCHEMA_SQL)
+      : OPENCLAW_AGENT_SCHEMA_SQL;
+  const predicateSchemaSql =
+    targetVersion < AGENT_JSON_PREDICATE_SCHEMA_VERSION
+      ? withoutAgentJsonPredicateColumns(sequenceSchemaSql)
+      : sequenceSchemaSql;
   const canonicalSchemaSql =
     targetVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION
-      ? withLegacyCanonicalSessionValidationTriggers(OPENCLAW_AGENT_SCHEMA_SQL)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
+      ? withLegacyCanonicalSessionValidationTriggers(predicateSchemaSql)
+      : predicateSchemaSql;
   const sessionSchemaSql =
     targetVersion < SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION
       ? withoutSessionEntrySnapshotsSchema(canonicalSchemaSql)
@@ -330,6 +341,24 @@ export function assertAgentSchemaVersion(
   );
 }
 
+export function finishAgentSchemaMigration(
+  db: DatabaseSync,
+  agentId: string,
+  pathname: string,
+  targetVersion: number,
+  schemaSql: string,
+  requiresMaintenance: boolean,
+  assertMigration: () => void,
+): void {
+  db.exec(`PRAGMA user_version = ${targetVersion};`);
+  persistAgentSchemaMetadata(db, agentId, targetVersion);
+  assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
+  if (requiresMaintenance && db.prepare("PRAGMA foreign_key_check").all().length > 0) {
+    throw new Error(`Agent schema migration failed foreign key validation for ${pathname}.`);
+  }
+  assertMigration();
+}
+
 function hasLegacyMemoryChunkProvenanceTrigger(db: DatabaseSync): boolean {
   return Boolean(
     db
@@ -359,9 +388,8 @@ export function hasPendingCurrentVersionAgentDatabaseMigration(database: Databas
     hasPendingMemoryChunkMetadataMigration(database) ||
     hasPendingSessionKeyContractSchemaMigration(database) ||
     hasRetiredAgentStateLeaseSchema(database) ||
-    hasPendingSessionConversationRouteContextColumn(database) ||
-    hasPendingSessionTranscriptContextEligibilityColumn(database) ||
-    hasPendingInputConsumptionColumnMigration(database) ||
-    hasPendingSessionProjectColumn(database)
+    hasPendingAgentStartupColumns(
+      (getAdmittedSqliteSchemaFacts(database) ?? captureSqliteSchemaFacts(database)).tableSql,
+    )
   );
 }

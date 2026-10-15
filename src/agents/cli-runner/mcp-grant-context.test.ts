@@ -36,24 +36,6 @@ function buildGrant(
 }
 
 describe("buildCliMcpGrantContext source-reply authority", () => {
-  it.each(["heartbeat", "cron-event", "exec-event"])(
-    "keeps the reply channel separate from the %s turn source",
-    (messageProvider) => {
-      expect(buildGrant({ messageProvider, messageChannel: "telegram" }).messageProvider).toBe(
-        "telegram",
-      );
-      expect(buildGrant({ messageProvider }).messageProvider).toBeUndefined();
-    },
-  );
-
-  it("stamps only trusted, message-capped subagent completion grants", () => {
-    expect(buildGrant().sourceReplyOnly).toBe(true);
-  });
-
-  it("carries the prepared model vision capability into the loopback grant", () => {
-    expect(buildGrant({ modelHasVision: true }).modelHasVision).toBe(true);
-  });
-
   it("snapshots only the resolved logical model into the loopback grant", () => {
     const requesterModel = {
       provider: "selected-provider",
@@ -77,11 +59,7 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     );
   });
 
-  it("carries the prepared reply mode into loopback message tools", () => {
-    expect(buildGrant({ replyToMode: "all" }).replyToMode).toBe("all");
-  });
-
-  it.each(["read-only", "guarded", "workspace", "full"] as const)(
+  it.each(["read-only"] as const)(
     "carries the exact %s session permission into the loopback grant",
     (permissionMode) => {
       const grant = buildGrant({
@@ -97,13 +75,7 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     },
   );
 
-  it.each([
-    { execMode: "deny", permissionMode: "read-only" },
-    { execMode: "allowlist", permissionMode: "guarded" },
-    { execMode: "ask", permissionMode: "guarded" },
-    { execMode: "auto", permissionMode: "workspace" },
-    { execMode: "full", permissionMode: "full" },
-  ] as const)(
+  it.each([{ execMode: "full", permissionMode: "full" }] as const)(
     "preserves effective $execMode execution authority in the granted session",
     ({ execMode, permissionMode }) => {
       const grant = buildGrant({

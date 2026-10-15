@@ -18,6 +18,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import {
   chatHistoryRequests,
@@ -146,14 +147,14 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       this.state &&
       this.isCurrentSessionArchived(this.state) &&
       this.currentSessionArchived === false &&
-      isThreadPresentationFocused(this.presentationId, this),
+      isThreadPresentationFocused(this.presentationId, this.element),
     );
   }
 
   protected retireArchivedPresentation(): void {
     const archived = this.state ? this.isCurrentSessionArchived(this.state) : false;
     if (archived && this.currentSessionArchived === false) {
-      dismissThreadPortals(this.presentationId, this);
+      dismissThreadPortals(this.presentationId, this.element);
       if (this.archiveFocusOwned) {
         this.querySelector<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
       }
@@ -191,7 +192,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       agentId: edit.agentId,
       exactKey: true,
     });
-    runSessionNavigationIntent(this, {
+    runSessionNavigationIntent(this.element, {
       agentId: edit.agentId,
       face: "chat",
       sessionKey: edit.sessionKey,
@@ -453,7 +454,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
               <div class="exec-approval-sub">${description}</div>
             </div>
           </div>
-          <div class="exec-approval-actions">
+          <openclaw-modal-actions class="exec-approval-actions">
             <button
               class="btn primary"
               type="button"
@@ -469,7 +470,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
             >
               ${t("common.cancel")}
             </button>
-          </div>
+          </openclaw-modal-actions>
         </div>
       </openclaw-modal-dialog>
     `;
@@ -558,8 +559,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     this.clearComposerPrefillAttention();
     this.settleResetConfirmation(false);
     this.cancelHeaderRename();
-    dismissConfirmedActionPopovers(this);
-    resetTranscriptSession(this.presentationId, this);
+    dismissConfirmedActionPopovers(this.element);
+    resetTranscriptSession(this.presentationId, this.element);
     const state = this.state;
     if (state) {
       stopChatRealtimeTalk(state);
@@ -629,8 +630,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         if (this.state !== state || state.sessionKey !== sessionKey) {
           return;
         }
-        const client = state.client;
-        const connectionEpoch = state.connectionEpoch;
+        const connectionIsCurrent = captureChatConnectionOwner(state);
         const sessions = state.sessions;
         const attachments = state.chatAttachments;
         const mentions = state.chatMentions;
@@ -640,9 +640,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         const isCurrent = () =>
           this.state === state &&
           state.sessionKey === sessionKey &&
-          state.connected &&
-          state.client === client &&
-          state.connectionEpoch === connectionEpoch &&
+          connectionIsCurrent() &&
           state.sessions === sessions &&
           this.isConnected &&
           this.active &&

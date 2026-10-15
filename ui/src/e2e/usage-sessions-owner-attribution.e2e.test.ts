@@ -2,6 +2,8 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { resetLogger, setLoggerOverride } from "../../../src/logging/logger.ts";
 import type { SessionsUsageResult } from "../../../src/shared/usage-types.ts";
@@ -10,8 +12,7 @@ import {
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
-import type { ApplicationContext } from "../app/context.ts";
-import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -41,12 +42,6 @@ async function capture(page: Page, name: string) {
   });
 }
 
-async function prepareUsageProofPage(page: Page) {
-  await page.addInitScript((key) => {
-    window.localStorage.setItem(key, JSON.stringify({ dismissedAtMs: 1770000000000 }));
-  }, COMMUNITY_INVITE_KEY);
-}
-
 async function dragTimelineRange(page: Page, fraction: number) {
   const panel = page.locator(".session-detail-panel");
   const handle = panel.locator(".chart-handle-right");
@@ -70,12 +65,10 @@ async function requestGateway<T>(
   methodName: string,
   requestParams: Record<string, unknown>,
 ) {
-  return await page.evaluate(
-    async ({ method, params }) => {
-      const app = document.querySelector("openclaw-app") as
-        | (HTMLElement & { runtime?: { context: ApplicationContext } })
-        | null;
-      const client = app?.runtime?.context.gateway.snapshot.client;
+  return await evaluateControlUiContext(
+    page,
+    async (context, { method, params }) => {
+      const client = context.gateway.snapshot.client;
       if (!client) {
         throw new Error("Usage proof has no connected Gateway client");
       }
@@ -131,7 +124,7 @@ suite.define(() => {
             await import("../../../src/config/sessions/session-accessor.js");
 
           signal.throwIfAborted();
-          await state.writeConfig({
+          const config: OpenClawConfig = {
             agents: {
               ownership: "explicit",
               defaults: { workspace: state.workspaceDir },
@@ -151,7 +144,9 @@ suite.define(() => {
             session: {
               store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
             },
-          });
+          };
+          await state.writeConfig(config);
+          setRuntimeConfigSnapshot(config);
 
           for (const agentId of ["main", "opus"]) {
             signal.throwIfAborted();
@@ -213,7 +208,6 @@ suite.define(() => {
               viewport,
             },
             async ({ page }) => {
-              await prepareUsageProofPage(page);
               const pageErrors: string[] = [];
               page.on("pageerror", (error) => pageErrors.push(String(error)));
 
@@ -334,7 +328,6 @@ suite.define(() => {
           await suite.withPage(
             { locale: "en-US", timezoneId: "UTC", serviceWorkers: "block", viewport },
             async ({ page }) => {
-              await prepareUsageProofPage(page);
               const key = "agent:opus:usage-instance-proof";
               const gatewayUrl = new URL(`ws://127.0.0.1:${port}`).href;
               const pageErrors: string[] = [];
@@ -551,11 +544,13 @@ suite.define(() => {
               expect(await selectedReplacement.getAttribute("aria-label")).toBe(
                 "Replacement usage session",
               );
-              expect(
-                observedOverviews
-                  .slice(focusOverviewStart)
-                  .some((overview) => overview.session?.sessionId === replacementId),
-              ).toBe(true);
+              await expect
+                .poll(() =>
+                  observedOverviews
+                    .slice(focusOverviewStart)
+                    .some((overview) => overview.session?.sessionId === replacementId),
+                )
+                .toBe(true);
               expect(connections).toBe(selectedConnections);
               if (pointCount === 2) {
                 await moveOriginalRange();

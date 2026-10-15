@@ -13,7 +13,8 @@ import type { SidebarSessionMutationScope } from "../../components/app-sidebar-s
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import type { SessionMenuData } from "../../components/session-menu-actions.ts";
 import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
-import type { SessionActionHost } from "../../components/session-organizer-operations.runtime.ts";
+import type * as SessionOperations from "../../components/session-organizer-operations.runtime.ts";
+import { sessionPlacementAction } from "../../components/session-placement-action.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
@@ -23,7 +24,6 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
@@ -31,6 +31,7 @@ import {
   areUiSessionKeysEquivalent,
   canArchiveSessionRow,
   isPinnableUiSessionRow,
+  isNativeCatalogAdoptionSessionKey,
   parseAgentSessionKey,
   isSubagentSessionKey,
   resolveUiConfiguredMainKey,
@@ -43,6 +44,7 @@ import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import { headerSessionMetadataPatch } from "./chat-pane-session-metadata-patch.ts";
+import { chatSessionPresentationTitle } from "./chat-pane-session-presentation.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
@@ -51,11 +53,7 @@ import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.t
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   private readonly headerSessionDataMemo = new ChatPaneHeaderMemo<SessionMenuData>();
   protected resolveHeaderSessionTitle(row: GatewaySessionRow | undefined): string {
-    // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
-    return (
-      this.presentationTitle ??
-      resolveSessionDisplayName(row?.key ?? this.state?.sessionKey ?? this.sessionKey, row)
-    );
+    return chatSessionPresentationTitle(this.state, row, this.sessionKey);
   }
 
   protected canArchiveHeaderSession(row: GatewaySessionRow): boolean {
@@ -115,10 +113,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const isChild =
       !isSubagentSessionKey(row.key) &&
       Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey])));
-    const hasChildren = hasSessionArchiveDescendants(
-      row,
-      this.state?.sessionsResult?.sessions ?? [],
-    );
     const archiving = this.context.sessions.archiveVisibility(row.key) === "pending";
     const pinned = this.context.navigation.snapshot.sidebarEntries.includes(
       serializeSidebarEntry({ type: "session", key: row.key }),
@@ -126,11 +120,11 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     return this.headerSessionDataMemo.read(
       [
         label,
+        sessionPlacementAction(row),
         row.key,
         row.agentId,
         row.sessionId,
         isChild,
-        hasChildren,
         pinned,
         pinnable,
         row.snoozedUntil,
@@ -146,10 +140,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       ],
       () => ({
         label,
+        placementAction: sessionPlacementAction(row),
         target: { key: row.key, agentId: row.agentId },
         sessionId: row.sessionId ?? null,
         isChild,
-        hasChildren,
         pinned,
         pinnable,
         snoozedUntil: row.snoozedUntil ?? null,
@@ -167,9 +161,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     );
   }
 
-  private headerSessionOperationsLoad: Promise<
-    typeof import("../../components/session-organizer-operations.runtime.ts")
-  > | null = null;
+  private headerSessionOperationsLoad: Promise<typeof SessionOperations> | null = null;
   protected async loadHeaderPlatform(
     client: GatewayBrowserClient,
     generation: number,
@@ -188,8 +180,11 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   protected async handleHeaderSessionAction(action: HeaderMenuAction, row: GatewaySessionRow) {
-    if (action.kind === "stop-cloud-worker") {
-      return this.changeHeaderPlacement(row, "reclaim");
+    if (action.kind === "delete" && isNativeCatalogAdoptionSessionKey(row.key)) {
+      return;
+    }
+    if (action.kind === "move-session" || action.kind === "stop-cloud-worker") {
+      return this.changeHeaderPlacement(row, action.kind === "move-session" ? "move" : "reclaim");
     }
     if (action.kind === "toggle-archived" && !row.archived && !this.canArchiveHeaderSession(row)) {
       return;
@@ -280,6 +275,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       hasActiveRun: candidate.hasActiveRun ?? candidate.status === "running",
       gatewayHasActiveRun: candidate.hasActiveRun,
       hasActiveSubagentRun: candidate.hasActiveSubagentRun,
+      hasArchiveDescendants: hasSessionArchiveDescendants(
+        candidate,
+        this.state?.sessionsResult?.sessions ?? [],
+      ),
     });
     const session = toActionSession(row);
     // Refresh metadata only on the selected instance; replacements must keep
@@ -300,7 +299,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     try {
       const operations = await (this.headerSessionOperationsLoad ??=
         import("../../components/session-organizer-operations.runtime.ts"));
-      const host: SessionActionHost & { knownSessionGroups(): string[] } = {
+      const host: SessionOperations.SessionActionHost & { knownSessionGroups(): string[] } = {
         sessionData: {
           isSessionMutationScopeCurrent: (candidate) =>
             this.isHeaderSessionActionCurrent(candidate, owner),
@@ -338,9 +337,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           category,
           scope,
           {},
-          {
-            resolveSession: resolveCurrentSession,
-          },
+          { resolveSession: resolveCurrentSession },
         );
       switch (action.kind) {
         case "toggle-involving-me":
@@ -367,9 +364,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         case "move-to-top-level":
           await operations.promoteSession(host, session, scope);
           break;
-        case "archive-tree":
-          await operations.archiveSessionTreeWithUndo(host, session, scope);
-          break;
         case "move-to-group":
           await assignCategory(action.category);
           break;
@@ -387,7 +381,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           break;
         }
         case "snooze":
-          await operations.snoozeSessionWithUndo(host, session, action.snoozedUntil, scope);
+          await operations.snoozeSessionWithUndo(host, session, action, scope);
           break;
         case "wake":
           await operations.patchSession(host, session, { snoozedUntil: null }, scope, {
@@ -595,6 +589,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const loads = [this.loadHeaderPlatform(client, this.connectionGeneration)];
     // Same precedence as resolveChatPaneWorkspace/loadSessionFileRoot.
     const immediateRoot =
+      row.deviceFolder?.path ||
       (row.execNode ? row.execCwd?.trim() : undefined) ||
       row.spawnedWorkspaceDir?.trim() ||
       row.spawnedCwd?.trim() ||
@@ -718,8 +713,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         ...(agentId ? { agentId } : {}),
       });
       if (!result.ok) {
-        const error = result.error ?? "Failed to reveal session workspace.";
-        this.publishHeaderError(error, owner);
+        this.publishHeaderError(result.error ?? "Failed to reveal session workspace.", owner);
       }
     } catch (error) {
       this.publishHeaderError(error, owner);

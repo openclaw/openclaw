@@ -10,7 +10,7 @@ import {
 } from "../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
 import {
-  resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync,
   type ResolvedRealtimeVoiceProvider,
 } from "../talk/provider-resolver.js";
 import type { RealtimeVoiceProviderConfig } from "../talk/provider-types.js";
@@ -98,13 +98,13 @@ export function meetingOutputBytesPerMs(audioFormat: MeetingRealtimeAudioFormat)
   return audioFormat === "g711-ulaw-8khz" ? 8 : 48;
 }
 
-export function resolveMeetingRealtimeProvider(params: {
+export async function resolveMeetingRealtimeProvider(params: {
   config: MeetingRealtimeProviderSelectionConfig;
   fullConfig: OpenClawConfig;
   providers?: RealtimeVoiceProviderPlugin[];
-}): ResolvedRealtimeVoiceProvider {
+}): Promise<ResolvedRealtimeVoiceProvider> {
   const providerId = params.config.realtime.voiceProvider ?? params.config.realtime.provider;
-  return resolveConfiguredRealtimeVoiceProvider({
+  return resolveConfiguredRealtimeVoiceProviderAsync({
     configuredProviderId: providerId,
     providerConfigs: params.config.realtime.providers,
     cfg: params.fullConfig,
@@ -117,11 +117,11 @@ export function resolveMeetingRealtimeProvider(params: {
   });
 }
 
-export function resolveMeetingRealtimeTranscriptionProvider(params: {
+export async function resolveMeetingRealtimeTranscriptionProvider(params: {
   config: MeetingRealtimeProviderSelectionConfig;
   fullConfig: OpenClawConfig;
   providers?: RealtimeTranscriptionProviderPlugin[];
-}): ResolvedRealtimeTranscriptionProvider {
+}): Promise<ResolvedRealtimeTranscriptionProvider> {
   const providers = params.providers ?? listRealtimeTranscriptionProviders(params.fullConfig);
   if (providers.length === 0) {
     throw new Error("No configured realtime transcription provider registered");
@@ -145,7 +145,11 @@ export function resolveMeetingRealtimeTranscriptionProvider(params: {
   const providerConfig = provider.resolveConfig
     ? provider.resolveConfig({ cfg: params.fullConfig, rawConfig })
     : rawConfig;
-  if (!provider.isConfigured({ cfg: params.fullConfig, providerConfig })) {
+  if (
+    !(provider.isConfiguredAsync
+      ? await provider.isConfiguredAsync({ cfg: params.fullConfig, providerConfig })
+      : (provider.isConfigured?.({ cfg: params.fullConfig, providerConfig }) ?? false))
+  ) {
     throw new Error(`Realtime transcription provider "${provider.id}" is not configured`);
   }
   return { provider, providerConfig };

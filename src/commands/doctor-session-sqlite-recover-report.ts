@@ -269,7 +269,7 @@ async function repairCanonicalIndexesForRecovery(
     }
     if (!clearOpenClawAgentDatabaseOpenFailure(sqlitePath, { env: databaseOptions.env })) {
       throw new Error(
-        `Repaired canonical SQLite indexes, but could not clear the quarantine for ${sqlitePath}.`,
+        `Repaired SQLite indexes, but could not clear the quarantine for ${sqlitePath}.`,
       );
     }
     return { ok: true };

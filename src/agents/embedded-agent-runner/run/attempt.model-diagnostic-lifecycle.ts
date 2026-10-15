@@ -30,6 +30,8 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import { formatPropagatedDiagnosticTraceparent } from "../../../infra/diagnostic-trace-propagation.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
+import { withModelTransportContext } from "../../../llm/model-transport-context.js";
+import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -176,6 +178,7 @@ function withDiagnosticRequestContext(
   trace: DiagnosticTraceContext,
   observer: ModelCallObserver,
   callId: string,
+  ctx: ModelCallDiagnosticContext,
 ): NonNullable<ModelCallStreamOptions> {
   const traceparent = formatPropagatedDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
@@ -224,6 +227,16 @@ function withDiagnosticRequestContext(
   };
   modelRequestBodyState(requestOptions).onBytes = (bytes) => {
     observer.state.requestPayloadBytes = bytes;
+    emitDiagnosticsTimelineEvent(
+      {
+        type: "mark",
+        name: "provider.request.serialized",
+        timestamp: new Date().toISOString(),
+        runId: ctx.runId,
+        spanId: callId,
+      },
+      { config: ctx.config },
+    );
   };
   return withProviderAcceptanceObserver(requestOptions, (acceptance) => {
     if (observer.state.terminalEventEmitted) {
@@ -244,6 +257,11 @@ export function createModelLifecycle(params: {
   createObserver: (capturePromptStats: boolean) => ModelCallObserver;
 }) {
   const callId = params.ctx.nextCallId();
+  const transportContext = {
+    sessionKey: params.ctx.sessionKey,
+    runId: params.ctx.runId,
+    requestId: callId,
+  };
   const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
   const observer = params.createObserver(areDiagnosticsEnabledForProcess());
   const eventBase: ModelCallEventBase = {
@@ -253,6 +271,10 @@ export function createModelLifecycle(params: {
     ...(observer.promptStats ? { promptStats: observer.promptStats } : {}),
     trace,
   };
+  const reportStreamProgress = createModelCallStreamProgressReporter({
+    config: params.ctx.config,
+    target: eventBase,
+  });
   emitCoreModelRequestStartedDiagnosticEvent(
     eventBase,
     params.ctx.ownerGeneration,
@@ -273,7 +295,13 @@ export function createModelLifecycle(params: {
     },
     { config: params.ctx.config },
   );
-  const propagatedOptions = withDiagnosticRequestContext(params.options, trace, observer, callId);
+  const propagatedOptions = withDiagnosticRequestContext(
+    params.options,
+    trace,
+    observer,
+    callId,
+    params.ctx,
+  );
   function emitModelCallEnded(failure: { error: unknown } | undefined): void {
     const { ownerGeneration, config } = params.ctx;
     if (observer.state.terminalEventEmitted) {
@@ -282,6 +310,14 @@ export function createModelLifecycle(params: {
     observer.state.terminalEventEmitted = true;
     const terminalAtMs = Date.now();
     const durationMs = terminalAtMs - startedAt;
+    const providerTimingFields: Record<string, number> =
+      observer.state.providerProcessingMs === undefined
+        ? {}
+        : {
+            providerProcessingMs: observer.state.providerProcessingMs,
+            // Includes queueing, loading, transport, and terminal settlement overhead.
+            providerWaitEstimateMs: Math.max(0, durationMs - observer.state.providerProcessingMs),
+          };
     const sizeTimingFields = observer.sizeTimingFields();
     const fields = failure ? modelCallErrorFields(failure.error) : undefined;
     const terminal = fields
@@ -318,6 +354,7 @@ export function createModelLifecycle(params: {
           ...(api ? { api } : {}),
           ...(transport ? { transport } : {}),
           terminalAtMs,
+          ...providerTimingFields,
           ...(observer.state.lastProviderActivityAtMs !== undefined
             ? { lastProviderActivityAtMs: observer.state.lastProviderActivityAtMs }
             : {}),
@@ -333,6 +370,7 @@ export function createModelLifecycle(params: {
         ...terminal,
         ...eventBase,
         durationMs,
+        ...providerTimingFields,
         ...sizeTimingFields,
         ...observer.usageField(),
       },
@@ -366,10 +404,13 @@ export function createModelLifecycle(params: {
     eventBase,
     observer,
     propagatedOptions,
+    runInTransportContext<T>(run: () => T): T {
+      return withModelTransportContext(transportContext, run);
+    },
     startedAt,
     observeChunk(chunk: unknown) {
       observer.observeResponseChunk(startedAt, chunk);
-      observer.maybeEmitStreamProgress(eventBase);
+      reportStreamProgress(observer.state.terminalEventEmitted ? undefined : callId);
       if (params.ctx.onOutputDelta && isModelOutputDelta(chunk)) {
         params.ctx.onOutputDelta();
       }

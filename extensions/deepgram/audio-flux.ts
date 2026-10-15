@@ -10,7 +10,6 @@ import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   openProviderWebSocket,
-  requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
@@ -274,8 +273,12 @@ export async function transcribeDeepgramFluxAudio(params: {
           });
           return;
         }
-        if (event.type !== "TurnInfo" || typeof event.transcript !== "string") {
+        if (event.type !== "TurnInfo") {
           return;
+        }
+        // Silence is a stream without turns; a turn without transcript text is malformed.
+        if (typeof event.transcript !== "string") {
+          throw new Error("Audio transcription response missing transcript");
         }
         if (event.event === "EndOfTurn") {
           finalizedTranscriptBytes += Buffer.byteLength(event.transcript, "utf8");
@@ -328,11 +331,6 @@ export async function transcribeDeepgramFluxAudio(params: {
     );
   }).finally(() => socket.terminate());
 
-  return {
-    text: requireTranscriptionText(
-      transcript || undefined,
-      "Audio transcription response missing transcript",
-    ),
-    model: params.model,
-  };
+  // A clean close after flush without turns is silence; the media runner skips it.
+  return { text: transcript, model: params.model };
 }

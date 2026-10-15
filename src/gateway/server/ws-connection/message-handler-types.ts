@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import type {
   ConnectParams,
   RequestFrame,
+  ResponseFrame,
   errorShape,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -20,6 +21,7 @@ import type { PluginNodeCapabilitySurface } from "../../plugin-node-capability.j
 import type { GatewayRole } from "../../role-policy.types.js";
 import type { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
+import type { RemoteIngressPrincipalSnapshot } from "../client-identity-types.js";
 import type { GatewayClientRegistry } from "../client-registry.js";
 import type {
   GatewayConnectionTransport,
@@ -121,7 +123,7 @@ export type GatewayConnectPhaseContext = {
     message: string,
     options?: Parameters<typeof errorShape>[2],
   ) => void;
-  sendFrame: (obj: unknown) => Promise<void>;
+  sendFrame: (obj: ResponseFrame) => Promise<void>;
   /** Retire pre-auth ingress limits once hello-ok is accepted by the transport. */
   onHelloDelivered: () => void;
   onPairingWait: () => void;
@@ -137,6 +139,7 @@ export type GatewayConnectPhaseContext = {
 };
 
 export type AuthenticatedGatewayConnect = {
+  remoteIngressPrincipal?: RemoteIngressPrincipalSnapshot;
   authPolicy: GatewayAuthPolicy;
   resolvedAuth: ResolvedGatewayAuth;
   minProtocol: number;

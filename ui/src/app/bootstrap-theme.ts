@@ -20,6 +20,7 @@ import {
   type UiPreferences,
   type UiSettings,
 } from "./settings.ts";
+import { syncThemeBackgroundArtwork } from "./theme-background-artwork.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "./theme-branding.ts";
 import type { CatalogTheme, createThemeCatalog, ThemeCatalogSnapshot } from "./theme-catalog.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
@@ -62,10 +63,12 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   const effectiveTheme = dynamic && !catalogTheme ? "claw" : settings.theme;
   const mode = catalogTheme?.mode ?? settings.themeMode;
   const resolvedTheme = resolveTheme(effectiveTheme, mode);
+  const resolvedMode = resolvedTheme.endsWith("light") ? "light" : "dark";
   root.dataset.themeId = effectiveTheme;
   root.dataset.theme = resolvedTheme;
-  root.dataset.themeMode = resolvedTheme.endsWith("light") ? "light" : "dark";
+  root.dataset.themeMode = resolvedMode;
   const branding = themeBranding(settings, catalogTheme);
+  syncThemeBackgroundArtwork(root, branding, resolvedMode);
   root.dataset.themeMascot = branding.mascot;
   if (branding.avatarHat) {
     root.dataset.themeAvatarHat = branding.avatarHat;
@@ -85,7 +88,8 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   applyChatFontSmoothing(typefaces.chat);
   syncCustomThemeStyleTag(catalogTheme?.palette ?? settings.customTheme);
   applyControlUiAccent(settings.accent);
-  syncControlUiSystemChrome();
+  // Custom palette CSS can change while the theme ID and inline styles stay the same.
+  syncControlUiSystemChrome(true);
 }
 
 function livePreferencesKey(settings: UiPreferences): string {

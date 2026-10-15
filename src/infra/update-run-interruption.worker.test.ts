@@ -89,8 +89,7 @@ describe("interrupted update source custody", () => {
           },
         };
       });
-      const selected = vi.fn();
-      const pending = reconcileInterruptedUpdateRuns(options, selected).then(
+      const pending = reconcileInterruptedUpdateRuns(options).then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
@@ -130,7 +129,6 @@ describe("interrupted update source custody", () => {
       } else {
         expect(outcome).toMatchObject({ value: [{ runId: run.runId, status: "succeeded" }] });
       }
-      expect(selected.mock.calls).toEqual([[run.runId]]);
     },
   );
 });

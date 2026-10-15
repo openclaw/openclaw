@@ -1,8 +1,8 @@
-import { nothing, render } from "lit";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { createChatProps, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -47,22 +47,21 @@ describe("chat comment pins", () => {
         disconnect() {}
       },
     );
-    const container = document.createElement("div");
-    onTestFinished(() => {
-      render(nothing, container);
-    });
+    const container = createComposerContainer();
     document.body.append(container);
     // A loading transcript stays static, so only pin inputs and observers vary.
     const props = createChatProps({ attachments: [comment("first")], loading: true });
-    render(renderChat(props), container);
+    renderChatPropsInto(container, props);
     const pins = container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
       "openclaw-chat-comment-pins",
     )!;
     const layouts = vi.spyOn(pins, "getBoundingClientRect");
+    await waitForSolid(() => expect(resizes.length).toBeGreaterThan(0));
     const settle = async () => {
       await pins.updateComplete;
       // Observer callbacks run as microtasks after the committed render.
       await Promise.resolve();
+      flush();
       for (const frame of frames.splice(0)) {
         frame(0);
       }
@@ -73,10 +72,13 @@ describe("chat comment pins", () => {
     expect(await settle()).toBe(1);
 
     // Streaming frames and composer edits rebuild the pane props object.
-    render(renderChat({ ...props, draft: "Typing in the composer" }), container);
+    renderChatPropsInto(container, { ...props, draft: "Typing in the composer" });
     expect(await settle()).toBe(0);
 
-    render(renderChat({ ...props, attachments: [comment("first"), comment("second")] }), container);
+    renderChatPropsInto(container, {
+      ...props,
+      attachments: [comment("first"), comment("second")],
+    });
     expect(await settle()).toBe(1);
 
     const thread = container.querySelector(".chat-thread")!;

@@ -26,7 +26,6 @@ const mocks = vi.hoisted(() => ({
   }),
   resolveProvider: vi.fn(() => ({ provider: { id: "openai" }, providerConfig: {} })),
   hangupRequested: vi.fn(async () => {}),
-  senderAuthVersion: 1 as number | undefined,
   pump: {
     suppressionReady: vi.fn(async () => {}),
     routeReady: vi.fn(async () => {}),
@@ -81,13 +80,11 @@ const mocks = vi.hoisted(() => ({
       },
 }));
 
+// mock-isolation: The driver fixture owns synthetic Talk sessions, consult callbacks, and observations; no host runtime is started.
 vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
   REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES: ["safe-read-only", "owner", "none"],
   isRealtimeVoiceAgentConsultToolPolicy: (value: unknown) =>
     value === "safe-read-only" || value === "owner" || value === "none",
-  get REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION() {
-    return mocks.senderAuthVersion;
-  },
   buildRealtimeVoiceAgentConsultPolicyInstructions: vi.fn(
     ({ consultPolicy }: { consultPolicy?: string }) => `Consult behavior: ${consultPolicy}.`,
   ),
@@ -121,7 +118,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
     transcript.splice(0, Math.max(0, transcript.length - maxEntries));
     return entry;
   }),
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveProvider,
   resolveRealtimeVoiceAgentConsultTools: vi.fn(
     (policy: string, customTools: Array<{ name: string }> = []) => [
       ...(policy === "none" ? [] : [{ name: "openclaw_agent_consult" }]),
@@ -183,7 +180,6 @@ export async function startReadyFaceTimeTalkDriver(params = startParams()) {
 export function resetTalkDriverMocks() {
   vi.clearAllMocks();
   mocks.getSessionEntry.mockReturnValue({ sessionId: "facetime-consult-session" });
-  mocks.senderAuthVersion = 1;
   mocks.resolveAgentContext.mockResolvedValue("Agent context: shared voice agent context.");
   mocks.bridge.connect.mockResolvedValue();
   mocks.pump.suppressionReady.mockResolvedValue();

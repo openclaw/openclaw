@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
@@ -171,6 +172,7 @@ describe("Gateway pending-profile authorization", () => {
     "rechecks bound webchat talk.mode after node discovery (profile merged: %s)",
     async (merge) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const email = "talk-source@example.test";
         const source = ensureProfileForEmail(email);
         const target = ensureProfileForEmail("talk-target@example.test");
@@ -246,6 +248,7 @@ describe("Gateway pending-profile authorization", () => {
 
   it("keeps the actual settings writer unchanged when a selected account merges during preparation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const source = ensureProfileForEmail("patch-source@example.test");
       const target = ensureProfileForEmail("patch-target@example.test");
       const scope = { agentId: "main", sessionKey: "agent:main:bound-patch" };

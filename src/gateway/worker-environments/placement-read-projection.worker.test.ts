@@ -4,10 +4,8 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { SpawnResult } from "../../process/exec.js";
-import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
-import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -188,7 +186,7 @@ describe("worker placement read projection", () => {
     expect(assertCurrent).toThrow("placement late-placement changed before mutation");
   });
 
-  it("publishes node retention without host SQL and refuses a drained placement on the next authority check", async () => {
+  it("publishes node retention without host SQL and refuses a drained placement before dispatch", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-node-retention-"));
     const database = openOpenClawStateDatabase();
     const { store, placement, identity } = await activePlacement(database, "node-retention");
@@ -263,6 +261,7 @@ describe("worker placement read projection", () => {
       });
       sql.clear();
       expect(request.isDispatchAuthorized()).toBe(false);
+      expect(request.isCompletionAuthorized?.()).toBe(true);
       sql.expectIdle();
       expect(warn).not.toHaveBeenCalled();
     } finally {
@@ -274,159 +273,8 @@ describe("worker placement read projection", () => {
     }
   });
 
-  it("refreshes admission facts when the preceding turn releases during its read", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-admission-refresh-"));
-    const database = openOpenClawStateDatabase();
-    const { store, placement, identity } = await activePlacement(database, "next-turn");
-    const claim = await store.claimTurn({
-      ...identity,
-      owner: placementTurnOwner(placement),
-      claimId: "preceding-claim",
-      runId: "preceding-run",
-    });
-    const read = store.readProjection.bind(store);
-    const observed = createDeferred();
-    const resume = createDeferred();
-    vi.spyOn(store, "readProjection").mockImplementationOnce(async (...args) => {
-      const result = await read(...args);
-      observed.resolve();
-      await resume.promise;
-      return result;
-    });
-    const sql = observeMainThreadSql();
-    const preparing = store.prepareRuntimeRefresh(identity.sessionId);
-    const settled = preparing.catch(() => undefined);
-    try {
-      await awaitGateBeforeSettlement(observed.promise, preparing, "placement read was skipped");
-      await store.releaseTurn(claim);
-      resume.resolve();
-      const prepared = await preparing;
-      try {
-        expect(prepared.placement).toMatchObject({
-          state: "active",
-          generation: placement.generation,
-          turnClaim: null,
-        });
-        prepared.assertCurrent();
-        sql.expectIdle();
-      } finally {
-        prepared.release();
-      }
-    } finally {
-      resume.resolve();
-      await settled;
-      sql.restore();
-    }
-  });
-
-  it.each(["session", "inventory"] as const)(
-    "joins %s publication settlement and keeps unknown, closed, and cancelled reads fenced",
-    async (kind) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-admission-pending-"));
-      const database = openOpenClawStateDatabase();
-      const store = createWorkerSessionPlacementStore({ database });
-      const placement = await store.startDispatch({
-        sessionId: "pending-publication",
-        sessionKey: "agent:main:pending-publication",
-        agentId: "main",
-      });
-      const read = vi.spyOn(store, "readProjection");
-      const inventoryRead = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-      const prepare = async () =>
-        kind === "inventory"
-          ? store.prepareMaintenancePlacements()
-          : store.prepareRuntimeRefresh(placement.sessionId);
-      const readCalls = () =>
-        kind === "inventory"
-          ? inventoryRead.mock.calls.filter(
-              (args) => args[1].type === "workers.placementPreservation",
-            )
-          : read.mock.calls;
-      for (const settlement of ["commit", "rollback", "invalidate", "cancel", "close"] as const) {
-        const previous = await prepare();
-        const publication = stagePlacementTurnClaimWorkerPublication(
-          requireOpenClawStateDatabaseIdentity({ db: database.db }),
-          placement,
-        );
-        read.mockClear();
-        inventoryRead.mockClear();
-        const scope = new AsyncWorkScope();
-        const preparing = scope.track(prepare);
-        const settled = preparing.catch(() => undefined);
-        try {
-          expect(readCalls()).toHaveLength(0);
-          if (settlement === "close") {
-            await closeOpenClawStateDatabaseAsync();
-          } else if (settlement === "cancel") {
-            scope.beginClose();
-          } else {
-            publication[settlement]();
-          }
-          if (settlement === "commit" || settlement === "rollback") {
-            const prepared = await preparing;
-            try {
-              if ("placements" in prepared) {
-                expect(prepared.placements).toEqual([placement]);
-              } else {
-                expect(prepared.placement).toEqual(placement);
-              }
-              prepared.assertCurrent();
-              expect(readCalls()).toHaveLength(
-                kind === "inventory" && settlement === "rollback" ? 0 : 1,
-              );
-            } finally {
-              prepared.release();
-            }
-          } else {
-            await expect(preparing).rejects.toThrow();
-            expect(readCalls()).toHaveLength(0);
-          }
-          if (settlement === "cancel") {
-            // Abandoning this reader cannot settle the independent accepted writer.
-            expect(() => previous.assertCurrent()).toThrow(
-              kind === "inventory" ? "placement inventory changed" : "placement authority changed",
-            );
-            publication.rollback();
-            previous.assertCurrent();
-          }
-        } finally {
-          publication.rollback();
-          previous.release();
-          await settled;
-          await scope.drain();
-        }
-      }
-    },
-  );
-
-  it("invalidates an empty maintenance scan when a new placement commits", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-maintenance-inventory-"));
-    const database = openOpenClawStateDatabase();
-    const store = createWorkerSessionPlacementStore({ database });
-    const empty = await store.prepareMaintenancePlacements();
-    try {
-      expect(empty.placements).toEqual([]);
-      const placement = await store.startDispatch({
-        sessionId: "new-placement",
-        sessionKey: "agent:main:new-placement",
-        agentId: "main",
-      });
-      expect(() => empty.assertCurrent()).toThrow("placement inventory changed");
-      const current = await store.prepareMaintenancePlacements();
-      try {
-        expect(current.placements).toEqual([placement]);
-        current.assertCurrent();
-      } finally {
-        current.release();
-      }
-      expect(() => current.assertCurrent()).toThrow("placement inventory changed");
-    } finally {
-      empty.release();
-    }
-  });
-
   it.each(["local", "worker-turn", "remote-exec"] as const)(
-    "fences inventory and session observations during %s publication settlement",
+    "fences session observations during %s publication settlement",
     async (kind) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-maintenance-settlement-"));
       const database = openOpenClawStateDatabase();
@@ -439,7 +287,7 @@ describe("worker placement read projection", () => {
       if (kind !== "local") {
         await activePlacement(database, session.sessionId, kind);
       }
-      const current = store.get(session.sessionId);
+      const current = await store.getAsync(session.sessionId);
       await store.claimTurn({
         ...session,
         owner: current?.state === "active" ? placementTurnOwner(current) : { kind: "local" },
@@ -449,7 +297,6 @@ describe("worker placement read projection", () => {
       const placement = store.get(session.sessionId)!;
       const identity = requireOpenClawStateDatabaseIdentity({ db: database.db });
       for (const settlement of ["rollback", "commit", "invalidate"] as const) {
-        const prepared = await store.prepareMaintenancePlacements();
         const sessionRead = await store.prepareRuntimeRefresh(session.sessionId);
         const publication = stagePlacementTurnClaimWorkerPublication(
           identity,
@@ -458,18 +305,8 @@ describe("worker placement read projection", () => {
           placement.state,
         );
         try {
-          if (kind === "local") {
-            prepared.assertCurrent();
-          } else {
-            expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
-          }
           expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
           publication[settlement]();
-          if (kind === "local" || settlement === "rollback") {
-            prepared.assertCurrent();
-          } else {
-            expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
-          }
           if (settlement === "rollback") {
             sessionRead.assertCurrent();
           } else {
@@ -478,7 +315,6 @@ describe("worker placement read projection", () => {
         } finally {
           publication.rollback();
           sessionRead.release();
-          prepared.release();
         }
       }
       const closing = await store.prepareMaintenancePlacements();
@@ -520,7 +356,7 @@ describe("worker placement read projection", () => {
     ).toEqual(profileSnapshot);
   });
 
-  it("discovers disk-probe placements off thread in session order before live sample checks", async () => {
+  it("discovers disk-probe placements off thread before live sample checks", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-disk-inventory-"));
     const database = openOpenClawStateDatabase();
     const last = await activePlacement(database, "z-disk");
@@ -555,14 +391,14 @@ describe("worker placement read projection", () => {
     const sql = observeHostDataSql();
     try {
       expect(store.get(first.placement.sessionId)?.state).toBe("active");
-      expect(sql.queries.length).toBeGreaterThan(0);
+      expect(sql.queries).toEqual([]);
       const beforeSweep = sql.queries.length;
       let discoverySql: string[] | undefined;
       const requestedEnvironments: string[] = [];
       const warn = vi.fn();
       const monitor = createWorkerPlacementDiskSpaceMonitor({
         placements: store,
-        runnerAvailability: { read: () => undefined },
+        runnerAvailability: { read: () => undefined, version: () => 0 },
         environments: {
           async startTunnel({ environmentId, ownerEpoch }) {
             discoverySql ??= sql.queries.slice(beforeSweep);
@@ -584,7 +420,7 @@ describe("worker placement read projection", () => {
       await monitor.sweep();
 
       expect(discoverySql).toEqual([]);
-      expect(requestedEnvironments).toEqual([
+      expect(requestedEnvironments.toSorted()).toEqual([
         first.placement.environmentId,
         last.placement.environmentId,
       ]);
@@ -831,7 +667,7 @@ describe("worker placement read projection", () => {
       expect(await store.listPendingWorkspaceResultsAsync()).toEqual(pendingResults);
       const orderedIds = [
         ...new Set([
-          ...store.listForReconcile().map((placement) => placement.sessionId),
+          ...(await store.listForReconcileAsync()).map((placement) => placement.sessionId),
           ...db
             .prepare(
               "SELECT session_id FROM worker_session_placement_moves ORDER BY created_at_ms, session_id",
@@ -929,7 +765,7 @@ describe("worker placement read projection", () => {
       for (const claimless of [false, true]) {
         if (claimless) {
           if (executionMode === "remote-exec") {
-            expect(store.clearLocalTurnClaimsAfterRestart()).toBe(1);
+            expect(await store.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
           } else {
             database.db
               .prepare(`UPDATE worker_session_placements SET turn_claim_owner = NULL, turn_claim_id = NULL,

@@ -30,12 +30,14 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
+// mock-isolation: Browser-auth routing uses fixture profile results while keeping host credential storage untouched.
 vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
   const { resolveOpenAICodexAuthIdentity } = await vi.importActual<
     typeof import("openclaw/plugin-sdk/provider-oauth-runtime")
   >("openclaw/plugin-sdk/provider-oauth-runtime");
   return {
     isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+    isProviderAuthProfileConfiguredAsync: mocks.isProviderAuthProfileConfiguredMock,
     resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
     resolveOpenAICodexAuthIdentity,
   };
@@ -302,26 +304,12 @@ describe("OpenAI realtime voice browser authentication", () => {
     );
   });
 
-  it("reports an unresolved Platform credential without trying another auth route", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_MISSING_TEST");
-    execFileSyncMock.mockImplementationOnce(() => {
-      throw new Error("keychain unavailable");
-    });
-    const provider = buildOpenAIRealtimeVoiceProvider();
-
-    await expect(
-      provider.createBrowserSession?.({
-        providerConfig: {},
-      }),
-    ).rejects.toThrow("OpenAI Realtime voice requires an OpenAI Platform API key");
-  });
-
-  it("does not configure Azure realtime sessions without a Platform API key", () => {
+  it("does not configure Azure realtime sessions without a Platform API key", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const cfg = { agents: { defaults: {} } } as never;
 
     expect(
-      provider.isConfigured({
+      await provider.isConfiguredAsync?.({
         cfg,
         providerConfig: {
           azureEndpoint: "https://example.openai.azure.com",

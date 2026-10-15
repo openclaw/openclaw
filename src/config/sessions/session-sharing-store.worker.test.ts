@@ -3,6 +3,10 @@ import path from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { initializeSessionReadContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { sessionSharingHandlers } from "../../gateway/server-methods/sessions-sharing.js";
 import {
@@ -17,6 +21,7 @@ import type {
 } from "../../gateway/server-methods/types.js";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import { getSessionRowProjection } from "../../gateway/session-row-projection-access.js";
+import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
@@ -29,12 +34,16 @@ import { sessionChanges, type SessionRowChange } from "../../sessions/session-ro
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
+  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
+  getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import * as agentWorkers from "../../state/openclaw-agent-worker-store.js";
 import { emitUserProfilesChanged } from "../../state/user-profile-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -42,11 +51,12 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { retainPreparedSessionSharingFacts } from "./session-accessor.sqlite-entry-cache-publication-state.js";
-import {
-  readCommittedSessionEntryCache,
-  readSessionEntryCache,
-} from "./session-accessor.sqlite-entry-cache.js";
+import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
+import { captureDurableSessionActor } from "./session-actor-durable.js";
+import { readSessionActorEntryFacts } from "./session-actor-replica.js";
+import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
 import { assignSessionOwnerInWorker } from "./session-metadata-write.async.js";
 import { recordSessionParticipantInWorker as recordSessionParticipant } from "./session-sharing-store.async.js";
@@ -55,11 +65,13 @@ import {
   readSessionMembersInWorker,
   removeSessionMember,
 } from "./session-sharing-store.js";
+import { bindSqliteWorkerBackend } from "./session-sharing-store.worker.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 it("lists current membership evidence while transcript reads wait", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = { agentId: "main", sessionKey: "agent:main:worker-members" };
     const entry = { sessionId: "worker-members", updatedAt: 1 };
     await patchSessionEntryCore(scope, () => entry, {
@@ -216,6 +228,7 @@ it.each(["session.members.list", "session.members.listEvidence"] as const)(
   "%s reads full member rows off the Gateway thread, including cached statements",
   async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "main", sessionKey: "agent:main:worker-members" };
       await upsertSessionEntryCore(scope, { sessionId: "worker-members", updatedAt: 1 });
       await addSessionMember(scope, { identityId: "zoe", addedBy: "owner", addedAt: 2 });
@@ -252,6 +265,7 @@ it.each(["session.members.list", "session.members.listEvidence"] as const)(
 
 it("rechecks the current manager after the membership read yields", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = { agentId: "main", sessionKey: "agent:main:member-reader-authority" };
     await upsertSessionEntryCore(scope, {
       sessionId: "member-reader-authority",
@@ -289,6 +303,21 @@ it("commits aliased worker membership and participant facts before publishing, a
       createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
     };
     replaceSessionEntrySync(scope, entry);
+    const identity = readOpenClawAgentDatabaseIdentity(database);
+    if (typeof identity.identity !== "string") {
+      throw new Error("Participant publication proof requires a physical database");
+    }
+    const actorTarget = {
+      sessionKey: scope.sessionKey,
+      database: {
+        kind: "file" as const,
+        physicalIdentity: identity.identity,
+        birthtime: identity.birthtime,
+        nativeLocation: database.path,
+      },
+    };
+    const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
+    let actor: ReturnType<typeof captureDurableSessionActor> | undefined;
     const expectedEntry = {
       sessionId: entry.sessionId,
       createdActor: entry.createdActor,
@@ -303,19 +332,8 @@ it("commits aliased worker membership and participant facts before publishing, a
         participantLifecycle(event);
       }
     });
-    const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-    const queries: string[] = [];
-    const methods = (["all", "get", "run", "iterate"] as const).map((method) => {
-      const original = prototype[method];
-      return vi.spyOn(prototype, method).mockImplementation(
-        new Proxy(original, {
-          apply(target, receiver: StatementSync, args) {
-            queries.push(receiver.sourceSQL);
-            return Reflect.apply(target, receiver, args);
-          },
-        }),
-      );
-    });
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    const sql = observeHostDataSql();
     try {
       expect(
         await addSessionMember(scope, {
@@ -346,6 +364,12 @@ it("commits aliased worker membership and participant facts before publishing, a
           },
         },
       });
+      actor = captureDurableSessionActor({
+        database: { agentId: "main", path: database.path },
+        target: actorTarget,
+        lifetime: authority,
+      });
+      const before = await actor.read(authority);
       const publications = changes.length;
       expect(
         await recordSessionParticipant(scope, {
@@ -353,7 +377,27 @@ it("commits aliased worker membership and participant facts before publishing, a
           promptedAt: 4,
         }),
       ).toBe("updated");
-      expect(changes).toHaveLength(publications);
+      expect(changes).toHaveLength(publications + 1);
+      expect(changes.at(-1)).toMatchObject({
+        sessionKey: scope.sessionKey,
+        facts: {
+          kind: "participants",
+          projectionChanged: false,
+          records: [
+            {
+              identity: { type: "agent", id: "peer" },
+              contributionCount: 2,
+              firstPromptedAt: 3,
+              lastPromptedAt: 4,
+            },
+          ],
+        },
+      });
+      expect(changes.at(-1)).not.toHaveProperty("facts.projection");
+      const after = actor.snapshot(authority);
+      expect(after?.participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 4 }]);
+      expect(after?.version).toEqual({ ...before.version, sequence: before.version.sequence + 1 });
+      expect(readSessionActorEntryFacts(actorTarget)?.participants).toEqual(after?.participants);
       expect(participantLifecycle).toHaveBeenCalledTimes(2);
       await expect(
         addSessionMember(scope, {
@@ -380,94 +424,122 @@ it("commits aliased worker membership and participant facts before publishing, a
         sessionKey: scope.sessionKey,
         facts: { kind: "member", identityId: "guest", present: false },
       });
-      expect(
-        queries.filter((sql) => /\b(session_members|session_participants)\b/.test(sql)),
-      ).toEqual([]);
+      expect(actor.snapshot(authority)).toBeUndefined();
+      expect((await actor.read(authority)).participants).toEqual(after?.participants);
+      expect(sql.queries).toEqual([]);
+      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main" })).toBeUndefined();
     } finally {
+      await actor?.release();
       stop();
       stopLifecycle();
-      for (const method of methods) {
-        method.mockRestore();
-      }
+      sql.restore();
     }
     expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
   });
 });
 
-it("rejects the complete aliased category update when a later member changes after preparation", async () => {
+it("prepares admitted category keys in one statement and observes committed replacements", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    setCanonicalSqliteSessionMainKey(database, "main");
+    const scope = {
+      agentId: "main",
+      storePath: database.path,
+      sessionKey: "agent:main:category-preparation",
+    };
+    const entry = { sessionId: "category-preparation", updatedAt: 1, category: "Work" };
+    replaceSessionEntrySync(scope, entry);
+    const backend = bindSqliteWorkerBackend(undefined, {
+      database: database.db,
+      databasePath: database.path,
+      admit: () => {},
+    });
+    const statements = trackSqliteStatementExecutions(database.db, ["all"], () => "all");
+    const transactions = vi.spyOn(database.db, "exec");
+    try {
+      const command = { type: "category.prepare" as const, input: { scope, from: "Work" } };
+      expect(backend.execute(command)).toEqual([scope.sessionKey]);
+      expect(statements.counts.all).toBe(1);
+      expect(transactions.mock.calls).toEqual([]);
+      replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, category: "Personal" });
+      statements.counts.all = 0;
+      transactions.mockClear();
+      expect(backend.execute(command)).toEqual([]);
+      expect(statements.counts.all).toBe(1);
+      expect(transactions.mock.calls).toEqual([]);
+    } finally {
+      transactions.mockRestore();
+      statements.restore();
+    }
+  });
+});
+
+it("preserves entry changes and skips reassigned categories after preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const alias = state.path("category-alias");
     fs.symlinkSync(path.dirname(database.path), alias, "junction");
-    const scopeAt = (index: number) => ({
+    const scope = {
       agentId: "main",
       storePath: path.join(alias, path.basename(database.path)),
-      sessionKey: `agent:main:category-revalidation:${String(index).padStart(2, "0")}`,
-    });
-    const firstScope = scopeAt(0);
-    const replacedScope = scopeAt(11);
-    const scopes = [
-      firstScope,
-      ...Array.from({ length: 10 }, (_, index) => scopeAt(index + 1)),
-      replacedScope,
-    ];
-    for (const [index, scope] of scopes.entries()) {
-      replaceSessionEntrySync(scope, {
-        sessionId: `original-${index}`,
+      sessionKey: "agent:main:category-current",
+    };
+    const reassigned = { ...scope, sessionKey: "agent:main:category-reassigned" };
+    for (const target of [scope, reassigned]) {
+      replaceSessionEntrySync(target, {
+        sessionId: target.sessionKey,
         updatedAt: 1,
         category: "Work",
+        label: "Before",
       });
     }
     let changed = false;
     await expect(
       updateSessionGroupCategoriesInWorker({
-        scope: firstScope,
+        scope,
         from: "Work",
         assertTargetCurrent() {
           if (!changed) {
             changed = true;
-            replaceSessionEntrySync(replacedScope, {
-              sessionId: "replacement",
+            replaceSessionEntrySync(scope, {
+              sessionId: scope.sessionKey,
               updatedAt: 2,
+              category: "Work",
+              label: "After",
+            });
+            replaceSessionEntrySync(reassigned, {
+              sessionId: reassigned.sessionKey,
+              updatedAt: 3,
               category: "Replacement",
+              label: "Reassigned",
             });
           }
         },
       }),
-    ).rejects.toThrow(
-      `SQLite session entry changed before replacement for ${replacedScope.sessionKey}`,
-    );
-    expect(loadSessionEntry(firstScope)).toMatchObject({
-      sessionId: "original-0",
-      updatedAt: 1,
-      category: "Work",
-    });
-    expect(loadSessionEntry(replacedScope)).toMatchObject({
-      sessionId: "replacement",
-      updatedAt: 2,
+    ).resolves.toBe(1);
+    const entry = loadSessionEntry(scope);
+    expect(entry).toMatchObject({ sessionId: scope.sessionKey, updatedAt: 2, label: "After" });
+    expect(entry?.category).toBeUndefined();
+    expect(loadSessionEntry(reassigned)).toMatchObject({
+      sessionId: reassigned.sessionKey,
+      updatedAt: 3,
       category: "Replacement",
+      label: "Reassigned",
     });
-    await expect(
-      updateSessionGroupCategoriesInWorker({ scope: firstScope, from: "Work" }),
-    ).resolves.toBe(11);
-    for (const [index, scope] of scopes.slice(0, -1).entries()) {
-      const entry = loadSessionEntry(scope);
-      expect(entry).toMatchObject({ sessionId: `original-${index}`, updatedAt: 1 });
-      expect(entry?.category).toBeUndefined();
-    }
-    expect(loadSessionEntry(replacedScope)?.category).toBe("Replacement");
   });
 });
 
 it.each([
-  { mutation: "membership", receipt: "valid" },
-  { mutation: "category", receipt: "valid" },
-  { mutation: "membership", receipt: "conflicting" },
-  { mutation: "membership", receipt: "missing" },
+  { mutation: "membership", receipt: "valid", closeBeforeFailure: false },
+  { mutation: "category", receipt: "valid", closeBeforeFailure: false },
+  { mutation: "membership", receipt: "conflicting", closeBeforeFailure: false },
+  { mutation: "membership", receipt: "missing", closeBeforeFailure: false },
+  { mutation: "membership", receipt: "missing", closeBeforeFailure: true },
 ] as const)(
-  "settles committed $mutation with $receipt receipt when the ordinary worker reply is lost",
-  async ({ mutation, receipt }) => {
+  "settles committed $mutation with $receipt receipt when the ordinary worker reply is lost (host closed: $closeBeforeFailure)",
+  async ({ mutation, receipt, closeBeforeFailure }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:lost-member-reply",
@@ -510,6 +582,18 @@ it.each([
         cachesAtPublication.push(readCommittedSessionEntryCache(database.db));
         projection.invalidate(change);
       });
+      const cfg = { agents: { entries: { main: {} } }, session: { store: database.path } };
+      const sharing = await prepareSessionMutationFacts({ cfg, ...scope });
+      const publishedMemberships: boolean[] = [];
+      const stopPublic = sessionChanges.subscribe((change) => {
+        if (
+          receipt === "valid" &&
+          "sessionKey" in change &&
+          change.sessionKey === scope.sessionKey
+        ) {
+          publishedMemberships.push(sharing.readCurrent(cfg).membership.has("guest"));
+        }
+      });
       const failure = new SqliteWorkerError(
         "membership reply lost after commit",
         "outcome-unknown",
@@ -540,7 +624,18 @@ it.each([
           async <Operations extends SqliteWorkerOperations>(
             ...args: Parameters<typeof original>
           ) => {
-            const worker = await original<Operations>(...args);
+            const [databaseOptions, native, configuration] = args;
+            const worker = await original<Operations>(databaseOptions, native, {
+              ...configuration,
+              onAdmitted(request) {
+                configuration.onAdmitted?.(request);
+                if (request.stage === "commit") {
+                  expect(() => sharing.readCurrent(cfg)).toThrow(
+                    "Session access facts are unavailable",
+                  );
+                }
+              },
+            });
             const intercept = async <T>(
               type: keyof Operations,
               run: () => Promise<T>,
@@ -551,6 +646,12 @@ it.each([
               }
               const result = await run();
               if (selected) {
+                if (closeBeforeFailure) {
+                  expect(closeOpenClawAgentDatabaseByPath(database.path, database.agentId)).toBe(
+                    true,
+                  );
+                  expect(database.db.isOpen).toBe(false);
+                }
                 throw failure;
               }
               return result;
@@ -613,7 +714,20 @@ it.each([
           expect(mutations).toBe(1);
           expect(projection.membership(database.path, scope.sessionKey)).toEqual([]);
           expect(projection.needsPreparation).toBe(true);
+          if (closeBeforeFailure) {
+            await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+          }
           expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
+          expect(() => sharing.readCurrent(cfg)).toThrow("Session access facts are unavailable");
+          await expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(
+            "Session access facts are unavailable",
+          );
+          open.mockRestore();
+          corruptReceipt.mockRestore();
+          await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 3 });
+          await expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(
+            "Session access facts are unavailable",
+          );
           return;
         }
         await expect(run()).resolves.toEqual(
@@ -650,6 +764,8 @@ it.each([
           expect(loadSessionEntry(aliasedScope)?.category).toBeUndefined();
         }
         const members = mutation === "category" ? ["guest"] : [];
+        expect([...sharing.readCurrent(cfg).membership]).toEqual(members);
+        expect(publishedMemberships).toEqual([mutation === "category"]);
         expect(projection.membership(database.path, scope.sessionKey)).toEqual(members);
         expect(projection.needsPreparation).toBe(false);
         expect(
@@ -660,6 +776,8 @@ it.each([
         ).toBe(mutation === "category" ? undefined : " Work ");
         expect(projection.groupTargets().has("Work")).toBe(mutation !== "category");
       } finally {
+        stopPublic();
+        sharing.release();
         open.mockRestore();
         corruptReceipt.mockRestore();
         stop();

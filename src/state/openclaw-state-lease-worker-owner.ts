@@ -26,7 +26,7 @@ export type OpenClawStateLeaseWorkerPurpose = "write" | "acquire" | "verify" | "
 export type OpenClawStateLeaseWorkerAuthority = {
   signal?: AbortSignal;
   assertCurrent(this: void): void;
-  /** Live authority for the first transaction grant, separate from transport preparation. */
+  /** Live authority for the first write grant, separate from transport preparation. */
   beforeTransaction?(this: void): void;
   beforeCommit?(this: void): void;
 };
@@ -125,7 +125,7 @@ function createLeaseAdmissionFactory(
         scope.settleNative(retained.settled, outcome);
       }
     });
-    let transactionStarted = false;
+    let prepareTransaction = options.beforeTransaction;
     const expiryRequired = purpose === "write" || purpose === "verify" || purpose === "renew";
     return {
       nativeLocations: [...new Set(scopes.map((scope) => scope.databasePath))],
@@ -162,18 +162,11 @@ function createLeaseAdmissionFactory(
             }
           };
           assertFacts();
-          if (
-            purpose === "write" &&
-            request.stage === "transaction" &&
-            !transactionStarted &&
-            options.beforeTransaction
-          ) {
-            assertSynchronousAuthority(options.beforeTransaction);
+          if (purpose === "write" && prepareTransaction) {
+            assertSynchronousAuthority(prepareTransaction);
+            prepareTransaction = undefined;
             assertCurrent();
             assertFacts();
-          }
-          if (request.stage === "transaction") {
-            transactionStarted = true;
           }
           if (purpose === "write" && request.stage === "commit") {
             assertSynchronousAuthority(beforeCommit);

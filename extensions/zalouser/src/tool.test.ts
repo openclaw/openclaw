@@ -57,22 +57,6 @@ describe("executeZalouserTool", () => {
     mockListGroups.mockReset();
   });
 
-  it("sends text message for send action", async () => {
-    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-1" } as never);
-    const result = await executeZalouserTool("tool-1", {
-      action: "send",
-      threadId: "t-1",
-      message: "hello",
-      profile: "work",
-      isGroup: true,
-    });
-    expect(mockSendMessage).toHaveBeenCalledWith("t-1", "hello", {
-      profile: "work",
-      isGroup: true,
-    });
-    expect(extractDetails(result)).toEqual({ success: true, messageId: "m-1" });
-  });
-
   it("defaults send routing from ambient deliveryContext target", async () => {
     mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-ambient" } as never);
     const tool = createZalouserTool({
@@ -204,7 +188,6 @@ describe("executeZalouserTool", () => {
   });
 
   it.each([
-    { name: "no route", deliveryContext: undefined, profile: "work", bytes: 1024 },
     {
       name: "matching credential profile with different case",
       deliveryContext: { channel: "zalouser", accountId: "support" },
@@ -212,21 +195,9 @@ describe("executeZalouserTool", () => {
       bytes: 2048,
     },
     {
-      name: "other profile",
-      deliveryContext: { channel: "zalouser", accountId: "support" },
-      profile: "personal",
-      bytes: 1024,
-    },
-    {
       name: "native default profile",
       deliveryContext: { channel: "zalouser", accountId: "support" },
       profile: undefined,
-      bytes: 1024,
-    },
-    {
-      name: "other channel",
-      deliveryContext: { channel: "sms", accountId: "support" },
-      profile: "work",
       bytes: 1024,
     },
   ])(

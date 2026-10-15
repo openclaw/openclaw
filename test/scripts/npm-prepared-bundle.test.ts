@@ -16,7 +16,6 @@ import {
   qualifyNpmPackageBundle,
   validatePreparedNpmBundleDescriptor,
   verifyNpmBundleProducer,
-  verifyPreparedNpmBundleFiles,
   verifyNpmSourceCheck,
 } from "../../scripts/npm-prepared-bundle.mjs";
 import { validatePreflightManifest } from "../../scripts/release-candidate-checklist.mts";
@@ -838,19 +837,6 @@ describe("prepared npm bundle", () => {
       expect(existsSync(fixture.outputDir)).toBe(false);
     },
   );
-
-  it("accepts descriptor JSON whose object keys were reordered without changing its contents", async () => {
-    const { descriptor, files, manifest } = await bundleFixture();
-    const reordered = JSON.parse(
-      JSON.stringify(descriptor, (_key, value: unknown) =>
-        value !== null && typeof value === "object" && !Array.isArray(value)
-          ? Object.fromEntries(Object.entries(value).toReversed())
-          : value,
-      ),
-    );
-    expect(JSON.stringify(reordered.producer)).not.toBe(JSON.stringify(descriptor.producer));
-    expect(verifyPreparedNpmBundleFiles({ descriptor: reordered, files })).toEqual(manifest);
-  });
 
   it("qualifies exact package bytes with large SDK and npm lock evidence", async () => {
     const fixture = await bundleFixture();

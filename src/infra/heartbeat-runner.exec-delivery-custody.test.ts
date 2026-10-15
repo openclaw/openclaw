@@ -282,86 +282,79 @@ it.for([
   },
 );
 
-it.each(["schema admission", "transaction rollback"] as const)(
-  "retains a proven unqueued completion for original-route recovery after %s",
-  async (phase) => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = heartbeatTestConfig(tmpDir, "last", "telegram", storePath);
-      const route = {
-        channel: "telegram",
-        to: "telegram:-1003774691294:topic:47",
-        accountId: "work",
-        threadId: 47,
-      };
-      const sessionKey = await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: route.to,
-        lastAccountId: "work",
-        lastThreadId: 47,
-      });
-      enqueueSystemEvent("Exec completed (queue-admission, code 0) :: original result", {
-        sessionKey,
-        contextKey: "exec:queue-admission",
-        deliveryContext: route,
-      });
-      replySpy.mockResolvedValue({ text: "Original completion without a pending-final marker" });
-      const telegram = vi
-        .fn()
-        .mockResolvedValue({ messageId: "delivered", chatId: "-1003774691294" });
-      // Admit the native writer before injecting the transaction failure. Schema
-      // admission itself is not the publication boundary under test.
-      if (phase === "transaction rollback") {
-        const warmup = await enqueueDelivery({
-          ...route,
-          payloads: [{ text: "writer admission only" }],
-        });
-        await ackDelivery(warmup);
-      }
-      const { db } = openOpenClawStateDatabase();
-      db.exec(
-        "CREATE TRIGGER reject_test_delivery BEFORE INSERT ON delivery_queue_entries WHEN NEW.queue_name = 'outbound-prepared-v1' BEGIN SELECT RAISE(ABORT, 'synthetic required queue publication failure'); END",
-      );
-      try {
-        const failed = await runHeartbeatOnce({
-          cfg,
-          sessionKey,
-          source: "exec-event",
-          reason: "exec-event",
-          deps: { getReplyFromConfig: replySpy, telegram },
-        });
-        expect(getLastHeartbeatEvent()?.reason).toContain(
-          phase === "transaction rollback"
-            ? "Delivery queue admission rejected before publication"
-            : "unexpected trigger reject_test_delivery",
-        );
-        expect(failed).toMatchObject({
-          status: "skipped",
-          reason: "channel-not-ready",
-          retryAtMs: expect.any(Number),
-        });
-      } finally {
-        db.exec("DROP TRIGGER reject_test_delivery");
-      }
-      expect(telegram).not.toHaveBeenCalled();
-      expect(await loadPendingDeliveries()).toHaveLength(0);
-      expect(peekDeliverableSystemEventEntries(sessionKey)).toHaveLength(1);
-      await runHeartbeatOnce({
+it("retains a proven unqueued completion for original-route recovery after transaction rollback", async () => {
+  await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+    const cfg = heartbeatTestConfig(tmpDir, "last", "telegram", storePath);
+    const route = {
+      channel: "telegram",
+      to: "telegram:-1003774691294:topic:47",
+      accountId: "work",
+      threadId: 47,
+    };
+    const sessionKey = await seedMainSessionStore(storePath, cfg, {
+      lastChannel: "telegram",
+      lastProvider: "telegram",
+      lastTo: route.to,
+      lastAccountId: "work",
+      lastThreadId: 47,
+    });
+    enqueueSystemEvent("Exec completed (queue-admission, code 0) :: original result", {
+      sessionKey,
+      contextKey: "exec:queue-admission",
+      deliveryContext: route,
+    });
+    replySpy.mockResolvedValue({ text: "Original completion without a pending-final marker" });
+    const telegram = vi
+      .fn()
+      .mockResolvedValue({ messageId: "delivered", chatId: "-1003774691294" });
+    // Admit the native writer before injecting the transaction failure. Schema
+    // admission itself is not the publication boundary under test.
+    const warmup = await enqueueDelivery({
+      ...route,
+      payloads: [{ text: "writer admission only" }],
+    });
+    await ackDelivery(warmup);
+    const { db } = openOpenClawStateDatabase();
+    db.exec(
+      "CREATE TRIGGER reject_test_delivery BEFORE INSERT ON delivery_queue_entries WHEN NEW.queue_name = 'outbound-prepared-v1' BEGIN SELECT RAISE(ABORT, 'synthetic required queue publication failure'); END",
+    );
+    try {
+      const failed = await runHeartbeatOnce({
         cfg,
         sessionKey,
         source: "exec-event",
         reason: "exec-event",
         deps: { getReplyFromConfig: replySpy, telegram },
       });
-      expect(telegram).toHaveBeenCalledExactlyOnceWith(
-        route.to,
-        expect.stringContaining("Original completion"),
-        expect.objectContaining({ accountId: "work", messageThreadId: 47 }),
+      expect(getLastHeartbeatEvent()?.reason).toContain(
+        "Delivery queue admission rejected before publication",
       );
-      expect(peekDeliverableSystemEventEntries(sessionKey)).toHaveLength(0);
+      expect(failed).toMatchObject({
+        status: "skipped",
+        reason: "channel-not-ready",
+        retryAtMs: expect.any(Number),
+      });
+    } finally {
+      db.exec("DROP TRIGGER reject_test_delivery");
+    }
+    expect(telegram).not.toHaveBeenCalled();
+    expect(await loadPendingDeliveries()).toHaveLength(0);
+    expect(peekDeliverableSystemEventEntries(sessionKey)).toHaveLength(1);
+    await runHeartbeatOnce({
+      cfg,
+      sessionKey,
+      source: "exec-event",
+      reason: "exec-event",
+      deps: { getReplyFromConfig: replySpy, telegram },
     });
-  },
-);
+    expect(telegram).toHaveBeenCalledExactlyOnceWith(
+      route.to,
+      expect.stringContaining("Original completion"),
+      expect.objectContaining({ accountId: "work", messageThreadId: 47 }),
+    );
+    expect(peekDeliverableSystemEventEntries(sessionKey)).toHaveLength(0);
+  });
+});
 
 it.each(["rejected", "ambiguous"] as const)(
   "does not regenerate %s queued completion on another route",

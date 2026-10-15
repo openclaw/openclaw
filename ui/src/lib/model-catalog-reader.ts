@@ -66,8 +66,12 @@ export class ModelCatalogReader {
       scope,
     };
     this.binding = binding;
-    const unwatchCache = subscribeModelCatalogCache(client, () => {
-      if (!this.owns(binding)) {
+    const params = modelCatalogParams(scope);
+    const key = modelCatalogKey(params);
+    const unwatchCache = subscribeModelCatalogCache(client, (update) => {
+      // The cache broadcasts invalidations for other sessions and draft accounts.
+      // Only the cache owner's matching scope can invalidate this reader's view.
+      if (!this.owns(binding) || (update.type === "invalidated" && !update.matches(params, key))) {
         return;
       }
       if (this.failed && peekModelCatalog(client, scope)) {

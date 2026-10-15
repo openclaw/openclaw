@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import "../../styles.css";
-import { renderAppearance, renderConfigView } from "./config-view.test-support.ts";
+import { renderAppearance, renderConfigView } from "./config-view.test-support.tsx";
 
 it("hides the collection and visit controls without changing their saved preferences", () => {
   const { container, props } = renderAppearance({

@@ -1,12 +1,16 @@
+import { statSync } from "node:fs";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronJob } from "../cron/types.js";
+import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as mentionWorker from "./mention-inbox-worker.js";
 import {
   SESSION_ID,
@@ -23,8 +27,36 @@ import {
   registerSessionAutomationSource,
   sessionHasAutomation,
 } from "./session-automation-index.js";
+import * as sessionSharing from "./session-sharing.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("recovers background views when a session is replaced during cold target preparation", async () => {
+  await withMentionInbox(async (f) => {
+    await f.post();
+    await readMentionInbox(f.inbox, f.bobClient);
+    const resolve = sessionSharing.resolveSessionSharingTargetAsync;
+    vi.spyOn(sessionSharing, "resolveSessionSharingTargetAsync").mockImplementationOnce(
+      async (...args) => {
+        const display = await resolve(...args);
+        await f.setSession({ sessionId: "replacement-session" });
+        const file = statSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
+        emitSessionIdentityMutation({
+          agentId: "main",
+          databaseIdentity: `${file.dev}:${file.ino}`,
+          kind: "replace",
+          previous: { sessionId: SESSION_ID, sessionKeys: [SESSION_KEY] },
+          current: { sessionId: "replacement-session", sessionKeys: [SESSION_KEY] },
+        });
+        return display;
+      },
+    );
+    await f.inbox.invalidateAsync();
+    expect((await readMentionInbox(f.inbox, f.bobClient)).items).toEqual([]);
+    await f.setSession({ sessionId: SESSION_ID });
+    expect((await readMentionInbox(f.inbox, f.bobClient)).items).toHaveLength(1);
+  });
+});
 
 it.each(["activity summary", "runtime settlement", "automation", "sharing revocation"] as const)(
   "keeps mention dismissal authority aligned with %s publication",
@@ -127,7 +159,7 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
   },
 );
 
-it("refreshes 50 connected mention views without rereading unchanged session targets", async () => {
+it("refreshes 50 connected mention views after session and viewer changes", async () => {
   const cfg: OpenClawConfig = {};
   await withMentionInbox(
     async (f) => {
@@ -158,6 +190,7 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
         "Design review",
       );
       f.broadcast.mockClear();
+      // This spy counts host SQL; invalidated targets are now prepared in the worker.
       let exactRowReads = 0;
       // oxlint-disable-next-line typescript/unbound-method -- apply preserves the intercepted statement receiver.
       const originalGet = StatementSync.prototype.get;
@@ -196,7 +229,7 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
       await f.setSession({ visibility: "draft" });
       exactRowReads = 0;
       await emit();
-      expect(exactRowReads).toBe(1);
+      expect(exactRowReads).toBe(0);
       expect(f.broadcast).toHaveBeenCalledTimes(50);
       expect((await readMentionInbox(f.inbox, f.bobClient)).items).toEqual([]);
 
@@ -204,7 +237,7 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
       exactRowReads = 0;
       f.broadcast.mockClear();
       await emit(SESSION_KEY);
-      expect(exactRowReads).toBe(1);
+      expect(exactRowReads).toBe(0);
       expect(f.broadcast).toHaveBeenCalledTimes(50);
       expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
         "Renamed conversation",
@@ -221,10 +254,11 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
 
       // Keyless invalidation also covers in-place runtime configuration updates.
       cfg.session = { store: alternateStorePath };
+      setRuntimeConfigSnapshot(cfg);
       exactRowReads = 0;
       f.broadcast.mockClear();
       await f.inbox.invalidateAsync();
-      expect(exactRowReads).toBe(1);
+      expect(exactRowReads).toBe(0);
       expect(f.broadcast).toHaveBeenCalledTimes(49);
       expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
         "Alternate conversation",

@@ -9,7 +9,18 @@ title: "Panels and docks"
 sidebarTitle: "Panels and docks"
 ---
 
-Surfaces that dock beside the current page instead of replacing it.
+Surfaces that dock beside the current page instead of replacing it. In mobile
+chat, the rightmost **Panels** button groups **Details**, files, and the available
+tools. A selected tool fills the conversation area instead of sharing a cramped
+split; widening the window restores the saved desktop layout. **Details** opens
+a full-width overlay above the composer. Desktop keeps the **Layout** menu and
+separate **Details** control.
+
+Details keeps session metadata visible. Pull requests and automations appear
+expanded when they contain items; empty sections are omitted entirely. You can
+collapse populated sections without ordinary updates reopening them. Loading or
+failed automation reads show their status and retry action without an empty
+disclosure. Task progress remains independently collapsible.
 
 ## OpenClaw system care
 
@@ -90,7 +101,7 @@ A connected **Desktop** viewer stays connected for 30 seconds while its tab is h
 
 When you open a chat, the panel automatically reveals an available desktop assigned to that exact session and the browser tab from its latest successful browser-tool result, when that tab is still running. Discovery only reads existing resources: it never starts a browser, provisions a desktop, or attaches an unrelated global or child-session resource. Session and inventory events, plus new browser results, refresh discovery while the chat is visible. Resources without explicit session metadata remain available through the manual panel controls.
 
-Automatic reveals reuse the existing panel and keep an already-selected tool in front. Automatically discovered tabs stay out of the saved layout, including after resizing or docking, so reloading validates the resource again before opening it. Narrow screens use the same bottom-docked layout as manually opened panels. Minimizing the panel or closing a Browser or Desktop tab disables further automatic reveals for that session in the current browser profile, including after reload; the **+** menu can still open them manually.
+Automatic reveals reuse the existing panel and keep an already-selected tool in front. Automatically discovered tabs stay out of the saved layout, including after resizing or docking, so reloading validates the resource again before opening it. Mobile chat shows these panels full-width, just like manually opened panels; other narrow panes retain their bottom-docked layout. Minimizing the panel or closing a Browser or Desktop tab disables further automatic reveals for that session in the current browser profile, including after reload; the **+** menu can still open them manually.
 
 Owner-authorized, unsandboxed agents can use the `terminal` tool to list, read, resize, or close terminals an operator already opened from the same Chat session's Terminal panel. Agents cannot open shells, and access remains exact-session scoped: an agent cannot inspect or control standalone operator terminals or terminals belonging to another session. Terminal input follows the effective session and host-exec permission policy: **Full access** (`full`, or YOLO) sends it immediately; **Guarded** (`guarded`) and **Workspace** (`workspace`, including accept-only or Guardian-reviewed flows) require an explicit, one-time approval for that exact input; **Read only** (`read-only`) or `tools.exec.mode: "deny"` forbids input entirely. Approving one input never grants unrestricted access to the terminal.
 
@@ -154,12 +165,16 @@ expand a [Browser dashboard](/web/dashboards#share-a-browser-dashboard-with-your
 
 The Control UI ships a **Browser** tab in the unified Chat side panel that renders the Gateway-controlled browser (the same one agents drive through the [browser tool](/tools/browser-control)) in any regular web browser - no native webview required. It appears in the panel's **+** menu when the connected Gateway advertises `browser.request` to an `operator.admin` connection; the globe action in **Files** toggles it. In a regular web browser, choosing **Browser** again while its panel tab is already open creates another Agent browser tab. The panel shows a live screencast, with screenshot fallback when streaming is unavailable, plus tabs, an editable URL bar, back/forward/reload, and open-in-your-browser, and forwards clicks, wheel scrolling, and basic typing to the remote page. The remote page follows the shared panel: opening it, resizing it, or switching tabs resizes the remote browser viewport to the panel's available space, so the snapshot fills the panel instead of rendering at whatever size an agent last used.
 
+Wheel scrolling targets the scrollable container under the pointer, including reversed chat lists and horizontal lists in left-to-right or right-to-left layouts.
+
 While the panel or a Browser dashboard is visible, a later remote resize also
 resynchronizes the page to the available space. Hidden panels leave the remote
 viewport alone. A browser that cannot honor a requested size is not repeatedly
 resized while its reported dimensions remain unchanged.
 
 Browser tabs appear directly in the Chat side-panel header, with the URL toolbar below. Each tab shows its page favicon when automatic favicon fetching is enabled and an icon is available. Closing the last browser tab leaves the Browser panel open so you can create another tab with **+**. When Browser is moved to the main area, its tabs appear above its own toolbar.
+
+When the Gateway browser is stopped, choose **Start browser**. The panel shows a loading indicator while startup is pending. If startup fails, it shows the error and restores **Start browser** so you can retry.
 
 While an Agent browser preview refreshes, the current page stays visible and the reload icon spins in the toolbar. A loading skeleton appears only before the first page image is available. If refreshing fails, the panel keeps the previous image and shows the error above it.
 

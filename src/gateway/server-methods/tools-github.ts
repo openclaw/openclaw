@@ -8,21 +8,123 @@ import {
   validateToolsGitHubStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  GitHubIdentityError,
   createManagedGitHubProfileId,
   installManagedGitHubProfile,
   resolveConfiguredGitHubToolIdentity,
   resolveGitHubToolIdentityStatus,
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
+import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { consumeGitHubSetupHandoff } from "../../secrets/store/secret-store.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
+import { gitHubPublicApi } from "../github-public-api.js";
+import { prepareGitHubReaderIdentity } from "../github-reader-identity.js";
 import { updateGitHubToolIdentityConfig } from "../github-tool-identity-config.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
+const handleGitHubRead: GatewayRequestHandler = async (options) => {
+  const { params, respond, context, client, req } = options;
+  const searching = req.method === "tools.github.search";
+  const toolName = searching ? "github_search" : "github_read";
+  const operation = searching
+    ? ({ type: "search", params: gitHubPublicApi.parseGitHubSearchParams(params) } as const)
+    : ({ type: "read", params: gitHubPublicApi.parseGitHubTarget(params) } as const);
+  if (
+    !operation.params ||
+    params.agentId !== undefined ||
+    params.sessionKey !== undefined ||
+    (params.refresh !== undefined && typeof params.refresh !== "boolean")
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${req.method} params`),
+    );
+    return;
+  }
+  const caller = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
+  const assertCaller = caller && captureGatewayToolCallerAssertion();
+  const assertToolAllowed = caller?.assertToolAllowed;
+  const scope = getPluginRuntimeGatewayRequestScope();
+  const registry = scope?.pluginRegistry;
+  const record = registry?.plugins.find((plugin) => plugin.id === "github");
+  const pluginCurrent =
+    registry &&
+    record &&
+    capturePluginLifecycleAuthority(registry, record, { scopedRuntime: true });
+  if (
+    !caller ||
+    !assertCaller ||
+    !assertToolAllowed ||
+    client?.internal?.pluginRuntimeOwnerId !== "github" ||
+    !pluginCurrent
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `GitHub reading requires an active ${toolName} tool invocation.`,
+      ),
+    );
+    return;
+  }
+  const signals = [options.signal, getAsyncWorkSignal(), ...(caller.approvalSignals ?? [])].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  const signal = AbortSignal.any(signals);
+  const assertActive = () => {
+    assertCaller();
+    assertToolAllowed(toolName);
+    options.sessionMutationCommitGuard?.();
+    signal.throwIfAborted();
+    if (!pluginCurrent() || options.hasCurrentClientAuthority?.() === false) {
+      throw new Error("GitHub read authority is no longer active.");
+    }
+  };
+  try {
+    const { identity, assertSelected } = await prepareGitHubReaderIdentity(
+      context,
+      caller.agentId,
+      assertActive,
+    );
+    const document =
+      operation.type === "read"
+        ? await gitHubPublicApi.loadGitHubDetail(
+            operation.params,
+            identity,
+            undefined,
+            params.refresh === true,
+            { assertActive: assertSelected, signal },
+          )
+        : await gitHubPublicApi.searchPublicGitHubItems(operation.params, identity, undefined, {
+            assertActive: assertSelected,
+            signal,
+          });
+    assertSelected();
+    respond(true, document, undefined);
+  } catch (error) {
+    const { message, ...details } =
+      error instanceof GitHubIdentityError
+        ? { message: error.message, retryable: error.reason !== "unavailable" }
+        : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
+    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
+  }
+};
+
 export const toolsGitHubHandlers: GatewayRequestHandlers = {
+  "tools.github.read": handleGitHubRead,
+  "tools.github.search": handleGitHubRead,
   "tools.github.status": defineValidatedGatewayHandler(
     "tools.github.status",
     validateToolsGitHubStatusParams,
@@ -82,7 +184,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
                   : {}),
               }
             : undefined;
-          const token = consumeGitHubSetupHandoff({ name: params.secretName });
+          const token = await consumeGitHubSetupHandoff({ name: params.secretName });
           if (!token) {
             throw new Error("temporary GitHub credential is unavailable");
           }
@@ -113,7 +215,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
           });
         }
         if (previousIdentity?.kind === "oauth") {
-          context.githubOAuthService?.retireProfile(previousIdentity.profileId);
+          await context.githubOAuthService?.retireProfileAsync(previousIdentity.profileId);
         }
         respond(
           true,
@@ -182,7 +284,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
   "tools.github.authorize.cancel": defineValidatedGatewayHandler(
     "tools.github.authorize.cancel",
     validateToolsGitHubAuthorizeCancelParams,
-    ({ params, respond, context }) => {
+    async ({ params, respond, context }) => {
       const service = context.githubOAuthService;
       if (!service) {
         respond(
@@ -192,7 +294,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      respond(true, { cancelled: service.cancelAuthorization(params.requestId) });
+      respond(true, { cancelled: await service.cancelAuthorizationAsync(params.requestId) });
     },
   ),
 };

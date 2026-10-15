@@ -848,7 +848,7 @@ describe("plugin registry runtime config scope", () => {
         return entry;
       };
       const runtime = createPluginRuntime();
-      runtime.agent.session.getSessionEntry = () => ({ ...entry });
+      runtime.agent.session.getSessionEntryAsync = async () => ({ ...entry });
       runtime.agent.session.patchSessionEntry = async (params) =>
         commitPatch(await params.update({ ...entry }, { existingEntry: { ...entry } }));
       runtime.agent.session.updateSessionStoreEntry = async (params) =>

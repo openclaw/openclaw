@@ -66,6 +66,7 @@ suite.define(() => {
             [
               "capture-suite.ts",
               "scenarios.ts",
+              "chat-tool-scenes.ts",
               "fixtures.ts",
               "fixture-fingerprint.ts",
               "../../ui/src/test-helpers/control-ui-e2e-screenshot.ts",
@@ -119,7 +120,7 @@ suite.define(() => {
                 colorScheme: profile.theme,
                 locale: "en-US",
                 timezoneId: "UTC",
-                serviceWorkers: "block",
+                serviceWorkers: scene.serviceWorkers ?? "block",
                 deviceScaleFactor: 1,
                 forcedColors: profile.forced ? "active" : "none",
                 reducedMotion: profile.reduced ? "reduce" : "no-preference",

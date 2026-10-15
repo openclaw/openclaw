@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
-  getRuntimeConfig,
+  captureRuntimeConfigAsyncReader,
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
 } from "../config/config.js";
@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { readHookInstalls } from "../hooks/installs.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
+import { readDeferredPluginMigrationsAsync } from "../infra/deferred-plugin-migrations.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import { resolveSourceCheckoutBundledPluginIds } from "../plugins/bundled-sources.js";
 import {
@@ -39,6 +40,7 @@ import {
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
 import { configReferencesNpmInstallPath } from "../plugins/installs.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "../plugins/official-runtime-plugins.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   withPluginLifecycleLease,
@@ -49,8 +51,10 @@ import {
   pluginPackageUpdateMayMutateConfig,
   reconcilePluginPackageUpdateConfig,
 } from "../plugins/plugin-package-update.js";
+import { resolveOfficialPluginCohortNpmSpecs } from "../plugins/plugin-version-drift.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
+  createOperatorManagedPluginUpdateOutcome,
   isClawHubTrustSkippedOutcome,
   isPluginInstallRecordUpdateSource,
   pluginInstallRecordMayMigrateConfigId,
@@ -130,7 +134,7 @@ function mayMutatePluginInstallRecord(
   return Boolean(record?.marketplaceSource && record.marketplacePlugin);
 }
 
-function pluginConfigReferencesId(config: ReturnType<typeof getRuntimeConfig>, pluginId: string) {
+function pluginConfigReferencesId(config: OpenClawConfig, pluginId: string) {
   const plugins = config.plugins;
   return (
     plugins?.allow?.includes(pluginId) ||
@@ -143,7 +147,7 @@ function pluginConfigReferencesId(config: ReturnType<typeof getRuntimeConfig>, p
 
 function shouldPreserveEmptyPlugins(params: {
   parsed: unknown;
-  sourceConfig: ReturnType<typeof getRuntimeConfig>;
+  sourceConfig: OpenClawConfig;
 }): boolean {
   const plugins = params.sourceConfig.plugins;
   const parsedPlugins =
@@ -221,7 +225,9 @@ async function runPluginUpdateCommandUnlocked(
     assertConfigWriteAllowedInCurrentMode();
   }
 
-  const sourceSnapshotPromise = readConfigFileSnapshotForWrite()
+  const deferredPluginMigrations = await readDeferredPluginMigrationsAsync();
+  assertOwned();
+  const sourceSnapshotPromise = readConfigFileSnapshotForWrite({ deferredPluginMigrations })
     .then((prepared) => {
       const writeOptions = selectInstallMutationWriteOptions(prepared.writeOptions);
       return {
@@ -247,7 +253,8 @@ async function runPluginUpdateCommandUnlocked(
   }
   // Bind selection, updater input, ownership checks, and persistence to one
   // mutation-start snapshot so concurrent config changes cannot be resurrected.
-  const cfg = mutationSnapshot?.snapshot.runtimeConfig ?? getRuntimeConfig();
+  const cfg =
+    mutationSnapshot?.snapshot.runtimeConfig ?? (await captureRuntimeConfigAsyncReader()());
   const sourceCfg = mutationSnapshot?.snapshot.sourceConfig ?? cfg;
   const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const cfgWithPluginInstallRecords = withPluginInstallRecords(cfg, pluginInstallRecords);
@@ -265,6 +272,7 @@ async function runPluginUpdateCommandUnlocked(
   });
   const installOwnerByPluginId = new Map<string, string>();
   const rejectedPluginIds = new Map<string, string>();
+  const operatorManagedOutcomes = new Map<string, PluginUpdateOutcome>();
   const ownershipResolver = createInstalledPluginOwnershipResolver(installedPluginIndex);
   for (const pluginId of new Set([
     ...installedPluginIndex.plugins.map((plugin) => plugin.pluginId),
@@ -273,9 +281,16 @@ async function runPluginUpdateCommandUnlocked(
     if (sourceBundledIds.has(pluginId)) {
       continue;
     }
-    const ownership = ownershipResolver.resolveLifecycle(pluginId);
+    const ownership = ownershipResolver.resolveUpdate(pluginId);
     if (!ownership.ok) {
       rejectedPluginIds.set(pluginId, ownership.error);
+      continue;
+    }
+    if (ownership.value.kind === "operator-managed") {
+      operatorManagedOutcomes.set(
+        pluginId,
+        createOperatorManagedPluginUpdateOutcome(ownership.value, VERSION),
+      );
       continue;
     }
     installOwnerByPluginId.set(pluginId, ownership.value.installOwner);
@@ -294,12 +309,20 @@ async function runPluginUpdateCommandUnlocked(
     installs: pluginInstallRecords,
     installOwnerByPluginId,
     rejectedPluginIds,
+    skippedPluginIds: new Set(operatorManagedOutcomes.keys()),
     rawIds: params.ids,
     all: params.opts.all,
   });
   if (pluginSelection.error) {
     defaultRuntime.error(pluginSelection.error);
     return 1;
+  }
+  const skippedOutcomes = new Map<string, PluginUpdateOutcome>();
+  for (const id of pluginSelection.skippedIds ?? []) {
+    const outcome = operatorManagedOutcomes.get(id);
+    if (outcome) {
+      skippedOutcomes.set(outcome.pluginId, outcome);
+    }
   }
   const selectedHooks = readHookInstalls();
   const hookSelection = resolveHookPackUpdateSelection({
@@ -337,9 +360,13 @@ async function runPluginUpdateCommandUnlocked(
       [...ownership.pluginIds],
     ]),
   );
+  logPluginUpdateOutcomes([...skippedOutcomes.values()]);
   if (pluginSelection.pluginIds.length === 0 && hookSelection.hookIds.length === 0) {
     if (params.opts.all) {
       defaultRuntime.log("No tracked plugins or hook packs to update.");
+      return 0;
+    }
+    if (skippedOutcomes.size > 0) {
       return 0;
     }
     defaultRuntime.error("Provide plugin or hook-pack ids, or use --all.");
@@ -459,6 +486,12 @@ async function runPluginUpdateCommandUnlocked(
                 officialPluginUpdateChannel,
                 syncOfficialPluginInstalls: params.opts.all ? true : undefined,
                 coreVersion: VERSION,
+                versionBoundPluginIds: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+                npmInstallSpecOverrides: resolveOfficialPluginCohortNpmSpecs({
+                  gatewayVersion: VERSION,
+                  installRecords: pluginInstallRecords,
+                  config: cfgWithPluginInstallRecords,
+                }),
                 ...installPolicyWarningAcknowledgement,
                 ...resolvePluginCapabilityConsentCliOptions({
                   acceptCapabilities: params.opts.acceptCapabilities,
@@ -556,6 +589,7 @@ async function runPluginUpdateCommandUnlocked(
       });
       const writeOptions = {
         ...sourceSnapshot?.writeOptions,
+        deferredPluginMigrations,
         afterWrite: {
           mode: "none" as const,
           reason: "plugin update owns registry refresh",
@@ -585,6 +619,8 @@ async function runPluginUpdateCommandUnlocked(
         return logPluginUpdateOutcomes([...pluginResult.outcomes, ...hookResult.outcomes]);
       }
       nextConfig = migration?.config ?? nextConfig;
+      writeOptions.deferredPluginMigrations =
+        migration?.deferredPluginMigrations ?? deferredPluginMigrations;
       const commit = async () => {
         if (shouldPersistPluginInstallIndex) {
           if (
@@ -598,7 +634,7 @@ async function runPluginUpdateCommandUnlocked(
               verifyConfigFresh: async () => {
                 await assertRecordsOnlyUpdateConfigFresh({
                   baseHash: sourceSnapshot?.snapshot.hash,
-                  writeOptions: sourceSnapshot?.writeOptions,
+                  writeOptions,
                 });
               },
             });

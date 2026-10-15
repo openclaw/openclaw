@@ -5,6 +5,7 @@ import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   bindSessionPendingInputSources,
@@ -19,6 +20,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userProfileList from "../../state/user-profile-list.js";
 import { setAvatar } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   abortQueuedChatTurnById,
@@ -33,6 +35,7 @@ import { readChatPendingInputs } from "./chat-pending-inputs.js";
 describe("pending input read boundary", () => {
   it("prepares automation names once per pending page from the Gateway's selected partition", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:pending-automation",
@@ -84,7 +87,7 @@ describe("pending input read boundary", () => {
             jobs: name ? [{ ...job, name }] : [],
           });
           const counter = trackSqliteStatementExecutions(
-            openOpenClawStateDatabase().db,
+            requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
             ["names", "selection"],
             (sql) =>
               /\bfrom\s+"?cron_jobs"?\b/iu.test(sql)
@@ -156,6 +159,7 @@ describe("pending input read boundary", () => {
 
   it("projects pending input acceptance times with fresh page-scoped sender displays", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const profile = ensureProfileForEmail("pending-sender@example.test");
       const scope = {
         agentId: "main",
@@ -164,7 +168,7 @@ describe("pending input read boundary", () => {
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const receipts = [];
-      const readDisplay = vi.spyOn(userProfileList, "getUserProfileDisplay");
+      const readDisplay = vi.spyOn(userProfileList, "getResidentUserProfileDisplay");
       try {
         for (let index = 0; index < 20; index += 1) {
           receipts.push(
@@ -310,6 +314,7 @@ describe("pending input read boundary", () => {
 
   it("keeps cancelled input readable and sanitized without changing the transcript or crossing a reset", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:accepted",
@@ -396,6 +401,7 @@ describe("pending input read boundary", () => {
 
   it("does not reveal an input hidden by the canonical history visibility policy", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:hidden-input",
@@ -446,6 +452,7 @@ describe("pending input consumption receipts", () => {
     "%s returns only requested current-session receipts in pages and empty deltas",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await captureRuntimeConfigAsyncReader()();
         const scope = {
           agentId: "main",
           sessionKey: "agent:main:collected",

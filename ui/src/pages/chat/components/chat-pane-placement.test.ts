@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
-import { renderChatPanePlacement } from "./chat-pane-placement.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { ChatPanePlacement } from "./chat-pane-placement.ts";
 
 const containers: HTMLElement[] = [];
 
@@ -37,16 +38,17 @@ function mount(
       runner: status ? { kind: "device", status } : undefined,
     },
   };
-  render(
-    renderChatPanePlacement({
-      session,
-      placementStartupStatus,
-      placementReclaimDisabledReason:
-        status === "offline"
-          ? "Reconnect the device to stop and sync its workspace, or Continue on Gateway."
-          : undefined,
-    }),
-    container,
+  mountSolid(
+    () =>
+      createComponent(ChatPanePlacement, {
+        session,
+        placementStartupStatus,
+        placementReclaimDisabledReason:
+          status === "offline"
+            ? "Reconnect the device to stop and sync its workspace, or Continue on Gateway."
+            : undefined,
+      }),
+    { container },
   );
   return container;
 }
@@ -90,7 +92,7 @@ describe("chat pane device placement", () => {
         },
       } satisfies GatewaySessionRow;
 
-      render(renderChatPanePlacement({ session }), container);
+      mountSolid(() => createComponent(ChatPanePlacement, { session }), { container });
 
       expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
         "Worker · syncing files",
@@ -189,7 +191,9 @@ describe("chat pane device placement", () => {
           : {}),
       };
 
-      render(renderChatPanePlacement({ session, onPlacementRecover }), container);
+      mountSolid(() => createComponent(ChatPanePlacement, { session, onPlacementRecover }), {
+        container,
+      });
 
       expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
         "Worker required",
@@ -222,7 +226,7 @@ describe("chat pane device placement", () => {
       },
     };
 
-    render(renderChatPanePlacement({ session }), container);
+    mountSolid(() => createComponent(ChatPanePlacement, { session }), { container });
 
     expect(container.querySelector(".chat-pane__placement-recovery")?.textContent?.trim()).toBe(
       "Restart session…",
@@ -249,7 +253,7 @@ describe("chat pane device placement", () => {
       },
     };
 
-    render(renderChatPanePlacement({ session }), container);
+    mountSolid(() => createComponent(ChatPanePlacement, { session }), { container });
 
     expect(container.querySelector(".chat-pane__placement-recovery")).toBeNull();
     expect(container.querySelector(".chat-pane__placement-reclaim")?.textContent?.trim()).toBe(

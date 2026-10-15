@@ -16,43 +16,6 @@ import {
   type SidebarNarrationSyncInput,
 } from "./app-sidebar-session-narration.ts";
 
-function releaseFixture(
-  failure: Error | null = new GatewayProtocolRequestError({ retryable: true }),
-) {
-  const server = { failure };
-  const wireKeys = new Set<string>();
-  const request = vi
-    .fn()
-    .mockImplementation(async (method: string, params: Record<string, unknown>) => {
-      const key = String(params.key);
-      if (method === "sessions.messages.subscribe") {
-        wireKeys.add(key);
-      } else {
-        if (server.failure) {
-          throw server.failure;
-        }
-        wireKeys.delete(key);
-      }
-      return { key };
-    });
-  const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
-  const source = {
-    subscribeMessages: (key: string, options?: Parameters<typeof coordinator.acquire>[1]) =>
-      coordinator.acquire(key, options),
-    unsubscribeMessages: vi.fn((handle: Awaited<ReturnType<typeof coordinator.acquire>>) =>
-      coordinator.release(handle),
-    ),
-  };
-  return {
-    ...createRunningNarrationController(source),
-    source,
-    server,
-    wireKeys,
-    request,
-    coordinator,
-  };
-}
-
 describe("sidebar narration subscription retries", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -63,245 +26,6 @@ describe("sidebar narration subscription retries", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
-
-  it("paces failed releases across syncs and releases the original lease after recovery", async () => {
-    vi.spyOn(Math, "random").mockReturnValue(0.5);
-    const { controller, input, source, server, wireKeys } = releaseFixture();
-    await vi.advanceTimersByTimeAsync(0);
-    const removed = { ...input, rows: [] };
-    for (let index = 0; index < 100; index++) {
-      controller.sync(removed);
-      await vi.advanceTimersByTimeAsync(0);
-    }
-    expect(source.unsubscribeMessages).toHaveBeenCalledOnce();
-    expect(wireKeys.size).toBe(1);
-    const original = source.unsubscribeMessages.mock.calls[0]?.[0];
-    for (const delay of [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000, 15_000]) {
-      const attempts = source.unsubscribeMessages.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(delay - 1);
-      controller.sync(removed);
-      expect(source.unsubscribeMessages).toHaveBeenCalledTimes(attempts);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(source.unsubscribeMessages).toHaveBeenCalledTimes(attempts + 1);
-    }
-    server.failure = null;
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(source.unsubscribeMessages.mock.calls.every(([handle]) => handle === original)).toBe(
-      true,
-    );
-    expect(wireKeys.size).toBe(0);
-    expect(vi.getTimerCount()).toBe(0);
-    controller.disconnect();
-  });
-
-  it("jitters a release after the server hint", async () => {
-    const draw = 0.5;
-    vi.spyOn(Math, "random").mockReturnValue(draw);
-    const { controller, input, source, server, wireKeys } = releaseFixture(
-      new GatewayProtocolRequestError({ retryable: true, retryAfterMs: 90_000 }),
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    controller.sync({ ...input, rows: [] });
-    await vi.advanceTimersByTimeAsync(0);
-    server.failure = null;
-    await vi.advanceTimersByTimeAsync(90_000 + draw * 500 - 1);
-    expect(source.unsubscribeMessages).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(wireKeys.size).toBe(0);
-    expect(source.unsubscribeMessages).toHaveBeenCalledTimes(2);
-    controller.disconnect();
-  });
-
-  it.each([
-    { retryable: false, returning: false },
-    { retryable: undefined, returning: false },
-    { retryable: false, returning: true },
-  ])(
-    "does not retry terminal release rejection (retryable=$retryable, returning=$returning)",
-    async ({ retryable, returning }) => {
-      const failure = new GatewayProtocolRequestError({ retryable });
-      const { controller, input, source, request } = releaseFixture(failure);
-      await vi.advanceTimersByTimeAsync(0);
-      const rejected = createDeferred();
-      if (returning) {
-        request.mockImplementationOnce(async () => {
-          await rejected.promise;
-          throw failure;
-        });
-      }
-      const removed = { ...input, rows: [] };
-      controller.sync(removed);
-      if (returning) {
-        controller.sync(input);
-        controller.sync(removed);
-        rejected.resolve();
-      } else {
-        await vi.advanceTimersByTimeAsync(0);
-        controller.sync(removed);
-      }
-      await vi.advanceTimersByTimeAsync(60_000);
-      if (returning) {
-        expect(request).toHaveBeenCalledTimes(2);
-      } else {
-        expect(source.unsubscribeMessages).toHaveBeenCalledOnce();
-      }
-      expect(vi.getTimerCount()).toBe(0);
-      controller.disconnect();
-    },
-  );
-
-  it("cancels a queued release when re-desired and preserves shared viewers", async () => {
-    vi.spyOn(Math, "random").mockReturnValue(0.5);
-    const { controller, input, request, wireKeys, coordinator, server } = releaseFixture();
-    await vi.advanceTimersByTimeAsync(0);
-    controller.sync({ ...input, rows: [] });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(2);
-    controller.sync(input);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(wireKeys.size).toBe(1);
-    expect(vi.getTimerCount()).toBe(0);
-    const key = input.rows[0]!.key;
-    const pane = await coordinator.acquire(key);
-    controller.disconnect();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-      [
-        "sessions.messages.subscribe",
-        { key, mode: "narration", subscriptionId: expect.any(String) },
-      ],
-      ["sessions.messages.unsubscribe", { key, subscriptionId: expect.any(String) }],
-      ["sessions.messages.subscribe", { key, subscriptionId: expect.any(String) }],
-    ]);
-    expect(wireKeys.has(key)).toBe(true);
-    expect(vi.getTimerCount()).toBe(0);
-    server.failure = null;
-    await coordinator.release(pane);
-    expect(request).toHaveBeenCalledTimes(4);
-    expect(request.mock.calls.at(-1)?.slice(0, 2)).toEqual([
-      "sessions.messages.unsubscribe",
-      { key, subscriptionId: expect.any(String) },
-    ]);
-    expect(wireKeys.size).toBe(0);
-  });
-
-  it("resumes cleanup when re-acquisition fails and interest leaves again", async () => {
-    vi.spyOn(Math, "random").mockReturnValue(0.5);
-    const { controller, input, source, server, wireKeys } = releaseFixture();
-    await vi.advanceTimersByTimeAsync(0);
-    controller.sync({ ...input, rows: [] });
-    await vi.advanceTimersByTimeAsync(0);
-    vi.spyOn(source, "subscribeMessages").mockRejectedValue(
-      new GatewayProtocolRequestError({ retryable: true }),
-    );
-    controller.sync(input);
-    await vi.advanceTimersByTimeAsync(0);
-    server.failure = null;
-    controller.sync({ ...input, rows: [] });
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(wireKeys.size).toBe(0);
-    expect(vi.getTimerCount()).toBe(0);
-    controller.disconnect();
-  });
-
-  it.each([false, true])(
-    "settles a re-desired in-flight release without losing its observer (timeout: %s)",
-    async (timedOut) => {
-      const { controller, input, request, server, wireKeys } = releaseFixture();
-      await vi.advanceTimersByTimeAsync(0);
-      const released = createDeferred();
-      request.mockImplementationOnce(async () => {
-        await released.promise;
-        if (timedOut) {
-          wireKeys.clear();
-          throw new GatewayProtocolRequestTimeoutError({
-            method: "sessions.messages.unsubscribe",
-            timeoutMs: 30_000,
-            requestSent: true,
-          });
-        }
-        throw new GatewayProtocolRequestError({ retryable: true });
-      });
-      controller.sync({ ...input, rows: [] });
-      controller.sync(input);
-      released.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(wireKeys.size).toBe(1);
-      expect(request).toHaveBeenCalledTimes(timedOut ? 3 : 2);
-      expect(vi.getTimerCount()).toBe(0);
-      server.failure = null;
-      controller.disconnect();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(wireKeys.size).toBe(0);
-    },
-  );
-
-  it.each(["close", "replace", "disconnect"])(
-    "cancels release retry work on %s",
-    async (change) => {
-      vi.spyOn(Math, "random").mockReturnValue(0.5);
-      const { controller, input, source, coordinator } = releaseFixture();
-      await vi.advanceTimersByTimeAsync(0);
-      controller.sync({ ...input, rows: [] });
-      await vi.advanceTimersByTimeAsync(0);
-      if (change === "disconnect") {
-        controller.disconnect();
-      } else {
-        coordinator.reset();
-        controller.sync({
-          ...input,
-          rows: [],
-          connected: change !== "close",
-          connectionIdentity: change === "replace" ? {} : input.connectionIdentity,
-        });
-      }
-      expect(vi.getTimerCount()).toBe(0);
-      const attempts = source.unsubscribeMessages.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(source.unsubscribeMessages).toHaveBeenCalledTimes(attempts);
-      controller.disconnect();
-    },
-  );
-
-  it("coalesces an overdue release retry with the next sidebar sync", async () => {
-    vi.spyOn(Math, "random").mockReturnValue(0.5);
-    const { controller, input, source, server, wireKeys } = releaseFixture();
-    await vi.advanceTimersByTimeAsync(0);
-    const removed = { ...input, rows: [] };
-    controller.sync(removed);
-    await vi.advanceTimersByTimeAsync(0);
-    vi.setSystemTime(Date.now() + 250);
-    server.failure = null;
-    controller.sync(removed);
-    controller.sync(removed);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(source.unsubscribeMessages).toHaveBeenCalledTimes(2);
-    expect(wireKeys.size).toBe(0);
-    expect(vi.getTimerCount()).toBe(0);
-    controller.disconnect();
-  });
-
-  it.each([false, true])(
-    "retains failed cleanup across DOM detachment (re-desired: %s)",
-    async (desired) => {
-      vi.spyOn(Math, "random").mockReturnValue(0.5);
-      const { controller, input, server, wireKeys } = releaseFixture();
-      await vi.advanceTimersByTimeAsync(0);
-      const removed = { ...input, rows: [] };
-      controller.sync(removed);
-      await vi.advanceTimersByTimeAsync(0);
-      controller.disconnect();
-      expect(vi.getTimerCount()).toBe(0);
-      server.failure = null;
-      controller.sync(desired ? input : removed);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(wireKeys.size).toBe(desired ? 1 : 0);
-      controller.disconnect();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(wireKeys.size).toBe(0);
-    },
-  );
 
   it("paces failed acquisitions across render syncs and converges without another render", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5);
@@ -365,7 +89,7 @@ describe("sidebar narration subscription retries", () => {
     expect(wireKeys.size).toBe(0);
   });
 
-  it("reacquires after the coordinator compensates a sent request timeout", async () => {
+  it("reacquires after a sent request timeout without a compensating RPC", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5);
     const request = vi
       .fn()
@@ -387,20 +111,16 @@ describe("sidebar narration subscription retries", () => {
       GatewayProtocolRequestTimeoutError,
     );
     await vi.advanceTimersByTimeAsync(0);
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "sessions.messages.subscribe",
-      "sessions.messages.unsubscribe",
-    ]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["sessions.messages.subscribe"]);
     await vi.advanceTimersByTimeAsync(250);
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "sessions.messages.subscribe",
-      "sessions.messages.unsubscribe",
       "sessions.messages.subscribe",
     ]);
     expect(vi.getTimerCount()).toBe(0);
     controller.disconnect();
     await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it.each<{ draw: number; hint?: number; delay: number; clockShift?: number }>([

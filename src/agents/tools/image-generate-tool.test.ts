@@ -14,6 +14,10 @@ import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
 import {
@@ -82,7 +86,9 @@ function savedMedia(fileName: string, size: number, contentType = "image/png") {
 function configWithDefaults(
   defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
 ): OpenClawConfig {
-  return { agents: { defaults } };
+  const config = { agents: { defaults } };
+  setRuntimeConfigSnapshot(config, config);
+  return config;
 }
 
 const GENERATION_PROVIDER_ENV_VARS = [
@@ -480,6 +486,7 @@ describe("createImageGenerateTool", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    clearRuntimeConfigSnapshot();
   });
 
   it("returns null when no image-generation model can be inferred", () => {
@@ -551,7 +558,11 @@ describe("createImageGenerateTool", () => {
       .spyOn(imageGenerationRuntime, "generateImage")
       .mockRejectedValue(generationError);
     const tool = requireImageGenerateTool(
-      createImageGenerateTool({ config: {}, agentDir: "/tmp/agent" }),
+      createImageGenerateTool({
+        config: {},
+        agentDir: "/tmp/agent",
+        authProfileStore: { version: 1, profiles: {} },
+      }),
     );
 
     await expect(tool.execute("call-ready-image", { prompt: "An image" })).rejects.toBe(
@@ -746,8 +757,8 @@ describe("createImageGenerateTool", () => {
     resolveLateSave(lateSavedMedia);
     await expect(execution).rejects.toBe(terminalError);
     expect(deleteMediaBuffer).toHaveBeenCalledTimes(2);
-    expect(deleteMediaBuffer).toHaveBeenNthCalledWith(1, "late.png", "tool-image-generation");
-    expect(deleteMediaBuffer).toHaveBeenNthCalledWith(2, "saved.png", "tool-image-generation");
+    expect(deleteMediaBuffer).toHaveBeenCalledWith("late.png", "tool-image-generation");
+    expect(deleteMediaBuffer).toHaveBeenCalledWith("saved.png", "tool-image-generation");
   });
 
   it("runs explicit deployment refs and preserves timeout-only image defaults", async () => {
@@ -922,7 +933,10 @@ describe("createImageGenerateTool", () => {
   defineMediaGenerationCancellationTests({
     kind: "image",
     tasks: taskRuntimeMocks,
-    createTool: (options) => requireImageGenerateTool(createImageGenerateTool(options)),
+    createTool: (options) => {
+      setRuntimeConfigSnapshot(options.config ?? {}, options.config);
+      return requireImageGenerateTool(createImageGenerateTool(options));
+    },
     requesterOrigin: { channel: "discord", to: "dm:123" },
     references: ["https://example.test/first.png", "https://example.test/second.png"],
     referenceSignal: "caller",
@@ -955,7 +969,10 @@ describe("createImageGenerateTool", () => {
     kind: "image",
     tasks: taskRuntimeMocks,
     listTasks: mediaActivityMocks.listOperations,
-    createTool: (options) => requireImageGenerateTool(createImageGenerateTool(options)),
+    createTool: (options) => {
+      setRuntimeConfigSnapshot(options.config ?? {}, options.config);
+      return requireImageGenerateTool(createImageGenerateTool(options));
+    },
     agentDir: "/tmp/agent",
     setupProviders: () => {
       stubImageGenerationProviders();
@@ -981,9 +998,13 @@ describe("createImageGenerateTool", () => {
       createDeferred<
         Awaited<ReturnType<typeof taskStatus.findDuplicateGuardImageGenerationTaskForSession>>
       >();
+    const lookupStarted = createDeferred();
     const findDuplicate = vi
       .spyOn(taskStatus, "findDuplicateGuardImageGenerationTaskForSession")
-      .mockReturnValue(lookup.promise);
+      .mockImplementation(() => {
+        lookupStarted.resolve();
+        return lookup.promise;
+      });
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
     const scheduleBackgroundWork = vi.fn();
     const agentSessionKey = "agent:main:discord:direct:123";
@@ -1003,6 +1024,7 @@ describe("createImageGenerateTool", () => {
     const abortReason = new Error("image requester cancelled during task lookup");
 
     const pending = tool.execute("call-image-lookup", { prompt: "an image" }, controller.signal);
+    await lookupStarted.promise;
     expect(findDuplicate).toHaveBeenCalledWith(agentSessionKey, {
       prompt: "an image",
       requestKey: undefined,

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import {
   appendTranscriptEvent,
   assignSessionOwner,
@@ -466,6 +467,14 @@ describe("session-store-runtime", () => {
 
 describe("plugin session store maintenance", () => {
   const maintenanceSessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-maintenance-");
+
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
 
   it("keeps lifecycle cleanup in the explicit environment while its executor is live", async () => {
     await withOpenClawTestState({ layout: "state-only", applyEnv: false }, async ({ env }) => {

@@ -7,6 +7,7 @@ import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite.js";
 import type { HealthCheck, HealthFinding } from "../flows/health-checks.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { removeTempDirectoryAsync } from "../infra/sqlite-readonly-location-cleanup.js";
+import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -57,7 +58,7 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       } finally {
         database.close();
       }
-      const reader = acquireAuthProfileReadDatabase(filename);
+      const reader = acquireAuthProfileReadDatabase(filename, openSqliteReadOnlyDatabase);
       if (reader.status !== "readable") {
         throw new Error("auth reader fixture is not readable");
       }

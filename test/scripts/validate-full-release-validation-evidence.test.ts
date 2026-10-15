@@ -207,6 +207,7 @@ describe("full release validation evidence", () => {
     "diagnostic",
     "missing",
     "selection",
+    "windows-after-admission",
     "context",
     "tooling",
     "missing-publication",
@@ -288,9 +289,19 @@ describe("full release validation evidence", () => {
         expectedPublicationSelection: (): PublicationSelection => ({
           ...selection,
           route: scenario === "selection" ? "prepared" : "normal",
+          ...(scenario === "windows-after-admission"
+            ? {
+                windowsNodeTag: "v0.6.3",
+                windowsNodeInstallerDigests: {
+                  "OpenClawCompanion-Setup-x64.exe": `sha256:${"d".repeat(64)}`,
+                },
+              }
+            : {}),
         }),
       });
-    if (scenario === "publish") {
+    if (scenario === "windows-after-admission") {
+      expect(run).toThrow("windows-node-release.yml");
+    } else if (scenario === "publish") {
       expect(run).not.toThrow();
     } else {
       expect(run).toThrow(

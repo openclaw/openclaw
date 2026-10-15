@@ -1,7 +1,9 @@
 import { EventEmitter, getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -87,6 +89,48 @@ describe("broadcast transport retirement", () => {
     }
     expect(sessionRead.frames).toEqual([]);
     expect(node.frames).toEqual([]);
+  });
+
+  it("keeps drain events on authorized session subscriptions", () => {
+    const selected = controlledPeer("selected");
+    const other = controlledPeer("other");
+    const revoked = controlledPeer("revoked");
+    const node = controlledPeer("node");
+    const peers = [selected, other, revoked, node];
+    const subscribers = createSessionMessageSubscriberRegistry();
+    for (const peer of peers) {
+      peer.client.connect.scopes = ["operator.sessions.read"];
+      peer.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    }
+    node.client.connect.role = "node";
+    subscribers.subscribe("selected", "agent:work:global");
+    subscribers.subscribe("revoked", "agent:work:global");
+    subscribers.subscribe("node", "agent:work:global");
+    subscribers.subscribe("other", "agent:main:global");
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(peers.map((peer) => peer.client)),
+      sessionMessageSubscribers: subscribers,
+      canReceiveSessionEvent: (client) => client.connId !== "revoked",
+    });
+
+    broadcastToConnIds(
+      "socket.drain",
+      { sessionKey: "global", agentId: "work", reason: "reset", ts: 1 },
+      new Set(peers.map((peer) => peer.client.connId)),
+      { agentId: "work", sessionKeys: ["agent:work:global"], dropIfSlow: false },
+    );
+
+    expect(selected.frames).toEqual([
+      {
+        type: "event",
+        event: "socket.drain",
+        payload: { sessionKey: "global", agentId: "work", reason: "reset", ts: 1 },
+        seq: 1,
+      },
+    ]);
+    for (const peer of [other, revoked, node]) {
+      expect(peer.frames).toEqual([]);
+    }
   });
 
   it("shares encoded plugin events only after scope filtering and preserves recipient sequences", () => {

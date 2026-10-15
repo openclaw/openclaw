@@ -69,7 +69,7 @@ local proof.
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.34"
+    "typebox": "1.3.36"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"
@@ -238,7 +238,7 @@ local proof.
     clawhub package publish your-org/your-plugin
     ```
 
-    Canonical ClawHub package snippets live in `docs/snippets/plugin-publish/`.
+    Shared ClawHub package snippets live in `docs/snippets/plugin-publish/`.
 
   </Step>
 
@@ -314,6 +314,17 @@ calls reject invalid schemas before execution and validate the final value after
 tool hooks. Omit it for tools without a stable JSON result. See
 [Tool plugins](/plugins/tool-plugins#output-contracts) for the full contract.
 
+Declare when a tool needs the session workspace with `workspaceAccess` in its
+registration options. Use `true` when the factory reads working files, or omit
+the option to retain that safe default. OpenClaw finishes workspace preparation
+before calling those factories or starting the model. Use `"execute"` when the
+factory only builds a definition and working files are accessed during tool
+preparation or execution. Use `false` only when both factory and execution are
+independent of the session workspace. These explicit declarations let the model
+start while checkout continues. Plain tool objects default to `"execute"` because
+they have no runtime factory. `defineToolPlugin` accepts the same option on each
+tool definition.
+
 Every tool registered with `api.registerTool(...)` must also be declared in the
 plugin manifest:
 
@@ -361,7 +372,7 @@ turn; it can include `provider`, `modelId`, and `modelRef`. Treat it as
 informational runtime metadata, not a security boundary against the local
 operator, installed plugin code, or a modified OpenClaw runtime. Sensitive
 local tools should still require an explicit plugin or operator opt-in and
-fail closed when active-model metadata is missing or unsuitable.
+refuse to run when active-model metadata is missing or unsuitable.
 
 The manifest declares ownership and discovery; execution still calls the live
 registered tool implementation. Keep `toolMetadata.<tool>.optional: true`
@@ -380,7 +391,7 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 Within your plugin package, use local barrel files such as `api.ts` and
 `runtime-api.ts` for internal imports. Do not import your own plugin through an
 SDK path. Provider-specific helpers should stay in the provider package unless
-the seam is truly generic.
+the interface is truly generic.
 
 Custom Gateway RPC methods are an advanced entry point. Keep them on a
 plugin-specific prefix; core admin namespaces such as `config.*`,

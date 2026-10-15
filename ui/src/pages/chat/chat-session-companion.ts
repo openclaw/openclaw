@@ -36,7 +36,7 @@ export type ChatSessionCompanionTurn = {
   question: string;
   attachments?: ChatAttachment[];
 } & (
-  | { status: "pending" }
+  | { status: "pending"; startedAt: number }
   | ({ status: "answered" } & SessionCompanionExchange)
   | {
       status: "failed";
@@ -264,6 +264,7 @@ export class ChatSessionCompanionThreads {
     const turn: ChatSessionCompanionTurn = {
       question: normalized,
       status: "pending",
+      startedAt: Date.now(),
       ...(attachments?.length ? { attachments } : {}),
     };
     if (typeof question === "string") {

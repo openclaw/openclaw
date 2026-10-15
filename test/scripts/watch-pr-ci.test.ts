@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { collectRollupContexts, type RollupCheck } from "../../scripts/lib/watch-pr-ci-rollup.mts";
 import {
   buildFindRunArgs,
-  classifyAttachedCiRun,
   classifyRollup,
   classifyRunAttachment,
   parseArgs,
@@ -323,6 +322,7 @@ describe("watch-pr-ci", () => {
       timeout: 3600,
       interval: 120,
       completion: "rollup",
+      once: false,
     });
     expect(
       parseArgs([
@@ -340,6 +340,7 @@ describe("watch-pr-ci", () => {
         "5",
         "--completion",
         "ci-run",
+        "--once",
       ]),
     ).toMatchObject({
       repo: "fork/project",
@@ -348,6 +349,7 @@ describe("watch-pr-ci", () => {
       timeout: 90,
       interval: 5,
       completion: "ci-run",
+      once: true,
     });
     expect(parseArgs(["1", sha.toUpperCase()]).headSha).toBe(sha);
   });
@@ -1925,29 +1927,18 @@ console.log(JSON.stringify(value));
     });
 
     it.each([
-      { label: "pending", status: "QUEUED", conclusion: null, exitCode: 16 },
-      { label: "failed", status: "COMPLETED", conclusion: "FAILURE", exitCode: 15 },
-    ])(
-      "observes a new $label required check after alias verification",
-      async ({ status, conclusion, exitCode }) => {
-        const fixture = structuredClone(placeholderFixture);
-        const afterAliasScan = structuredClone(fixture.graphql);
-        afterAliasScan.data.repository.pullRequest.state = "OPEN";
-        const contexts = afterAliasScan.data.repository.pullRequest.statusCheckRollup.contexts;
-        Object.assign(contexts, {
-          totalCount: contexts.totalCount + 1,
-          nodes: [
-            ...contexts.nodes,
-            { kind: "CheckRun", name: "new required check", status, conclusion },
-          ],
-        });
-        const result = await replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-        expect(result.stdout).not.toContain("GREEN");
+      {
+        label: "new pending required check",
+        added: true,
+        patch: { status: "QUEUED", conclusion: null },
+        exitCode: 16,
       },
-    );
-
-    it.each([
+      {
+        label: "new failed required check",
+        added: true,
+        patch: { status: "COMPLETED", conclusion: "FAILURE" },
+        exitCode: 15,
+      },
       { label: "starts running", patch: { status: "IN_PROGRESS" }, exitCode: 16 },
       { label: "fails", patch: { status: "COMPLETED", conclusion: "FAILURE" }, exitCode: 15 },
       {
@@ -1956,16 +1947,21 @@ console.log(JSON.stringify(value));
         exitCode: 16,
       },
       { label: "is renamed", patch: { name: "different required check" }, exitCode: 16 },
-    ])("does not reuse proof when an alias $label", async ({ patch, exitCode }) => {
+    ])("revalidates alias evidence: $label", async ({ patch, exitCode, added }) => {
       const fixture = structuredClone(placeholderFixture);
       const afterAliasScan = structuredClone(fixture.graphql);
       afterAliasScan.data.repository.pullRequest.state = "OPEN";
-      const alias =
-        afterAliasScan.data.repository.pullRequest.statusCheckRollup.contexts.nodes.find(
-          (check) => check.databaseId === 98802098786,
-        );
-      assert(alias);
-      Object.assign(alias, patch);
+      const contexts = afterAliasScan.data.repository.pullRequest.statusCheckRollup.contexts;
+      if (added) {
+        Object.assign(contexts, {
+          totalCount: contexts.totalCount + 1,
+          nodes: [...contexts.nodes, { kind: "CheckRun", name: "new required check", ...patch }],
+        });
+      } else {
+        const alias = contexts.nodes.find((check) => check.databaseId === 98802098786);
+        assert(alias);
+        Object.assign(alias, patch);
+      }
       const result = await replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
       expect(result.stdout).not.toContain("GREEN");
@@ -2326,28 +2322,30 @@ console.log(JSON.stringify(value));
     );
   });
 
-  it.each(["transitioned", undefined])(
-    "polls at the deadline before returning %s",
-    async (outcome) => {
-      let now = 0;
-      const waits: number[] = [];
-      let polls = 0;
-      const result = await pollUntilDeadline({
-        deadline: 1_000,
-        interval: 120,
-        now: () => now,
-        wait: async (milliseconds) => {
-          waits.push(milliseconds);
-          now += milliseconds;
-        },
-        poll: () => (++polls === 2 ? outcome : undefined),
-      });
-      expect(result).toBe(outcome);
-      expect(waits).toEqual([1_000]);
-      expect(now).toBe(1_000);
-      expect(polls).toBe(2);
-    },
-  );
+  it.each([
+    { label: "transition at deadline", outcome: "transitioned", once: false },
+    { label: "unresolved at deadline", outcome: undefined, once: false },
+    { label: "unresolved single pass", outcome: undefined, once: true },
+  ])("polls until $label", async ({ outcome, once }) => {
+    let now = 0;
+    const waits: number[] = [];
+    let polls = 0;
+    const result = await pollUntilDeadline({
+      deadline: 1_000,
+      interval: 120,
+      once,
+      now: () => now,
+      wait: async (milliseconds) => {
+        waits.push(milliseconds);
+        now += milliseconds;
+      },
+      poll: () => (++polls === 2 ? outcome : undefined),
+    });
+    expect(result).toBe(outcome);
+    expect(waits).toEqual(once ? [] : [1_000]);
+    expect(now).toBe(once ? 0 : 1_000);
+    expect(polls).toBe(once ? 1 : 2);
+  });
 
   it("warns for an already-completed late attachment without changing attachment", () => {
     expect(classifyRunAttachment(102, { status: "completed", conclusion: "success" })).toEqual({
@@ -2567,12 +2565,6 @@ console.log(JSON.stringify(value));
         contexts: { nodes, ...(totalCount === undefined ? {} : { totalCount }) },
       }),
     ).toEqual(expected);
-  });
-
-  it("lets the attached CI run complete independently of the rollup", () => {
-    expect(classifyAttachedCiRun({ status: "completed", conclusion: "success" })).toEqual({
-      verdict: "GREEN",
-    });
   });
 
   it.each([2, 11])("collects a %s-context rollup within ten pages", (totalCount) => {

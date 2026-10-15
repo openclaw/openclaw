@@ -114,7 +114,7 @@ export function adoptCommittedBackgroundPreference(options: {
   } else {
     delete lastSeen.background;
   }
-  publishConfirmedPrefs(outbox, effectiveScope, lastSeen, ["background"]);
+  publishConfirmedPrefs(outbox, effectiveScope, lastSeen);
   outbox.preferenceWriteFailures.get(effectiveScope)?.delete("background");
   outbox.updateRetainedLocalKeys(effectiveScope, ["background"], false);
   outbox.lastReconciledConfigObject = null;
@@ -176,7 +176,6 @@ export function retryServerUiPrefWrite(
   outbox.updateRetainedLocalKeys(effectiveScope, [key], false);
   outbox.pendingPrefs = { ...outbox.pendingPrefs, [key]: retryValue };
   outbox.mergePendingIntoStorage();
-  outbox.clearConflictRedrain();
   outbox.publishPreferenceWrites();
   outbox.startPendingDrain(writer);
   return true;

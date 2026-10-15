@@ -10,12 +10,13 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
-import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
+import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 
 afterEach(() => vi.useRealTimers());
 
@@ -106,7 +107,7 @@ it.each(["agent:work:current", "global"])(
         });
       const container = document.createElement("div");
       const drawPermission = () =>
-        render(renderChatPermissionPicker(controls().permissionPicker), container);
+        render(solidContent(ChatPermissionPicker, controls().permissionPicker), container);
       permissionReadbackUnavailable = true;
       await controls().permissionPicker.onSelect("full");
       expect(request).toHaveBeenCalledWith(

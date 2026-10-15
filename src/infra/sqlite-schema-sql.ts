@@ -64,6 +64,11 @@ export function normalizeSqlIdentifier(identifier: string): string {
   return identifier.toLowerCase();
 }
 
+/** SQLite folds only ASCII letters when comparing identifiers. */
+export function foldSqliteIdentifierCase(identifier: string): string {
+  return identifier.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
 export function normalizeSchemaSql(sql: string | null): string | null {
   if (sql === null) {
     return null;
@@ -101,6 +106,23 @@ export function findSqlCharacter(sql: string, character: string): number {
     }
   }
   return -1;
+}
+
+/** Match SQL keywords without treating quoted payloads, identifiers or comments as code. */
+export function hasUnquotedSqlKeyword(sql: string, keywords: RegExp): boolean {
+  const starts = new Set<number>();
+  for (const match of sql.matchAll(keywords)) {
+    starts.add(match.index);
+  }
+  if (starts.size === 0) {
+    return false;
+  }
+  for (const index of unquotedSqlIndexes(sql, 0)) {
+    if (starts.has(index)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function findSqlClosingParenthesis(sql: string, open: number): number {

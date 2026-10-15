@@ -110,6 +110,7 @@ export function buildGatewaySessionSnapshot(params: {
         }),
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
+    deviceFolder: sessionRow.deviceFolder ?? null,
     permissionMode: sessionRow.permissionMode ?? null,
     communication: sessionRow.communication ?? null,
     effectiveCommunication: sessionRow.effectiveCommunication,
@@ -152,6 +153,7 @@ export function buildGatewaySessionSnapshot(params: {
     restartRecoveryStatus: sessionRow.restartRecoveryStatus ?? null,
     inputTokens: sessionRow.inputTokens,
     outputTokens: sessionRow.outputTokens,
+    usageReport: sessionRow.usageReport,
     lastChannel: sessionRow.lastChannel,
     lastTo: sessionRow.lastTo,
     lastAccountId: sessionRow.lastAccountId,
@@ -204,11 +206,16 @@ export function buildGatewaySessionSnapshot(params: {
     }
   }
   const session: Record<string, unknown> | undefined = params.includeSession
-    ? Object.assign(
-        sessionRow,
-        Object.fromEntries(Object.entries(eventFields).filter(([, value]) => value !== undefined)),
-      )
+    ? sessionRow
     : undefined;
+  if (session) {
+    for (const key in eventFields) {
+      const value = eventFields[key];
+      if (value !== undefined) {
+        session[key] = value;
+      }
+    }
+  }
   if (session && sessionRow.key === "global" && !params.agentId) {
     delete session.goal;
   }

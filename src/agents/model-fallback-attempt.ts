@@ -118,6 +118,7 @@ export type ModelFallbackResultClassification =
       status?: number;
       code?: string;
       rawError?: string;
+      rateLimitRetriesExhausted?: number;
       preserveResultOnExhaustion?: boolean;
       preserveResultPriority?: number;
     }
@@ -331,6 +332,11 @@ export async function runFallbackAttempt<T>(
   if (!runResult.ok) {
     return { error: runResult.error };
   }
+  const buildClassifiedResult = () => ({
+    result: runResult.result,
+    provider: params.provider,
+    model: params.model,
+  });
   if (!attemptError) {
     const stopReason =
       classification && "stopReason" in classification ? classification.stopReason : undefined;
@@ -346,9 +352,7 @@ export async function runFallbackAttempt<T>(
       ...(stopReason ? { stopped: true as const } : {}),
       success: {
         outcome: "completed",
-        result: runResult.result,
-        provider: params.provider,
-        model: params.model,
+        ...buildClassifiedResult(),
         attempts: params.attempts,
       },
     };
@@ -359,17 +363,11 @@ export async function runFallbackAttempt<T>(
     classification.preserveResultOnExhaustion === true;
   return {
     error: attemptError,
-    classifiedResult: {
-      result: runResult.result,
-      provider: params.provider,
-      model: params.model,
-    },
+    classifiedResult: buildClassifiedResult(),
     ...(preserveResultOnExhaustion
       ? {
           exhaustionResult: {
-            result: runResult.result,
-            provider: params.provider,
-            model: params.model,
+            ...buildClassifiedResult(),
             priority:
               typeof classification.preserveResultPriority === "number" &&
               Number.isFinite(classification.preserveResultPriority)
@@ -402,6 +400,7 @@ function resolveResultClassificationError(
         status: classification.status,
         code: classification.code,
         rawError: classification.rawError,
+        rateLimitRetriesExhausted: classification.rateLimitRetriesExhausted,
       })
     : null;
 }
@@ -516,6 +515,7 @@ function buildFailedCandidateAttempt(
         ? described.rawError
         : described.message,
     reason: described.reason ?? "unknown",
+    rateLimitRetriesExhausted: described.rateLimitRetriesExhausted,
     authMode: described.authMode,
     status: described.status,
     code: described.code,
@@ -634,6 +634,7 @@ export function throwFallbackFailureSummary(params: {
     // Recovery must not infer OAuth from the provider after candidate errors collapse here.
     authMode: lastAttempt?.authMode,
     status: lastAttempt?.status,
+    rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
     code: lastAttempt?.code,
     cause: params.lastError instanceof Error ? params.lastError : undefined,
     sessionId: params.attribution?.sessionId,
@@ -643,25 +644,28 @@ export function throwFallbackFailureSummary(params: {
   });
 }
 
-export function resolveFallbackSoonestCooldownExpiry(params: {
+export async function resolveFallbackSoonestCooldownExpiry(params: {
   authRuntime: ModelFallbackAuthRuntime | null;
   userLockedAuthProfileId?: string;
   agentDir?: string;
   cfg: OpenClawConfig | undefined;
   profileIdsByCandidate: ReadonlyMap<ModelCandidate, string[]>;
-}): number | null {
+}): Promise<number | null> {
   if (!params.authRuntime || params.profileIdsByCandidate.size === 0) {
     return null;
   }
   // Reload attempt-written cooldowns without losing the admitted profile scope.
-  const refreshedStore = params.authRuntime.loadAuthProfileStoreForRuntime(params.agentDir, {
-    readOnly: true,
-    profileId: params.userLockedAuthProfileId,
-    externalCli: externalCliDiscoveryForProviders({
-      cfg: params.cfg,
-      providers: [...params.profileIdsByCandidate.keys()].map((candidate) => candidate.provider),
-    }),
-  });
+  const refreshedStore = await params.authRuntime.loadAuthProfileStoreForRuntimeAsync(
+    params.agentDir,
+    {
+      readOnly: true,
+      profileId: params.userLockedAuthProfileId,
+      externalCli: externalCliDiscoveryForProviders({
+        cfg: params.cfg,
+        providers: [...params.profileIdsByCandidate.keys()].map((candidate) => candidate.provider),
+      }),
+    },
+  );
   let soonest: number | null = null;
   for (const [candidate, ids] of params.profileIdsByCandidate) {
     const candidateSoonest = params.authRuntime.getSoonestCooldownExpiry(refreshedStore, ids, {

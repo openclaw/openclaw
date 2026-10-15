@@ -8,18 +8,18 @@ import { pluginSessionMenuActions } from "../../plugins/control-ui-actions.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import type {
   HeaderMenuAction,
-  HeaderMenuQuickAction,
+  HeaderMenuSessionAction,
 } from "./components/chat-header-session-menu.ts";
 
 export class ChatPaneNativeSessionActions {
-  private readonly memo = new ChatPaneHeaderMemo<HeaderMenuQuickAction[]>();
+  private readonly memo = new ChatPaneHeaderMemo<HeaderMenuSessionAction[]>();
 
   read(
     context: ApplicationContext,
     row: GatewaySessionRow | undefined,
     stopDisabledReason: string | undefined,
     onAction: (action: HeaderMenuAction) => void,
-  ): HeaderMenuQuickAction[] {
+  ): HeaderMenuSessionAction[] {
     const enabled = context.nativeConversation?.supportsSessionActions;
     const pluginActions = enabled && row ? pluginSessionMenuActions(context.plugins, row) : [];
     const canStop = Boolean(

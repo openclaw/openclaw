@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
 const loadI18n = useLazyEnglishTest();
@@ -14,7 +14,7 @@ it.each([
   },
   {
     surface: "connections",
-    load: () => import("../features/github-connections/github-connections.ts"),
+    load: () => import("../features/github-connections/github-connections.tsx"),
   },
   {
     surface: "CI details",
@@ -22,11 +22,11 @@ it.each([
   },
   {
     surface: "session hovercard",
-    load: () => import("../components/session-hovercard.ts"),
+    load: () => import("../components/session-hovercard-solid.tsx"),
   },
   {
     surface: "identity",
-    load: () => import("../features/github-connections/github-identity-view.ts"),
+    load: () => import("../features/github-connections/github-identity-view.tsx"),
   },
 ])("loads GitHub fallback copy at the cold $surface boundary", async ({ load }) => {
   const { en, manager } = await loadI18n({
@@ -64,7 +64,21 @@ it.each([
     ),
   ).toEqual(["GitHub connections", "My GitHub", "System GitHub", "For me", "For the system"]);
   await manager.setLocale("de");
-  await load();
+  // Cold imports repeat repository registrations. Dependencies register only once
+  // per worker, so their definitions must remain in the document's registry.
+  const define = customElements.define.bind(customElements);
+  const registration = vi
+    .spyOn(customElements, "define")
+    .mockImplementation((name, constructor, options) => {
+      if (!customElements.get(name)) {
+        define(name, constructor, options);
+      }
+    });
+  try {
+    await load();
+  } finally {
+    registration.mockRestore();
+  }
   expect(en.githubConnections).toBe(connections);
   expect(en.githubPublication).toBe(publication);
   expect(manager.t("githubConnections.manage")).toBe("Verbindungen verwalten");

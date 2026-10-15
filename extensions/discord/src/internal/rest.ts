@@ -20,7 +20,12 @@ import { appendQuery, createRouteKey } from "./rest-routes.js";
 import { RestScheduler, type RequestPriority, type RequestQuery } from "./rest-scheduler.js";
 import { isDiscordRateLimitBody } from "./schemas.js";
 
-export { DiscordError, isUnknownDiscordVoiceStateError, RateLimitError } from "./rest-errors.js";
+export {
+  DiscordError,
+  isUnknownDiscordMessageError,
+  isUnknownDiscordVoiceStateError,
+  RateLimitError,
+} from "./rest-errors.js";
 
 export type RequestClientOptions = {
   baseUrl?: string;

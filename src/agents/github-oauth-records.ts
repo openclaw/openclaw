@@ -3,10 +3,10 @@ import { isManagedGitHubProfileId } from "../config/github-identity-profile-id.j
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   deleteHiddenGitHubSecretRecord,
-  listHiddenGitHubSecretRecordNames,
+  listHiddenGitHubSecretRecords,
   readHiddenGitHubSecretRecord,
   writeHiddenGitHubSecretRecord,
-} from "../secrets/store/secret-store.js";
+} from "../secrets/store/secret-store-hidden-github.js";
 import {
   githubOAuthTimestamp as timestamp,
   githubOAuthProfileId,
@@ -156,14 +156,14 @@ export function createGitHubOAuthRecord(params: {
   };
 }
 
-function githubDeviceRecordName(requestId: string): string {
+export function githubDeviceRecordName(requestId: string): string {
   if (!DEVICE_REQUEST_ID_PATTERN.test(requestId)) {
     throw new Error("GitHub device authorization request id is invalid.");
   }
   return requestId;
 }
 
-function githubOAuthRecordName(profileId: string): string {
+export function githubOAuthRecordName(profileId: string): string {
   if (!isManagedGitHubProfileId(profileId)) {
     throw new Error("Managed GitHub profile id is invalid.");
   }
@@ -188,59 +188,72 @@ function parseGitHubRecord<T>(raw: string, schema: z.ZodType<T>): T | undefined 
   return result.success ? result.data : undefined;
 }
 
-export function writeGitHubDeviceAuthorizationRecord(
+export async function writeGitHubDeviceAuthorizationRecord(
   record: GitHubDeviceAuthorizationRecord,
-): void {
+): Promise<void> {
   const parsed = parseGitHubRecord(JSON.stringify(record), deviceRecordSchema);
   if (!parsed || parsed.requestId !== record.requestId) {
     throw new Error("GitHub device authorization record is invalid.");
   }
-  writeHiddenGitHubSecretRecord({
+  await writeHiddenGitHubSecretRecord({
     name: githubDeviceRecordName(record.requestId),
     value: JSON.stringify(parsed),
   });
 }
 
-export function readGitHubDeviceAuthorizationRecord(
+export async function readGitHubDeviceAuthorizationRecord(
+  requestId: string,
+): Promise<GitHubDeviceAuthorizationRecord | undefined> {
+  const raw = await readHiddenGitHubSecretRecord({ name: githubDeviceRecordName(requestId) });
+  return parseGitHubDeviceAuthorizationRecord(raw, requestId);
+}
+
+export function parseGitHubDeviceAuthorizationRecord(
+  raw: string | undefined,
   requestId: string,
 ): GitHubDeviceAuthorizationRecord | undefined {
-  const raw = readHiddenGitHubSecretRecord({ name: githubDeviceRecordName(requestId) });
   const record = raw === undefined ? undefined : parseGitHubRecord(raw, deviceRecordSchema);
   return record?.requestId === requestId ? record : undefined;
 }
 
-export function deleteGitHubDeviceAuthorizationRecord(requestId: string): void {
-  deleteHiddenGitHubSecretRecord({ name: githubDeviceRecordName(requestId) });
+export async function deleteGitHubDeviceAuthorizationRecord(requestId: string): Promise<void> {
+  await deleteHiddenGitHubSecretRecord({ name: githubDeviceRecordName(requestId) });
 }
 
-export function listGitHubDeviceAuthorizationRecords(): Array<{
-  requestId: string;
-  record: GitHubDeviceAuthorizationRecord | undefined;
-}> {
-  return listHiddenGitHubSecretRecordNames({ prefix: "github-device" }).flatMap((name) => {
-    const requestId = name;
-    if (!DEVICE_REQUEST_ID_PATTERN.test(requestId)) {
-      return [];
-    }
-    return [{ requestId, record: readGitHubDeviceAuthorizationRecord(requestId) }];
-  });
+export async function listGitHubDeviceAuthorizationRecords(): Promise<
+  Array<{
+    requestId: string;
+    record: GitHubDeviceAuthorizationRecord | undefined;
+  }>
+> {
+  return (await listHiddenGitHubSecretRecords({ prefix: "github-device" })).flatMap(
+    ({ name, value }) => {
+      if (!DEVICE_REQUEST_ID_PATTERN.test(name)) {
+        return [];
+      }
+      const record = parseGitHubRecord(value, deviceRecordSchema);
+      return [{ requestId: name, record: record?.requestId === name ? record : undefined }];
+    },
+  );
 }
 
-export function writeGitHubOAuthRecord(record: GitHubOAuthRecord): void {
+export async function writeGitHubOAuthRecord(record: GitHubOAuthRecord): Promise<void> {
   const parsed = parseGitHubRecord(JSON.stringify(record), oauthRecordSchema);
   if (!parsed || parsed.profileId !== record.profileId) {
     throw new Error("GitHub OAuth record is invalid.");
   }
-  writeHiddenGitHubSecretRecord({
+  await writeHiddenGitHubSecretRecord({
     name: githubOAuthRecordName(record.profileId),
     value: JSON.stringify(parsed),
   });
 }
 
-export function inspectGitHubOAuthRecord(
+export async function inspectGitHubOAuthRecord(
   profileId: string,
-): { state: "missing" } | { state: "invalid" } | { state: "valid"; record: GitHubOAuthRecord } {
-  const raw = readHiddenGitHubSecretRecord({ name: githubOAuthRecordName(profileId) });
+): Promise<
+  { state: "missing" } | { state: "invalid" } | { state: "valid"; record: GitHubOAuthRecord }
+> {
+  const raw = await readHiddenGitHubSecretRecord({ name: githubOAuthRecordName(profileId) });
   if (raw === undefined) {
     return { state: "missing" };
   }
@@ -248,20 +261,24 @@ export function inspectGitHubOAuthRecord(
   return record?.profileId === profileId ? { state: "valid", record } : { state: "invalid" };
 }
 
-export function deleteGitHubOAuthRecord(profileId: string): void {
-  deleteHiddenGitHubSecretRecord({ name: githubOAuthRecordName(profileId) });
+export async function deleteGitHubOAuthRecord(profileId: string): Promise<void> {
+  await deleteHiddenGitHubSecretRecord({ name: githubOAuthRecordName(profileId) });
 }
 
-export function listGitHubOAuthRecords(): Array<{
-  profileId: string;
-  record: GitHubOAuthRecord | undefined;
-}> {
-  return listHiddenGitHubSecretRecordNames({ prefix: "github-oauth" }).flatMap((name) => {
-    const profileId = parseGitHubOAuthProfileId(name);
-    if (!profileId) {
-      return [];
-    }
-    const inspected = inspectGitHubOAuthRecord(profileId);
-    return [{ profileId, record: inspected.state === "valid" ? inspected.record : undefined }];
-  });
+export async function listGitHubOAuthRecords(): Promise<
+  Array<{
+    profileId: string;
+    record: GitHubOAuthRecord | undefined;
+  }>
+> {
+  return (await listHiddenGitHubSecretRecords({ prefix: "github-oauth" })).flatMap(
+    ({ name, value }) => {
+      const profileId = parseGitHubOAuthProfileId(name);
+      if (!profileId) {
+        return [];
+      }
+      const record = parseGitHubRecord(value, oauthRecordSchema);
+      return [{ profileId, record: record?.profileId === profileId ? record : undefined }];
+    },
+  );
 }

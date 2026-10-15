@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { constants, DatabaseSync } from "node:sqlite";
+import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
@@ -9,6 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { closeOpenClawStateDatabaseByPath } from "./openclaw-state-db-cache.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
@@ -26,12 +27,12 @@ import {
   readUserModelAccountSummary,
   readSelectedUserModelAccount,
   readUserModelAuthProfile,
-  resolveUserProfileAuthLink,
   setUserProfileAuthLink,
   updateUserModelAuthProfile,
 } from "./user-model-accounts.js";
+import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { captureUserProfileModelAccountLinksAuthority } from "./user-profile-events.js";
-import { linkEmail, setAvatar } from "./user-profile-writes.worker.js";
+import { linkEmail, mergeProfiles, setAvatar } from "./user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
 import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
@@ -89,23 +90,72 @@ function connectToken(
 }
 
 describe("personal model accounts", () => {
-  it("observes foreign default-link commits on the next worker read", async () => {
+  it("reads current linked credentials together after in-process refresh and unlink writes", () => {
+    const options = stateOptions();
+    const alice = ensureProfileForEmail("catalog-alice@example.test", options);
+    const first = connectToken(alice.id, options).authProfileId;
+    const second = connectUserModelAccount(
+      {
+        ownerProfileId: alice.id,
+        credential: { type: "token", provider: "openai", token: "synthetic-second-token" },
+        assertCurrent() {},
+      },
+      options,
+    ).authProfileId;
+    const { db } = openOpenClawStateDatabase(options);
+    const read = () => {
+      const result = readUserModelAccountCommand(db, {
+        type: "userModelAccounts.catalog",
+        selection: { requesterProfileId: alice.id },
+      });
+      if (result.type !== "userModelAccounts.catalog") {
+        throw new Error("Expected personal catalog");
+      }
+      return result.catalog;
+    };
+    expect(Object.keys(read().profiles)).toEqual([first, second]);
+    expect(
+      updateUserModelAuthProfile(
+        first,
+        (profile) => {
+          if (profile.credential.type !== "token") {
+            throw new Error("Expected token credential");
+          }
+          profile.credential.token = "synthetic-refreshed-token";
+          return true;
+        },
+        options,
+      ),
+    ).toBe(true);
+    clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" }, options);
+    expect(read()).toEqual({
+      links: [{ provider: "anthropic", authProfileId: first, updatedAt: expect.any(Number) }],
+      profiles: {
+        [first]: {
+          credential: { type: "token", provider: "anthropic", token: "synthetic-refreshed-token" },
+          usageStats: undefined,
+        },
+      },
+    });
+  });
+
+  it("refreshes cached default links after committed link and merge writes", async () => {
     const options = stateOptions();
     const alice = ensureProfileForEmail("worker-links@example.test", options);
+    const bob = ensureProfileForEmail("worker-link-target@example.test", options);
     const { authProfileId } = connectToken(alice.id, options);
     await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([
       expect.objectContaining({ provider: "anthropic", authProfileId }),
     ]);
-    const external = new DatabaseSync(options.path);
-    try {
-      external
-        .prepare(
-          "UPDATE secret_store_entries SET value = ? WHERE scope_kind = 'identity' AND scope_id = ? AND name = 'model-accounts'",
-        )
-        .run(JSON.stringify({ version: 1, links: {} }), alice.id);
-      await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([]);
-    } finally {
-      external.close();
+    clearUserProfileAuthLink({ profileId: alice.id, provider: "anthropic" }, options);
+    await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([]);
+    setUserProfileAuthLink({ profileId: alice.id, provider: "anthropic", authProfileId }, options);
+    await expect(listUserProfileAuthLinksAsync(bob.id, options)).resolves.toEqual([]);
+    mergeProfiles(alice.id, bob.id, options);
+    for (const profileId of [alice.id, bob.id]) {
+      await expect(listUserProfileAuthLinksAsync(profileId, options)).resolves.toEqual([
+        expect.objectContaining({ provider: "anthropic", authProfileId }),
+      ]);
     }
   });
 
@@ -118,12 +168,12 @@ describe("personal model accounts", () => {
     const aliceCurrent = captureUserProfileModelAccountLinksAuthority(admission, alice.id);
     const bobCurrent = captureUserProfileModelAccountLinksAuthority(admission, bob.id);
     const { db } = openOpenClawStateDatabase(options);
-    db.setAuthorizer(() => constants.SQLITE_DENY);
+    requireNativeSqliteDatabase(db).setAuthorizer(() => constants.SQLITE_DENY);
     try {
       expect(aliceCurrent()).toBe(true);
       expect(bobCurrent()).toBe(true);
     } finally {
-      db.setAuthorizer(null);
+      requireNativeSqliteDatabase(db).setAuthorizer(null);
     }
     expect(() =>
       runOpenClawStateWriteTransaction(() => {
@@ -175,7 +225,7 @@ describe("personal model accounts", () => {
             .where("id", "=", kind === "missing target" ? source.id : target.id),
         );
       }
-      db.setAuthorizer((action, table, column) =>
+      requireNativeSqliteDatabase(db).setAuthorizer((action, table, column) =>
         action === constants.SQLITE_READ && table === "user_profiles" && column === "avatar"
           ? constants.SQLITE_DENY
           : constants.SQLITE_OK,
@@ -200,7 +250,7 @@ describe("personal model accounts", () => {
           ).toThrow("owner is unavailable");
         }
       } finally {
-        db.setAuthorizer(null);
+        requireNativeSqliteDatabase(db).setAuthorizer(null);
       }
     },
   );
@@ -214,9 +264,6 @@ describe("personal model accounts", () => {
         : "missing";
       expect(listUserProfileAuthLinks(profileId, options)).toEqual([]);
       expect(listUserModelAccounts({ profileId }, options)).toEqual({ accounts: [] });
-      expect(
-        resolveUserProfileAuthLink({ profileId, providers: ["openai"] }, options),
-      ).toBeUndefined();
       if (withProfile) {
         expect(hasPrivateAccountState(profileId, options)).toBe(false);
       } else {
@@ -449,35 +496,6 @@ describe("personal model accounts", () => {
     ).toEqual([ids.at(-1)]);
   });
 
-  it("resolves through provider preference order without creating storage", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForEmail("bob@example.test", options);
-    expect(
-      resolveUserProfileAuthLink({ profileId: profile.id, providers: ["openai"] }, options),
-    ).toBeUndefined();
-    expect(hasPrivateAccountState(profile.id, options)).toBe(false);
-    setUserProfileAuthLink(
-      { profileId: profile.id, provider: "openai", authProfileId: "openai:bob" },
-      options,
-    );
-    setUserProfileAuthLink(
-      { profileId: profile.id, provider: "anthropic", authProfileId: "anthropic:bob" },
-      options,
-    );
-    expect(
-      resolveUserProfileAuthLink(
-        { profileId: profile.id, providers: ["anthropic", "openai"] },
-        options,
-      ),
-    ).toBe("anthropic:bob");
-    expect(
-      resolveUserProfileAuthLink({ profileId: profile.id, providers: ["openai"] }, options),
-    ).toBe("openai:bob");
-    expect(
-      resolveUserProfileAuthLink({ profileId: profile.id, providers: ["mistral"] }, options),
-    ).toBeUndefined();
-  });
-
   it("replaces only owned credentials, retaining exact session pins after unlink", () => {
     const options = stateOptions();
     const alice = ensureProfileForEmail("alice@example.test", options);
@@ -503,9 +521,7 @@ describe("personal model accounts", () => {
     expect(listUserProfileAuthLinks(bob.id, options)).toEqual([]);
 
     clearUserProfileAuthLink({ profileId: alice.id, provider: "anthropic" }, options);
-    expect(
-      resolveUserProfileAuthLink({ profileId: alice.id, providers: ["anthropic"] }, options),
-    ).toBeUndefined();
+    expect(listUserProfileAuthLinks(alice.id, options)).toEqual([]);
     expect(readUserModelAuthProfile(first.authProfileId, options)?.credential).toMatchObject({
       token: "synthetic-new-token",
     });
@@ -568,9 +584,9 @@ describe("personal model accounts", () => {
       credential: { token: "synthetic-rotated-token" },
       usageStats: { lastUsed: 42, cooldownUntil: 99, cooldownReason: "rate_limit" },
     });
-    expect(
-      resolveUserProfileAuthLink({ profileId: alice.id, providers: ["anthropic"] }, options),
-    ).toBe(authProfileId);
+    expect(listUserProfileAuthLinks(alice.id, options)).toMatchObject([
+      { provider: "anthropic", authProfileId },
+    ]);
   });
 
   it.each([false, true])(
@@ -602,12 +618,7 @@ describe("personal model accounts", () => {
         { provider: "openai", authProfileId: "openai:source" },
       ];
       expect(listUserProfileAuthLinks(target.id, options)).toMatchObject(expectedLinks);
-      expect(
-        resolveUserProfileAuthLink({ profileId: source.id, providers: ["mistral"] }, options),
-      ).toBe("mistral:target");
-      expect(
-        resolveUserProfileAuthLink({ profileId: target.id, providers: ["anthropic"] }, options),
-      ).toBe(disconnected ? undefined : targetAccount.authProfileId);
+      expect(listUserProfileAuthLinks(source.id, options)).toMatchObject(expectedLinks);
       expect(
         readUserModelAccountSummary(
           { profileId: target.id, authProfileId: sourceAccount.authProfileId },

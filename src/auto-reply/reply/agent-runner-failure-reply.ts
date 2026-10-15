@@ -110,6 +110,7 @@ export function resolveReplyFailureSummary(params: {
             reason: params.reason,
             attempts,
             provider: failoverError?.provider,
+            rateLimitRetriesExhausted: failoverError?.rateLimitRetriesExhausted,
             cooldownExpiry: failoverError?.soonestCooldownExpiry,
             sanitizeText: (rawText) => sanitizeUserFacingText(rawText, { errorContext: true }),
           });
@@ -165,7 +166,11 @@ export function buildPreflightCompactionFailureText(
   )
     .trim()
     .replace(/\s+/gu, " ");
-  const isTimeout = classifyCompactionReason(reason) === "timeout";
+  const classification = classifyCompactionReason(reason);
+  if (classification === "unshrinkable_request") {
+    return `⚠️ ${reason}`;
+  }
+  const isTimeout = classification === "timeout";
   const reasonSuffix = options?.includeDetails && reason && !isTimeout ? ` Reason: ${reason}.` : "";
   const summary = isTimeout
     ? "⚠️ This conversation is too long, and shortening it took too long."
@@ -331,6 +336,17 @@ export function buildExternalRunFailureReply(
   });
   if (cliBackendTimeoutFailure) {
     return { text: cliBackendTimeoutFailure, isGenericRunnerFailure: false };
+  }
+  if (isFailoverError(error) && error.rateLimitRetriesExhausted !== undefined) {
+    const summary = resolveReplyFailureSummary({
+      error,
+      message,
+      reason: failoverFacts.reason,
+      attempts: error.attempts,
+    });
+    if (summary) {
+      return { text: summary.text, isGenericRunnerFailure: false };
+    }
   }
   const providerRequestError = failoverFacts.providerRequestError;
   if (providerRequestError) {

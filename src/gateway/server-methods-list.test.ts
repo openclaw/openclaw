@@ -22,6 +22,19 @@ describe("listGatewayMethods", () => {
     }
   });
 
+  it("appends the MCP event catalog with its current-train read policy", () => {
+    const advertised = listGatewayMethods();
+    expect(advertised.indexOf("mcp.events.list")).toBeGreaterThanOrEqual(
+      LEGACY_ADVERTISED_GATEWAY_METHODS.length,
+    );
+    expect(coreGatewayHandlers["mcp.events.list"]).toBeTypeOf("function");
+    expect(
+      createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+        (descriptor) => descriptor.name === "mcp.events.list",
+      ),
+    ).toMatchObject({ scope: "operator.read", since: "2026.10" });
+  });
+
   it("preserves the frozen legacy advertised method prefix", () => {
     expect(listGatewayMethods().slice(0, LEGACY_ADVERTISED_GATEWAY_METHODS.length)).toEqual(
       LEGACY_ADVERTISED_GATEWAY_METHODS,

@@ -1,4 +1,3 @@
-import { render } from "lit";
 import { getLobsterdex } from "./lobster-dex.ts";
 import { canonicalLobsterLook, lobsterLookStyle, renderLobsterSvg } from "./lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
@@ -55,7 +54,7 @@ export async function loadUnlockedLobsterFavicon(
       lobsterLookStyle(look) +
       ";position:fixed;left:-10000px;top:0;bottom:auto;width:120px;height:105px;opacity:0;pointer-events:none;transform:none";
     document.body.append(host);
-    render(renderLobsterSvg(look, { standalone: true }), host);
+    host.append(renderLobsterSvg(look, { standalone: true }));
     const source = host.querySelector("svg");
     if (!source) {
       return null;

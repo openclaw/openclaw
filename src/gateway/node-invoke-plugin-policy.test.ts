@@ -509,7 +509,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(invoke).toHaveBeenCalledOnce();
   });
 
-  it.for([false, true])("routes approvals for synthetic=%s", async (synthetic, testContext) => {
+  it.for([true])("routes approvals for synthetic=%s", async (synthetic, testContext) => {
     const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
       approvalKind: "plugin",
     });

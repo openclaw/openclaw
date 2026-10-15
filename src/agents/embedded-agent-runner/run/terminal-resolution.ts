@@ -247,7 +247,6 @@ export async function resolveEmbeddedRunTerminal(input: {
   const intentionalTerminalCompletion =
     !terminalAborted &&
     !terminalTimedOut &&
-    payloadCount === 0 &&
     resolveSettledToolBatchEvidence(attempt).intentionalTermination;
   // A failed isolated finalization is terminal for this user turn. Do not let
   // its settled side effects cascade into any ordinary retry family.
@@ -277,6 +276,9 @@ export async function resolveEmbeddedRunTerminal(input: {
   const nextEmptyResponseRetryInstruction = replyRecoveryAllowed
     ? resolveEmptyResponseRetryInstruction(retryInput)
     : null;
+  const emptyResponseRetryCounter = attempt.textToolCallAttempt
+    ? "textToolCallAttempts"
+    : "emptyResponseAttempts";
   if (
     nextReasoningOnlyRetryInstruction &&
     retryState.reasoningOnlyAttempts < DEFAULT_REASONING_ONLY_RETRY_LIMIT
@@ -312,13 +314,13 @@ export async function resolveEmbeddedRunTerminal(input: {
   if (
     !nextReasoningOnlyRetryInstruction &&
     nextEmptyResponseRetryInstruction &&
-    retryState.emptyResponseAttempts < DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT
+    retryState[emptyResponseRetryCounter] < DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT
   ) {
-    retryState.emptyResponseAttempts += 1;
+    retryState[emptyResponseRetryCounter] += 1;
     sessionPromptState.activateInternalPrompt(nextEmptyResponseRetryInstruction);
     log.warn(
       `empty response detected: ${modelLogContext} ` +
-        `stopReason=${input.attemptAssistant?.stopReason ?? "missing"} — retrying ${retryState.emptyResponseAttempts}/${DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT} ` +
+        `stopReason=${input.attemptAssistant?.stopReason ?? "missing"} — retrying ${retryState[emptyResponseRetryCounter]}/${DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT} ` +
         `with visible-answer continuation`,
     );
     return { action: "retry" };
@@ -336,7 +338,7 @@ export async function resolveEmbeddedRunTerminal(input: {
           hasIntentionalTerminalCompletion: intentionalTerminalCompletion,
           terminalAuthFailure: input,
         });
-  const incompleteTurnFallbackSafe = Boolean(
+  const incompleteTurnReplaySafe = Boolean(
     incompleteTurnText &&
     !terminalInterrupted &&
     !promptError &&
@@ -345,7 +347,12 @@ export async function resolveEmbeddedRunTerminal(input: {
     !terminalAssistantError &&
     !input.replayState.hadPotentialSideEffects,
   );
-  const terminalToolPresentation = incompleteTurnFallbackSafe
+  // Replay safety alone is not a model-capability failure; explicit harness failures retain fallback.
+  const incompleteTurnFallbackSafe =
+    incompleteTurnReplaySafe &&
+    (input.attemptAssistant?.stopReason !== "stop" ||
+      attempt.agentHarnessResultClassification !== undefined);
+  const terminalToolPresentation = incompleteTurnReplaySafe
     ? availableTerminalToolPresentation
     : undefined;
   if (
@@ -391,10 +398,10 @@ export async function resolveEmbeddedRunTerminal(input: {
   if (
     !nextReasoningOnlyRetryInstruction &&
     nextEmptyResponseRetryInstruction &&
-    retryState.emptyResponseAttempts >= DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT
+    retryState[emptyResponseRetryCounter] >= DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT
   ) {
     log.warn(
-      `empty response retries exhausted: ${modelLogContext} attempts=${retryState.emptyResponseAttempts}/${DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT} — surfacing incomplete-turn error`,
+      `empty response retries exhausted: ${modelLogContext} attempts=${retryState[emptyResponseRetryCounter]}/${DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT} — surfacing incomplete-turn error`,
     );
   }
   if (incompleteTurnText) {
@@ -405,7 +412,7 @@ export async function resolveEmbeddedRunTerminal(input: {
         `hasCurrentAttemptAssistant=${attempt.currentAttemptAssistant ? "yes" : "no"} payloads=${payloadCount} ` +
         `tools=${attempt.toolMetas?.length ?? 0} replaySafe=${attempt.replayMetadata.replaySafe ? "yes" : "no"} ` +
         `compactions=${input.attemptCompactionCount} reasoningRetries=${retryState.reasoningOnlyAttempts}/${DEFAULT_REASONING_ONLY_RETRY_LIMIT} ` +
-        `emptyRetries=${retryState.emptyResponseAttempts}/${DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT} ` +
+        `emptyRetries=${retryState[emptyResponseRetryCounter]}/${DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT} ` +
         `missingAssistantRetries=${retryState.missingAssistantAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} — ` +
         (terminalToolPresentation
           ? "surfacing tool-authored terminal presentation"
@@ -537,6 +544,7 @@ async function completeEmbeddedRun(
       profileId: input.authProfileId,
       profileStore: input.profileFailureStore,
       provider: input.provider,
+      modelId: input.modelId,
       agentDir: input.runParams.agentDir,
       runId: input.runParams.runId,
       sessionId: input.runParams.sessionId,

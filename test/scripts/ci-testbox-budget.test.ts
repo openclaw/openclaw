@@ -23,7 +23,7 @@ describe("Testbox spending admission", () => {
       const lease = { ...request, id: `tbx_example_${index}` };
       const group = planTestboxAdmission(lease, now).group;
       expect(group).toMatch(/^openclaw-testbox-budget-v1-(?:[0-9]|[12][0-9]|3[01])$/);
-      for (const profile of ["arm", "build", "windows"]) {
+      for (const profile of ["check-focused", "check-routine", "arm", "build", "windows"]) {
         expect(planTestboxAdmission({ ...lease, profile }, now).group).toBe(group);
       }
       groups.add(group);
@@ -47,6 +47,25 @@ describe("Testbox spending admission", () => {
       groups.add(plan.group);
     }
     expect(groups.size).toBe(4);
+  });
+
+  it.each([
+    ["check-focused", "blacksmith-4vcpu-ubuntu-2404", 60],
+    ["check-routine", "blacksmith-8vcpu-ubuntu-2404", 120],
+  ])("bounds opt-in %s proof without changing the default", (profile, runner, ceiling) => {
+    const plan = planTestboxAdmission({ ...request, profile }, now);
+    expect(plan.runner).toBe(runner);
+    expect(plan.minutes).toBe(60);
+    expect(plan.group).toBe(planTestboxAdmission(request, now).group);
+    expect(planTestboxAdmission({ ...request, profile, minutes: ceiling }, now).minutes).toBe(
+      ceiling,
+    );
+    expect(() => planTestboxAdmission({ ...request, profile, minutes: ceiling + 1 }, now)).toThrow(
+      /runtime/,
+    );
+    expect(() =>
+      planTestboxAdmission({ ...request, profile, runner: "blacksmith-32vcpu-ubuntu-2404" }, now),
+    ).toThrow(/not allowed/);
   });
 
   it.each([0, -1, 241, 1.5, "invalid"])("rejects an unbounded runtime: %s", (minutes) => {
@@ -94,7 +113,7 @@ describe("Testbox spending admission", () => {
     );
   });
 
-  it.each(["check", "check-memory", "arm", "build", "windows"])(
+  it.each(["check-focused", "check-routine", "check", "check-memory", "arm", "build", "windows"])(
     "admits a saturated %s queue without resetting the dispatch deadline",
     (profile) => {
       const created = Date.parse(request.createdAt);
@@ -145,6 +164,9 @@ describe("Testbox spending admission", () => {
 
   it.each([
     ["ci-check-testbox.yml", "check", "check"],
+    ["ci-check-focused-testbox.yml", "check", "check-focused"],
+    ["ci-android-focused-testbox.yml", "check", "check-focused"],
+    ["ci-check-routine-testbox.yml", "check", "check-routine"],
     ["ci-check-high-memory-testbox.yml", "check", "check-memory"],
     ["ci-check-arm-testbox.yml", "check-arm", "arm"],
     ["ci-build-artifacts-testbox.yml", "build-artifacts", "build"],
@@ -161,7 +183,7 @@ describe("Testbox spending admission", () => {
     expect(job.if).toContain("needs.admission.result == 'success'");
     expect(job["runs-on"]).toContain("needs.admission.outputs.runner");
     expect(job.concurrency.group).toContain("needs.admission.outputs.group");
-    expect(job.concurrency.queue).toBeUndefined();
+    expect(job.concurrency.queue).toBe("max");
     expect(job.concurrency["cancel-in-progress"]).toBe(false);
     const names = job.steps.map((step: { name: string }) => step.name);
     expect(names.indexOf("Reject expired Testbox admission")).toBeGreaterThan(

@@ -24,6 +24,36 @@ function usage(overrides: Partial<SessionCostSummary> = {}): SessionCostSummary 
 }
 
 describe("shared/usage-aggregates", () => {
+  it("retains incomplete daily and model subtotals after merging complete rows", () => {
+    const accumulator = createUsageAggregateAccumulator();
+    const date = "2026-05-15";
+    const marker = { state: "unavailable" as const };
+    for (const usageReport of [marker, undefined]) {
+      accumulator.add({
+        usage: usage({
+          usageReport,
+          dailyBreakdown: [{ ...usage(), date, tokens: 10, cost: 1, usageReport }],
+          dailyModelUsage: [{ date, model: "local", tokens: 10, cost: 1, count: 1, usageReport }],
+        }),
+      });
+    }
+    const result = accumulator.finish();
+    expect(result.daily).toEqual([
+      { date, tokens: 20, cost: 2, messages: 0, toolCalls: 0, errors: 0, usageReport: marker },
+    ]);
+    expect(result.modelDaily).toEqual([
+      {
+        date,
+        model: "local",
+        provider: undefined,
+        tokens: 20,
+        cost: 2,
+        count: 2,
+        usageReport: marker,
+      },
+    ]);
+  });
+
   it("builds collision-free model identities with legacy unknown grouping", () => {
     expect(usageModelIdentity("fixture", "bedrock::arn")).not.toBe(
       usageModelIdentity("fixture::bedrock", "arn"),

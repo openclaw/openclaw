@@ -70,7 +70,6 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 }));
 
 const runtimePinState = await import("../../daemon/runtime-pin-state.js");
-const configMachineState = await import("../../state/config-machine-state.js");
 const runtimePaths = await import("../../daemon/runtime-paths.js");
 
 const daemonExec = await import("../../daemon/exec-file.js");
@@ -629,23 +628,23 @@ describe("runDaemonInstall integration", () => {
         serviceMock.readCommand.mockResolvedValue({
           programArguments: [runtimePath, "/opt/openclaw/openclaw.mjs", "gateway"],
         });
+        const readRuntimePin = runtimePinState.readDaemonRuntimePinForInstall;
+        const pinRead = vi.spyOn(runtimePinState, "readDaemonRuntimePinForInstall");
         if (failure === "transient-read") {
-          vi.spyOn(configMachineState, "readConfigMachineState").mockImplementation(() => {
+          pinRead.mockImplementation(() => {
             throw Object.assign(new Error("EIO: pin state read failed"), { code: "EIO" });
           });
         } else {
-          const readRuntimePin = runtimePinState.readDaemonRuntimePinForInstall;
-          vi.spyOn(runtimePinState, "readDaemonRuntimePinForInstall").mockImplementation(
-            (...args) => ({
-              ...readRuntimePin(...args),
-              stored: true,
-              pin: { runtime: "node", path: runtimePath },
-            }),
-          );
+          pinRead.mockImplementation((...args) => ({
+            ...readRuntimePin(...args),
+            stored: true,
+            pin: { runtime: "node", path: runtimePath },
+          }));
         }
 
         await expect(runDaemonInstall({ json: true, force: true })).rejects.toThrow("__exit__:1");
 
+        expect(pinRead).toHaveBeenCalledOnce();
         expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
         expect(runtimeLogs).toEqual([
           JSON.stringify(

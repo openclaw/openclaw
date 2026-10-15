@@ -5,7 +5,6 @@ import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metad
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { loadAuthProfileStoreForRuntimeAsync, resolveAuthProfileOrder } from "../auth-profiles.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
-import { AuthProfileRuntimeReadStaleError } from "../auth-profiles/runtime-persisted-rows.js";
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
@@ -183,22 +182,11 @@ export async function resolveDynamicModelAuthProfile(params: {
       preferredProfile: params.preferredProfile,
     }),
   };
-  const readStore = () => {
-    params.abortSignal?.throwIfAborted();
-    return loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
-  };
   const providers = listOpenAIAuthProfileProvidersForAgentRuntime({
     provider: params.provider,
     config: params.cfg,
   });
-  const store = await readStore().catch(async (error: unknown) => {
-    if (!(error instanceof AuthProfileRuntimeReadStaleError)) {
-      throw error;
-    }
-    // OAuth publication can overlap selection. The rejected reader has joined its cleanup.
-    await error.waitForSettlement?.(params.abortSignal);
-    return readStore();
-  });
+  const store = await loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
   params.abortSignal?.throwIfAborted();
   const profileId =
     explicitProfileId ??

@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -191,7 +191,11 @@ function parseDirectiveToken(
 
 export function buildMinimaxSpeechProvider({
   isProviderAuthProfileConfigured,
-}: Pick<PluginCapabilityCatalogContext, "isProviderAuthProfileConfigured">): SpeechProviderPlugin {
+  isProviderAuthProfileConfiguredAsync,
+}: Pick<
+  PluginCapabilityCatalogHostContext,
+  "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync"
+>): SpeechProviderPlugin {
   return {
     id: "minimax",
     label: "MiniMax",
@@ -222,10 +226,16 @@ export function buildMinimaxSpeechProvider({
     resolveTalkOverrides: ({ params }) =>
       readMinimaxOverrides({ ...params, model: params.modelId }),
     listVoices: async () => MINIMAX_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
+    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(
         resolveMinimaxDirectTtsApiKey(readMinimaxProviderConfig(providerConfig, cfg).apiKey) ||
         isProviderAuthProfileConfigured({ cfg, provider: MINIMAX_PORTAL_PROVIDER_ID }),
+      ),
+    isConfiguredAsync: async ({ cfg, providerConfig }) =>
+      Boolean(
+        resolveMinimaxDirectTtsApiKey(readMinimaxProviderConfig(providerConfig, cfg).apiKey) ||
+        (await isProviderAuthProfileConfiguredAsync({ cfg, provider: MINIMAX_PORTAL_PROVIDER_ID })),
       ),
     synthesize: async (req) => {
       const config = readMinimaxProviderConfig(req.providerConfig, req.cfg);

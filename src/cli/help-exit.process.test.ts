@@ -36,7 +36,6 @@ const LAZY_GROUP_HELP_CASES = [
   { group: "clawbot", usageCommand: "clawbot", registry: "subcli" },
   { group: "daemon", usageCommand: "daemon", registry: "subcli" },
   { group: "hooks", usageCommand: "hooks", registry: "subcli" },
-  { group: "infer", usageCommand: "infer|capability", registry: "subcli" },
   { group: "migrate", usageCommand: "migrate", registry: "core" },
   { group: "node", usageCommand: "node", registry: "subcli" },
   { group: "security", usageCommand: "security", registry: "subcli" },

@@ -294,8 +294,7 @@ describe("shared chat history transient recovery", () => {
       expect(await first).toMatchObject({ message: expect.stringContaining("timed out") });
       expect(request).toHaveBeenCalledTimes(1);
       if (second) {
-        expect(secondSettled).toBe(false);
-        await vi.advanceTimersByTimeAsync(30_000);
+        expect(secondSettled).toBe(true);
         expect(await second).toMatchObject({ message: expect.stringContaining("timed out") });
         expect(request).toHaveBeenCalledTimes(1);
       }

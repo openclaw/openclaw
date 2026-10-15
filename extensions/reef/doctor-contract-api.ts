@@ -403,13 +403,13 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
             await store.lookup(REEF_REGISTRATION_IDENTITY_KEY),
           );
           if (!binding) {
-            throw new Error("canonical identity binding is missing");
+            throw new Error("saved identity binding is missing");
           }
           if (configuredBindingResult.status === "invalid") {
             throw new Error("configured handle or relay is invalid");
           }
           if (configuredBinding && JSON.stringify(binding) !== JSON.stringify(configuredBinding)) {
-            throw new Error("configured handle or relay differs from canonical identity binding");
+            throw new Error("configured handle or relay differs from saved identity binding");
           }
           if (
             (await legacyReefFileExists(keysPath)) ||
@@ -471,7 +471,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       if (!legacy.config) {
         if (legacy.total > 0) {
           warnings.push(
-            "Skipped Reef peer trust migration because channels.reef needs a valid handle and canonical config; left legacy friends config in place",
+            "Skipped Reef peer trust migration because channels.reef needs a valid handle and the current config format; left legacy friends config in place",
           );
         }
         return { changes: [], warnings };

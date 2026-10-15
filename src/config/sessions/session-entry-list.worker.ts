@@ -1,4 +1,5 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
   runSqliteDeferredTransactionSync,
@@ -7,6 +8,7 @@ import {
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import {
@@ -36,17 +38,44 @@ export function readSessionEntryList(
   let source: SessionEntryListWorkerResult["source"];
   let revision: string | undefined;
   let unchanged: true | undefined;
+  let nextCronRunUpdatedAt: number | null = null;
+  let nextCronRunSessionKey: string | null = null;
 
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
+        if (scope.pendingInputRecovery) {
+          if (!hasSessionPendingInputsSchema(database.db)) {
+            return [];
+          }
+          const keys = executeSqliteQuerySync(
+            database.db,
+            getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+              .selectFrom("session_pending_inputs as input")
+              .innerJoin("session_nodes as session", (join) =>
+                join
+                  .onRef("session.session_key", "=", "input.session_key")
+                  .onRef("session.current_session_id", "=", "input.session_id"),
+              )
+              .select("input.session_key")
+              .distinct()
+              .where("input.consumed_event_id", "is", null)
+              // Queued inputs without live custody become interrupted in the history owner.
+              .where("input.state", "in", ["queued", "interrupted"]),
+          ).rows.map((row) => row.session_key);
+          return keys.length ? readSelectedSessionEntriesInDatabase(database, keys) : [];
+        }
         if (scope.cleanupSession === undefined) {
           const read = () =>
             listSqliteSessionEntriesFromDatabase(
               database,
               resolveSqliteScope({ ...scope, sessionKey: "" }),
               scope,
+              {
+                captureCronRunUpdatedAt: (value) => (nextCronRunUpdatedAt = value),
+                captureCronRunSessionKey: (value) => (nextCronRunSessionKey = value),
+              },
             );
           if (
             scope.projection !== "list" ||
@@ -67,6 +96,7 @@ export function readSessionEntryList(
                   readOpenClawAgentDatabaseIdentity(database).incarnation,
                   current.siblingWriteRevision,
                   current.sessionNodesGeneration,
+                  current.schemaVersion,
                 ]);
           if (token !== undefined && request.ifRevision === token) {
             revision = token;
@@ -80,7 +110,7 @@ export function readSessionEntryList(
           }
           return entries;
         }
-        return withSqlitePostCommitPublications(database.db, () =>
+        return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
           runSqliteDeferredTransactionSync(database.db, () => {
             const identities = executeSqliteQuerySync(
               database.db,
@@ -112,5 +142,12 @@ export function readSessionEntryList(
   if (!result.found && request.expectedIdentity?.key.startsWith("file:")) {
     throw new Error("Session listing lost its captured physical owner");
   }
-  return { entries: result.found ? result.value : [], source, revision, unchanged };
+  return {
+    entries: result.found ? result.value : [],
+    source,
+    revision,
+    unchanged,
+    ...(scope.expiredCronRuns ? { nextCronRunUpdatedAt } : {}),
+    ...(scope.cronRetention ? { nextCronRunSessionKey } : {}),
+  };
 }

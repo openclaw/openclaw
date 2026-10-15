@@ -30,6 +30,7 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import {
@@ -330,14 +331,7 @@ function expectStringSchema(
     description?: string;
   },
 ) {
-  if (!schema || typeof schema !== "object") {
-    throw new Error("Expected string schema");
-  }
-  const record = schema as Record<string, unknown>;
-  expect(record.type).toBe("string");
-  if (expected?.description) {
-    expect(record.description).toBe(expected.description);
-  }
+  expect(schema).toMatchObject({ type: "string", ...expected });
 }
 
 const { runMessageAction: actualRunMessageAction } = await vi.importActual<
@@ -810,66 +804,57 @@ describe("poll vote echo guard", () => {
   }
 
   it.each([
-    [29_999, true],
-    [30_000, false],
-  ])("expires the same-route vote after %s ms", async (elapsedMs, suppressed) => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
-    try {
-      const sessionKey = `agent:test:imessage:direct:ttl-${elapsedMs}`;
-      const voteTool = createPollVoteTool("Black", sessionKey);
-      await castBlueVote(voteTool);
-
-      now.mockReturnValue(100_000 + elapsedMs);
-      const nextRunTool = createPollVoteTool("Black", sessionKey);
-      const result = await nextRunTool.execute("send", {
-        action: "send",
-        channel: "imessage",
-        message: "🦞 Black.",
-      });
-      if (suppressed) {
-        expect(result.details).toMatchObject({ status: "suppressed", reason: "poll_vote_echo" });
-      } else {
-        expect(result.details).not.toMatchObject({ status: "suppressed" });
-      }
-      expect(mocks.runMessageAction).toHaveBeenCalledTimes(suppressed ? 1 : 2);
-    } finally {
-      now.mockRestore();
-    }
-  });
-
-  it("does not suppress a later-run echo from a different conversation", async () => {
-    const voteTool = createPollVoteTool("Black", "agent:test:imessage:direct:convo-a");
-    await castBlueVote(voteTool);
-    const otherTool = createPollVoteTool("Black", "agent:test:imessage:direct:convo-b");
-    await otherTool.execute("send", {
-      action: "send",
-      channel: "imessage",
+    {
+      name: "before expiry",
+      elapsedMs: 29_999,
+      option: "Black",
       message: "🦞 Black.",
-    });
-    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([
-    { option: "Lobster 🦞 ", message: "🦞 Lobster.", suppressed: true },
-    { option: "Option 1️⃣", message: "2️⃣ Option.", suppressed: false },
+      suppressed: true,
+    },
+    {
+      name: "at expiry",
+      elapsedMs: 30_000,
+      option: "Black",
+      message: "🦞 Black.",
+      suppressed: false,
+    },
+    { name: "matching emoji", option: "Lobster 🦞 ", message: "🦞 Lobster.", suppressed: true },
+    { name: "different emoji", option: "Option 1️⃣", message: "2️⃣ Option.", suppressed: false },
+    {
+      name: "different conversation",
+      option: "Black",
+      message: "🦞 Black.",
+      otherConversation: true,
+      suppressed: false,
+    },
   ])(
-    "matches poll emoji identity regardless of position: $option",
-    async ({ option, message, suppressed }) => {
-      const tool = createPollVoteTool(option);
-      await castBlueVote(tool);
+    "suppresses only a matching, live poll echo: $name",
+    async ({ name, elapsedMs, option, message, otherConversation, suppressed }) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+      try {
+        const sessionKey = `agent:test:imessage:direct:echo-${name}`;
+        const voteTool = createPollVoteTool(option, sessionKey);
+        await castBlueVote(voteTool);
 
-      const result = await tool.execute("send", {
-        action: "send",
-        channel: "imessage",
-        message,
-      });
-
-      if (suppressed) {
-        expect(result.details).toMatchObject({ status: "suppressed", reason: "poll_vote_echo" });
-      } else {
-        expect(result.details).not.toMatchObject({ status: "suppressed" });
+        now.mockReturnValue(100_000 + (elapsedMs ?? 0));
+        const nextRunTool =
+          elapsedMs !== undefined || otherConversation
+            ? createPollVoteTool(option, otherConversation ? `${sessionKey}-other` : sessionKey)
+            : voteTool;
+        const result = await nextRunTool.execute("send", {
+          action: "send",
+          channel: "imessage",
+          message,
+        });
+        if (suppressed) {
+          expect(result.details).toMatchObject({ status: "suppressed", reason: "poll_vote_echo" });
+        } else {
+          expect(result.details).not.toMatchObject({ status: "suppressed" });
+        }
+        expect(mocks.runMessageAction).toHaveBeenCalledTimes(suppressed ? 1 : 2);
+      } finally {
+        now.mockRestore();
       }
-      expect(mocks.runMessageAction).toHaveBeenCalledTimes(suppressed ? 1 : 2);
     },
   );
 
@@ -1199,10 +1184,14 @@ describe("message tool secret scoping", () => {
 
   it("uses separate autogenerated idempotency keys for parallel identical sends", async () => {
     const pending: Array<(value: MessageActionResult) => void> = [];
+    const dispatched = createDeferredCore();
     mocks.runMessageAction.mockImplementation(
       () =>
         new Promise<MessageActionResult>((resolve) => {
           pending.push(resolve);
+          if (pending.length === 2) {
+            dispatched.resolve();
+          }
         }),
     );
 
@@ -1223,26 +1212,28 @@ describe("message tool secret scoping", () => {
       message: "same",
     });
 
-    for (let i = 0; i < 10 && mocks.runMessageAction.mock.calls.length < 2; i += 1) {
-      await Promise.resolve();
+    const results = Promise.all([firstResult, secondResult]);
+    void results.catch(dispatched.reject);
+    try {
+      await dispatched.promise;
+      expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+      const first = mocks.runMessageAction.mock.calls[0]?.[0] as RunMessageActionInput | undefined;
+      const second = mocks.runMessageAction.mock.calls[1]?.[0] as RunMessageActionInput | undefined;
+      expect(first?.params?.idempotencyKey).not.toBe(second?.params?.idempotencyKey);
+    } finally {
+      for (const resolve of pending) {
+        resolve({
+          kind: "send",
+          action: "send",
+          channel: "telegram",
+          to: "telegram:123",
+          handledBy: "plugin",
+          payload: {},
+          dryRun: true,
+        });
+      }
+      await results;
     }
-    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
-    const first = mocks.runMessageAction.mock.calls[0]?.[0] as RunMessageActionInput | undefined;
-    const second = mocks.runMessageAction.mock.calls[1]?.[0] as RunMessageActionInput | undefined;
-    expect(first?.params?.idempotencyKey).not.toBe(second?.params?.idempotencyKey);
-
-    for (const resolve of pending) {
-      resolve({
-        kind: "send",
-        action: "send",
-        channel: "telegram",
-        to: "telegram:123",
-        handledBy: "plugin",
-        payload: {},
-        dryRun: true,
-      });
-    }
-    await Promise.all([firstResult, secondResult]);
   });
 
   it("keeps nested delivery fields in autogenerated idempotency keys", async () => {
@@ -1910,81 +1901,67 @@ describe("message tool explicit target guard", () => {
     ]);
   });
 
-  it("allows explicit-target send when requireExplicitTarget is set", async () => {
-    mocks.runMessageAction.mockResolvedValueOnce({
-      kind: "action",
-      channel: "telegram",
-      action: "send",
-      handledBy: "dry-run",
-      payload: { ok: true, dryRun: true, channel: "telegram", action: "send" },
-      dryRun: true,
-    });
-
-    const tool = createMessageTool({
-      runMessageAction: mocks.runMessageAction as never,
-      requireExplicitTarget: true,
-      currentChannelProvider: "telegram",
-      currentChannelId: "telegram:dm-user-1",
-    });
-
-    await tool.execute("1", {
-      action: "send",
-      target: "telegram:alert-channel",
-      message: "heartbeat alert",
-    });
-
-    const call = firstRunMessageActionInput();
-    expect(call?.params?.target).toBe("telegram:alert-channel");
-  });
-
-  it("allows an iMessage delivery alias when requireExplicitTarget is set", async () => {
-    const plugin = createChannelPlugin({
-      id: "imessage",
-      actions: ["sendWithEffect"],
-      messageActionTargetAliases: {
-        sendWithEffect: {
-          aliases: ["chatGuid", "chatIdentifier", "chatId"],
-          deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
-          resolveDeliveryTarget: ({ args }) =>
-            typeof args.chatGuid === "string" ? `chat_guid:${args.chatGuid}` : undefined,
-        },
+  it.each([
+    { channel: "telegram", action: "send", target: { target: "telegram:alert-channel" } },
+    {
+      channel: "imessage",
+      action: "sendWithEffect",
+      target: {
+        chatGuid: "iMessage;+;chat0000",
+        effectId: "com.apple.messages.effect.CKConfettiEffect",
       },
-    });
-    const preparedChannel = {
-      id: "imessage",
-      actions: plugin.actions,
-      reconcilesUnknownSend: false,
-    };
-    const preparedMessageToolCatalog = {
-      version: 1,
-      channels: [preparedChannel],
-      getChannel: (id: string) => (id === preparedChannel.id ? preparedChannel : undefined),
-    };
-    mocks.runMessageAction.mockResolvedValueOnce({
-      kind: "action",
-      channel: "imessage",
-      action: "sendWithEffect",
-      handledBy: "dry-run",
-      payload: { ok: true, dryRun: true, channel: "imessage", action: "sendWithEffect" },
-      dryRun: true,
-    });
-    const tool = createMessageTool({
-      runMessageAction: mocks.runMessageAction as never,
-      requireExplicitTarget: true,
-      currentChannelProvider: "imessage",
-      preparedMessageToolCatalog,
-    });
+    },
+  ])(
+    "allows $channel explicit delivery targets when required",
+    async ({ channel, action, target }) => {
+      const plugin = createChannelPlugin({
+        id: "imessage",
+        actions: ["sendWithEffect"],
+        messageActionTargetAliases: {
+          sendWithEffect: {
+            aliases: ["chatGuid", "chatIdentifier", "chatId"],
+            deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+            resolveDeliveryTarget: ({ args }) =>
+              typeof args.chatGuid === "string" ? `chat_guid:${args.chatGuid}` : undefined,
+          },
+        },
+      });
+      const preparedChannel = {
+        id: "imessage",
+        actions: plugin.actions,
+        reconcilesUnknownSend: false,
+      };
+      const preparedMessageToolCatalog = {
+        version: 1,
+        channels: [preparedChannel],
+        getChannel: (id: string) => (id === preparedChannel.id ? preparedChannel : undefined),
+      };
+      mocks.runMessageAction.mockResolvedValueOnce({
+        kind: "action",
+        channel,
+        action,
+        handledBy: "dry-run",
+        payload: { ok: true, dryRun: true, channel, action },
+        dryRun: true,
+      });
+      const tool = createMessageTool({
+        runMessageAction: mocks.runMessageAction as never,
+        requireExplicitTarget: true,
+        currentChannelProvider: channel,
+        currentChannelId: channel === "telegram" ? "telegram:dm-user-1" : undefined,
+        preparedMessageToolCatalog: channel === "imessage" ? preparedMessageToolCatalog : undefined,
+      });
 
-    await tool.execute("1", {
-      action: "sendWithEffect",
-      channel: "imessage",
-      chatGuid: "iMessage;+;chat0000",
-      effectId: "com.apple.messages.effect.CKConfettiEffect",
-      message: "heartbeat alert",
-    });
+      await tool.execute("1", {
+        action,
+        ...(channel === "imessage" ? { channel } : {}),
+        ...target,
+        message: "heartbeat alert",
+      });
 
-    expect(firstRunMessageActionInput()?.params?.chatGuid).toBe("iMessage;+;chat0000");
-  });
+      expect(firstRunMessageActionInput()?.params).toMatchObject(target);
+    },
+  );
 });
 
 describe("message tool loop detection action runner proof", () => {
@@ -2096,9 +2073,13 @@ describe("message tool schema scoping", () => {
     registerPlugins();
   });
 
-  it("includes configured plugin fields and actions in the scoped schema", () => {
+  it("includes bound plugin fields and actions in the scoped schema", () => {
     registerPlugins(telegramPlugin, discordPlugin, slackPlugin);
-    const tool = createMessageTool({ config: {}, currentChannelProvider: "telegram" });
+    const tool = createMessageTool({
+      config: { bindings: [{ agentId: "main", match: { channel: "discord" } }] },
+      agentId: "main",
+      currentChannelProvider: "telegram",
+    });
     const properties = getToolProperties(tool);
     expect(getActionEnum(properties)).toEqual(["poll", "poll-vote", "react", "send"]);
     expect(properties).toHaveProperty("presentation");
@@ -2144,18 +2125,31 @@ describe("message tool schema scoping", () => {
   });
 
   it.each([
-    { action: "conversation-open", hasTeamId: true },
-    { action: "send", hasTeamId: false },
+    { action: "conversation-open", fields: ["teamId"], scopedOnly: false },
+    { action: "send", fields: [], scopedOnly: false },
+    { action: "channel-move", fields: ["position", "parentId"], scopedOnly: true },
+    { action: "category-delete", fields: ["categoryId"], scopedOnly: true },
   ] as const)(
-    "limits teamId to consuming actions when only $action is allowed",
-    ({ action, hasTeamId }) => {
+    "preserves only consuming schema groups when $action is allowed",
+    ({ action, fields, scopedOnly }) => {
       const plugin = createChannelPlugin({
         id: "test-channel",
-        actions: ["send", "read", "channel-info", "channel-list", "conversation-open"],
+        actions: [
+          "send",
+          "read",
+          "channel-info",
+          "channel-list",
+          "conversation-open",
+          "channel-move",
+          "category-delete",
+        ],
       });
       registerPlugins(plugin);
 
       for (const currentChannelProvider of ["test-channel", undefined]) {
+        if (scopedOnly && !currentChannelProvider) {
+          continue;
+        }
         const tool = createMessageTool({
           config: {
             agents: {
@@ -2167,7 +2161,10 @@ describe("message tool schema scoping", () => {
         });
         const properties = getToolProperties(tool);
         expect(getActionEnum(properties)).toEqual([action]);
-        if (!hasTeamId) {
+        for (const field of fields) {
+          expect(properties).toHaveProperty(field);
+        }
+        if (action !== "conversation-open") {
           expect(properties).not.toHaveProperty("teamId");
           continue;
         }
@@ -2278,7 +2275,8 @@ describe("message tool cross-channel schema", () => {
     registerPlugins(signalPlugin, telegramPlugin);
 
     const tool = createMessageTool({
-      config: {} as never,
+      config: { bindings: [{ agentId: "main", match: { channel: "telegram" } }] },
+      agentId: "main",
       currentChannelProvider: "signal",
     });
 
@@ -2306,7 +2304,8 @@ describe("message tool cross-channel schema", () => {
     registerPlugins(signalPlugin, matrixProfilePlugin);
 
     const crossChannelTool = createMessageTool({
-      config: {} as never,
+      config: { bindings: [{ agentId: "main", match: { channel: "matrix" } }] },
+      agentId: "main",
       currentChannelProvider: "signal",
     });
     const crossChannelProperties = getToolProperties(crossChannelTool);

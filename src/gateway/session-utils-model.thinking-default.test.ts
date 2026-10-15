@@ -19,7 +19,6 @@ import {
   type PreparedThinkingPolicy,
   type ThinkingCatalogPolicyCarrier,
 } from "../plugins/provider-thinking-catalog.js";
-import type { ProviderThinkingRegistry } from "../plugins/provider-thinking.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -35,6 +34,62 @@ import {
 } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
+
+it("keeps runtime capacity reads separate from cached API capability donors", () => {
+  const context = buildSessionListRowMetadataContext({ now: 1 });
+  const entry: ModelCatalogEntry = {
+    provider: "fixture",
+    id: "local-model",
+    name: "Local model",
+    contextTokens: 32_768,
+  };
+  const selection = { entry, routeVariants: [entry], runtimeId: "native-fixture" };
+  expect(context.selectModelCatalogRuntimeEntry(selection).entry.contextTokens).toBe(32_768);
+  expect(
+    context.selectModelCatalogRuntimeEntry({ ...selection, allowApiFallback: false }).entry
+      .contextTokens,
+  ).toBeUndefined();
+});
+
+it.each([false, true])(
+  "preserves configured reasoning=%s when selecting a runtime route",
+  (reasoning) => {
+    const logicalEntry: ModelCatalogEntry = {
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "Configured model",
+      api: "openai-chatgpt-responses",
+      reasoning,
+    };
+    const projection = resolveGatewaySessionThinkingProjectionInternal({
+      cfg: {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+      },
+      agentId: "main",
+      sessionKey: "agent:main:route",
+      provider: "openai",
+      model: "gpt-5.4",
+      entry: { sessionId: "route", updatedAt: 1, thinkingLevel: "high" },
+      modelCatalog: [logicalEntry],
+      modelCatalogRouteVariants: [
+        { ...logicalEntry, api: "openai-responses", reasoning: true, nativeRuntime: "openclaw" },
+      ],
+    });
+    const levels = projection.thinkingLevels.map(({ id }) => id);
+    if (reasoning) {
+      expect(levels).toContain("high");
+      expect(projection.effectiveThinkingLevel).toBe("high");
+    } else {
+      expect(levels).toEqual(["off", "ultra"]);
+      expect(projection.thinkingDefault).toBe("off");
+      expect(projection.effectiveThinkingLevel).toBe("off");
+    }
+  },
+);
 
 describe("Gateway stored thinking levels", () => {
   it("keeps stored Ultra for supported harnesses and clamps unavailable native profiles", () => {
@@ -53,20 +108,18 @@ describe("Gateway stored thinking levels", () => {
       resolveProviderPolicySurface("openai")?.resolveThinkingProfile,
       "OpenAI public thinking policy",
     );
+    const modelEntry: ModelCatalogEntry & ThinkingCatalogPolicyCarrier = {
+      provider: "openai",
+      id: "native-effort-fixture",
+      name: "Native effort fixture",
+      [PREPARED_THINKING_POLICY]: { resolve: openaiPolicy },
+    };
     const row = (
       entry: SessionEntry,
       catalog?: { reasoning?: boolean; compat?: { supportedReasoningEfforts: string[] } },
     ) => {
       const modelCatalog: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier)[] | undefined = catalog
-        ? [
-            {
-              provider: "openai",
-              id: "native-effort-fixture",
-              name: "Native effort fixture",
-              [PREPARED_THINKING_POLICY]: { resolve: openaiPolicy },
-              ...catalog,
-            },
-          ]
+        ? [{ ...modelEntry, ...catalog }]
         : undefined;
       return buildGatewaySessionRow({
         cfg,
@@ -86,11 +139,11 @@ describe("Gateway stored thinking levels", () => {
     expect(row(stored).thinkingLevel).toBe("ultra");
     expect(row(stored, {}).thinkingLevel).toBe("ultra");
     expect(row(stored, { reasoning: true }).thinkingLevel).toBe("ultra");
-    expect(row(stored, { reasoning: false }).thinkingLevel).toBe("off");
+    expect(row(stored, { reasoning: false }).thinkingLevel).toBe("ultra");
     expect(
       row(stored, { reasoning: true, compat: { supportedReasoningEfforts: ["off"] } })
         .thinkingLevel,
-    ).toBe("off");
+    ).toBe("ultra");
     expect(
       row(stored, { reasoning: true, compat: { supportedReasoningEfforts: ["max"] } })
         .thinkingLevel,
@@ -101,6 +154,20 @@ describe("Gateway stored thinking levels", () => {
     });
     expect(nativeUltra.thinkingLevel).toBe("ultra");
     expect(nativeUltra.thinkingLevels).toContainEqual({ id: "ultra", label: "ultra" });
+    expect(
+      projectSessionPatchResult({
+        cfg,
+        targetAgentId: "main",
+        canonicalKey: "agent:main:main",
+        entry: stored,
+        storePath: "/tmp/agents/main/sessions/sessions.json",
+        preparedAcpMeta: null,
+        modelCatalog: [{ ...modelEntry, reasoning: false }],
+      }),
+    ).toMatchObject({
+      entry: { thinkingLevel: "ultra" },
+      resolved: { thinkingLevel: "off" },
+    });
   });
 });
 
@@ -138,47 +205,6 @@ describe("Gateway all-null thinking map", () => {
       expect(profile.thinkingDefault).toBe(thinkingDefault);
     },
   );
-});
-
-describe("Gateway captured thinking defaults", () => {
-  const provider = "captured-thinking-default-fixture";
-  const captured: ProviderThinkingRegistry = {
-    providers: [
-      {
-        provider: {
-          id: provider,
-          resolveThinkingProfile: () => ({
-            // Medium stays supported so clamping cannot hide a lost policy source.
-            levels: [{ id: "off" }, { id: "low" }, { id: "medium" }],
-            defaultLevel: "low",
-          }),
-        },
-      },
-    ],
-  };
-
-  it("projects the agent-specific model default above shared model and global defaults", () => {
-    const ref = `${provider}/reasoner`;
-    const profile = resolveGatewayModelThinkingProfile({
-      cfg: {
-        agents: {
-          defaults: {
-            thinkingDefault: "medium",
-            models: { [ref]: { params: { thinking: "low" } } },
-          },
-          entries: { main: { models: { [ref]: { params: { thinking: "off" } } } } },
-        },
-      },
-      agentId: "main",
-      provider,
-      model: "reasoner",
-      agentRuntime: "openclaw",
-      providerPolicySource: captured,
-      modelCatalog: [{ provider, id: "reasoner", name: "Reasoner", reasoning: true }],
-    });
-
-    expect(profile.thinkingDefault).toBe("off");
-  });
 });
 
 describe("Gateway thinking catalog", () => {
@@ -488,7 +514,6 @@ describe("Gateway model identity", () => {
           now: 1,
           rowContext,
           lightweightListRow: true,
-          skipTranscriptUsageFallback: true,
           modelCatalog: [
             { provider: "custom", id: selected, name: selected, contextWindow: 128_000 },
           ],
@@ -636,7 +661,6 @@ describe("Gateway model identity", () => {
           key,
           entry,
           lightweightListRow,
-          skipTranscriptUsageFallback: true,
         });
         expect(row).toMatchObject(expected);
         expect(row.agentRuntime?.id).toBe("openclaw");

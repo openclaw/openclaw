@@ -7,6 +7,7 @@ import type {
 } from "../../audit/audit-event-types.js";
 import type { MessageReceipt, MessageReceiptSourceResult } from "../../channels/message/types.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import type { DeliveryPlacementEvidence } from "./delivery-placement-evidence.types.js";
 
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
 
@@ -125,6 +126,10 @@ export type OutboundPayloadDeliveryOutcome =
       index: number;
       status: "sent";
       results: OutboundDeliveryResult[];
+      /** Identified progress exists, but at least one physical result was discarded. */
+      incompleteReason?: "adapter_returned_no_send" | "adapter_returned_no_identity";
+      /** Immutable union of reported placement before progress reconciliation/callback mutation. */
+      reportedPlacement?: DeliveryPlacementEvidence;
       /** Effective post-hook, post-render payload kind. */
       deliveryKind?: OutboundPayloadDeliveryKind;
     }
@@ -176,6 +181,8 @@ export class OutboundDeliveryError extends Error {
       cause: unknown;
       results?: readonly OutboundDeliveryResult[];
       payloadOutcomes?: readonly OutboundPayloadDeliveryOutcome[];
+      /** Durable evidence from an earlier attempt of the same intent. */
+      sentBeforeError?: boolean;
       stage?: OutboundDeliveryFailureStage;
     },
   ) {
@@ -184,6 +191,7 @@ export class OutboundDeliveryError extends Error {
     this.results = [...(options.results ?? [])];
     this.payloadOutcomes = [...(options.payloadOutcomes ?? [])];
     this.sentBeforeError =
+      options.sentBeforeError === true ||
       this.results.length > 0 ||
       this.payloadOutcomes.some((outcome) =>
         outcome.status === "failed"

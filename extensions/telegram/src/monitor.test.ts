@@ -25,8 +25,10 @@ const mocks = vi.hoisted(() => ({
   runtime: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
-  getRuntimeConfig: mocks.config,
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: mocks.config,
+  captureRuntimeConfigAsyncReader: () => async () => mocks.config(),
 }));
 vi.mock("./runtime.js", () => ({ getTelegramRuntime: mocks.runtime }));
 vi.mock("./polling-session.js", () => ({

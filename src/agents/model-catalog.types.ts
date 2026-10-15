@@ -24,6 +24,10 @@ export type ModelCatalogEntry = {
   contextWindows?: ModelCatalogContextWindowOption[];
   contextWindowDefault?: string;
   contextTokens?: number;
+  /** Visible failed-acquisition starter; sizing comes from current static or accepted owner facts. */
+  contextCapacitySource?: "unaccepted-starter";
+  /** Provider-declared unknown-model estimate; not an authored or curated static limit. */
+  contextWindowSource?: "synthetic";
   reasoning?: boolean;
   /** Config-authored reasoning override; internal provenance, never project to clients. */
   configuredReasoning?: boolean;
@@ -47,6 +51,8 @@ export type ModelCatalogSnapshot = {
   routeVariants: ModelCatalogEntry[];
   /** Provider-owned outcome of each live catalog request in this generation. */
   providerOutcomes?: readonly ProviderCatalogOutcome[];
+  /** Previously accepted inventory remains bound to these provider/profile identities. */
+  acceptedDiscoveryOrigins?: readonly Pick<ProviderCatalogOutcome, "provider" | "profileId">[];
   /** Native discovery facts belong to their harness, independently of API-provider auth. */
   nativeProviderOutcomes?: Readonly<Record<string, readonly ProviderCatalogOutcome[]>>;
   /** Untagged harness observations, before API donor enrichment; each runtime owns its scope. */

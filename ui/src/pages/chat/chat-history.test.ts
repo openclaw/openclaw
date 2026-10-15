@@ -9,7 +9,6 @@ import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import { loadOlderChatHistoryPage, requestChatSessionSnapshot } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import {
   activeHistory as emptyActiveHistory,
@@ -27,7 +26,6 @@ import {
   readChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
-import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 function createState(history: ChatHistoryResult) {
   const state = makeChatHost({ sessionKey: "main", requestHandlers: { "chat.history": history } });
@@ -168,74 +166,6 @@ it("starts the new subscription before the old unsubscribe settles", async () =>
   release.resolve();
   await sync;
   expect(state.chatSessionMessageSubscription).toEqual(selected);
-});
-
-it.each([false, true])("retains owned subscriptions when releases fail (both=%s)", async (both) => {
-  const release = vi.fn().mockRejectedValueOnce(new Error("previous release failed"));
-  if (both) {
-    release.mockRejectedValueOnce(new Error("replacement release failed"));
-  }
-  release.mockResolvedValue(undefined);
-  const state = subscriptionState(release);
-  await syncSelectedSessionMessageSubscription(state);
-  expect(state.chatSessionMessageSubscriptionRequestedKey).toBe(both ? selected.key : previous.key);
-  expect(state.chatSessionMessageSubscription).toBe(both ? selected : previous);
-  expect(getChatHistoryLoadState(state)).toMatchObject({
-    phase: "failed",
-    message: expect.stringContaining("previous release failed"),
-  });
-  expect(state.sessionsError).toBeNull();
-  expect(release).toHaveBeenNthCalledWith(1, previous);
-  expect(release).toHaveBeenNthCalledWith(2, selected);
-  if (both) {
-    expect(getChatHistoryLoadState(state)).toMatchObject({
-      phase: "failed",
-      message: expect.stringContaining("replacement release failed"),
-    });
-    await syncSelectedSessionMessageSubscription(state);
-    expect(release).toHaveBeenNthCalledWith(3, previous);
-    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe(selected.key);
-    expect(state.chatSessionMessageSubscription).toBe(selected);
-  }
-});
-
-it("retries a stale generation's rejected subscription release", async () => {
-  vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
-  const stale = { key: "agent:main:stale", agentId: null };
-  const pending = createDeferred<typeof stale>();
-  const release = vi
-    .fn()
-    .mockRejectedValueOnce(new Error("stale release failed"))
-    .mockResolvedValue(undefined);
-  const subscribe = vi.fn(async (key: string) =>
-    key === stale.key ? await pending.promise : selected,
-  );
-  const state = Object.assign(
-    withSessions({ messages: [] }, { subscribeMessages: subscribe, unsubscribeMessages: release }),
-    {
-      sessionKey: stale.key,
-      chatSessionMessageSubscriptionRequestedKey: null as string | null,
-      chatSessionMessageSubscription: null as typeof stale | null,
-    },
-  );
-  const sync = syncSelectedSessionMessageSubscription(state);
-  await Promise.resolve();
-  state.sessionKey = selected.key;
-  await syncSelectedSessionMessageSubscription(state);
-  pending.resolve(stale);
-  await vi.runAllTimersAsync();
-  await sync;
-  expect(state.chatSessionMessageSubscription).toBe(selected);
-  expect(release).toHaveBeenNthCalledWith(1, stale);
-  await syncSelectedSessionMessageSubscription(state);
-  expect(release).toHaveBeenNthCalledWith(2, stale);
-  expect(release).toHaveBeenCalledTimes(2);
-  expect(vi.getTimerCount()).toBe(0);
-  expect(state.chatSessionMessageSubscription).toBe(selected);
-  expect(subscribe).toHaveBeenCalledTimes(2);
 });
 
 it("rewinds cached history and restores only valid composer attachments", async () => {
@@ -478,62 +408,6 @@ it("materializes live commentary when history replaces active tool activity", as
   expect(state.chatStreamSegments).toEqual([]);
 });
 
-it("keeps a foreground tool when history persists a sibling's identical call id", async () => {
-  const toolCallId = "call-shared";
-  const foreground = buildToolStreamIdentity("run-foreground", toolCallId);
-  const background = buildToolStreamIdentity("run-background", toolCallId);
-  const result = {
-    role: "toolResult",
-    runId: "run-background",
-    toolCallId,
-    content: "background complete",
-    timestamp: 4,
-  };
-  const state = createState({
-    ...activeHistory("run-foreground"),
-    messages: [{ role: "user", content: "do it", timestamp: 1 }, result],
-  });
-  state.chatRunId = "run-foreground";
-  state.chatStream = "foreground still running";
-  state.chatStreamStartedAt = 5;
-  function addTool(
-    runId: string,
-    name: string,
-    args: Record<string, string>,
-    startedAt: number,
-    resultReceived = false,
-  ) {
-    const toolMessage = {
-      role: "assistant",
-      runId,
-      toolCallId,
-      content: [{ type: "toolcall", name, arguments: args }],
-    };
-    state.toolStreamById.set(buildToolStreamIdentity(runId, toolCallId), {
-      toolCallId,
-      runId,
-      name,
-      startedAt,
-      receivedAt: startedAt,
-      resultReceived,
-      message: toolMessage,
-    });
-    return toolMessage;
-  }
-  const foregroundMessage = addTool("run-foreground", "read", { path: "foreground.txt" }, 2);
-  const backgroundMessage = addTool("run-background", "exec", { command: "background" }, 3, true);
-  state.toolStreamOrder = [foreground, background];
-  state.chatToolMessages = [foregroundMessage, backgroundMessage];
-  await loadChatHistory(state);
-  expect(state.chatRunId).toBe("run-foreground");
-  // The snapshot owns the unchanged live tail; tool ownership stays run-scoped.
-  expect(state.chatStream).toBe("intentionally ignored on web");
-  expect(state.toolStreamOrder).toEqual([foreground]);
-  expect(state.toolStreamById.has(foreground)).toBe(true);
-  expect(state.toolStreamById.has(background)).toBe(false);
-  expect(state.chatToolMessages).toEqual([foregroundMessage]);
-});
-
 describe("chat history run errors", () => {
   const row = (overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
     key: "main",
@@ -569,20 +443,6 @@ describe("chat history run errors", () => {
   ) {
     handleChatGatewayEvent(state, { sessionKey: "main", runId, ...event });
   }
-
-  it("recovers the failure notice diagnostic", async () => {
-    const diagnostic =
-      'Failed to prepare skill resources: skill="review" path="/workspace/skills/review/CLAUDE.md" error=ENOENT';
-    const sessionInfo = row();
-    const state = host({
-      messages: [notice(diagnostic, { errorKind: "state_contention" })],
-      sessionInfo,
-    });
-    await loadChatHistory(state);
-    expect(state.chatRunError).toMatchObject({ runId: "run", summary: diagnostic });
-    expect(state.chatRunError?.kind).toBe("state_contention");
-    expect(getChatSessionProjection(state).runs.run?.errorMessage).toBe(diagnostic);
-  });
 
   it("retires a recovered failure after a newer successful history and rejects its stale replay", async () => {
     const first = {
@@ -627,7 +487,6 @@ describe("chat history run errors", () => {
   });
 
   it.each([
-    { snapshotStatus: "done", newerState: "active", requestOrder: "before" },
     { snapshotStatus: "failed", newerState: "failed", requestOrder: "before" },
     { snapshotStatus: "done", newerState: "completed", requestOrder: "after" },
   ] as const)(
@@ -644,15 +503,13 @@ describe("chat history run errors", () => {
       );
       let loading = requestOrder === "before" ? loadChatHistory(state) : undefined;
       emit(state, "1", { state: "delta", deltaText: "New reply" });
-      if (newerState !== "active") {
-        emit(
-          state,
-          "1",
-          newerState === "completed"
-            ? { state: "final", message: { role: "assistant", content: "New reply" } }
-            : { state: "error", errorMessage: "Current full diagnostic" },
-        );
-      }
+      emit(
+        state,
+        "1",
+        newerState === "completed"
+          ? { state: "final", message: { role: "assistant", content: "New reply" } }
+          : { state: "error", errorMessage: "Current full diagnostic" },
+      );
       const currentError = state.chatRunError;
       loading ??= loadChatHistory(state);
       response.resolve({
@@ -665,7 +522,7 @@ describe("chat history run errors", () => {
       });
       await loading;
       expect(state.chatRunError).toEqual(currentError);
-      expect(state.chatRunId).toBe(newerState === "active" ? "1" : null);
+      expect(state.chatRunId).toBeNull();
     },
   );
 

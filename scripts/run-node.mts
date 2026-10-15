@@ -28,10 +28,9 @@ import {
 } from "./lib/local-build-metadata.mts";
 import { hasUnjoinedWork } from "./lib/managed-child-process.mts";
 import { acquireManagedCleanup } from "./lib/managed-cleanup-handoff.mts";
+import { pinnedBunEnv, requirePinnedBun } from "./lib/pinned-bun.mts";
 import { resolveQaCodexApiKeyEnvPatch } from "./lib/qa-codex-auth-env.mts";
 import {
-  captureRunNodeInputState,
-  type RunNodeInputState,
   collectRunNodeBundledPluginBuildEntries,
   hasDirtySourceTree,
   resolveRunNodeInputSignature,
@@ -1169,12 +1168,14 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[], execPath = deps.e
   return res.exitCode ?? 1;
 };
 
-const runOpenClaw = (deps: RunNodeDeps) =>
-  runNodeChild(
-    deps,
+const runOpenClaw = (deps: RunNodeDeps) => {
+  const bun = resolveTestRuntime(deps.env) === "bun" ? requirePinnedBun(deps.env) : undefined;
+  return runNodeChild(
+    bun ? { ...deps, env: { ...deps.env, ...pinnedBunEnv(bun, deps.env) } } : deps,
     [...resolveRunNodeDiagnosticArgs(deps), "openclaw.mjs", ...deps.args],
-    resolveTestRuntime(deps.env) === "bun" ? "bun" : deps.execPath,
+    bun ?? deps.execPath,
   );
+};
 
 const pipeSpawnedOutput = (
   childProcess: ChildProcess,
@@ -1437,8 +1438,14 @@ const withRunNodeRuntimePublication = async <T,>(deps: RunNodeDeps, publish: () 
 };
 
 const syncRuntimeArtifacts = async (deps: RunNodeDeps) => {
+  // Metadata sync prunes plugins outside its selection, and this refresh cannot
+  // recompile them. Keep the private QA plugins a private QA build compiled.
+  const privateQaBuild = deps.privateQaRequiredDistEntries.every(
+    (entry) => statMtime(entry, deps.fs) != null,
+  );
+  const env = privateQaBuild ? { ...deps.env, OPENCLAW_BUILD_PRIVATE_QA: "1" } : deps.env;
   try {
-    await deps.runRuntimePostBuild({ cwd: deps.cwd, env: deps.env });
+    await deps.runRuntimePostBuild({ cwd: deps.cwd, env });
   } catch (error) {
     logRunner(`Failed to write runtime build artifacts: ${getErrorMessage(error)}`, deps);
     return false;
@@ -1446,14 +1453,14 @@ const syncRuntimeArtifacts = async (deps: RunNodeDeps) => {
   return true;
 };
 
-const writeRuntimePostBuildStamp = (deps: RunNodeDeps, inputState: RunNodeInputState | null) => {
+const writeRuntimePostBuildStamp = (deps: RunNodeDeps, inputSignature: string | null) => {
   try {
     writeDistRuntimePostBuildStamp({
       cwd: deps.cwd,
       fs: deps.fs,
       env: deps.env,
       spawnSync: deps.spawnSync,
-      inputState,
+      inputSignature,
     });
     return true;
   } catch (error) {
@@ -1486,12 +1493,12 @@ const syncRuntimeArtifactsAndStamp = async (deps: RunNodeDeps) =>
           return false;
         }
         deps.cancellation.signal.throwIfAborted();
-        const inputState = captureRunNodeInputState(deps, "runtime");
+        const inputSignature = resolveRunNodeInputSignature(deps, "runtime");
         deps.fs.rmSync(deps.runtimePostBuildStampPath, { force: true });
         const synced = await syncRuntimeArtifacts(deps);
         deps.cancellation.signal.throwIfAborted();
         if (synced) {
-          return writeRuntimePostBuildStamp(deps, inputState);
+          return writeRuntimePostBuildStamp(deps, inputSignature);
         }
         return false;
       });

@@ -136,47 +136,36 @@ describe("Claude imported internal inputs", () => {
     },
   );
 
-  it.each(["string", "text-block"])(
-    "removes the resume decorator, not its real %s user turn",
-    (encoding) => {
-      const text = `${buildCliSessionDriftNote(["system-prompt", "prompt-tools"])}\n\nreal question`;
-      const image = {
-        type: "image",
-        source: { type: "base64", media_type: "image/png", data: "aa" },
-      };
-      const message = importUnmatched(
-        encoding === "string" ? text : [{ type: "text", text }, image],
-      );
-      expect(message?.content).toEqual(
-        encoding === "string" ? "real question" : [{ type: "text", text: "real question" }, image],
-      );
-      expect(message?.display).not.toBe(false);
-      expect(message?.provenance).toBeUndefined();
-      expect(
-        importUnmatched(
-          "OpenClaw resumed this CLI session after prompt content changed. This is a quote.",
-        )?.content,
-      ).toContain("This is a quote.");
-    },
-  );
-
-  it("matches a literal resume note against its canonical row before trying the stripped text", () => {
-    const literal = `${buildCliSessionDriftNote(["prompt-tools"])}\n\nhello`;
-    const localMessages = [
-      { role: "user", content: literal, timestamp: 1 },
-      { role: "user", content: "hello", timestamp: 2 },
-    ];
-    const merged = mergeImportedChatHistoryMessages({
-      localMessages,
-      importedMessages: [
-        { ...parseImportedUser(literal), timestamp: 1 },
-        { ...parseImportedUser("hello"), timestamp: 2 },
-      ],
-    });
-    expect(merged.map((message) => (message as { content?: unknown }).content)).toEqual([
-      literal,
-      "hello",
-    ]);
+  it.each([
+    ["resume", "string"],
+    ["resume", "text-block"],
+    ["legacy requester", "string"],
+    ["legacy requester", "text-block"],
+  ])("removes the %s decorator, not its real %s user turn", (decoration, encoding) => {
+    const hint =
+      'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
+    const body = decoration === "resume" ? "real question" : `${hint}\n\nreal question`;
+    const prefix =
+      decoration === "resume"
+        ? buildCliSessionDriftNote(["system-prompt", "prompt-tools"])
+        : 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"}}\n```\n\n' +
+          hint;
+    const text = `${prefix}\n\n${body}`;
+    const image = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "aa" },
+    };
+    const message = importUnmatched(encoding === "string" ? text : [{ type: "text", text }, image]);
+    expect(message?.content).toEqual(
+      encoding === "string" ? body : [{ type: "text", text: body }, image],
+    );
+    expect(message?.display).not.toBe(false);
+    expect(message?.provenance).toBeUndefined();
+    expect(
+      importUnmatched(
+        "OpenClaw resumed this CLI session after prompt content changed. This is a quote.",
+      )?.content,
+    ).toContain("This is a quote.");
   });
 
   it.each(internalWakeInputs)("marks imported %s prompts internal", (sourceTool, text) => {
@@ -192,6 +181,9 @@ describe("Claude imported internal inputs", () => {
     "[System] Please explain this tag.",
     "[Tue 2026-09-22 16:00 GMT+8] [System] Please explain this tag.",
     "System: Please preserve this log\n\nExplain it",
+    'Explain this instruction: requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.',
+    'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available. Extra user text.\n\nExplain it',
+    'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"},"requester_profile_hint":"current"}\n```\n\nrequester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\nExplain it',
     "System: Please explain this log\n\n[System] This is the line I am asking about.",
     "Explain this log:\n```text\nlog\n```\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?",
     'Explain this log:\nConversation info: ⟦openclaw:ctx⟧\n```json\n{"a":1}\n```\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?',
@@ -207,21 +199,36 @@ describe("Claude imported internal inputs", () => {
       { type: "text", text: "Explain this log:\n" },
       {
         type: "text",
-        text: "System: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?",
+        text: 'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?',
       },
     ];
     expect(importUnmatched(content)).toMatchObject({ content });
   });
 
-  it.each(["", 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"a":1}\n```\n\n'])(
-    "drops queued system event lines from a real user turn",
-    (context) => {
-      for (const stamp of ["2026-10-04 13:15:44 GMT+8", "2026-10-04T05:15:44Z", "unknown-time"]) {
-        const events = `System: [${stamp}] Model switched.\nSystem: more\n\n`;
-        const text = `${context}${events}real question`;
-        expect(importUnmatched(text)?.content).toBe(`${context}real question`);
+  it.each([
+    "",
+    'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"a":1}\n```\n\n',
+    'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"history_count":2}\n```\n\n' +
+      "Recent chat history: ⟦openclaw:ctx⟧\n" +
+      "#123 2026-10-11 12:20:09 GMT+5:30 Alice: The conservatory has 137 benches.\n" +
+      "#124 2026-10-11 12:20:20 GMT+5:30 Alice: /model anthropic/claude-haiku-4-5\n\n",
+  ])("drops queued system event lines from a real user turn", (context) => {
+    for (const stamp of [
+      "2026-10-04 13:15:44 GMT+8",
+      "2026-10-11 12:20:20 GMT+5:30",
+      "2026-10-04T05:15:44Z",
+      "unknown-time",
+    ]) {
+      const events = `System: [${stamp}] Model switched.\nSystem: more\n\n`;
+      for (const question of [
+        "real question",
+        "Please explain this header:\n\nContext: ⟦openclaw:ctx⟧\nexample",
+        "Please explain this header:\n\nContext:\n<active_memory_plugin>\nexample\n</active_memory_plugin>",
+      ]) {
+        const text = `${context}${events}${question}`;
+        expect(importUnmatched(text)?.content).toBe(`${context}${question}`);
         // The canonical row holds the turn without the queued events; the pair is one turn.
-        const canonical = { role: "user", content: `${context}real question`, timestamp: 1 };
+        const canonical = { role: "user", content: `${context}${question}`, timestamp: 1 };
         expect(
           mergeImportedChatHistoryMessages({
             localMessages: [canonical],
@@ -229,10 +236,10 @@ describe("Claude imported internal inputs", () => {
           }),
         ).toMatchObject([canonical]);
       }
-      const untouched = "real question\n\nSystem: quoted log line\n\nmore";
-      expect(importUnmatched(untouched)).toMatchObject({ content: untouched });
-    },
-  );
+    }
+    const untouched = "real question\n\nSystem: quoted log line\n\nmore";
+    expect(importUnmatched(untouched)).toMatchObject({ content: untouched });
+  });
 
   it("hides decorated internal rows through JSONL import, merge and the common client history projection", async () => {
     await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
@@ -292,7 +299,9 @@ describe("readClaudeCliFallbackSeed", () => {
     if (kind === "empty") {
       await writeJsonl([{ ...userTurn("u-side", "sidechain user turn"), isSidechain: true }]);
     }
-    expect(readFallbackSeed(kind === "path escape" ? "../escape" : SESSION_ID)).toBeUndefined();
+    expect(
+      await readFallbackSeed(kind === "path escape" ? "../escape" : SESSION_ID),
+    ).toBeUndefined();
   });
 
   it("collects valid turns through the HOME-resolved session store despite null rows", async () => {
@@ -365,6 +374,6 @@ describe("readClaudeCliFallbackSeed", () => {
     },
   ])("seeds from the $name", async ({ lines, expected }) => {
     await writeJsonl(lines);
-    expect(readFallbackSeed()).toMatchObject(expected);
+    expect(await readFallbackSeed()).toMatchObject(expected);
   });
 });

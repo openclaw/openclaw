@@ -48,10 +48,11 @@ afterEach(() => resetChatThreadState());
 
 describe("system notices through pending-to-history promotion", () => {
   it.each([
+    ["main_session_restart_recovery", "System · restart recovery", "", false],
     [
-      "main_session_restart_recovery",
-      "System · restart recovery",
-      "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+      "cron_failure_repair",
+      "System · automation recovery",
+      "An automation failed — asked the agent to investigate and continue if needed.",
       false,
     ],
     [
@@ -84,7 +85,9 @@ describe("system notices through pending-to-history promotion", () => {
         content:
           sourceTool === "main_session_restart_recovery"
             ? baseMessage.content
-            : (midTurn ? "" : "[System] ") + text,
+            : sourceTool === "cron_failure_repair"
+              ? "Automation repair request from the scheduler.\n<untrusted-text>Private task payload and last error</untrusted-text>"
+              : (midTurn ? "" : "[System] ") + text,
         provenance: { kind: "internal_system", sourceTool },
         __openclaw: imported
           ? {

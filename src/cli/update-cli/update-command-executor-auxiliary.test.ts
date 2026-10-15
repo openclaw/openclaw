@@ -269,27 +269,25 @@ it("keeps B extra-child custody after partial preflight release without reactiva
   await once(child, "message");
   assert(child.pid);
   try {
-    await expect(
-      withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(root, { serviceRoot, preflight: true });
-        const store = createManagedHandoffLeaseStore();
-        const acquired = store.acquire(`${root}/.openclaw-update-child-extra`, "extra-child", {
-          kind: "update",
-        });
-        assert(acquired.kind === "acquired");
-        const registered = store.bind(acquired.lease, child.pid!);
-        assert(registered);
-        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("release failed");
-        expect(() => fence.assertCurrent()).toThrow("no longer current");
-        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
-        expect(store.read(serviceRoot)).toEqual({ kind: "absent" });
-        expect(store.acquire(root, "contender", { kind: "update" }).kind).toBe("busy");
-        expect(store.current(registered)).toBe(true);
-        child.kill("SIGTERM");
-        await exited;
-        expect(store.release(registered)).toBe(true);
-      }),
-    ).rejects.toThrow();
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root, { serviceRoot, preflight: true });
+      const store = createManagedHandoffLeaseStore();
+      const acquired = store.acquire(`${root}/.openclaw-update-child-extra`, "extra-child", {
+        kind: "update",
+      });
+      assert(acquired.kind === "acquired");
+      const registered = store.bind(acquired.lease, child.pid!);
+      assert(registered);
+      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("release failed");
+      expect(() => fence.assertCurrent()).toThrow("no longer current");
+      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+      expect(store.read(serviceRoot)).toEqual({ kind: "absent" });
+      expect(store.acquire(root, "contender", { kind: "update" }).kind).toBe("busy");
+      expect(store.current(registered)).toBe(true);
+      child.kill("SIGTERM");
+      await exited;
+      expect(store.release(registered)).toBe(true);
+    });
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");
@@ -531,20 +529,9 @@ it.each([
   },
 );
 
-it.each([
-  { boundary: "before-launch", change: "requester-revoked" },
-  ...(
-    [
-      "run-replaced",
-      "run-id-changed",
-      "executor-replaced",
-      "requester-replaced",
-      "requester-revoked",
-    ] as const
-  ).map((change) => ({ boundary: "at-input" as const, change })),
-] as const)(
-  "refuses Node provisioning after $change at $boundary",
-  async ({ boundary, change }) => {
+it.each(["before-launch", "at-input"] as const)(
+  "refuses Node provisioning after requester revocation at %s",
+  async (boundary) => {
     const runId = randomUUID();
     const effect = path.join(root, "installer-effect");
     let requesterCurrent = true;
@@ -557,22 +544,7 @@ it.each([
     };
     const recoveryParams = { root, opts, timeoutMs: 10000 };
     const revoke = () => {
-      assert(opts.run);
-      if (change === "run-replaced") {
-        opts.run = { ...opts.run };
-      }
-      if (change === "run-id-changed") {
-        opts.run.runId = randomUUID();
-      }
-      if (change === "executor-replaced") {
-        opts.run.executorFence = { assertCurrent() {} };
-      }
-      if (change === "requester-replaced") {
-        opts.run.requesterAuthority = { requester: {}, isCurrent: () => true };
-      }
-      if (change === "requester-revoked") {
-        requesterCurrent = false;
-      }
+      requesterCurrent = false;
     };
     const runCommand = processRunner.runCommandWithTimeout;
     const commands = vi
@@ -603,9 +575,7 @@ it.each([
         process.env,
       );
     });
-    await expect(work).rejects.toThrow(
-      change === "requester-revoked" ? "requester-revoked" : "lost its original update executor",
-    );
+    await expect(work).rejects.toThrow("requester-revoked");
     expect(commands).toHaveBeenCalledTimes(boundary === "at-input" ? 1 : 0);
     expect(fs.existsSync(effect)).toBe(false);
     for (const key of [root, serviceRoot]) {

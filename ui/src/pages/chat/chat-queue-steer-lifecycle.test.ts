@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { render } from "lit";
+import { createComponent, createSignal, merge } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { chatItemGroups } from "./chat-agent-run-grouping.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -14,8 +16,8 @@ import { buildPendingInputQueueItems, getChatPendingInputs } from "./chat-pendin
 import { retryQueuedChatMessage, steerQueuedChatMessage } from "./chat-send-actions.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { readPendingSendStatus } from "./chat-thread-items.ts";
-import { renderChatQueue } from "./components/chat-composer-queue.ts";
-import { renderChatSendStatus } from "./components/chat-message-send-status.ts";
+import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
+import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
 import { projectTranscriptChain } from "./components/chat-transcript-message-index.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
@@ -24,6 +26,7 @@ import { applyChatCacheSnapshot, readChatSessionSnapshot } from "./session-messa
 
 useChatSendBrowserFixture();
 afterEach(() => {
+  cleanupSolid();
   document.body.replaceChildren();
   vi.useRealTimers();
 });
@@ -110,6 +113,26 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
     const recovery = document.createElement("div");
     document.body.append(container, recovery);
     let sending: Promise<void> | undefined;
+    const [queueProps, setQueueProps] = createSignal<Parameters<typeof renderChatQueueSolid>[0]>({
+      queue: [],
+      onQueueRemove: vi.fn(),
+    });
+    mountSolid(() => createComponent(renderChatQueueSolid, merge(queueProps)), { container });
+    const [sendState, setSendState] = createSignal<ReturnType<typeof readPendingSendStatus>>(null);
+    mountSolid(
+      () =>
+        createComponent(ChatSendStatus, {
+          get status() {
+            return sendState();
+          },
+          actions: {
+            onRetryQueuedMessage: (id) => {
+              sending = retryQueuedChatMessage(host, id);
+            },
+          },
+        }),
+      { container: recovery },
+    );
     const snapshot = () => {
       const pending = getChatPendingInputs(host);
       const inputs = pending
@@ -124,18 +147,15 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
         }
         return extractText(message);
       };
-      render(
-        renderChatQueue({
-          canAbort: true,
-          queue: host.chatQueue,
-          displayQueue: [...buildPendingInputQueueItems(display.queuedInputs), ...display.queue],
-          onQueueSteer: (id) => {
-            sending = steerQueuedChatMessage(host, id);
-          },
-          onQueueRemove: vi.fn(),
-        }),
-        container,
-      );
+      setQueueProps({
+        canAbort: true,
+        queue: host.chatQueue,
+        displayQueue: [...buildPendingInputQueueItems(display.queuedInputs), ...display.queue],
+        onQueueSteer: (id) => {
+          sending = steerQueuedChatMessage(host, id);
+        },
+        onQueueRemove: vi.fn(),
+      });
       const thread = projectTranscriptChain(
         buildChatItems({
           paneId: "queue-steer-lifecycle",
@@ -166,14 +186,8 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
                 group.messages.map(({ message }) => messageText(message)),
               ),
       );
-      render(
-        renderChatSendStatus(sendStatus, {
-          onRetryQueuedMessage: (id) => {
-            sending = retryQueuedChatMessage(host, id);
-          },
-        }),
-        recovery,
-      );
+      setSendState(sendStatus);
+      flush();
       return {
         thread,
         queue: [...container.querySelectorAll(".chat-queue__item")].map((item) =>

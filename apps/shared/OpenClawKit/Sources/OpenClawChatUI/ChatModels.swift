@@ -1007,6 +1007,15 @@ public struct OpenClawChatEventPayload: Codable, Sendable {
     public let state: String?
     public let message: AnyCodable?
     public let errorMessage: String?
+    /// With `state == "status"`: what the run is doing before it produces anything.
+    public var phase: String?
+    public var retry: Retry?
+    public var seq: Int?
+
+    public struct Retry: Codable, Sendable {
+        public let attempt: Int
+        public let maxAttempts: Int
+    }
 
     // periphery:ignore - package tests construct transport events; app consumers decode them.
     public init(
@@ -1101,6 +1110,14 @@ public struct OpenClawSessionMessageEventPayload: Codable, Sendable {
         case hasActiveRun
         case activeRunIds
     }
+}
+
+/// The existing Gateway refresh receipt, including the authoritative pre-refresh baseline.
+public struct OpenClawChatProgressCardRefreshResult: Decodable, Sendable {
+    private enum Status: String, Decodable, Sendable { case accepted }
+    public let runId: String
+    public let revision: Int
+    private let status: Status
 }
 
 public struct OpenClawAgentEventPayload: Codable, Sendable, Identifiable {

@@ -1,5 +1,6 @@
 // Sends HMAC-protected exec host requests over the local socket.
 import crypto from "node:crypto";
+import type { NodePermissionDetails } from "../../packages/gateway-protocol/src/node-permissions.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approvals.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 
@@ -32,6 +33,7 @@ type ExecHostError = {
   code: string;
   message: string;
   reason?: string;
+  details?: NodePermissionDetails;
 };
 
 export type ExecHostResponse =

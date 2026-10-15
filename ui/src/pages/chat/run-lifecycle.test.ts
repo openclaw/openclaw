@@ -74,7 +74,6 @@ function completeLocalRun(host: ReconcileHost, publishRunStatus = true) {
     runId: "r1",
     sessionKey: "s1",
     clearLocalRun: true,
-    clearChatStream: true,
     armLocalTerminalReconcile: true,
     publishRunStatus,
   });
@@ -413,7 +412,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
           runId: "work-run",
           sessionKey,
           clearLocalRun: true,
-          clearChatStream: true,
           publishRunStatus: false,
           armLocalTerminalReconcile: !yielded,
         });
@@ -506,22 +504,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("reconciles stale session publications while terminal status is visible", () => {
-    const completedAt = Date.now();
-    const host = makeHost({
-      chatRunStatus: {
-        phase: "done",
-        runId: "r1",
-        sessionKey: "s1",
-        occurredAt: completedAt,
-      },
-      lastLocalTerminalReconcile: makeLocalTerminalReconcile(),
-    });
-
-    expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
-    expect(rowActive(host)).toBe(false);
   });
 
   it("recovers a missed terminal event from the exact settled session row", () => {

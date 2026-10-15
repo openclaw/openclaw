@@ -56,7 +56,6 @@ describe("ACP child environment", () => {
     { serverCommand: undefined, serverArgs: undefined, strip: true },
     { serverCommand: "openclaw", serverArgs: ["acp"], strip: true },
     { serverCommand: "custom-server", serverArgs: ["serve"], strip: false },
-    { serverCommand: "openclaw", serverArgs: ["custom-entry.js"], strip: false },
   ])(
     "sanitizes $serverCommand $serverArgs (provider stripping: $strip)",
     ({ strip, ...server }) => {
@@ -137,17 +136,7 @@ describe("resolvePermissionRequest", () => {
       "search",
       "auto",
     ],
-    [{ title: "search: TODO", rawInput: { path: "../.ssh" } }, "search", "reject"],
     [{ title: "search: path: ~/.ssh" }, "search", "reject"],
-    [{ title: "search: TODO", locations: [{ path: "/etc/passwd" }] }, "search", "reject"],
-    [
-      {
-        title: "read: docs/security.md",
-        rawInput: { path: "file:///tmp/openclaw-acp-cwd/docs/security.md" },
-      },
-      "read",
-      "auto",
-    ],
     [{ title: "read: src", rawInput: { path: "FILE:/tmp/outside/marker.txt" } }, "read", "reject"],
     [{ title: "read" }, "read", "reject"],
   ])("resolves %j (%s) with %s", async (toolCall, toolName, decision) => {

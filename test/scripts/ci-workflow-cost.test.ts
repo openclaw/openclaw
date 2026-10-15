@@ -14,6 +14,60 @@ const context = {
 const action = readWorkflow(".github/actions/detect-scheduled-changes/action.yml");
 const script = action.runs.steps[0].with.script;
 
+describe("native locale refresh event scope", () => {
+  it.each([
+    [["apps/ios/README.md"], false],
+    [["apps/ios/AGENTS.md"], false],
+    [["apps/ios/README.md", "apps/ios/AGENTS.md"], false],
+    [["apps/ios/README.md", "apps/ios/Sources/App.swift"], true],
+    [["apps/ios/Info.plist"], true],
+    [["apps/ios/Localizable.xcstrings"], true],
+    [["apps/.i18n/native-source.json"], true],
+    [["scripts/native-app-i18n.ts"], true],
+    [[".github/workflows/native-app-locale-refresh.yml"], true],
+  ] as const)("routes %j", (files, expected) => {
+    const workflow = readWorkflow(".github/workflows/native-app-locale-refresh.yml");
+    const accepts = files.some((file) =>
+      workflow.on.push.paths.reduce(
+        (selected: boolean, pattern: string) =>
+          pattern.startsWith("!")
+            ? selected && !matchesGlob(file, pattern.slice(1))
+            : selected || matchesGlob(file, pattern),
+        false,
+      ),
+    );
+    expect(accepts).toBe(expected);
+    expect(workflow.on.workflow_dispatch).toBeDefined();
+  });
+});
+
+describe("plugin scaffold event scope", () => {
+  it.each([
+    [["src/plugin-sdk/AGENTS.md"], false],
+    [["src/plugin-sdk/index.ts"], true],
+    [["src/plugin-sdk/AGENTS.md", "src/plugin-sdk/index.ts"], true],
+    [["src/plugin-sdk/runtime-fixture.md"], true],
+    [[".github/workflows/plugin-init-scaffold-validation.yml"], true],
+  ] as const)("routes %j", (files, expected) => {
+    const workflow = readWorkflow(".github/workflows/plugin-init-scaffold-validation.yml");
+    expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
+    for (const event of ["push", "pull_request"]) {
+      const accepts = files.some((file) =>
+        workflow.on[event].paths.reduce(
+          (selected: boolean, pattern: string) =>
+            pattern.startsWith("!")
+              ? selected && !matchesGlob(file, pattern.slice(1))
+              : selected || matchesGlob(file, pattern),
+          false,
+        ),
+      );
+      expect(accepts).toBe(expected);
+    }
+    expect(workflow.on.workflow_dispatch).toBeDefined();
+    expect(workflow.on.schedule).toBeDefined();
+  });
+});
+
 async function scheduledScope(
   options: {
     files?: Array<{ filename: string; previous_filename?: string }>;
@@ -125,7 +179,9 @@ describe("bounded scheduled proof reuse", () => {
       const scope = workflow.jobs.scope.steps.find((step: { id?: string }) => step.id === "scope");
       const patterns = scope.with.paths.trim().split("\n");
       expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
-      for (const path of workflow.on.push.paths) {
+      for (const path of workflow.on.push.paths.filter(
+        (pattern: string) => !pattern.startsWith("!"),
+      )) {
         expect(
           patterns.some((pattern: string) => matchesGlob(path, pattern)),
           path,
@@ -168,14 +224,56 @@ describe("bounded scheduled proof reuse", () => {
   );
 });
 
+describe("node runtime event scope", () => {
+  it.each([
+    [["patches/README.md"], false],
+    [["patches/vitest@5.0.1.patch"], true],
+    [["patches/README.md", "patches/vitest@5.0.1.patch"], true],
+    [["patches/runtime-fixture.md"], true],
+    [["crates/openclaw-node-host/SIDECAR_PROTOCOL.md"], false],
+    [
+      ["crates/openclaw-node-host/SIDECAR_PROTOCOL.md", "crates/openclaw-node-host/src/main.rs"],
+      true,
+    ],
+    [["crates/openclaw-node-host/Cargo.toml"], true],
+    [["crates/openclaw-node-host/tests/fixtures/README.md"], true],
+    [[".github/workflows/node-runtime-conformance.yml"], true],
+  ] as const)("routes %j", (files, expected) => {
+    const workflow = readWorkflow(".github/workflows/node-runtime-conformance.yml");
+    for (const event of ["push", "pull_request"]) {
+      const accepts = files.some((file) =>
+        workflow.on[event].paths.reduce(
+          (selected: boolean, pattern: string) =>
+            pattern.startsWith("!")
+              ? selected && !matchesGlob(file, pattern.slice(1))
+              : selected || matchesGlob(file, pattern),
+          false,
+        ),
+      );
+      expect(accepts).toBe(expected);
+    }
+    expect(workflow.on.workflow_dispatch).toBeDefined();
+    expect(workflow.on.schedule).toBeDefined();
+  });
+});
+
 describe("workflow cost admission", () => {
   it.each(["ci-check-testbox", "ci-check-arm-testbox", "ci-build-artifacts-testbox"])(
     "keeps %s scoped to its hydration inputs",
     (name) => {
       const workflow = readWorkflow(`.github/workflows/${name}.yml`);
       const accepts = (path: string) =>
-        workflow.on.pull_request.paths.some((pattern: string) => matchesGlob(path, pattern));
+        workflow.on.pull_request.paths.reduce(
+          (selected: boolean, pattern: string) =>
+            pattern.startsWith("!")
+              ? selected && !matchesGlob(path, pattern.slice(1))
+              : selected || matchesGlob(path, pattern),
+          false,
+        );
       expect(accepts(".github/workflows/docs.yml")).toBe(false);
+      for (const path of ["scripts/README.md", "scripts/AGENTS.md", "patches/README.md"]) {
+        expect(accepts(path), path).toBe(false);
+      }
       for (const path of [
         `.github/workflows/${name}.yml`,
         ".github/actions/setup-node-env/install-dependencies.sh",
@@ -187,9 +285,12 @@ describe("workflow cost admission", () => {
         "scripts/ci-hydrate-testbox-env.sh",
         ".npmrc",
         "packages/fs-safe/package.json",
+        "patches/vitest@5.0.1.patch",
+        "patches/runtime-fixture.md",
       ]) {
         expect(accepts(path), path).toBe(true);
       }
+      expect(["patches/README.md", "patches/vitest@5.0.1.patch"].some(accepts)).toBe(true);
       expect(workflow.on.workflow_dispatch).toBeDefined();
     },
   );

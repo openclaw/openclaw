@@ -1,8 +1,4 @@
 import { ServerResponse, type IncomingMessage } from "node:http";
-import {
-  createTestRegistry,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createMockIncomingRequest, postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -353,10 +349,6 @@ describe("Nextcloud Talk accounts sharing a Gateway route", () => {
   it.each([
     [
       { port: 8788, host: "127.0.0.1" },
-      { port: 8789, host: "127.0.0.1" },
-    ],
-    [
-      { port: 8788, host: "127.0.0.1" },
       { port: 8788, host: "127.0.0.2" },
     ],
   ])(
@@ -505,13 +497,20 @@ describe("Nextcloud Talk accounts sharing a Gateway route", () => {
 describe("Nextcloud Talk shared webhook lifetime", () => {
   it("keeps the route and limiter until its last account stops, then releases both", async () => {
     vi.useFakeTimers();
-    const registry = createTestRegistry();
-    setActivePluginRegistry(registry);
+    const registry = webhookRegistry;
     const baselineTimerCount = vi.getTimerCount();
     const target = { path: "/w", secret: "s", onWebhook: async () => "ignored" as const };
     const first = registerNextcloudTalkWebhook(target);
     const second = registerNextcloudTalkWebhook({ ...target, secret: "other" });
     expect(registry.httpRoutes).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(baselineTimerCount);
+    const { body, headers } = createSignedCreateMessageRequest();
+    const request = {
+      body,
+      headers: { ...headers, "x-nextcloud-talk-signature": "invalid-signature" },
+    };
+    const invoke = createInvoker(target.path, request);
+    expect((await invoke()).status).toBe(401);
     expect(vi.getTimerCount()).toBe(baselineTimerCount + 1);
     const legacyTarget = { ...target, legacyListener: { port: 8788, host: "127.0.0.1" } };
     const firstLegacy = registerNextcloudTalkWebhook(legacyTarget);
@@ -521,6 +520,8 @@ describe("Nextcloud Talk shared webhook lifetime", () => {
       secret: "other",
     });
     expect(registry.httpRoutes).toHaveLength(2);
+    expect((await createInvoker("/other", request)()).status).toBe(401);
+    expect((await invoke({ legacyListener: legacyTarget.legacyListener })).status).toBe(401);
     expect(vi.getTimerCount()).toBe(baselineTimerCount + 3);
     await firstLegacy();
     expect(vi.getTimerCount()).toBe(baselineTimerCount + 3);

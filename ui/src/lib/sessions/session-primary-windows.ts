@@ -18,6 +18,7 @@ export function createSessionPrimaryWindows(
   managedLists: Map<string, ManagedSessionList>,
   open: (scope: SessionListScope) => ManagedSessionList,
   onRetired: (agentIds: ReadonlySet<string>) => void,
+  readPrimary: () => SessionListSnapshot,
 ) {
   let invalidationRevision = 0;
   const retireWarmLists = (matches: (entry: ManagedSessionList) => boolean = () => true) => {
@@ -59,6 +60,10 @@ export function createSessionPrimaryWindows(
       }
       // Keep invalidation dormant until observed again, without runnable queued work.
       entry.coordinator.setActive(false, entry.queued !== null);
+      if (entry.queued?.immediate) {
+        // Keep an unserved create invalidation urgent if this query is observed again.
+        entry.coordinator.schedule(true);
+      }
       entry.queued = null;
       const release = () => {
         if (
@@ -81,6 +86,20 @@ export function createSessionPrimaryWindows(
 
   return {
     subscribe,
+    snapshot(this: void, scope: SessionListScope): SessionListSnapshot {
+      if (isPrimarySessionListQuery(scope)) {
+        const { result, agentId, loading, error, startupPending } = readPrimary();
+        return { result, agentId, loading, error, startupPending };
+      }
+      return (
+        managedLists.get(sessionListQueryKey(scope))?.snapshot ?? {
+          result: null,
+          agentId: null,
+          loading: false,
+          error: null,
+        }
+      );
+    },
     /** Own an observed query subscription and fence explicit refresh against disposal. */
     observe(
       entry: ManagedSessionList,

@@ -136,7 +136,6 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
         assertPrivate(reference.target);
       }
     }
-    copiedGraph.assertSourceCurrent();
     const unresolvedPrivate = copiedGraph.unresolved.filter(
       ({ source, specifier }) => isPathInside(privateRoot, source) && isPrivateLookup(specifier),
     );
@@ -195,14 +194,12 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       await assertMatchingFile(source, copied);
       comparedFiles.set(source, copied);
     }
-    available.assertSourceCurrent();
     originals.push(available);
   }
   if (originals.length === 0) {
     return { copiedFiles: 0, warnings };
   }
   const files = new Set(originals.flatMap((graph) => graph.files));
-  const assertSourcesCurrent = () => originals.forEach((graph) => graph.assertSourceCurrent());
   for (const source of files) {
     const copied = project(source);
     assertPrivate(copied);
@@ -217,11 +214,9 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     ) {
       throw new Error("Update authority changed during plugin dependency preparation");
     }
-    assertSourcesCurrent();
     for (const [source, copied] of comparedFiles) {
       await assertMatchingFile(source, copied);
     }
-    assertSourcesCurrent();
   };
   await assertCurrent();
   const plan = await prepareUpdateCandidatePluginTrees({

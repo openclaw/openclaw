@@ -446,8 +446,8 @@ async function runVitestPairBenchmarkBeforeDeadline(
     deadline,
   );
   deadline.throwIfExpired();
-  if (packageManager.version !== "12.9.0") {
-    throw new Error(`vitest-pair benchmark requires pnpm 12.9.0, got ${packageManager.version}`);
+  if (packageManager.version !== "12.10.1") {
+    throw new Error(`vitest-pair benchmark requires pnpm 12.10.1, got ${packageManager.version}`);
   }
   const baselineInventory = assertInventoryAvailable(baselineDir, context.manifest);
   const candidateInventory = assertInventoryAvailable(candidateDir, context.manifest);

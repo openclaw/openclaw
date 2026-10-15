@@ -8,6 +8,7 @@ import {
   captureExternalSessionCommitGuard,
   sessionEntryCommitGuardOptions,
   type SessionSourceCheck,
+  type AsyncSessionSourceCheck,
 } from "../../config/sessions/session-source-authority.js";
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
@@ -90,7 +91,7 @@ export function sessionEntryPersistenceConflictReply(): CommandHandlerResult {
 }
 
 export async function persistAbortTargetEntry(params: {
-  isCurrent?: SessionSourceCheck;
+  isCurrent?: SessionSourceCheck | AsyncSessionSourceCheck;
   entry?: SessionEntry;
   key?: string;
   sessionStore?: Record<string, SessionEntry>;
@@ -98,7 +99,12 @@ export async function persistAbortTargetEntry(params: {
   abortCutoff?: AbortCutoff;
 }): Promise<boolean> {
   const { entry, key, sessionStore, storePath, abortCutoff } = params;
-  if (!entry || !key || !sessionStore || params.isCurrent?.() === false) {
+  if (
+    !entry ||
+    !key ||
+    !sessionStore ||
+    (!params.isCurrent?.sessionSource && params.isCurrent?.() === false)
+  ) {
     return false;
   }
 

@@ -119,6 +119,8 @@ describe("custodian page", () => {
       .mockResolvedValueOnce(chatReply("Setup complete.", { sessionId: "rich-wizard-session" }));
     const { page } = await mount(request);
 
+    expect(page.querySelector(".chat-read-aloud-btn")).toBeNull();
+
     const trigger = await element<HTMLButtonElement>(
       page,
       ".custodian__wizard-step .picker-select__trigger",
@@ -263,7 +265,6 @@ describe("custodian page", () => {
     expect(replacementRequest.mock.calls.map(([method]) => method)).toEqual([
       "openclaw.chat.history",
       "openclaw.chat",
-      "openclaw.chat.history",
     ]);
     expect(replacementRequest.mock.calls[1]?.[1]).toMatchObject({ sessionId: "custodian-session" });
     expect(replacementRequest.mock.calls[1]?.[1]).not.toHaveProperty("message");

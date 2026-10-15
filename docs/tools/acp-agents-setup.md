@@ -38,7 +38,7 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 | `droid`      | [Factory Droid](https://www.factory.ai)                                                                |
 | `fast-agent` | [fast-agent](https://fast-agent.ai)                                                                    |
 | `gemini`     | [Gemini CLI](https://github.com/google-gemini/gemini-cli)                                              |
-| `grok-build` | Grok Build (`grok agent stdio`)                                                                        |
+| `grok-build` | [Grok Build](https://docs.x.ai/build/overview) (`grok agent stdio`)                                    |
 | `iflow`      | [iFlow CLI](https://github.com/iflow-ai/iflow-cli)                                                     |
 | `kilocode`   | [Kilocode](https://kilocode.ai)                                                                        |
 | `kimi`       | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli)                                                     |
@@ -57,6 +57,7 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 `factory-droid` and `factorydroid` also resolve to the built-in `droid` adapter.
 
 When OpenClaw uses the acpx backend, prefer these values for `agentId` unless your acpx config defines custom agent aliases.
+`grok-build` is an ACPX agent target, not the xAI model id `xai/grok-build-0.1`. Use `agentId: "grok-build"` to launch the Grok Build CLI through ACP; use `xai/grok-build-0.1` only when selecting that model on OpenClaw's xAI provider route.
 If your local Cursor install still exposes ACP as `agent acp`, override the `cursor` agent command in your acpx config instead of changing the built-in default.
 
 Direct acpx CLI usage can also target arbitrary adapters via `--agent <command>`, but that raw escape hatch is an acpx CLI feature (not the normal OpenClaw `agentId` path).
@@ -117,24 +118,31 @@ availability is unconfirmed, check the native app on the Gateway host and run
 
 ## Permissions for native chat runtimes
 
-When a native runtime cannot enforce the chat's optional OpenClaw tool, sandbox,
-or workspace restrictions, the Control UI offers **Continue for this chat** to
-an administrator. The same confirmation applies when selecting the runtime or
-sending a message with an existing selection.
+Enable an installed agent from **Models → Installed agents**. For a runtime that
+uses its own native permissions, OpenClaw asks **Use {runtime}’s native permissions?**
+before enabling it. Accepting remembers consent for the selected OpenClaw agent
+in the same config update as enablement. New chats using that runtime then start
+with **Full access** and optional sandboxing off, without repeating the prompt.
+Enabling a native app does not sign you in to that app.
 
-Confirming selects **Full access**, turns off optional sandboxing for that chat,
-and records consent for the exact native runtime. The native agent then uses its
-own permissions on the Gateway host. OpenClaw does not claim to enforce its
-optional tool restrictions inside that agent. Other chats and global settings
-stay unchanged, and tools hosted by OpenClaw retain their existing policy.
+The native agent uses its own permissions on the Gateway host. OpenClaw does not
+claim to enforce its optional tool restrictions inside that agent. Other agents
+and their chats stay unchanged, and tools hosted by OpenClaw retain their policy.
+Remove the runtime ID from `agents.entries.<agentId>.nativeRuntimeConsent` to
+revoke remembered consent. Disabling and re-enabling the app does not erase it.
+
+For a runtime configured manually without remembered consent, the Control UI
+still offers **Continue for this chat** to an administrator when selecting the
+runtime or sending a message with that selection. This fallback changes only
+that chat's permissions.
 
 Declining leaves permissions unchanged and keeps the message unsent. A first send
 can create an empty chat so confirmation is bound to that chat, but no message is
 saved or run before you confirm. Confirmation saves the permissions and retries
 that message once, including a chat's first message, without pinning its default model.
-Selection-only confirmation does not send the draft. Consent is not inherited by
-another chat and is cleared when the session resets or the selected runtime changes.
-Older hosts that do not recognize consent retain their previous restriction checks.
+Selection-only confirmation does not send the draft. This per-chat consent is
+not inherited by another chat and is cleared when the session resets or the
+selected runtime changes.
 
 Required sandboxes, required workspace boundaries, and incompatible remote
 execution placement cannot be waived by this confirmation. A restricted user
@@ -159,12 +167,14 @@ Core ACP baseline:
       "cursor",
       "droid",
       "gemini",
+      "grok-build",
       "iflow",
       "kilocode",
       "kimi",
       "kiro",
       "openclaw",
       "opencode",
+      "pool",
       "qwen",
     ],
     stream: {
@@ -204,7 +214,7 @@ ACPX isolates bare session names by OpenClaw owner. If a session reports
 `openclaw doctor --fix`, then restart. Doctor uses the same service workspace
 as the Gateway; ACPX's default state directory is `<service workspace>/state`.
 
-The repair requires one current, unambiguous canonical owner claim with matching
+The repair requires one current, unambiguous stored owner claim with matching
 backend identifiers. It preserves the raw history, event-log references, upstream
 session IDs, timestamps, options, and usage. Persistent record names move to an
 owner-qualified resource; existing oneshot physical IDs and histories remain intact.
@@ -214,7 +224,7 @@ session does not bypass this repair.
 
 This is an offline, crash-recoverable migration with atomic destination-file
 publication. Files and SQLite are not one atomic transaction. Interrupted repairs
-can be rerun: Doctor checks the existing destination and canonical claim before
+can be rerun: Doctor checks the existing destination and stored owner claim before
 finishing the metadata update and archiving the old persistent record.
 
 ## Plugin setup for acpx backend
@@ -442,7 +452,7 @@ See [Config hot reload](/gateway/configuration/hot-reload) for other reload mode
 <Warning>
 OpenClaw defaults to `permissionMode=approve-reads` and `nonInteractivePermissions=fail`. In non-interactive ACP sessions, any write or exec that triggers a permission prompt can fail with `PermissionPromptUnavailableError: Permission prompt unavailable in non-interactive mode`.
 
-If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions degrade gracefully instead of crashing.
+If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions deny restricted actions instead of crashing.
 </Warning>
 
 ## Related

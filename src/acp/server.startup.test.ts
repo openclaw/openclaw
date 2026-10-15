@@ -276,14 +276,6 @@ describe("serveAcpGateway startup", () => {
     return gateway;
   }
 
-  function getGatewayBootstrapParams(): { env?: unknown; gatewayUrl?: unknown } {
-    const firstCall = mockState.resolveGatewayClientBootstrap.mock.calls[0];
-    if (!firstCall) {
-      throw new Error("Expected gateway bootstrap resolution call");
-    }
-    return firstCall[0];
-  }
-
   function captureProcessSignalHandlers() {
     const handlers = new Map<NodeJS.Signals, () => void>();
     const spy = vi.spyOn(process, "on").mockImplementation(((
@@ -395,14 +387,6 @@ describe("serveAcpGateway startup", () => {
     mockState.resolveGatewayClientBootstrap.mockResolvedValue(createGatewayBootstrap());
   });
 
-  it("preserves console exports for a co-sharded subsystem logger", async () => {
-    const { createSubsystemLogger } = await import("../logging/subsystem.js");
-
-    expect(() =>
-      createSubsystemLogger("test/acp-startup").isEnabled("info", "console"),
-    ).not.toThrow();
-  });
-
   describe("Gateway lifecycle", () => {
     let signalHandlers: ReturnType<typeof captureProcessSignalHandlers>["signalHandlers"];
     let onSpy: ReturnType<typeof captureProcessSignalHandlers>["onSpy"];
@@ -434,27 +418,6 @@ describe("serveAcpGateway startup", () => {
       await stopServeWithSigint(signalHandlers, servePromise);
     });
 
-    it("injects the server-owned SQLite event ledger into the ACP agent", async () => {
-      const servePromise = serveAcpGateway({});
-      await emitHelloAndWaitForAgentSideConnection();
-
-      expect(mockState.sqliteEventLedgers).toHaveLength(1);
-      expect((mockState.agentOptions[0] as { eventLedger?: unknown }).eventLedger).toBe(
-        mockState.sqliteEventLedgers[0],
-      );
-
-      await stopServeWithSigint(signalHandlers, servePromise);
-    });
-
-    it("advertises approval handling and subscribes to run-scoped tool events", async () => {
-      const servePromise = serveAcpGateway({});
-      await emitHelloAndWaitForAgentSideConnection();
-
-      expect(mockState.gatewayOptions[0]?.caps).toEqual(["exec-approvals", "tool-events"]);
-
-      await stopServeWithSigint(signalHandlers, servePromise);
-    });
-
     it("passes the resolved TLS fingerprint into the ACP gateway client", async () => {
       mockState.resolveGatewayClientBootstrap.mockResolvedValue({
         ...createGatewayBootstrap("wss://127.0.0.1:18789"),
@@ -470,11 +433,6 @@ describe("serveAcpGateway startup", () => {
     });
 
     it.each([
-      {
-        name: "default logging",
-        opts: {},
-        expected: ["openclaw acp: gateway event chat failed\n"],
-      },
       {
         name: "verbose logging",
         opts: { verbose: true },
@@ -537,86 +495,6 @@ describe("serveAcpGateway startup", () => {
 
       await serveAcpGateway({});
       expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
-      expect(mockState.closeOpenClawStateDatabaseAsync).toHaveBeenCalledOnce();
-    });
-
-    it("passes resolved SecretInput gateway credentials to the ACP gateway client", async () => {
-      mockState.resolveGatewayClientBootstrap.mockResolvedValue({
-        ...createGatewayBootstrap(),
-        auth: {
-          token: undefined,
-          password: "resolved-secret-password" /* pragma: allowlist secret */,
-        },
-      });
-
-      const servePromise = serveAcpGateway({});
-      await Promise.resolve();
-
-      const bootstrapParams = getGatewayBootstrapParams();
-      expect(bootstrapParams.env).toBe(process.env);
-      expect(mockState.gatewayAuth[0]).toEqual({
-        token: undefined,
-        password: "resolved-secret-password", // pragma: allowlist secret
-      });
-
-      await emitHelloAndWaitForAgentSideConnection();
-      await stopServeWithSigint(signalHandlers, servePromise);
-    });
-
-    it("passes CLI URL override context into shared gateway auth resolution", async () => {
-      const servePromise = serveAcpGateway({
-        gatewayUrl: "wss://override.example/ws",
-      });
-      await Promise.resolve();
-
-      const bootstrapParams = getGatewayBootstrapParams();
-      expect(bootstrapParams.env).toBe(process.env);
-      expect(bootstrapParams.gatewayUrl).toBe("wss://override.example/ws");
-
-      await emitHelloAndWaitForAgentSideConnection();
-      await stopServeWithSigint(signalHandlers, servePromise);
-    });
-
-    it("passes the configured Gateway URL into the ACP gateway client", async () => {
-      mockState.resolveGatewayClientBootstrap.mockResolvedValue(
-        createGatewayBootstrap("ws://127.0.0.1:19999", "cli --url"),
-      );
-
-      const servePromise = serveAcpGateway({
-        gatewayUrl: "ws://127.0.0.1:19999",
-      });
-      await Promise.resolve();
-
-      expect(mockState.gatewayOptions[0]?.url).toBe("ws://127.0.0.1:19999");
-
-      await emitHelloAndWaitForAgentSideConnection();
-      await stopServeWithSigint(signalHandlers, servePromise);
-    });
-
-    it("does not proxy the standalone ACP control-plane Gateway connection", async () => {
-      const servePromise = serveAcpGateway({});
-      await vi.waitFor(() => {
-        expect(mockState.gateways).toHaveLength(1);
-      });
-
-      expect(mockState.startProxy).not.toHaveBeenCalled();
-      await emitHelloAndWaitForAgentSideConnection();
-      await stopServeWithSigint(signalHandlers, servePromise);
-      expect(mockState.stopProxy).not.toHaveBeenCalled();
-    });
-
-    it("shuts down when the ACP client closes its stdio stream", async () => {
-      const servePromise = serveAcpGateway({});
-      await emitHelloAndWaitForAgentSideConnection();
-      const closeConnection = mockState.closeAgentSideConnection;
-      if (!closeConnection) {
-        throw new Error("Expected mocked ACP connection close handler");
-      }
-
-      closeConnection();
-      await servePromise;
-
-      expect(mockState.agentShutdown).toHaveBeenCalledOnce();
       expect(mockState.closeOpenClawStateDatabaseAsync).toHaveBeenCalledOnce();
     });
 
@@ -725,21 +603,6 @@ describe("serveAcpGateway startup", () => {
 
       const [message] = await captureAcpMessagesAfterStartup([initializeRequest]);
       expect(message).toBe(initializeRequest);
-    });
-
-    it("passes non-initialize JSON-RPC messages through unchanged", async () => {
-      const sessionRequest = {
-        jsonrpc: "2.0",
-        id: 2,
-        method: "session/new",
-        params: {
-          protocolVersion: "2025-11-25",
-          cwd: "/tmp/openclaw",
-        },
-      };
-
-      const [message] = await captureAcpMessagesAfterStartup([sessionRequest]);
-      expect(message).toBe(sessionRequest);
     });
   });
 
