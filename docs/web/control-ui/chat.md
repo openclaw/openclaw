@@ -68,6 +68,12 @@ that subagent in the **Subagents** panel, or its session when the panel does not
 list it. The rows reuse the chat's loaded subagent list; they do not load each
 child's transcript.
 
+When a direct child session, such as a visible session started with
+`sessions_spawn`, asks with `ask_user`, its pending question also docks above
+this chat's composer, marked **Asked by session …**. Answering it there answers
+the child, which continues; the answered question stays in the child's
+transcript.
+
 When a turn hands off with `sessions_yield` and its subagents are still active,
 their live rows stay under that reply without a separate **Waiting on…** line.
 One muted timer at the far right of those rows shows the total time since your

@@ -11,7 +11,6 @@ import { canUseQuestionPrompts } from "../../app/question-prompt-client.ts";
 import {
   refreshPendingQuestionsWithRetry,
   setQuestionPromptClient,
-  type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
@@ -33,6 +32,11 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
+import {
+  EMPTY_QUESTION_PROJECTION,
+  projectChildSessionQuestions,
+  reuseQuestionProjection,
+} from "./chat-child-questions.ts";
 import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import {
   getChatHistoryLoadState,
@@ -117,10 +121,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private outboxRecoveryReady = false;
   private gatewayReadsAvailable = false;
   private sidebarLayoutSource?: { client: ApplicationGatewaySnapshot["client"]; ready: boolean };
-  private questionProjection: { prompts: QuestionPrompt[]; revisions: number[] } = {
-    prompts: [],
-    revisions: [],
-  };
+  private questionProjection = EMPTY_QUESTION_PROJECTION;
   // Capability identity matters because a replacement restarts its canonical revision at zero.
   private canonicalSessionList?: {
     sessions: ApplicationContext["sessions"];
@@ -380,23 +381,16 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       agentId?: string | null;
     }) =>
       uiConversationMatches(state, state.sessionKey, request.sessionKey, request.agentId, agentId);
-    const questions = visible ? this.questionPrompts.filter(matchesConversation) : [];
-    // Question records mutate in place; their revisions own transcript-cache invalidation.
-    if (
-      questions.length !== this.questionProjection.prompts.length ||
-      questions.some(
-        (prompt, index) =>
-          prompt !== this.questionProjection.prompts[index] ||
-          prompt.revision !== this.questionProjection.revisions[index],
-      )
-    ) {
-      this.questionProjection = {
-        prompts: questions,
-        revisions: questions.map((prompt) => prompt.revision),
-      };
-    }
+    this.questionProjection = reuseQuestionProjection(
+      this.questionProjection,
+      visible ? this.questionPrompts.filter(matchesConversation) : [],
+      visible ? this.projectChildQuestions(state) : undefined,
+    );
     return {
-      gatewayQuestionPrompts: this.questionProjection.prompts,
+      gatewayQuestions: {
+        gatewayQuestionPrompts: this.questionProjection.prompts,
+        gatewayQuestionSources: this.questionProjection.sources,
+      },
       // Session replay already owns the parent's presentation scope for delegated approvals.
       inlineApproval: visible
         ? (state.chatSessionApprovalQueue?.[0] ??
@@ -406,6 +400,17 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
           null)
         : null,
     };
+  }
+
+  // Reads the same child roster and owner-qualified ancestry key as the subagent rows.
+  private projectChildQuestions(state: ChatPageHost) {
+    const roster = this.projectChildRoster(this.resolveChatReadTarget());
+    return projectChildSessionQuestions(
+      state,
+      roster.subagentParentKey,
+      roster.subagentSessions,
+      this.questionPrompts,
+    );
   }
 
   protected applyApplicationConfig(config: ApplicationContext["config"]["current"]) {

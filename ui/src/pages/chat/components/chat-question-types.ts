@@ -18,6 +18,8 @@ export type QuestionPanelViewModel = {
   drafts: Map<string, QuestionDraft>;
   error?: string | null;
   notice?: string;
+  /** Display name of the child session that asked, when it is not this conversation. */
+  requestedBySession?: string;
   requestPosition?: { current: number; total: number };
 };
 
@@ -38,5 +40,6 @@ export type QuestionPanelOptions = Pick<
   "onChange" | "onSubmit" | "onSkip" | "onCollapsedChange" | "onPreviousRequest" | "onNextRequest"
 > & {
   collapsed?: boolean;
+  requestedBySession?: string;
   requestPosition?: QuestionPanelViewModel["requestPosition"];
 };

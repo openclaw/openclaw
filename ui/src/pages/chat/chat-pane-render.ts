@@ -362,7 +362,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     };
     const selfProfileId = selfUser?.identity?.type === "profile" ? selfUser.identity.id : null;
     const mentionsUnsupported = !nativeConversation || selectedSession?.incognito || !selfProfileId;
-    const { gatewayQuestionPrompts, inlineApproval } = this.projectConversationAttention(
+    const { gatewayQuestions, inlineApproval } = this.projectConversationAttention(
       state,
       currentAgentId,
       !catalogKey && !sessionParticipationBlocked,
@@ -426,7 +426,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         this.transcript.cancelScroll();
       },
       onDismissProgressCard: progressPresentation ? this.hideProgressCard.bind(this) : undefined,
-      gatewayQuestionPrompts,
+      ...gatewayQuestions,
       asyncQuestionStorage: nativeConversation
         ? this.chatState.composerPersistence.durableScope
         : null,

@@ -113,8 +113,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   runId?: string | null;
   onDismissProgressCard?: (card: ProgressCard) => void;
   onClearSavedProgressCard?: (card: ProgressCard) => void;
-  /** The pane scopes Gateway questions to this conversation's agent and session. */
+  /** The pane scopes Gateway questions to this conversation and its direct child sessions. */
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
+  /** Asking child session display names, keyed by question id. */
+  gatewayQuestionSources?: ReadonlyMap<string, string>;
   asyncQuestions?: AsyncQuestionPresentation;
   messages: unknown[];
   stream: string | null;

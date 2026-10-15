@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { BrowserContext, Page } from "playwright";
 import { beforeEach, afterEach, expect, it } from "vitest";
-import type { SessionsListResult } from "../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
@@ -101,7 +101,11 @@ function historyMessages() {
   }));
 }
 
-async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouch = false) {
+async function openQuestionPage(
+  viewport = { height: 900, width: 1440 },
+  hasTouch = false,
+  extraSessions: GatewaySessionRow[] = [],
+) {
   context = await suite.browser.newContext({
     hasTouch,
     locale: "en-US",
@@ -129,7 +133,7 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
       "sessions.list": {
         ts: Date.now(),
         path: "",
-        count: 2,
+        count: 2 + extraSessions.length,
         defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: null },
         sessions: [
           {
@@ -144,6 +148,7 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
             label: "Question proof",
             updatedAt: Date.now(),
           },
+          ...extraSessions,
         ],
       } satisfies SessionsListResult,
     },
@@ -265,6 +270,62 @@ suite.define(() => {
 
     await row.locator(".sidebar-recent-session__link").tap();
     await expect.poll(() => shell.getAttribute("class")).not.toContain("shell--nav-drawer-open");
+  });
+
+  it("docks a visible child session's question in the parent and answers it there", async () => {
+    const childKey = "agent:main:dashboard:child-question";
+    const { gateway, page } = await openQuestionPage(undefined, false, [
+      {
+        key: childKey,
+        kind: "direct",
+        label: "Release checks",
+        parentSessionKey: questionSessionKey,
+        spawnDepth: 1,
+        status: "running",
+        hasActiveRun: true,
+        updatedAt: Date.now(),
+      },
+    ]);
+    const choice = (question: string) => ({
+      questionId: "channel",
+      header: "Channel",
+      question,
+      options: [{ label: "Beta" }, { label: "Stable" }],
+      isOther: false,
+    });
+    const unrelatedPrompt = "Which channel should the unrelated session use?";
+    await emitRequested(gateway, {
+      ...questionRecord("unrelated-session-question", [choice(unrelatedPrompt)]),
+      sessionKey: "agent:main:dashboard:unrelated",
+    });
+    const childPrompt = "Which channel should the release checks use?";
+    const request = {
+      ...questionRecord("child-session-question", [choice(childPrompt)]),
+      sessionKey: childKey,
+    };
+    await emitRequested(gateway, request);
+    const panel = panelFor(page, childPrompt);
+    await panel.waitFor();
+    expect((await panel.locator(".chat-question-panel__source").textContent())?.trim()).toBe(
+      "Asked by session Release checks",
+    );
+    expect(await panelFor(page, unrelatedPrompt).count()).toBe(0);
+    await screenshot(page, "child-question-parent-dock.png");
+
+    await panel.getByRole("radio", { name: /Beta/ }).click();
+    const answers = { answers: { channel: ["Beta"] } };
+    await gateway.setMethodResponse("question.resolve", {
+      status: "answered",
+      answers,
+    } satisfies QuestionResolveResult);
+    await panel.getByRole("button", { name: "Submit", exact: true }).click();
+    expect((await gateway.waitForRequest("question.resolve")).params).toEqual({
+      id: request.id,
+      answers,
+    });
+    await expect.poll(() => panel.count()).toBe(0);
+    // The answered question belongs to the child's transcript, not the parent's.
+    expect(await page.locator(".chat-thread").getByText(childPrompt).count()).toBe(0);
   });
 
   it("opens an external question step without answering until completion is submitted", async () => {

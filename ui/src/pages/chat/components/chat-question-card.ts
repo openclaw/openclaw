@@ -43,6 +43,7 @@ export function createGatewayQuestionPanelProps(
       submitting: prompt.submitting,
       drafts: prompt.drafts,
       error: prompt.error,
+      requestedBySession: options.requestedBySession,
       requestPosition: options.requestPosition,
     },
     onChange,

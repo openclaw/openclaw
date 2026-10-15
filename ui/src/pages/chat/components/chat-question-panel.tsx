@@ -368,6 +368,13 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
                   <Icon name="chevronDown" />
                 </button>
               </div>
+              {model().requestedBySession && (
+                <div class="chat-question-panel__source" role="note">
+                  {t("chat.questions.requestedBySession", {
+                    session: model().requestedBySession!,
+                  })}
+                </div>
+              )}
               {!model().nonBlocking && (
                 <div class="chat-question-panel__heading">
                   <span class="chat-question-panel__prompt">{item().question}</span>
