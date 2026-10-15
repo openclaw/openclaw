@@ -4,7 +4,6 @@ import { renderDecisionModelPicker } from "./decision-model-picker.ts";
 import { renderModelPicker, type ModelPickerOption } from "./model-picker.ts";
 import { renderPicker, type SelectPicker } from "./select-picker.ts";
 import { renderSettingsRow } from "./settings-ui.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../styles/base.css";
 import "../styles/settings-controls.css";
 import "../styles/settings.css";
