@@ -251,10 +251,7 @@ export async function buildDynamicTools(
       emitBeforeToolCallDiagnostics: false,
       modelProvider: params.model.provider,
       modelId: params.modelId,
-      modelCompat:
-        params.model.compat && typeof params.model.compat === "object"
-          ? (params.model.compat as OpenClawCodingToolsOptions["modelCompat"])
-          : undefined,
+      modelCompat: params.model.compat,
       modelApi: params.model.api,
       modelContextWindowTokens: params.model.contextWindow,
       delegationCapability: params.delegationCapability,

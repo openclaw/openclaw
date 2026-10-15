@@ -34,6 +34,10 @@ vi.mock("../infra/sqlite-readonly-worker.js", () => ({
 vi.mock("../state/openclaw-state-db-readonly.js", () => ({
   isArtifactPreservingStateRead: () => mocks.preserving,
 }));
+vi.mock("../state/openclaw-state-db.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db.js")>()),
+  initializeNativeOpenClawStateDatabase: vi.fn(),
+}));
 vi.mock("./doctor-sqlite-maintenance-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-sqlite-maintenance-lock.js")>()),
   withDoctorSqliteMaintenanceLock: mocks.maintenance,

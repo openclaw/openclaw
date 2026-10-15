@@ -528,7 +528,7 @@ describe("new-session composer start control", () => {
 
     expect(composer.querySelectorAll(".chat-send-btn")).toHaveLength(1);
     expect(composer.querySelector(".new-session-page__start-split")).toBeNull();
-    expect(composer.querySelector("[data-value='start-terminal']")).toBeNull();
+    expect(composer.querySelector("button[aria-label='Start in terminal']")).toBeNull();
   });
 
   it("marks the Start button busy while the session is starting", () => {

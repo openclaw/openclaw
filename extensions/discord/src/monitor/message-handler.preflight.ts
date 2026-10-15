@@ -50,7 +50,6 @@ import {
   isDiscordThreadChannelMessage,
   matchesActiveDiscordMentionPatterns,
   resolveDiscordMentionState,
-  resolveInjectedBoundThreadLookupRecord,
   shouldIgnoreBoundThreadWebhookMessage,
 } from "./message-handler.preflight-helpers.js";
 import { buildDiscordPreflightHistoryEntry } from "./message-handler.preflight-history.js";
@@ -230,10 +229,7 @@ export async function preflightDiscordMessage(
   // messages should reach the single authoritative binding lookup below.
   const injectedBoundThreadBinding =
     !isDirectMessage && !isGroupDm && (webhookId || author.bot)
-      ? resolveInjectedBoundThreadLookupRecord({
-          threadBindings: params.threadBindings,
-          threadId: messageChannelId,
-        })
+      ? params.threadBindings.getByThreadId?.(messageChannelId)
       : undefined;
   const ignoreBoundThreadMessage = (
     threadBinding: Parameters<typeof shouldIgnoreBoundThreadWebhookMessage>[0]["threadBinding"],

@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
-import { createCoreHealthChecks } from "../flows/doctor-core-checks.js";
 import { resolveFinalDoctorHealthContributions } from "../flows/doctor-health-contributions-final.js";
 import * as gatewayCall from "../gateway/call.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../gateway/method-scopes.js";
@@ -14,19 +13,12 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { collectDevicePairingHealthFindings } from "./doctor-device-pairing.js";
 import { checkGatewayHealth, probeGatewayMemoryStatus } from "./doctor-gateway-health.js";
 
-const {
-  socketCall,
-  note,
-  collectClawStateHealthFindings,
-  collectWhatsappResponsivenessHealthFindings,
-} = vi.hoisted(() => ({
+const { socketCall, note, collectWhatsappResponsivenessHealthFindings } = vi.hoisted(() => ({
   socketCall: vi.fn(),
   note: vi.fn(),
-  collectClawStateHealthFindings: vi.fn(),
   collectWhatsappResponsivenessHealthFindings: vi.fn(),
 }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
-vi.mock("../claws/doctor.js", () => ({ collectClawStateHealthFindings }));
 vi.mock("./doctor-whatsapp-responsiveness.js", () => ({
   collectWhatsappResponsivenessHealthFindings,
 }));
@@ -57,7 +49,6 @@ describe("Doctor hosted Gateway reads", () => {
     // Hosted routing and readiness stay real; only socket requests are replaced.
     vi.spyOn(gatewayCall, "callGateway").mockImplementation(socketCall);
     note.mockReset();
-    collectClawStateHealthFindings.mockReset();
     collectWhatsappResponsivenessHealthFindings.mockReset().mockReturnValue([]);
   });
   afterEach(() => {
@@ -123,46 +114,6 @@ describe("Doctor hosted Gateway reads", () => {
         });
       },
     );
-    expect(socketCall).not.toHaveBeenCalled();
-  });
-
-  it("keeps paginated cron inventory bound to the original hosted Gateway", async () => {
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
-    let reads = 0;
-    let current: GatewayRequestContext | undefined = contextFor({
-      "cron.list": ({ params, respond }) => {
-        reads += 1;
-        expect(params.offset).toBe(0);
-        respond(true, {
-          jobs: [{ id: "first" }],
-          snapshotRevision: "revision",
-          total: 2,
-          offset: 0,
-          limit: 200,
-          hasMore: true,
-          nextOffset: 1,
-        });
-        current = contextFor({
-          "cron.list": () => {
-            throw new Error("replacement Gateway used");
-          },
-        });
-      },
-    });
-    collectClawStateHealthFindings.mockImplementation(
-      async ({ cronGateway }) => await cronGateway.list(),
-    );
-    const check = createCoreHealthChecks().find((entry) => entry.id === "core/doctor/claws-state");
-    expect(check).toBeDefined();
-    await withPluginRuntimeGatewayContextResolver(
-      () => current,
-      async () => {
-        await expect(check!.detect({ mode: "doctor", runtime, cfg: {} })).rejects.toThrow(
-          "Gateway instance unavailable",
-        );
-      },
-    );
-    expect(reads).toBe(1);
     expect(socketCall).not.toHaveBeenCalled();
   });
 

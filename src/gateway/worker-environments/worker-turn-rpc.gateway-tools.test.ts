@@ -212,3 +212,58 @@ describe("worker Gateway tool RPC authority", () => {
     },
   );
 });
+
+describe("worker GitHub heartbeat authority", () => {
+  support.setupWorkerEnvironmentServiceSuite();
+
+  it("fences a credential prepared before its retained caller closes", async () => {
+    const h = await support.placementHarness("github-refresh", "github-refresh-session");
+    const entered = createDeferred();
+    const release = createDeferred();
+    const revoke = vi.fn(async () => {});
+    h.bindGitHubGrant({
+      binding: { token: "synthetic-initial", login: "fixture", branch: "fixture" },
+      signal: new AbortController().signal,
+      assertCurrent() {},
+      revoke,
+      refresh: async () => {
+        entered.resolve();
+        await release.promise;
+        return { generation: 1, token: "synthetic-replacement" };
+      },
+    });
+    const pending = h.workerService.refreshGitHubBinding(h.identity, 0);
+    await entered.promise;
+    h.releaseSource();
+    release.resolve();
+    await expect(pending).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+    expect(revoke).toHaveBeenCalledOnce();
+  });
+
+  it("revalidates a prepared heartbeat at delivery and stops renewing after terminal ACK", async () => {
+    const h = await support.placementHarness("github-delivery", "github-delivery-session", {
+      liveEvents: support.sequencedLiveEvents().liveEvents,
+    });
+    const refresh = vi.fn(async () => ({ generation: 1, token: "synthetic-replacement" }));
+    h.bindGitHubGrant({
+      binding: { token: "synthetic-initial", login: "fixture", branch: "fixture" },
+      signal: new AbortController().signal,
+      assertCurrent() {},
+      revoke: async () => {},
+      refresh,
+    });
+    const prepared = await h.workerService.refreshGitHubBinding(h.identity, 0);
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("Expected admitted heartbeat");
+    }
+    expect(prepared.result?.token).toBe("synthetic-replacement");
+    await h.workerService.pushLiveEvent(h.identity, support.terminalEvent(h.identity));
+    expect(prepared.result).toBeUndefined();
+    const terminal = await h.workerService.refreshGitHubBinding(h.identity, 0);
+    expect(terminal).toMatchObject({ ok: true, result: undefined });
+    expect(refresh).toHaveBeenCalledOnce();
+    h.releaseSource();
+    expect(() => prepared.assertCurrent()).toThrow();
+  });
+});

@@ -14,6 +14,12 @@ The Gateway applies revisioned config snapshots automatically. Most settings do
 not need a manual restart. `~/.openclaw/openclaw.json` remains the config source,
 including JSON5, `$include`, and environment substitutions.
 
+Startup waits for the config watcher's initial reconciliation, queued file-stability
+checks, and any resulting reload attempt before completing. Initial config
+publication cannot race the first request after startup.
+Credential refreshes that leave the effective config unchanged preserve pending
+work instead of invalidating its config snapshot.
+
 Writes made through the running Gateway publish their committed snapshot
 directly to the reload owner. They do not wait for a file-watcher event or its
 debounce window. Runtime consumers keep reading the last successfully applied
@@ -277,7 +283,8 @@ their original handlers. Workspace changes reload directory hooks from the
 newly selected workspace. Reload does not replay `gateway:startup`.
 
 Under `gateway.controlUi`, the `enabled`, `environment`, `github`,
-`sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, `experimental.customPlugins`, and
+`sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, `experimental.customPlugins`,
+`experimental.claws`, and
 `automaticallyFetchFavicons` settings hot-apply. Reload open Control UI pages to
 pick up the environment label, CLI agent picker, embed preferences, and favicon
 display preference; the Gateway process keeps running. `allowedOrigins` and

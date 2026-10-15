@@ -633,12 +633,12 @@ suite.define(() => {
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    await currentPage.getByLabel("Session sharing").click();
+    await currentPage.getByRole("button", { name: "Session sharing", exact: true }).click();
     const publish = currentPage.getByText("Publish draft", { exact: true });
     await publish.waitFor();
     await captureUiProof(
       suite,
-      currentPage.locator('.chat-pane__sharing-menu [part="menu"]'),
+      currentPage.locator(".chat-pane__sharing-panel"),
       "04-publish-draft-action.png",
       [publish],
     );
@@ -676,11 +676,16 @@ suite.define(() => {
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByRole("button", { name: "Session sharing" }).click();
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
-    await expect.poll(() => dropdown.getAttribute("open")).not.toBeNull();
+    const panel = dropdown.locator(".chat-pane__sharing-panel");
+    await expect
+      .poll(() => panel.evaluate((element) => element.matches(":popover-open")))
+      .toBe(true);
     await expectBrowser(dropdown.locator(".chat-pane__sharing-title")).toHaveCount(3);
     await currentPage.getByText("Publish draft", { exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
-    await expect.poll(() => dropdown.getAttribute("open")).toBeNull();
+    await expect
+      .poll(() => panel.evaluate((element) => element.matches(":popover-open")))
+      .toBe(false);
     expect(await gateway.getRequests("session.members.listEvidence")).toHaveLength(0);
 
     const message = "visibility change rejected";
@@ -731,24 +736,18 @@ suite.define(() => {
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    await currentPage.getByLabel("Session sharing").click();
+    await currentPage.getByRole("button", { name: "Session sharing", exact: true }).click();
     await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
-    const publish = dropdown.locator('wa-dropdown-item[value="visibility:shared"]');
-    await publish.waitFor();
-    expect(await publish.getAttribute("disabled")).not.toBeNull();
-
+    const publish = dropdown.locator('button[value="visibility:shared"]');
+    const member = dropdown.locator('button[value="member:profile-bob"]');
+    await expectBrowser(publish).toBeVisible();
+    await expectBrowser(publish).toBeDisabled();
+    await expectBrowser(member).toBeVisible();
+    await expectBrowser(member).toBeDisabled();
     await dropdown.evaluate((element) => {
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          detail: { item: { value: "visibility:shared" } },
-        }),
-      );
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          detail: { item: { value: "member:profile-bob" } },
-        }),
-      );
+      element.querySelector<HTMLButtonElement>('button[value="visibility:shared"]')?.click();
+      element.querySelector<HTMLButtonElement>('button[value="member:profile-bob"]')?.click();
     });
 
     expect(await gateway.getRequests("session.visibility.set")).toHaveLength(0);
@@ -821,20 +820,20 @@ suite.define(() => {
     await currentPage.locator(".chat-pane__sharing-trigger").click();
     await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
-    await dropdown.locator('wa-dropdown-item[value="member:profile-member-0"]').waitFor();
+    await dropdown.locator('button[value="member:profile-member-0"]').waitFor();
     await dropdown.evaluate(async (element) => {
-      const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      const menu = element.querySelector<HTMLElement>(".chat-pane__sharing-panel");
       const animations = [...element.getAnimations(), ...(menu?.getAnimations() ?? [])];
       await Promise.all(animations.map((animation) => animation.finished.catch(() => {})));
     });
-    const longNameItem = dropdown.locator('wa-dropdown-item[value="member:profile-long-name"]');
-    const longIdItem = dropdown.locator(`wa-dropdown-item[value="member:${longMemberId}"]`);
+    const longNameItem = dropdown.locator('button[value="member:profile-long-name"]');
+    const longIdItem = dropdown.locator(`button[value="member:${longMemberId}"]`);
 
     await longIdItem.scrollIntoViewIfNeeded();
-    const selectedIndicator = longIdItem.locator('[slot="details"]');
+    const selectedIndicator = longIdItem.locator(".session-menu__check");
     await expectBrowser(selectedIndicator).toBeVisible();
     const selectedIndicatorContained = await longIdItem.evaluate((item) => {
-      const indicator = item.querySelector<HTMLElement>('[slot="details"]');
+      const indicator = item.querySelector<HTMLElement>(".session-menu__check");
       const itemRect = item.getBoundingClientRect();
       const indicatorRect = indicator?.getBoundingClientRect();
       return Boolean(
@@ -846,7 +845,7 @@ suite.define(() => {
     expect(selectedIndicatorContained).toBe(true);
 
     const beforeScroll = await dropdown.evaluate((element) => {
-      const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      const menu = element.querySelector<HTMLElement>(".chat-pane__sharing-panel");
       if (menu) {
         menu.scrollTop = 0;
       }
@@ -894,7 +893,7 @@ suite.define(() => {
         ),
         visibilityTitlePosition: visibilityTitle ? getComputedStyle(visibilityTitle).position : "",
         membersTitlePosition: membersTitle ? getComputedStyle(membersTitle).position : "",
-        nestedScrollers: [...element.children].filter((child) => {
+        nestedScrollers: [...(menu?.children ?? [])].filter((child) => {
           const node = child as HTMLElement;
           return (
             node.scrollHeight > node.clientHeight &&
@@ -904,7 +903,7 @@ suite.define(() => {
       };
     });
     const afterScroll = await dropdown.evaluate(async (element) => {
-      const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      const menu = element.querySelector<HTMLElement>(".chat-pane__sharing-panel");
       const visibilityTitle = element.querySelector<HTMLElement>(
         ".chat-pane__sharing-visibility-title",
       );

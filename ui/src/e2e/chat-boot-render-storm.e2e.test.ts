@@ -265,13 +265,13 @@ suite.define(() => {
         const measurement = await page.evaluate(() => ({
           tags: Object.fromEntries(window.chatBootRenderCounts),
           closedMenuItems: document.querySelectorAll(
-            "openclaw-chat-pane wa-dropdown:not([open]) wa-dropdown-item",
+            'openclaw-chat-pane wa-dropdown:not([open]) wa-dropdown-item, openclaw-chat-pane [role="menu"][popover]:not(:popover-open) [role^="menuitem"]',
           ).length,
           closedMenuHosts: Array.from(
             document.querySelectorAll(
-              "openclaw-chat-pane wa-dropdown:not([open]) wa-dropdown-item",
+              'openclaw-chat-pane wa-dropdown:not([open]) wa-dropdown-item, openclaw-chat-pane [role="menu"][popover]:not(:popover-open) [role^="menuitem"]',
             ),
-            (item) => item.closest("wa-dropdown")?.className,
+            (item) => item.closest('wa-dropdown, [role="menu"][popover]')?.className,
           ),
         }));
         await writeFile(
@@ -298,7 +298,7 @@ suite.define(() => {
           .getByRole("menu", { name: `Actions for ${label}` })
           .waitFor({ state: "visible" });
         expect(
-          await pane.locator("openclaw-chat-header-session-menu wa-dropdown-item").count(),
+          await pane.locator('openclaw-chat-header-session-menu [role^="menuitem"]').count(),
         ).toBeGreaterThan(10);
         await page.keyboard.press("Escape");
         await pane.getByRole("button", { name: "Session sharing", exact: true }).click();

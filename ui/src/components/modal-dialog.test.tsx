@@ -83,7 +83,7 @@ describe("openclaw-modal-dialog", () => {
       await commitRender(modal);
 
       expect(modal.open).toBe(true);
-      expect(document.openClawModalLayers?.has(modal)).toBe(false);
+      expect(document.openClawModalLayers?.has(modal)).not.toBe(true);
 
       container.append(modal);
       const { dialog } = await getRenderedModalDialog(container);

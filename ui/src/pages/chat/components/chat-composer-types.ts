@@ -46,7 +46,7 @@ import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-me
 import type {
   ChatComposerCapabilityMenuProps,
   ChatComposerPlusMenuView,
-} from "./chat-composer-plus-menu.tsx";
+} from "./chat-composer-plus-menu.types.ts";
 import type { SkillMenuState } from "./chat-composer-skill-menu.tsx";
 import type { SlashMenuState } from "./chat-composer-slash-menu.tsx";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
@@ -163,7 +163,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
   composerControls?: LegacyTemplateResult | LegacyDirectiveResult | typeof emptyLegacyContent;
   footerContent?: JSX.Element;
-  composerRecovery?: LegacyTemplateResult | typeof emptyLegacyContent;
+  composerRecovery?: LegacyTemplateResult | LegacyDirectiveResult | typeof emptyLegacyContent;
   notices?: JSX.Element;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;

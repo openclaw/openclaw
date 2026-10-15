@@ -20,6 +20,7 @@ import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { ApplicationOverlays } from "../app/overlays-types.ts";
 import type { AppSidebarElement, AppSidebarOwner } from "../components/app-sidebar.tsx";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
+import { createInitialConfigState } from "../lib/config/config-state-model.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
 import {
   createSessionCapability,
@@ -55,13 +56,7 @@ const sidebarSessionGatewayBindings = new WeakMap<
 export type SidebarLifecycleState = AppSidebarElement &
   Omit<AppSidebarOwner, keyof AppSidebarElement>;
 
-export type TestSessionMenu = HTMLElement & {
-  forkDisabled: boolean;
-  forkFromLastCompleted: boolean;
-  onAction: (action: { kind: "fork" }) => void;
-  selectionCount: number;
-  readonly updateComplete: Promise<boolean>;
-};
+export type TestSessionMenu = HTMLElementTagNameMap["openclaw-session-menu"];
 
 export function createGatewayHarness(client: GatewayBrowserClient) {
   const originalRequest =
@@ -534,6 +529,11 @@ export function createContext(
     placementStartup: { pause: vi.fn<ApplicationContext["placementStartup"]["pause"]>() },
     agents,
     agentIdentity,
+    runtimeConfig: {
+      state: createInitialConfigState(gateway.snapshot),
+      ensureLoaded: async () => undefined,
+      subscribe: () => () => undefined,
+    },
     scopeUpgrade: hiddenScopeUpgradeCapability,
     overlays: {
       snapshot: { approvalQueue },

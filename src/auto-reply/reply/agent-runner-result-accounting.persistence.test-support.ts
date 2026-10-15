@@ -342,6 +342,7 @@ export async function createAgentAccountingPersistenceFixture({
               // The reply was already delivered; exercise completion bookkeeping
               // without creating another pending delivery intent.
               completedSourceReplyDelivery: true,
+              reminderNoteAppended: false,
               guardedReplyPayloads: [],
               responseUsageLine: undefined,
             },

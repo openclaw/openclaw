@@ -157,7 +157,7 @@ export class ShellOwner
   // Settings navigation is needed only after entering the settings takeover.
   // Keep its search, update-card, and sidebar rendering graph off the startup path.
   readonly settingsSidebar = new LazyRenderer(this, () =>
-    import("../components/settings-sidebar.ts").then((module) => module.renderSettingsSidebar),
+    import("../components/settings-sidebar.tsx").then((module) => module.renderSettingsSidebar),
   );
   readonly debugOverlayFrame = new LazyRenderer(this, () =>
     import("../pages/debug/debug-overlay-frame.ts").then(

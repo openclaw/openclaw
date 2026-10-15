@@ -6,6 +6,7 @@ import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyMemoryWikiMutation } from "./apply.js";
 import { importChatGptConversations } from "./chatgpt-import.js";
+import { compileMemoryWikiVault } from "./compile.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { buildSourcePage } from "./source-page.test-helpers.js";
@@ -27,7 +28,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
       const vault = await actual.root(...args);
       return new Proxy(vault, {
         get(target, prop, receiver) {
-          if (prop !== "readText") {
+          if (prop !== "readText" && prop !== "readBytes") {
             return Reflect.get(target, prop, receiver);
           }
           return async (relativePath: string) => {
@@ -42,7 +43,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
               securityRuntimeMock.readTextFailureInjected = true;
               throw securityRuntimeMock.readTextOnceError;
             }
-            return target.readText(relativePath);
+            return target[prop](relativePath);
           };
         },
       });
@@ -115,6 +116,33 @@ describe("memory-wiki existing-page read retry", () => {
     securityRuntimeMock.readTextError = new Error("persistent existing-page read failure");
     securityRuntimeMock.readTextFailureInjected = false;
   });
+
+  it.each(["index.md", "reports/open-questions.md"])(
+    "leaves existing generated page %s unchanged after a non-missing read failure",
+    async (relativePath) => {
+      const { rootDir, config } = await createVault({
+        prefix: "memory-wiki-compile-read-failure-",
+        initialize: true,
+        config: {
+          render: {
+            createBacklinks: false,
+            createDashboards: relativePath.startsWith("reports/"),
+          },
+        },
+      });
+      const pagePath = path.join(rootDir, relativePath);
+      const original = "# Existing page\n\n## Notes\nKeep this human-written content.\n";
+      await fs.writeFile(pagePath, original, "utf8");
+      securityRuntimeMock.failReadTextAlwaysFor = relativePath;
+
+      await expect(compileMemoryWikiVault(config)).rejects.toThrow(
+        "persistent existing-page read failure",
+      );
+
+      expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
+      await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(original);
+    },
+  );
 
   it("preserves ingest notes after a transient existing-page read failure", async () => {
     const rootDir = await createTempDir("memory-wiki-reingest-read-retry-");

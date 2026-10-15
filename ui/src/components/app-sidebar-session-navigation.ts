@@ -346,11 +346,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     this.ownerOptions = result.ownerOptions;
     this.sessionOwnershipVisibility = result.ownershipVisibility;
     this.activeSessionOwnerId = result.activeOwnerId;
-    return result.rows;
-  }
-
-  public getRouteSessionKey(): string {
-    return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
+    // A row event can precede the create response. Keep authoritative membership,
+    // but render only the non-actionable handoff until the response admits it.
+    const pendingKey = this.pendingSessionCreate()?.creation.sessionKey;
+    return pendingKey ? result.rows.filter((row) => row.key !== pendingKey) : result.rows;
   }
 
   getSessionNavigationState(): SidebarSessionNavigationState {
@@ -767,15 +766,15 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   };
 
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean {
-    return this.sessionProjection.isChildrenExpanded(session.key);
+    return this.sessionProjection.children.isExpanded(session.key);
   }
 
   isSessionChildrenFullyShown(sessionKey: string): boolean {
-    return this.sessionProjection.isChildrenFullyShown(sessionKey);
+    return this.sessionProjection.children.isFullyShown(sessionKey);
   }
 
   toggleSessionChildren(session: SidebarRecentSession) {
-    const { expanded } = this.sessionProjection.toggleChildren(session);
+    const { expanded } = this.sessionProjection.children.toggle(session.key);
     for (const key of session.childLoadParentKeys ?? [session.key]) {
       if (expanded) {
         this.sessionData.retryChildSessions(key);
@@ -787,7 +786,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   showMoreChildren(sessionKey: string) {
-    this.sessionProjection.showMoreChildren(sessionKey);
+    this.sessionProjection.children.showMore(sessionKey);
     this.requestUpdate();
   }
 

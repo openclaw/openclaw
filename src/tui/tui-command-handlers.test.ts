@@ -676,48 +676,52 @@ describe("tui command handlers", () => {
     },
   );
 
-  it("keeps the active run and same-text persisted peer when a queued send fails", async () => {
-    const peer = userMessage("peer-user", 4, "peer-run");
-    const h = createTuiCommandHandlersHarness({
-      sendChat: vi.fn().mockRejectedValue(new Error("local send failed")),
-      activeChatRunId: "run-active",
-      sessionProjection: createSessionProjection(
-        { sessionKey: "agent:main:main", agentId: "main" },
-        [peer],
-      ),
-    });
-    await h.handleCommand("hello");
-    expect(h.state.activeChatRunId).toBe("run-active");
-    expect(h.state.pendingSubmit).toBeNull();
-    expect(h.dropPendingUser).toHaveBeenCalledWith(h.addPendingUser.mock.calls[0]?.[0]);
-    expect(h.state.sessionProjection?.messages).toEqual([peer]);
-    expect(h.state.sessionProjection?.entries[0]).toMatchObject({
-      pending: false,
-      pendingRunId: null,
-    });
-  });
-
-  it.each([false, true])(
-    "prevents a delayed /new from hijacking a replacement (failure: %s)",
-    async (fails) => {
-      const creation = createDeferred<{ ok: true; key: string }>();
-      const sessionInfo = { inputTokens: 11, outputTokens: 22, totalTokens: 33 };
+  it.each(["persisted peer", "completed run", "secret-bearing cause"] as const)(
+    "cleans a failed send without restoring or leaking its %s",
+    async (scenario) => {
+      const peer = userMessage("peer-user", 4, "peer-run");
+      const send = createDeferred<never>();
+      const secret = "sk-abcdefghijklmnopqrstuv";
       const h = createTuiCommandHandlersHarness({
-        currentSessionId: "private-session",
-        sessionInfo: { ...sessionInfo },
-        createSession: vi.fn(() => creation.promise),
+        sendChat: vi.fn(() => send.promise),
+        activeChatRunId: "run-active",
+        activityStatus: "streaming",
+        sessionProjection: createSessionProjection(
+          { sessionKey: "agent:main:main", agentId: "main" },
+          [peer],
+        ),
       });
-      const pending = h.handleCommand("/new");
-      h.state.currentSessionId = "replacement-session";
-      if (fails) {
-        creation.reject(new Error("private creation failure"));
-      } else {
-        creation.resolve({ ok: true, key: "agent:main:private-child" });
+      const pending = h.handleCommand(
+        scenario === "secret-bearing cause" ? "/context detail" : "hello",
+      );
+      await Promise.resolve();
+      if (scenario === "completed run") {
+        h.state.activeChatRunId = null;
       }
+      send.reject(
+        scenario === "secret-bearing cause"
+          ? new Error("gateway down", {
+              cause: new Error(`\u001b[31mAuthorization: Bearer ${secret}\u001b[0m`),
+            })
+          : new Error("local send failed"),
+      );
       await pending;
-      expect(h.setSession).not.toHaveBeenCalled();
-      expect(h.addSystem).not.toHaveBeenCalled();
-      expect(h.state.sessionInfo).toEqual(sessionInfo);
+      expect(h.state.activeChatRunId).toBe(scenario === "completed run" ? null : "run-active");
+      expect(h.state.pendingSubmit).toBeNull();
+      expect(h.dropPendingUser).toHaveBeenCalledWith(h.addPendingUser.mock.calls[0]?.[0]);
+      expect(h.state.sessionProjection?.messages).toEqual([peer]);
+      expect(h.state.sessionProjection?.entries[0]).toMatchObject({
+        pending: false,
+        pendingRunId: null,
+      });
+      if (scenario === "secret-bearing cause") {
+        const message = h.addSystem.mock.calls.at(-1)?.[0];
+        expect(message).toContain("send failed: gateway down");
+        expect(message).toContain("Authorization: Bearer");
+        expect(message).not.toContain(secret);
+        expect(message).not.toContain("\u001b");
+        expect(h.setActivityStatus).toHaveBeenLastCalledWith("error");
+      }
     },
   );
 
@@ -770,76 +774,76 @@ describe("tui command handlers", () => {
     },
   );
 
-  it("serializes input until /new adopts a unique successor session", async () => {
-    const creation = createDeferred<{ ok: true; key: string }>();
-    const h = createTuiCommandHandlersHarness({
-      currentSessionKey: "global",
-      currentAgentId: "work",
-      currentSessionId: "parent-session",
-      createSession: vi.fn(() => creation.promise),
-    });
-    const creating = h.handleCommand("/new");
-    expect(h.resolveMessageAdmission("must not reach parent")).toEqual({
-      status: "blocked",
-      reason: "session-transition",
-      command: "new",
-    });
-    await h.sendMessage("must not reach parent");
-    await h.handleCommand("/new");
-    expect(h.sendChat).not.toHaveBeenCalled();
-    expect(h.createSession).toHaveBeenCalledExactlyOnceWith({
-      key: expect.stringMatching(/^tui-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/),
-      agentId: "work",
-      parentSessionKey: "global",
-      succeedsParent: true,
-    });
-    expect(h.addSystem).toHaveBeenCalledWith("session change in progress; wait for /new to finish");
-    creation.resolve({ ok: true, key: "agent:work:tui-created" });
-    await creating;
-    expect(h.setSession).toHaveBeenCalledExactlyOnceWith("agent:work:tui-created");
-    expect(h.addSystem).toHaveBeenCalledWith("new session: agent:work:tui-created");
-  });
-
-  it("serializes input until /reset adopts the backend replacement", async () => {
-    const reset = createDeferred<{ ok: true; key: string; entry: { sessionId: string } }>();
-    const result = {
-      ok: true as const,
-      key: "agent:main:replacement",
-      entry: { sessionId: "replacement-session" },
-    };
-    const h = createTuiCommandHandlersHarness({
-      resetSession: vi.fn(() => reset.promise),
-      applySessionMutationResult: vi.fn((value: typeof result) => {
-        h.state.currentSessionKey = value.key;
-        h.state.currentSessionId = value.entry.sessionId;
-        return true;
-      }),
-    });
-    const resetting = h.handleCommand("/reset");
-    expect(h.resolveMessageAdmission("must not reach resetting session")).toEqual({
-      status: "blocked",
-      reason: "session-transition",
-      command: "reset",
-    });
-    await h.sendMessage("must not reach resetting session");
-    await h.handleCommand("/reset");
-    expect(h.sendChat).not.toHaveBeenCalled();
-    expect(h.resetSession).toHaveBeenCalledExactlyOnceWith("agent:main:main", "reset", undefined);
-    expect(h.addSystem).toHaveBeenCalledWith(
-      "session change in progress; wait for /reset to finish",
-    );
-    reset.resolve(result);
-    await resetting;
-    expect(h.applySessionMutationResult).toHaveBeenCalledExactlyOnceWith(result, {
-      sessionKey: "agent:main:main",
-      agentId: "main",
-    });
-    expect(h.refreshSessionInfo).toHaveBeenCalledOnce();
-    expect(h.loadHistory).not.toHaveBeenCalled();
-    expect(h.state.currentSessionKey).toBe(result.key);
-    expect(h.state.currentSessionId).toBe(result.entry.sessionId);
-    expect(h.addSystem).toHaveBeenCalledWith("session agent:main:replacement reset");
-  });
+  it.each(["new", "reset"] as const)(
+    "serializes input until /%s adopts its successor",
+    async (command) => {
+      const transition = createDeferred<{ ok: true; key: string; entry: { sessionId: string } }>();
+      const result = {
+        ok: true as const,
+        key: command === "new" ? "agent:work:tui-created" : "agent:main:replacement",
+        entry: { sessionId: "replacement-session" },
+      };
+      const h = createTuiCommandHandlersHarness({
+        ...(command === "new"
+          ? {
+              currentSessionKey: "global",
+              currentAgentId: "work",
+              currentSessionId: "parent-session",
+            }
+          : {}),
+        ...(command === "new"
+          ? { createSession: vi.fn(() => transition.promise) }
+          : { resetSession: vi.fn(() => transition.promise) }),
+        applySessionMutationResult: vi.fn((value: typeof result) => {
+          h.state.currentSessionKey = value.key;
+          h.state.currentSessionId = value.entry.sessionId;
+          return true;
+        }),
+      });
+      const pending = h.handleCommand(`/${command}`);
+      expect(h.resolveMessageAdmission("must not reach resetting session")).toEqual({
+        status: "blocked",
+        reason: "session-transition",
+        command,
+      });
+      await h.sendMessage("must not reach resetting session");
+      await h.handleCommand(`/${command}`);
+      expect(h.sendChat).not.toHaveBeenCalled();
+      expect(h.addSystem).toHaveBeenCalledWith(
+        `session change in progress; wait for /${command} to finish`,
+      );
+      if (command === "new") {
+        expect(h.createSession).toHaveBeenCalledExactlyOnceWith({
+          key: expect.stringMatching(/^tui-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/),
+          agentId: "work",
+          parentSessionKey: "global",
+          succeedsParent: true,
+        });
+      } else {
+        expect(h.resetSession).toHaveBeenCalledExactlyOnceWith(
+          "agent:main:main",
+          "reset",
+          undefined,
+        );
+      }
+      transition.resolve(result);
+      await pending;
+      if (command === "new") {
+        expect(h.setSession).toHaveBeenCalledExactlyOnceWith(result.key);
+        expect(h.addSystem).toHaveBeenCalledWith(`new session: ${result.key}`);
+        return;
+      }
+      expect(h.applySessionMutationResult).toHaveBeenCalledExactlyOnceWith(result, {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+      });
+      expect(h.refreshSessionInfo).toHaveBeenCalledOnce();
+      expect(h.loadHistory).not.toHaveBeenCalled();
+      expect(h.state.currentSessionKey).toBe(result.key);
+      expect(h.state.currentSessionId).toBe(result.entry.sessionId);
+      expect(h.addSystem).toHaveBeenCalledWith("session agent:main:replacement reset");
+    },
+  );
 
   it("reloads a global session after /reset returns no session entry", async () => {
     const h = createTuiCommandHandlersHarness({
@@ -1064,35 +1068,62 @@ describe("tui command handlers", () => {
     expect(h.state.currentAgentId).toBe("ops");
   });
 
-  it.each([false, true])("ignores a stale reset completion (failure: %s)", async (fails) => {
-    const reset = createDeferred<{ ok: true; key: string; entry: { sessionId: string } }>();
-    const h = createTuiCommandHandlersHarness({
-      currentSessionKey: fails ? "global" : "agent:main:main",
-      currentAgentId: "main",
-      currentSessionId: "first-session",
-      sessionGeneration: 4,
-      resetSession: vi.fn(() => reset.promise),
-      applySessionMutationResult: vi.fn().mockReturnValue(true),
-    });
-    const pending = h.handleCommand("/reset");
-    if (fails) {
-      h.state.currentAgentId = "work";
-      reset.reject(new Error("stale global reset"));
-    } else {
-      expect(h.resetSession).toHaveBeenCalledExactlyOnceWith("agent:main:main", "reset", undefined);
-      h.state.sessionGeneration += 1;
-      h.state.currentSessionId = "second-session";
-      reset.resolve({ ok: true, key: "agent:main:main", entry: { sessionId: "stale-reset" } });
-    }
-    await pending;
-    if (!fails) {
-      expect(h.state.currentSessionId).toBe("second-session");
-    }
-    expect(h.applySessionMutationResult).not.toHaveBeenCalled();
-    expect(h.refreshSessionInfo).not.toHaveBeenCalled();
-    expect(h.loadHistory).not.toHaveBeenCalled();
-    expect(h.addSystem).not.toHaveBeenCalled();
-  });
+  it.each([
+    { command: "new", fails: false },
+    { command: "new", fails: true },
+    { command: "reset", fails: false },
+    { command: "reset", fails: true },
+  ] as const)(
+    "ignores a stale /$command completion (failure: $fails)",
+    async ({ command, fails }) => {
+      const transition = createDeferred<{ ok: true; key: string; entry: { sessionId: string } }>();
+      const sessionInfo = { inputTokens: 11, outputTokens: 22, totalTokens: 33 };
+      const h = createTuiCommandHandlersHarness({
+        currentSessionKey: command === "reset" && fails ? "global" : "agent:main:main",
+        currentAgentId: "main",
+        currentSessionId: "first-session",
+        sessionGeneration: 4,
+        sessionInfo: { ...sessionInfo },
+        ...(command === "new"
+          ? { createSession: vi.fn(() => transition.promise) }
+          : { resetSession: vi.fn(() => transition.promise) }),
+        applySessionMutationResult: vi.fn().mockReturnValue(true),
+      });
+      const pending = h.handleCommand(`/${command}`);
+      if (command === "new") {
+        h.state.currentSessionId = "replacement-session";
+      } else if (fails) {
+        h.state.currentAgentId = "work";
+      } else {
+        expect(h.resetSession).toHaveBeenCalledExactlyOnceWith(
+          "agent:main:main",
+          "reset",
+          undefined,
+        );
+        h.state.sessionGeneration += 1;
+        h.state.currentSessionId = "second-session";
+      }
+      if (fails) {
+        transition.reject(new Error("stale session transition"));
+      } else {
+        transition.resolve({
+          ok: true,
+          key: "agent:main:private-child",
+          entry: { sessionId: "stale-reset" },
+        });
+      }
+      await pending;
+      expect(h.state.currentSessionId).toBe(
+        command === "new" ? "replacement-session" : fails ? "first-session" : "second-session",
+      );
+      expect(h.state.sessionInfo).toEqual(sessionInfo);
+      expect(h.setSession).not.toHaveBeenCalled();
+      expect(h.applySessionMutationResult).not.toHaveBeenCalled();
+      expect(h.refreshSessionInfo).not.toHaveBeenCalled();
+      expect(h.loadHistory).not.toHaveBeenCalled();
+      expect(h.addSystem).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["/verbose", "usage: /verbose <on|off|full>"],
@@ -1127,24 +1158,6 @@ describe("tui command handlers", () => {
       expect.stringContaining("/think <off|max|default>"),
     );
     expect(addSystem).toHaveBeenNthCalledWith(2, "usage: /think <off|max|default>");
-  });
-
-  it("redacts secrets and preserves nested causes in displayed send failures", async () => {
-    const secret = "sk-abcdefghijklmnopqrstuv";
-    const cause = new Error(`\u001b[31mAuthorization: Bearer ${secret}\u001b[0m`);
-    const { handleCommand, addSystem, state, setActivityStatus } = createTuiCommandHandlersHarness({
-      sendChat: vi.fn().mockRejectedValue(new Error("gateway down", { cause })),
-    });
-
-    await handleCommand("/context detail");
-
-    const message = addSystem.mock.calls.at(-1)?.[0];
-    expect(message).toContain("send failed: gateway down");
-    expect(message).toContain("Authorization: Bearer");
-    expect(message).not.toContain(secret);
-    expect(message).not.toContain("\u001b");
-    expect(setActivityStatus).toHaveBeenLastCalledWith("error");
-    expect(state.pendingSubmit).toBeNull();
   });
 
   it.each(["disconnected", "pending"] as const)(
@@ -1205,24 +1218,6 @@ describe("tui command handlers", () => {
     expect(abortActive).toHaveBeenCalledWith({ preferActive: true });
     expect(sendChat).not.toHaveBeenCalled();
     expect(addPendingUser).not.toHaveBeenCalled();
-  });
-
-  it("does not restore a queued run that completes before the followup send fails", async () => {
-    const send = createDeferred<never>();
-    const sendChat = vi.fn(() => send.promise);
-    const { handleCommand, state } = createTuiCommandHandlersHarness({
-      sendChat,
-      activeChatRunId: "run-active",
-      activityStatus: "streaming",
-    });
-
-    const pendingSend = handleCommand("queued followup");
-    await Promise.resolve();
-    state.activeChatRunId = null;
-    send.reject(new Error("network error"));
-    await pendingSend;
-
-    expect(state.activeChatRunId).toBeNull();
   });
 
   it.each([0, 1])("refreshes the local auth flow and reports exit %s", async (exitCode) => {

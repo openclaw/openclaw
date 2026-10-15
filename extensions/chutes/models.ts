@@ -103,7 +103,7 @@ export async function discoverChutesModels(
     providerId: "chutes",
     endpoint: `${CHUTES_BASE_URL}/models`,
     providerConfig: { baseUrl: CHUTES_BASE_URL, api: "openai-completions" },
-    models: structuredClone(CHUTES_MODEL_CATALOG),
+    models: CHUTES_MODEL_CATALOG,
     discoveryApiKey: normalizeOptionalString(accessToken),
     timeoutMs: 10_000,
     ttlMs: CACHE_TTL,

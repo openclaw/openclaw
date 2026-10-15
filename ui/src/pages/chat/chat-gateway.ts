@@ -430,6 +430,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         }
       : payload.phase && {
           phase: payload.phase,
+          ...(payload.waitReason ? { waitReason: payload.waitReason } : {}),
           ...(payload.seq === undefined ? {} : { seq: payload.seq }),
         };
     if (status) {
