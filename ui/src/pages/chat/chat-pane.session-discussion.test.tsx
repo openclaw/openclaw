@@ -1,16 +1,20 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
+import { createSignal, Show } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createSessionCapabilityFixture,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
-import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
-import "./components/session-discussion-panel.tsx";
+import {
+  SessionDiscussionPanel,
+  type SessionDiscussionPanelConfig,
+} from "./components/session-discussion-panel.tsx";
 import { openSlot } from "./sidebar-layout.ts";
 
 type DiscussionTestPane = TestChatPane & {
@@ -28,6 +32,39 @@ type DiscussionTestPane = TestChatPane & {
 };
 
 const SESSION_KEY = "agent:main:current";
+
+function createDiscussionPanelHarness(container: HTMLElement, savedSlot = false) {
+  const [frame, setFrame] = createSignal<{
+    config: SessionDiscussionPanelConfig | null;
+    sourceGeneration: number;
+  }>({ config: null, sourceGeneration: 0 });
+  const panel = () => (
+    <Show when={frame().config}>
+      {(config) => (
+        <SessionDiscussionPanel
+          sessionKey={config().sessionKey}
+          canOpen={config().canOpen}
+          sourceGeneration={frame().sourceGeneration}
+          loadInfo={config().loadInfo}
+          openDiscussion={config().openDiscussion}
+          onStateChange={config().onStateChange}
+        />
+      )}
+    </Show>
+  );
+  const view = mountSolid(
+    () => (savedSlot ? <section data-panel-slot="discussion">{panel()}</section> : panel()),
+    { container },
+  );
+  return {
+    async render(config: SessionDiscussionPanelConfig | null, sourceGeneration: number) {
+      setFrame({ config, sourceGeneration });
+      flush();
+      await container.querySelector("openclaw-session-discussion")?.updateComplete;
+    },
+    unmount: view.unmount,
+  };
+}
 
 function createDiscussionPane(params: {
   info: SessionDiscussionInfo | Promise<SessionDiscussionInfo>;
@@ -96,21 +133,11 @@ describe("chat pane session discussion", () => {
     });
     const container = document.createElement("div");
     document.body.append(container);
+    const view = createDiscussionPanelHarness(container);
 
     const renderPanel = async () => {
       const config = pane.buildSessionDiscussionPanel(state, SESSION_KEY)!;
-      render(
-        html`<openclaw-session-discussion
-          .sessionKey=${config.sessionKey}
-          .canOpen=${config.canOpen}
-          .sourceGeneration=${pane.connectionGeneration}
-          .loadInfo=${config.loadInfo}
-          .openDiscussion=${config.openDiscussion}
-          .onStateChange=${config.onStateChange}
-        ></openclaw-session-discussion>`,
-        container,
-      );
-      await container.querySelector("openclaw-session-discussion")?.updateComplete;
+      await view.render(config, pane.connectionGeneration);
     };
 
     await renderPanel();
@@ -118,6 +145,7 @@ describe("chat pane session discussion", () => {
     await renderPanel();
     expect(request).toHaveBeenCalledTimes(1);
 
+    view.unmount();
     container.remove();
   });
 
@@ -204,27 +232,11 @@ describe("chat pane session discussion", () => {
     state.sidebarLayout = openSlot({ columns: [] }, "discussion");
     const container = document.createElement("div");
     document.body.append(container);
+    const view = createDiscussionPanelHarness(container, true);
 
     const renderSavedTab = async () => {
       const config = pane.buildSessionDiscussionPanel(state, SESSION_KEY);
-      render(
-        html`<section data-panel-slot="discussion">
-          ${
-            config
-              ? html`<openclaw-session-discussion
-                  .sessionKey=${config.sessionKey}
-                  .canOpen=${config.canOpen}
-                  .sourceGeneration=${pane.connectionGeneration}
-                  .loadInfo=${config.loadInfo}
-                  .openDiscussion=${config.openDiscussion}
-                  .onStateChange=${config.onStateChange}
-                ></openclaw-session-discussion>`
-              : nothing
-          }
-        </section>`,
-        container,
-      );
-      await container.querySelector("openclaw-session-discussion")?.updateComplete;
+      await view.render(config, pane.connectionGeneration);
     };
     const discussionRequests = () =>
       request.mock.calls.filter(([method]) => method === "session.discussion.info");
@@ -288,6 +300,7 @@ describe("chat pane session discussion", () => {
       expect(container.querySelector<HTMLAnchorElement>("a.session-link")?.href).toBe(openUrl),
     );
 
+    view.unmount();
     container.remove();
   });
 });
