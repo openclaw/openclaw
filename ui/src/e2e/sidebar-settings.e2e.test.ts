@@ -1,4 +1,5 @@
 import path from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expect, it } from "vitest";
 import {
   installMockGateway,
@@ -516,7 +517,39 @@ suite.define(() => {
       expect(await credential.inputValue()).toBe("browser-proof-secret");
       expect(await credential.isEditable()).toBe(true);
 
-      await gateway.waitForRequest("system.info");
+      try {
+        await gateway.waitForRequest("system.info");
+      } catch (error) {
+        try {
+          const [browser, systemInfoRequestCount, heartbeatRequestCount] = await withTimeout(
+            Promise.all([
+              page.evaluate(() => {
+                const host = document.querySelector("openclaw-connection-page");
+                const systemInfoSection = host?.querySelector("#settings-connection-host");
+                return {
+                  visibilityState: document.visibilityState,
+                  hasFocus: document.hasFocus(),
+                  connectionHostPresent: host !== null,
+                  connectionHostConnected: host?.isConnected ?? null,
+                  systemInfoSectionPresent: Boolean(systemInfoSection),
+                  systemInfoSectionBusy: systemInfoSection?.getAttribute("aria-busy") === "true",
+                };
+              }),
+              gateway.getRequests("system.info").then((requests) => requests.length),
+              gateway.getRequests("last-heartbeat").then((requests) => requests.length),
+            ]),
+            5_000,
+            "connection system.info failure diagnostics",
+          );
+          console.error(
+            "[sidebar-settings] initial system.info wait failed",
+            JSON.stringify({ ...browser, systemInfoRequestCount, heartbeatRequestCount }),
+          );
+        } catch {
+          console.error("[sidebar-settings] initial system.info diagnostics unavailable");
+        }
+        throw error;
+      }
       const reads = (await gateway.getRequests("system.info")).length;
       const connections = (await gateway.getRequests("connect")).length;
       await gateway.deferNext("connect");

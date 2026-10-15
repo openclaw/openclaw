@@ -2,7 +2,6 @@ import { getBoundDeviceBootstrapProfile } from "../../../infra/device-bootstrap.
 import {
   getPairedDevice,
   listEffectivePairedDeviceRoles,
-  updatePairedDeviceMetadata,
   type PairedDevice,
 } from "../../../infra/device-pairing.js";
 import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-bootstrap-profile.js";
@@ -169,14 +168,16 @@ export async function authorizeExistingGatewayDevice(params: {
   // and same-family mobile OS version labels, but real platform/device-family
   // changes must stay on the approved pairing record.
   if (device) {
-    const metadataStartedAt = performance.now();
-    await updatePairedDeviceMetadata(device.id, {
-      ...clientAccessMetadata,
-      ...(metadataPinning.refreshPairedPlatform
-        ? { platform: metadataPinning.refreshPairedPlatform }
-        : {}),
-    });
-    context.recordAttachTiming?.("deviceMetadataMs", metadataStartedAt);
+    context.pendingDeviceMetadata = {
+      deviceId: device.id,
+      identity: paired,
+      patch: {
+        ...clientAccessMetadata,
+        ...(metadataPinning.refreshPairedPlatform
+          ? { platform: metadataPinning.refreshPairedPlatform }
+          : {}),
+      },
+    };
   }
   return { ok: true, handoffBootstrapProfile };
 }

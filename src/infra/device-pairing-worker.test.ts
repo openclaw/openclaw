@@ -25,6 +25,7 @@ import {
 import {
   getPairedDevice,
   getPendingDevicePairing,
+  recordPairedDeviceAccess,
   listDevicePairing,
   listDevicePairingReadOnly,
   requestDevicePairing,
@@ -353,7 +354,7 @@ test.each(["metadata", "presence"] as const)(
       .spyOn(stateReads, "executeExistingOpenClawStateRead")
       .mockRejectedValueOnce(new Error("synthetic unavailable pairing read"));
     try {
-      await expect(getPairedDevice("paired-rich", baseDir)).rejects.toThrow(
+      await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
         "synthetic unavailable pairing read",
       );
     } finally {
@@ -382,6 +383,61 @@ test.each(["metadata", "presence"] as const)(
     }
   },
 );
+
+test("serves reconnect lookups from committed rows while the read worker is unavailable", async () => {
+  const device = await getPairedDevice("paired-rich", baseDir);
+  const unavailable = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockRejectedValue(new Error("reader busy"));
+  try {
+    const rows = await Promise.all(
+      Array.from({ length: 160 }, () => getPairedDevice("paired-rich", baseDir)),
+    );
+    expect(rows).toEqual(Array.from({ length: 160 }, () => device));
+    rows[0]!.tokens!.operator!.revokedAtMs = 123;
+    expect(
+      (await getPairedDevice("paired-rich", baseDir))?.tokens?.operator?.revokedAtMs,
+    ).toBeUndefined();
+    await updatePairedDeviceMetadata("paired-rich", { displayName: "Committed" }, baseDir);
+    expect((await getPairedDevice("paired-rich", baseDir))?.displayName).toBe("Committed");
+  } finally {
+    unavailable.mockRestore();
+  }
+});
+
+test("coalesces reconnect presence without rewriting recent last-seen or replacement approvals", async () => {
+  const device = await getPairedDevice("paired-rich", baseDir);
+  if (!device) {
+    throw new Error("expected paired fixture");
+  }
+  const patch = { lastSeenAtMs: 100_000, lastSeenReason: "connect" };
+  await Promise.all(
+    Array.from({ length: 160 }, () =>
+      recordPairedDeviceAccess(device.deviceId, patch, device, baseDir),
+    ),
+  );
+  const before = readDevicePairingStoreStateFromDatabase(database.db);
+  expect(before.pairedByDeviceId[device.deviceId]).toMatchObject(patch);
+  await recordPairedDeviceAccess(
+    device.deviceId,
+    { ...patch, lastSeenAtMs: 100_001, lastSeenReason: "device-token-auth" },
+    device,
+    baseDir,
+  );
+  expect(readDevicePairingStoreStateFromDatabase(database.db)).toEqual(before);
+  await recordPairedDeviceAccess(
+    device.deviceId,
+    { ...patch, displayName: "Changed", lastSeenAtMs: 100_002 },
+    device,
+    baseDir,
+  );
+  expect((await getPairedDevice(device.deviceId, baseDir))?.displayName).toBe("Changed");
+  const replacement = readDevicePairingStoreStateFromDatabase(database.db);
+  replacement.pairedByDeviceId[device.deviceId]!.publicKey = "replacement-key";
+  persistDevicePairingStoreState(replacement, baseDir, "paired");
+  await recordPairedDeviceAccess(device.deviceId, { platform: "stale-platform" }, device, baseDir);
+  expect(readDevicePairingStoreStateFromDatabase(database.db)).toEqual(replacement);
+});
 
 test.each(["reply lost", "policy revoked", "callback throws"] as const)(
   "retires narrowed bootstrap grants only after native settlement (%s)",

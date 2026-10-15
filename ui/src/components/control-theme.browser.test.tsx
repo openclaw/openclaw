@@ -123,7 +123,7 @@ describe.runIf("__vitest_browser__" in globalThis)("shared control theme inherit
       { container: host },
     ).unmount;
     flush();
-    const menu = host.querySelector(".sidebar-identity-menu")!;
+    const menu = host.querySelector<HTMLElement>(".sidebar-identity-menu")!;
     const submenuIndicator = host.querySelector(
       ".sidebar-identity-menu__help .oc-menu-item__submenu-icon",
     )!;
@@ -133,7 +133,7 @@ describe.runIf("__vitest_browser__" in globalThis)("shared control theme inherit
     const menuTrigger = host.querySelector<HTMLButtonElement>(".oc-menu-trigger")!;
     const pickerTrigger = host.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
     const pickerMenu = host.querySelector(".picker-select__menu")!;
-    const pickerList = host.querySelector('[role="listbox"]')!;
+    const pickerList = host.querySelector<HTMLElement>('[role="listbox"]')!;
     const currentOption = host.querySelector<HTMLElement>('[role="option"][data-value="fr"]')!;
     const activeTab = host.querySelector("#theme-first-tab")!;
     const inactiveTab = host.querySelector("#theme-second-tab")!;

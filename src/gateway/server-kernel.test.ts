@@ -779,6 +779,7 @@ describe("createGatewayKernel", () => {
         "host-desktop.runtime-import",
         "computer.runtime-import",
         "device-identity",
+        "device-pairing",
         "runtime.config",
         "control-ui.root",
         "terminal.launch-import",

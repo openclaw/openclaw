@@ -78,6 +78,7 @@ export function useMenuMachine(
   options: MenuNavigationOptions = {},
 ): MenuBinding {
   let lastPointerX: number | undefined;
+  let lastPointerY: number | undefined;
   let focusFromKeyboard = false;
   const ownsTarget = (target: HTMLElement) =>
     ![...overlay.children].some((child) => child.open && containsComposed(child.surface, target)) &&
@@ -466,7 +467,8 @@ export function useMenuMachine(
           }
         },
         onPointerMove: (event: PointerEvent) => {
-          if (event.movementX === 0 && event.movementY === 0) {
+          // WebKit can report zero movement offsets for a real mouse move.
+          if (event.clientX === lastPointerX && event.clientY === lastPointerY) {
             return;
           }
           focusFromKeyboard = false;
@@ -561,6 +563,7 @@ export function useMenuMachine(
         tabIndex: -1,
         onPointerMove: (event: PointerEvent) => {
           lastPointerX = event.clientX;
+          lastPointerY = event.clientY;
         },
         onKeyDown: (e: KeyboardEvent) => {
           const target = e.target;
