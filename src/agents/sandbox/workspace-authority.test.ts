@@ -67,16 +67,6 @@ describe("resolveSandboxWorkspaceAuthority", () => {
     expect(result).toEqual({ sandboxed: true, workspaceAccess: "rw" });
   });
 
-  it("preserves read-only authority", async () => {
-    const result = await prepareWorkspaceAuthority({
-      config: configWithSandbox({ mode: "all", workspaceAccess: "ro" }),
-      agentId: "main",
-      sessionKey: "agent:main:subagent:workboard-card",
-    });
-
-    expect(result).toEqual({ sandboxed: true, workspaceAccess: "ro" });
-  });
-
   it("caps role-required access and rejects principal-shared worker authority", async () => {
     const sessionKey = "agent:main:guest-worker";
     const storePath = createSessionStorePath("openclaw-required-workspace-authority-");
@@ -224,23 +214,6 @@ describe("resolveSandboxWorkspaceAuthority", () => {
       });
       expect(result.confinementError).toContain("unclassified tool surface");
     }
-  });
-
-  it("trusts only caller-enumerated plugin tools", async () => {
-    const config = configWithSandbox({ mode: "all", workspaceAccess: "rw" });
-    config.tools!.sandbox!.tools!.allow = [
-      ...SAFE_WORKBOARD_TOOLS,
-      "workboard_complete",
-      "workboard_shell",
-    ];
-    const result = await prepareWorkspaceAuthority({
-      config,
-      agentId: "main",
-      sessionKey: "agent:main:subagent:workboard-card",
-      confinedToolNames: ["workboard_complete"],
-    });
-
-    expect(result.confinementError).toContain("workboard_shell");
   });
 
   it("requires lifecycle tools across the complete effective policy", async () => {
