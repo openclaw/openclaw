@@ -446,9 +446,13 @@ describe("openclaw live updater", () => {
     }
   });
 
-  test.each(["EPERM", "EIO"])(
-    "uses actual plist read errno %s, then rechecks ownership",
-    (code) => {
+  test.each([
+    { code: "EPERM", loadedAfterRead: false },
+    { code: "EIO", loadedAfterRead: false },
+    { code: "EPERM", loadedAfterRead: true },
+  ])(
+    "handles plist errno $code and rechecks ownership (loaded=$loadedAfterRead)",
+    ({ code, loadedAfterRead }) => {
       let probes = 0;
       vi.mocked(openSync).mockImplementationOnce(() => {
         throw Object.assign(new Error("read failed"), { code });
@@ -458,35 +462,24 @@ describe("openclaw live updater", () => {
           readdirSync: () => ["com.vendor.plist"],
           spawnSync: (command: string) =>
             command === "/bin/launchctl"
-              ? (++probes, { status: 113, stderr: "Could not find service" })
+              ? {
+                  status: ++probes === 2 && loadedAfterRead ? 0 : 113,
+                  stderr: "Could not find service",
+                }
               : { status: 1, stderr: "Operation not permitted" },
         });
       if (code === "EIO") {
         expect(check).toThrow("could not read system LaunchDaemon plist");
         expect(probes).toBe(1);
+      } else if (loadedAfterRead) {
+        expect(check).toThrow("system/ai.openclaw.gateway already owns");
+        expect(probes).toBe(2);
       } else {
         expect(check).not.toThrow();
         expect(probes).toBe(2);
       }
     },
   );
-
-  test("rejects a loaded owner appearing after an unreadable plist was skipped", () => {
-    let probes = 0;
-    vi.mocked(openSync).mockImplementationOnce(() => {
-      throw Object.assign(new Error("denied"), { code: "EPERM" });
-    });
-    expect(() =>
-      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
-        readdirSync: () => ["com.vendor.plist"],
-        spawnSync: (command: string) =>
-          command === "/bin/launchctl"
-            ? { status: ++probes === 1 ? 113 : 0, stderr: "Could not find service" }
-            : { status: 1 },
-      }),
-    ).toThrow("system/ai.openclaw.gateway already owns");
-    expect(probes).toBe(2);
-  });
 
   test.each([{ status: 113, error: Object.assign(new Error("query failed"), { code: "EIO" }) }])(
     "rejects incomplete ownership queries: %j",
@@ -731,64 +724,61 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ).toEqual([]);
   });
 
-  test("retries exact legacy suspension params with preserve semantics", () => {
-    const root = realpathSync(tempDirs.make("openclaw-legacy-gateway-suspension-"));
-    const stub = createGatewaySuspensionCliStub(root, {
-      type: "gateway_request_error",
+  test.each([
+    {
       code: "INVALID_REQUEST",
       message: "invalid gateway.suspend.prepare params",
       retryable: false,
-    });
-
-    expect(
-      prepareGatewaySuspension(stub.checkout, runBuiltGatewayCall, stub.deployment),
-    ).toMatchObject({
-      status: "busy",
-      activeCount: 1,
-      blockers: [{ kind: "terminal-session", count: 1 }],
-    });
-    const calls = readFileSync(stub.callsPath, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { requestId: string; terminalPolicy?: string });
-    expect(calls).toHaveLength(2);
-    expect(calls[0]).toEqual({
-      requestId: expect.stringMatching(/^openclaw-live-updater-/u),
-      terminalPolicy: "terminate",
-    });
-    expect(calls[1]).toEqual({ requestId: calls[0]?.requestId });
-  });
-
-  test("does not downgrade unrelated Gateway suspension failures", () => {
-    const root = realpathSync(tempDirs.make("openclaw-gateway-suspension-failure-"));
+    },
+    { code: "UNAVAILABLE", message: "gateway scheduler recovery is pending", retryable: true },
+  ])("retries only the exact legacy suspension error: $code", (requestError) => {
+    const root = realpathSync(tempDirs.make("openclaw-legacy-gateway-suspension-"));
     const stub = createGatewaySuspensionCliStub(root, {
       type: "gateway_request_error",
-      code: "UNAVAILABLE",
-      message: "gateway scheduler recovery is pending",
-      retryable: true,
+      ...requestError,
     });
-    let failure: unknown;
+    if (requestError.code === "INVALID_REQUEST") {
+      expect(
+        prepareGatewaySuspension(stub.checkout, runBuiltGatewayCall, stub.deployment),
+      ).toMatchObject({
+        status: "busy",
+        activeCount: 1,
+        blockers: [{ kind: "terminal-session", count: 1 }],
+      });
+      const calls = readFileSync(stub.callsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { requestId: string; terminalPolicy?: string });
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toEqual({
+        requestId: expect.stringMatching(/^openclaw-live-updater-/u),
+        terminalPolicy: "terminate",
+      });
+      expect(calls[1]).toEqual({ requestId: calls[0]?.requestId });
+    } else {
+      let failure: unknown;
 
-    try {
-      prepareGatewaySuspension(stub.checkout, runBuiltGatewayCall, stub.deployment);
-    } catch (error) {
-      failure = error;
-    }
+      try {
+        prepareGatewaySuspension(stub.checkout, runBuiltGatewayCall, stub.deployment);
+      } catch (error) {
+        failure = error;
+      }
 
-    expect(formatUpdateFailure(failure)).toMatchObject({
-      error: {
-        code: "gateway_suspend_prepare_failed",
-        diagnostics: {
-          kind: "invariant",
-          cause: {
-            kind: "command",
-            operation: "gateway.suspend.prepare",
-            status: 1,
+      expect(formatUpdateFailure(failure)).toMatchObject({
+        error: {
+          code: "gateway_suspend_prepare_failed",
+          diagnostics: {
+            kind: "invariant",
+            cause: {
+              kind: "command",
+              operation: "gateway.suspend.prepare",
+              status: 1,
+            },
           },
         },
-      },
-    });
-    expect(readFileSync(stub.callsPath, "utf8").trim().split("\n")).toHaveLength(1);
+      });
+      expect(readFileSync(stub.callsPath, "utf8").trim().split("\n")).toHaveLength(1);
+    }
   });
 
   test("pins managed Gateway calls with a backward-compatible local overlay", () => {

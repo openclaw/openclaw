@@ -23,6 +23,7 @@ import type { readSessionRowFacts } from "./server-methods/session-placement-rea
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
+import { sessionTitleRequests } from "./session-title-state.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -475,6 +476,13 @@ export function present(
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;
+  // Naming belongs to the in-flight owner, not persisted or materialized row state.
+  row.titlePending =
+    sessionTitleRequests.get({
+      storePath: record.storeTarget.storePath,
+      sessionKey: record.key,
+      sessionId: record.entry.sessionId,
+    }) !== undefined;
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
     row.derivedTitle = undefined;

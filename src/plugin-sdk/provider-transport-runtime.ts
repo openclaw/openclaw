@@ -30,6 +30,7 @@ export {
   copyProviderAcceptanceObserver,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
+  createProviderWaitObserver,
   failTransportStream,
   finalizeTerminalToolCallArguments,
   finalizeTransportStream,

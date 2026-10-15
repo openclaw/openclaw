@@ -20,13 +20,14 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
 import "../../../components/tooltip.ts";
 import "../../../components/workspace-icon.ts";
+import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
 import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";
-import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
+import { isSessionTitlePending, resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,
   resolveUiSessionNavigationParentKey,
@@ -49,6 +50,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
   title: string;
+  titlePending?: boolean;
   session: GatewaySessionRow | undefined;
   incognito?: boolean;
   showOwnerChip?: boolean;
@@ -163,7 +165,17 @@ function SessionTitle(props: ChatPaneHeaderProps) {
           renderSessionColorDot(props.catalog ? props.catalogColor : props.session?.color))
         }
       />
-      <span class="chat-pane__session-title-text">{props.title}</span>
+      <span class="chat-pane__session-title-text">
+        <Show
+          when={
+            props.titlePending ??
+            (!props.catalog && isSessionTitlePending(props.session?.key ?? "", props.session))
+          }
+          fallback={props.title}
+        >
+          <SessionTitlePlaceholder />
+        </Show>
+      </span>
     </>
   );
 }

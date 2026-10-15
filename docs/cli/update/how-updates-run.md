@@ -39,6 +39,13 @@ consumes the shared deadline, so it cannot extend the update's overall budget.
 These checks belong to the installed updater; a candidate cannot change an
 older updater's already-running readiness wait.
 
+Before replacing the same installation, the updater observes the incumbent Gateway once. Failed
+readiness produces a warning and prevents automatic rollback from restarting it;
+the updater does not wait for the incumbent to recover before replacing it.
+The replacement still receives the full startup and readiness verification.
+Certifying a service rooted in a different installation, or verifying a restored
+service after restart, still waits within the existing readiness budget.
+
 On Windows, candidate commands verify their recorded handoff lease and their own
 PID/start identity even when the launcher process tree changes. A different
 immediate parent no longer causes a valid candidate to fail with `Candidate
@@ -68,10 +75,11 @@ The restored predecessor uses the same acceptance rules. Wrong identity, physica
 corruption, a wrong marker reply, or exhaustion of the readiness budget still
 requires failure recovery.
 
-Channel health collection timeouts are warnings during post-update verification.
+Channel probe failures, stopped channels, and health collection timeouts are
+warnings during post-update verification.
 The Gateway must still answer, report the expected version and build, pass HTTP
-readiness, and pass the normal health-settle checks. An explicit negative channel
-probe still fails verification. Timeout warnings remain in the update report even
+readiness, and pass the normal health-settle checks. A channel fault that also
+makes HTTP readiness fail still fails verification. Timeout warnings remain in the update report even
 if a later probe completes; run `openclaw health` to check the affected channels.
 The seven-second collection budget is unchanged. Updated Gateways also avoid
 reporting collection timeouts as negative probes to older updaters, although those

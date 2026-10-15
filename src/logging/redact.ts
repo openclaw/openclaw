@@ -1127,12 +1127,19 @@ export function redactSensitiveLines(
   if (lines.length === 0 || resolved.mode === "off") {
     return selectedLines ? lines.filter((_, index) => selectedLines[index]) : lines;
   }
+  // Partial PEM context belongs to the complete batch, not each JSON record.
+  const recordPatterns = resolved.patterns.map((pattern) =>
+    pattern.source === PEM_REDACT_PATTERN_SOURCE ? PEM_REDACT_MATCHER : pattern,
+  );
   const recordRedaction = {
     ...resolved,
-    // Partial PEM context belongs to the complete batch, not each JSON record.
-    patterns: resolved.patterns.map((pattern) =>
-      pattern.source === PEM_REDACT_PATTERN_SOURCE ? PEM_REDACT_MATCHER : pattern,
-    ),
+    // Tail context copies the pattern array; restore default-policy identity so
+    // benign fields retain the transport redactor's built-in prefilter.
+    patterns:
+      defaultResolvedPatterns?.length === recordPatterns.length &&
+      recordPatterns.every((pattern, index) => pattern === defaultResolvedPatterns?.[index])
+        ? defaultResolvedPatterns
+        : recordPatterns,
   };
   return redactJsonRecord(
     lines

@@ -426,12 +426,7 @@ export async function sendMessageIMessage(
     Math.max(0, timeoutMs) + PENDING_PERSISTED_ECHO_GRACE_MS,
   );
   const region = opts.region?.trim() || account.config.region?.trim() || "US";
-  const maxBytes =
-    typeof opts.maxBytes === "number"
-      ? opts.maxBytes
-      : typeof account.config.mediaMaxMb === "number"
-        ? account.config.mediaMaxMb * 1024 * 1024
-        : 16 * 1024 * 1024;
+  const maxBytes = opts.maxBytes ?? (account.config.mediaMaxMb ?? 16) * 1024 * 1024;
   let message = opts.approvalPrompt
     ? addApprovalReactionHintToText({
         text,
@@ -505,15 +500,111 @@ export async function sendMessageIMessage(
     }
   };
   const withRemoteFile = opts.withRemoteFile ?? withIMessageRemoteFile;
+  const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
+
+  async function recordAcceptedSend(
+    result: Record<string, unknown>,
+    delivery:
+      | { kind: "attachment"; chatTarget: string; audioAsVoice?: boolean }
+      | { kind: "message"; startedAtMs: number },
+  ): Promise<IMessageSendResult> {
+    const isMessage = delivery.kind === "message";
+    const resolvedId = resolveMessageId(result);
+    const messageId =
+      resolvedId ??
+      (result.ok || result.success || (isMessage && result.status === "sent") ? "ok" : "unknown");
+    let guid = await resolveApprovalBindingMessageGuid({
+      dbPath: chatDbLookupPath,
+      messageId: resolvedId,
+      result,
+      resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
+    });
+    if (!guid && isMessage && opts.approvalPrompt && !filePath && !effectiveReplyToId) {
+      guid = await resolveFallbackSentMessageGuid({
+        dbPath: chatDbLookupPath,
+        target,
+        text: message,
+        sentAfterMs: delivery.startedAtMs,
+        resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
+      });
+    }
+    await rememberPersistedIMessageEcho({
+      scope: echoScope,
+      text: isMessage ? echoText : undefined,
+      media: echoMedia,
+      messageId: resolvedId ?? undefined,
+    });
+    const providerChatGuid = isMessage
+      ? (stringValue(result.chat_guid) ?? stringValue(result.chatGuid))
+      : undefined;
+    const confirmedService = isMessage
+      ? resolveIMessageDirectChatService(resultService(result.service) ?? service, providerChatGuid)
+      : undefined;
+    if (resolvedId && normalizeIMessageMessageId(resolvedId)) {
+      // Attachment CLI selectors and send RPC service confirmations carry different chat facts.
+      const chatContext = isMessage
+        ? {
+            ...chatContextFromIMessageTarget(target, confirmedService ?? service),
+            ...(providerChatGuid ? { chatGuid: providerChatGuid } : {}),
+          }
+        : {
+            chatGuid:
+              target.kind === "chat_guid"
+                ? target.chatGuid
+                : target.kind === "chat_id"
+                  ? delivery.chatTarget
+                  : undefined,
+            chatIdentifier:
+              target.kind === "chat_identifier" || target.kind === "handle"
+                ? delivery.chatTarget
+                : undefined,
+            chatId: target.kind === "chat_id" ? target.chatId : undefined,
+          };
+      await rememberIMessageReplyCache({
+        accountId: account.accountId,
+        messageId: resolvedId,
+        ...chatContext,
+        timestamp: Date.now(),
+        isFromMe: true,
+      });
+    }
+    if (isMessage && message && guid && opts.approvalPrompt) {
+      const handle = target.kind === "handle" ? normalizeIMessageHandle(target.to) : undefined;
+      const conversation: IMessageApprovalConversationKey = {
+        ...(target.kind === "chat_guid" ? { chatGuid: target.chatGuid } : {}),
+        ...(target.kind === "chat_identifier" ? { chatIdentifier: target.chatIdentifier } : {}),
+        ...(target.kind === "chat_id" ? { chatId: target.chatId } : {}),
+        ...(handle ? { handle } : {}),
+      };
+      await registerIMessageApprovalReactionTarget({
+        accountId: account.accountId,
+        conversation,
+        messageId: guid,
+        approvalId: opts.approvalPrompt.approvalId,
+        approvalKind: opts.approvalPrompt.approvalKind,
+        allowedDecisions: opts.approvalPrompt.allowedDecisions,
+      });
+    }
+    const replyToId = isMessage ? effectiveReplyToId : resolvedReplyToId;
+    return {
+      messageId,
+      ...(guid ? { guid } : {}),
+      ...(confirmedService ? { service: confirmedService } : {}),
+      ...(providerChatGuid ? { chatGuid: providerChatGuid } : {}),
+      sentText: isMessage ? message : "",
+      ...(isMessage && echoText ? { echoText } : {}),
+      ...(echoMedia ? { echoMedia } : {}),
+      receipt: createIMessageSendReceipt({
+        messageId,
+        target,
+        kind: isMessage ? (filePath ? "media" : "text") : delivery.audioAsVoice ? "voice" : "media",
+        ...(replyToId ? { replyToId } : {}),
+      }),
+    };
+  }
 
   async function trySendAttachment(attachmentFilePath: string): Promise<IMessageSendResult | null> {
-    const {
-      audioAsVoice,
-      resolveMessageGuidImpl,
-      assertDirectAdapterHandoff,
-      onPlatformSendDispatch,
-    } = opts;
-    const accountId = account.accountId;
+    const { audioAsVoice, assertDirectAdapterHandoff, onPlatformSendDispatch } = opts;
     if (audioAsVoice && sendTransport === "applescript") {
       throw new Error(
         "iMessage voice messages require bridge transport; AppleScript cannot send native voice notes. Set sendTransport to bridge or auto.",
@@ -569,10 +660,6 @@ export async function sendMessageIMessage(
     }
     assertDirectAdapterHandoff?.();
 
-    const echoScope = resolveOutboundEchoScope({
-      accountId,
-      target,
-    });
     let result: Record<string, unknown>;
     let pendingEchoKey: string | undefined;
     try {
@@ -637,50 +724,11 @@ export async function sendMessageIMessage(
       throw error;
     }
 
-    const resolvedId = resolveMessageId(result);
-    const approvalBindingMessageId = await resolveApprovalBindingMessageGuid({
-      dbPath: chatDbLookupPath,
-      messageId: resolvedId,
-      result,
-      resolveMessageGuidImpl,
+    return await recordAcceptedSend(result, {
+      kind: "attachment",
+      chatTarget: attachmentChatTarget,
+      audioAsVoice,
     });
-    const messageId = resolvedId ?? (result.ok || result.success ? "ok" : "unknown");
-    await rememberPersistedIMessageEcho({
-      scope: echoScope,
-      media: echoMedia,
-      messageId: resolvedId ?? undefined,
-    });
-    if (resolvedId && normalizeIMessageMessageId(resolvedId)) {
-      await rememberIMessageReplyCache({
-        accountId,
-        messageId: resolvedId,
-        chatGuid:
-          target.kind === "chat_guid"
-            ? target.chatGuid
-            : target.kind === "chat_id"
-              ? attachmentChatTarget
-              : undefined,
-        chatIdentifier:
-          target.kind === "chat_identifier" || target.kind === "handle"
-            ? attachmentChatTarget
-            : undefined,
-        chatId: target.kind === "chat_id" ? target.chatId : undefined,
-        timestamp: Date.now(),
-        isFromMe: true,
-      });
-    }
-    return {
-      messageId,
-      ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
-      sentText: "",
-      ...(echoMedia ? { echoMedia } : {}),
-      receipt: createIMessageSendReceipt({
-        messageId,
-        target,
-        kind: audioAsVoice ? "voice" : "media",
-        ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
-      }),
-    };
   }
 
   if (filePath && (!resolvedReplyToId || opts.audioAsVoice)) {
@@ -762,8 +810,6 @@ export async function sendMessageIMessage(
     params.to = target.to;
   }
 
-  const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
-
   opts.assertDirectAdapterHandoff?.();
   const client =
     opts.client ??
@@ -837,81 +883,7 @@ export async function sendMessageIMessage(
         }
       }
     }
-    const resolvedId = resolveMessageId(result);
-    const messageId =
-      resolvedId ?? (result?.ok || result?.success || result?.status === "sent" ? "ok" : "unknown");
-    // Recover numeric ROWIDs through chat.db before binding tapback GUIDs.
-    let approvalBindingMessageId = await resolveApprovalBindingMessageGuid({
-      dbPath: chatDbLookupPath,
-      messageId: resolvedId,
-      result,
-      resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
-    });
-    if (!approvalBindingMessageId && opts.approvalPrompt && !filePath && !effectiveReplyToId) {
-      approvalBindingMessageId = await resolveFallbackSentMessageGuid({
-        dbPath: chatDbLookupPath,
-        target,
-        text: message,
-        sentAfterMs: sendStartedAtMs,
-        resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
-      });
-    }
-    await rememberPersistedIMessageEcho({
-      scope: echoScope,
-      text: echoText,
-      media: echoMedia,
-      messageId: resolvedId ?? undefined,
-    });
-    // Outbound provenance authorizes later edit/unsend; inbound cache entries cannot.
-    const providerChatGuid = stringValue(result.chat_guid) ?? stringValue(result.chatGuid);
-    const confirmedService = resolveIMessageDirectChatService(
-      resultService(result.service) ?? service,
-      providerChatGuid,
-    );
-    if (resolvedId && normalizeIMessageMessageId(resolvedId)) {
-      const chatContext = chatContextFromIMessageTarget(target, confirmedService ?? service);
-      await rememberIMessageReplyCache({
-        accountId: account.accountId,
-        messageId: resolvedId,
-        ...chatContext,
-        ...(providerChatGuid ? { chatGuid: providerChatGuid } : {}),
-        timestamp: Date.now(),
-        isFromMe: true,
-      });
-    }
-    if (message && approvalBindingMessageId && opts.approvalPrompt) {
-      const handleForKey =
-        target.kind === "handle" ? normalizeIMessageHandle(target.to) : undefined;
-      const conversation: IMessageApprovalConversationKey = {
-        ...(target.kind === "chat_guid" ? { chatGuid: target.chatGuid } : {}),
-        ...(target.kind === "chat_identifier" ? { chatIdentifier: target.chatIdentifier } : {}),
-        ...(target.kind === "chat_id" ? { chatId: target.chatId } : {}),
-        ...(handleForKey ? { handle: handleForKey } : {}),
-      };
-      await registerIMessageApprovalReactionTarget({
-        accountId: account.accountId,
-        conversation,
-        messageId: approvalBindingMessageId,
-        approvalId: opts.approvalPrompt.approvalId,
-        approvalKind: opts.approvalPrompt.approvalKind,
-        allowedDecisions: opts.approvalPrompt.allowedDecisions,
-      });
-    }
-    return {
-      messageId,
-      ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
-      ...(confirmedService ? { service: confirmedService } : {}),
-      ...(providerChatGuid ? { chatGuid: providerChatGuid } : {}),
-      sentText: message,
-      ...(echoText ? { echoText } : {}),
-      ...(echoMedia ? { echoMedia } : {}),
-      receipt: createIMessageSendReceipt({
-        messageId,
-        target,
-        kind: filePath ? "media" : "text",
-        ...(effectiveReplyToId ? { replyToId: effectiveReplyToId } : {}),
-      }),
-    };
+    return await recordAcceptedSend(result, { kind: "message", startedAtMs: sendStartedAtMs });
   } catch (error) {
     await forgetPersistedIMessageEchoKey(pendingEchoKey);
     throw error;

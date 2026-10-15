@@ -129,7 +129,7 @@ that do not load `SOUL.md` or `IDENTITY.md`.
 The bundled roles are [Claw sources](/cli/claws), sharing the portable
 `CLAW.md` format for identity, the `SOUL.md` body, and declared workspace
 files. `agents add --role <role>` loads one of these sources. With the
-experimental Claws surface enabled, the equivalent source path from a source
+Claws surface enabled, the equivalent source path from a source
 checkout is `openclaw claws add docs/reference/templates/roles/<role>`; follow
 the [Claw preview and consent flow](/cli/claws#inspect-and-preview).
 

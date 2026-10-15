@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type {
   SqliteWorkerBackend,
   SqliteWorkerOperations,
@@ -74,16 +74,9 @@ export function bindSessionWorkerBackend<Operations extends SqliteWorkerOperatio
     throw new Error(`${owner} lost its canonical database owner`);
   }
   const context = createSessionWorkerOperationContext(database, options, bound, domain);
-  return {
+  return bindSqliteWorkerDatabase<Operations>(database.db, {
     execute: createExecute(context, database),
-    assertSettled() {
-      assertTransactionUsable(database.db);
-      if (database.db.isTransaction) {
-        throw new Error(`${domain} transaction did not settle`);
-      }
-    },
-    close() {},
-  };
+  });
 }
 
 /** Connection-bound domains share the executor's transaction and publication grants. */

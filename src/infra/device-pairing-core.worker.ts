@@ -39,6 +39,7 @@ export const devicePairingOperations = {
       deviceId: string;
       patch: Parameters<typeof core.updatePairedDeviceMetadataInWorker>[1];
     }) => core.updatePairedDeviceMetadataInWorker(input.deviceId, input.patch),
+    { pairedDeviceId: (input) => input.deviceId },
   ),
   "devicePairing.updatePresence": devicePairingMutation(
     (input: {
@@ -51,6 +52,7 @@ export const devicePairingOperations = {
         input.patch,
         input.expectedPairingGeneration,
       ),
+    { pairedDeviceId: (input) => input.deviceId },
   ),
   "devicePairing.approve": devicePairingMutation(
     (input: {
