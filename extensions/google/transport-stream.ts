@@ -837,7 +837,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         stopReason: "stop",
       });
       try {
-        const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? undefined;
+        const apiKey = options?.apiKey ?? getEnvApiKey(model.provider);
         const guardedFetch = buildGuardedModelFetch(canonicalModel);
         const providerContext = supportsGoogleNativeVideo(model)
           ? await resolveProviderContext(context, options)

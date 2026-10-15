@@ -213,8 +213,6 @@ function resolveContinuityCharsPerToken(
 ): number | undefined {
   if (
     !calibration ||
-    !Number.isFinite(calibration.promptChars) ||
-    !Number.isFinite(calibration.inputTokens) ||
     calibration.promptChars < CONTINUITY_CALIBRATION_MIN_PROMPT_CHARS ||
     calibration.inputTokens <= 0
   ) {
@@ -276,19 +274,13 @@ export function fitCodexProjectedContextForTurnStart(params: {
       ...(imageGroups.length ? { imageGroups } : {}),
     };
   };
-  const maxChars =
-    typeof params.maxChars === "number" && Number.isFinite(params.maxChars)
-      ? Math.max(0, Math.floor(params.maxChars))
-      : CODEX_TURN_START_TEXT_INPUT_MAX_CHARS;
+  const maxChars = Math.max(0, params.maxChars ?? CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
   if (params.promptText.length <= maxChars) {
     return finish(slice(0, params.promptText.length));
   }
-  const range = normalizeProjectedContextRange(params.contextRange, params.promptText.length);
+  const range = params.contextRange;
   if (!range) {
-    const preservedRange = normalizeProjectedContextRange(
-      params.preservedRange,
-      params.promptText.length,
-    );
+    const preservedRange = params.preservedRange;
     if (!preservedRange) {
       return finish(slice(0, params.promptText.length));
     }
@@ -307,10 +299,7 @@ export function fitCodexProjectedContextForTurnStart(params: {
 
   const beforeContext = params.promptText.slice(0, range.start);
   const afterContext = params.promptText.slice(range.end);
-  const requestRange = normalizeProjectedContextRange(
-    params.requestRange,
-    params.promptText.length,
-  );
+  const requestRange = params.requestRange;
   if (
     requestRange &&
     requestRange.start >= range.end &&
@@ -354,34 +343,11 @@ export function fitCodexProjectedContextForTurnStart(params: {
   return finish(slice(range.start, range.end, contextBudgetAfterRequest), afterContextText);
 }
 
-function normalizeProjectedContextRange(
-  range: CodexProjectedContextRange | undefined,
-  textLength: number,
-): CodexProjectedContextRange | undefined {
-  if (!range) {
-    return undefined;
-  }
-  const start = Math.floor(range.start);
-  const end = Math.floor(range.end);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) {
-    return undefined;
-  }
-  if (end > textLength) {
-    return undefined;
-  }
-  return { start, end };
-}
-
 export function resolveProjectionPromptBudgetTokens(params: {
   contextTokenBudget: number;
   reserveTokens?: number;
 }): number {
-  const requestedReserveTokens =
-    typeof params.reserveTokens === "number" &&
-    Number.isFinite(params.reserveTokens) &&
-    params.reserveTokens >= 0
-      ? Math.floor(params.reserveTokens)
-      : DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
+  const requestedReserveTokens = params.reserveTokens ?? DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
   const minPromptBudget = Math.min(
     MIN_PROMPT_BUDGET_TOKENS,
     Math.max(1, Math.floor(params.contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),

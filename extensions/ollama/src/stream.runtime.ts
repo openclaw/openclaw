@@ -165,9 +165,7 @@ function pickOllamaParams(
   keys: ReadonlySet<string>,
 ): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(isRecord(params) ? params : {}).filter(
-      ([key, value]) => value !== undefined && keys.has(key),
-    ),
+    Object.entries(params ?? {}).filter(([key, value]) => value !== undefined && keys.has(key)),
   );
 }
 
@@ -265,17 +263,12 @@ interface OllamaTool {
   };
 }
 
-function safeJsonLength(value: unknown): number {
-  try {
-    const serialized = JSON.stringify(value);
-    return typeof serialized === "string" ? estimateStringChars(serialized) : 0;
-  } catch {
-    return 0;
-  }
+function estimateJsonChars(value: unknown): number {
+  return estimateStringChars(JSON.stringify(value) ?? "");
 }
 
 function estimateTokensFromChars(chars: number): number {
-  if (!Number.isFinite(chars) || chars <= 0) {
+  if (chars <= 0) {
     return 0;
   }
   return Math.max(1, Math.round(chars / CHARS_PER_TOKEN_ESTIMATE));
@@ -289,11 +282,11 @@ function estimateOllamaPromptTokens(params: {
   for (const message of params.messages) {
     chars += estimateStringChars(message.content);
     chars += message.thinking ? estimateStringChars(message.thinking) : 0;
-    chars += safeJsonLength(message.images);
-    chars += safeJsonLength(message.tool_calls);
+    chars += estimateJsonChars(message.images);
+    chars += estimateJsonChars(message.tool_calls);
     chars += message.tool_name ? estimateStringChars(message.tool_name) : 0;
   }
-  chars += safeJsonLength(params.tools);
+  chars += estimateJsonChars(params.tools);
   return estimateTokensFromChars(chars);
 }
 
@@ -306,7 +299,7 @@ function estimateOllamaCompletionTokens(
     estimateStringChars(response.message.content) +
     (response.message.thinking ? estimateStringChars(response.message.thinking) : 0) +
     (response.message.reasoning ? estimateStringChars(response.message.reasoning) : 0) +
-    safeJsonLength(response.message.tool_calls);
+    estimateJsonChars(response.message.tool_calls);
   return estimateTokensFromChars(chars);
 }
 
@@ -320,37 +313,19 @@ type OllamaAssistantMessageBuildOptions = OllamaToolCallNameOptions & {
 };
 
 function buildOllamaToolNameSet(tools: Tool[] | undefined): ReadonlySet<string> | undefined {
-  if (!tools || !Array.isArray(tools)) {
-    return undefined;
-  }
-  const names = new Set<string>();
-  for (const tool of tools) {
-    if (typeof tool.name === "string" && tool.name.trim()) {
-      names.add(tool.name.trim());
-    }
-  }
+  const names = new Set(tools?.map((tool) => tool.name.trim()).filter(Boolean));
   return names.size > 0 ? names : undefined;
 }
 
 function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
-  if (!tools || !Array.isArray(tools)) {
-    return [];
-  }
-  const result: OllamaTool[] = [];
-  for (const tool of sortPromptCacheToolsByName(tools)) {
-    if (typeof tool.name !== "string" || !tool.name) {
-      continue;
-    }
-    result.push({
-      type: "function",
-      function: {
-        name: tool.name,
-        description: typeof tool.description === "string" ? tool.description : "",
-        parameters: normalizeOllamaToolSchema(tool.parameters, true),
-      },
-    });
-  }
-  return result;
+  return sortPromptCacheToolsByName(tools ?? []).map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: normalizeOllamaToolSchema(tool.parameters, true),
+    },
+  }));
 }
 
 export function buildAssistantMessage(

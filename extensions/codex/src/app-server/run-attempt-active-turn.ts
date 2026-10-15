@@ -310,6 +310,9 @@ export function activateCodexAttemptTurn(
         await enqueueNotification(
           {
             method: "turn/completed",
+            threadId: resourceState.thread.threadId,
+            turnId: activeTurnId,
+            completedTurn: turn.turn,
             params: {
               threadId: resourceState.thread.threadId,
               turnId: activeTurnId,

@@ -94,7 +94,7 @@ function normalizeOpenAIProviderConfig(
   source: "raw" | "resolved" = "raw",
 ) {
   const raw = source === "raw" ? resolveOpenAIProviderConfigRecord(config) : config;
-  const configuredBaseUrl = normalizeOptionalString(raw?.baseUrl);
+  const configuredBaseUrl = normalizeOptionalString(raw.baseUrl);
   const defaultBaseUrl =
     normalizeOptionalString(process.env.OPENAI_TTS_BASE_URL) ?? DEFAULT_OPENAI_BASE_URL;
   const baseUrl =
@@ -105,17 +105,17 @@ function normalizeOpenAIProviderConfig(
     apiKey:
       source === "raw"
         ? normalizeResolvedSecretInputString({
-            value: raw?.apiKey,
+            value: raw.apiKey,
             path: "tts.providers.openai.apiKey",
           })
-        : normalizeOptionalString(raw?.apiKey),
+        : normalizeOptionalString(raw.apiKey),
     baseUrl,
-    model: normalizeOptionalString(raw?.model) ?? "gpt-4o-mini-tts",
-    voice: normalizeOptionalString(raw?.voice) ?? "coral",
-    speed: normalizeOpenAISpeechSpeed(raw?.speed, baseUrl),
-    instructions: normalizeOptionalString(raw?.instructions),
-    responseFormat: normalizeOpenAISpeechResponseFormat(raw?.responseFormat),
-    extraBody: readExtraBody(raw?.extraBody) ?? readExtraBody(raw?.extra_body),
+    model: normalizeOptionalString(raw.model) ?? "gpt-4o-mini-tts",
+    voice: normalizeOptionalString(raw.voice) ?? "coral",
+    speed: normalizeOpenAISpeechSpeed(raw.speed, baseUrl),
+    instructions: normalizeOptionalString(raw.instructions),
+    responseFormat: normalizeOpenAISpeechResponseFormat(raw.responseFormat),
+    extraBody: readExtraBody(raw.extraBody) ?? readExtraBody(raw.extra_body),
   };
 }
 
