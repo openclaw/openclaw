@@ -26,7 +26,6 @@ import type { SelectPicker } from "./select-picker.ts";
 import "./app-sidebar.tsx";
 
 type Sidebar = AppSidebarSessionNavigationElement & {
-  teamOnlineExpanded: boolean;
   sidebarNarrationLines: ReadonlyMap<string, string>;
 };
 
@@ -139,13 +138,13 @@ describe("sidebar projection memo", () => {
     projectRows.mockClear();
     for (const change of [
       () => {
-        sidebar.teamOnlineExpanded = true;
+        sidebar.requestUpdate();
       },
       () => {
         sidebar.devGitBranch = "feature/sidebar";
       },
       () => {
-        sidebar.teamOnlineExpanded = false;
+        sidebar.requestUpdate();
       },
       () => {
         sidebar.sidebarMenus.closePositionedMenu("sessionSort");
@@ -265,7 +264,7 @@ describe("sidebar projection memo", () => {
       }
       await settleLitElement(sidebar);
       expect(row(target.key) !== null).toBe(statusFilter === "snoozed");
-      sidebar.teamOnlineExpanded = true;
+      sidebar.requestUpdate();
       await settleLitElement(sidebar);
       await vi.advanceTimersByTimeAsync(999);
       await settleLitElement(sidebar);
@@ -418,6 +417,86 @@ describe("sidebar projection memo", () => {
       cancel?.();
     });
     expect(row(target.key)).not.toBeNull();
+  });
+
+  it("retires visible activity on answer and finishing without changing active run ownership", async () => {
+    const target = session("answer", {
+      hasActiveRun: true,
+      activeRunIds: ["answer-run"],
+      status: "running",
+    });
+    const other = session("other", {
+      hasActiveRun: true,
+      activeRunIds: ["other-run"],
+      status: "running",
+    });
+    const { sidebar, gateway, row, sessions } = await mount([target, other]);
+    const spinner = (sessionKey: string) =>
+      row(sessionKey)?.querySelector('[aria-label="Active run"]');
+    expect(spinner(target.key)).not.toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 1,
+      stream: "assistant",
+      data: { text: "The answer is ready." },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).toBeNull();
+    expect(spinner(other.key)).not.toBeNull();
+    gateway.publishEvent("chat", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      state: "delta",
+      replace: true,
+      message: { role: "assistant", content: [] },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 2,
+      stream: "item",
+      data: {
+        kind: "tool",
+        phase: "start",
+        itemId: "inspect",
+        toolCallId: "inspect",
+        name: "read_file",
+        title: "Read file",
+      },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).not.toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 3,
+      stream: "lifecycle",
+      data: { phase: "finishing", error: "retryable" },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 4,
+      stream: "run_status",
+      data: { phase: "retrying", message: "Retrying" },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).not.toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 3,
+      stream: "lifecycle",
+      data: { phase: "finishing" },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).not.toBeNull();
+    expect(sessions.sessions.state.result?.sessions[0]?.hasActiveRun).toBe(true);
   });
 
   it("replaces held running subtitles at their deadline without another input or full row projection", async () => {

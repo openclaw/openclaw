@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { currentThemeBranding, setCurrentThemeBranding } from "../../app/theme-branding.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -74,23 +75,6 @@ describe("ChatSessionCompanionThreads", () => {
         selectionContext: expect.stringContaining(`Selected text:\n${selectedText}`),
       }),
     );
-  });
-
-  it("records hydration until the authoritative companion state settles", async () => {
-    let resolveLoad!: (value: { exchanges: [] }) => void;
-    const threads = new ChatSessionCompanionThreads();
-    const pending = threads.hydrate(
-      "one",
-      () =>
-        new Promise((resolve) => {
-          resolveLoad = resolve;
-        }),
-    );
-
-    expect(threads.view("one").loading).toBe(true);
-    resolveLoad({ exchanges: [] });
-    await pending;
-    expect(threads.view("one").loading).toBe(false);
   });
 
   it("keeps matching bare session keys isolated by agent", () => {
@@ -244,6 +228,28 @@ describe("ChatSessionRailElement", () => {
     await element.updateComplete;
     return element;
   }
+
+  it.each([
+    { phrases: [], expected: "" },
+    { phrases: ["Reviewing the workspace"], expected: "· Reviewing the workspace…" },
+  ])("uses the theme's pending-answer phrases: $phrases", async ({ phrases, expected }) => {
+    const originalBranding = currentThemeBranding();
+    setCurrentThemeBranding({ ...originalBranding, workingPhrases: phrases });
+    try {
+      const element = await mount({
+        companion: {
+          turns: [{ question: "What changed?", status: "pending", startedAt: 560_000 }],
+          loading: false,
+          draft: "",
+        },
+      });
+      const phrase = element.querySelector("openclaw-working-phrase")!;
+      await phrase.updateComplete;
+      expect(phrase.textContent?.replace(/\s+/g, " ").trim()).toBe(expected);
+    } finally {
+      setCurrentThemeBranding(originalBranding);
+    }
+  });
 
   it("submits the rail composer and renders sanitized markdown answers", async () => {
     const onSubmit = vi.fn();

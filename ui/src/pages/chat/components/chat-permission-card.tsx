@@ -43,13 +43,17 @@ function ChatPermissionCard(props: {
       return entry?.status !== "granted" || Boolean(entry.state);
     });
   });
+  // Native cannot commit an enabled Location mode while macOS denies access.
   const disabled = createMemo(() =>
     remaining().filter(
       (id) =>
         id === "computerControl" ||
         id === "canvas" ||
         id === "cameraEnabled" ||
-        (id === "location" && projection?.read()?.permissions.location?.mode === "off"),
+        (id === "location" &&
+          projection?.read()?.permissions.location?.mode === "off" &&
+          projection?.read()?.permissions.entries.find((entry) => entry.id === id)?.status !==
+            "denied"),
     ),
   );
   const complete = () => Boolean(local()) && remaining().length === 0;

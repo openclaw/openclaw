@@ -1731,6 +1731,7 @@ CREATE INDEX IF NOT EXISTS idx_flow_runs_updated_at ON flow_runs(updated_at);
 -- Durable meeting-capture sessions are gateway-global rather than agent-session
 -- transcripts. JSON/JSONL files are doctor import inputs or explicit CLI exports.
 CREATE TABLE IF NOT EXISTS meeting_transcript_sessions (
+  started_at_ms INTEGER,
   session_id TEXT NOT NULL,
   started_at TEXT NOT NULL,
   selector TEXT NOT NULL UNIQUE,
@@ -1758,6 +1759,9 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_started
   ON meeting_transcript_sessions(started_at DESC, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_chronology
+  ON meeting_transcript_sessions(started_at_ms DESC, session_id ASC, started_at ASC);
 
 CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_id
   ON meeting_transcript_sessions(session_id, started_at DESC);

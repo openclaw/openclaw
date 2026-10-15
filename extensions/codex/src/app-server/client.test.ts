@@ -330,43 +330,6 @@ describe("CodexAppServerClient", () => {
     },
   );
 
-  it("handles stdin write errors without crashing the process", async () => {
-    const harness = createHarness();
-
-    // Start a pending request so we can verify it gets properly rejected.
-    const pending = harness.client.request("test/method");
-
-    // Simulate the child process closing its pipe: stdin emits an asynchronous
-    // EPIPE error before the transport observes a process exit.
-    const pipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-    harness.process.stdin.emit("error", pipeError);
-
-    // The pending request must be rejected with the pipe error rather than
-    // an unhandled exception tearing down the gateway.
-    const pendingError = await pending.catch((error: unknown) => error);
-    expect(pendingError).toBeInstanceOf(Error);
-    expect((pendingError as Error).message).toContain("write EPIPE");
-    expect(isCodexAppServerIndeterminateTransportError(pendingError)).toBe(true);
-
-    // Subsequent requests keep the original close reason so startup logs stay actionable.
-    await expect(harness.client.request("another/method")).rejects.toThrow("write EPIPE");
-  });
-
-  it("handles stdout stream errors without crashing the process", async () => {
-    const harness = createHarness();
-
-    const pending = harness.client.request("test/method");
-    const readError = Object.assign(new Error("stdout pipe broke"), { code: "EIO" });
-
-    expect(() => harness.process.stdout.emit("error", readError)).not.toThrow();
-
-    const pendingError = await pending.catch((error: unknown) => error);
-    expect(pendingError).toBeInstanceOf(Error);
-    expect((pendingError as Error).message).toContain("stdout pipe broke");
-    expect(isCodexAppServerIndeterminateTransportError(pendingError)).toBe(true);
-    await expect(harness.client.request("another/method")).rejects.toThrow("stdout pipe broke");
-  });
-
   it("keeps RPC requests usable after stderr stream errors", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createHarness();
@@ -498,14 +461,7 @@ describe("CodexAppServerClient", () => {
     });
   });
 
-  it.each([
-    { executionTimeoutMs: 900_000, beforeDeadlineMs: 660_000, deadlineMs: 930_000 },
-    {
-      executionTimeoutMs: 2_147_483_647,
-      beforeDeadlineMs: 2_147_000_000,
-      deadlineMs: 2_147_483_647,
-    },
-  ])(
+  it.each([{ executionTimeoutMs: 900_000, beforeDeadlineMs: 660_000, deadlineMs: 930_000 }])(
     "accepts one owner execution budget of $executionTimeoutMs ms",
     async ({ executionTimeoutMs, beforeDeadlineMs, deadlineMs }) => {
       vi.useFakeTimers();

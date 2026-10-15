@@ -2,7 +2,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 import type { ControllerHost } from "./page-controller.ts";
@@ -19,16 +19,45 @@ type CoreLoadOptions = {
   onStart: (reason: ModelProviderRefreshReason) => void;
   onComplete: (result: CoreRequest & { data: ModelProvidersData }) => void;
   onCatalogComplete: (result: ModelCatalogResult) => void;
-  refreshPublication: () => void;
 };
+
+async function loadConnectedProviderData(
+  client: GatewayBrowserClient,
+  agentId: string,
+  target: { providerId?: string; data: ModelProvidersData },
+  signal: AbortSignal,
+): Promise<ModelProvidersData> {
+  // Read auth first so the catalog sees the newly connected runtime. This one
+  // shared refresh absorbs the intermediate catalog invalidations during login.
+  const refreshed = await loadModelProvidersData(client, { agentId, refresh: true, signal });
+  const authStatus = refreshed.authStatus;
+  return {
+    ...target.data,
+    providerOutcomes: refreshed.providerOutcomes,
+    catalogError: refreshed.catalogError,
+    error: authStatus ? refreshed.error : t("modelProviders.login.statusRefreshFailed"),
+    authStatus:
+      authStatus && target.providerId
+        ? {
+            ...authStatus,
+            providers: [
+              ...(target.data.authStatus?.providers ?? []).filter(
+                (provider) => canonicalModelAuthProviderId(provider.provider) !== target.providerId,
+              ),
+              ...authStatus.providers.filter(
+                (provider) => canonicalModelAuthProviderId(provider.provider) === target.providerId,
+              ),
+            ],
+          }
+        : (authStatus ?? target.data.authStatus),
+  };
+}
 
 export class ModelProviderCoreLoader {
   private active = false;
-  private publicationPending = false;
   private catalogRequest: AbortController | null = null;
   catalogError: string | null = null;
-  // The latest explicit Retry includes one that has already settled.
-  catalogGeneration = 0;
+  retryProvider: string | undefined;
   private request: AbortController | null = null;
 
   constructor(
@@ -63,7 +92,6 @@ export class ModelProviderCoreLoader {
     const request = new AbortController();
     const ownsResult = () => this.catalogRequest === request && isCurrent();
     this.catalogRequest = request;
-    this.catalogGeneration += 1;
     this.catalogError = null;
     this.host.requestUpdate();
     try {
@@ -87,7 +115,6 @@ export class ModelProviderCoreLoader {
       if (this.catalogRequest === request) {
         this.catalogRequest = null;
         this.host.requestUpdate();
-        this.flushPublication();
       }
     }
   }
@@ -96,17 +123,11 @@ export class ModelProviderCoreLoader {
     client: GatewayBrowserClient,
     agentId: string,
     reason: ModelProviderRefreshReason,
+    target?: { providerId?: string; data: ModelProvidersData },
   ): Promise<void> {
     if (reason === "publication" && (this.active || this.catalogLoading)) {
-      this.publicationPending = true;
+      // Catalog changes during an existing read are best effort until the next refresh.
       return;
-    }
-    if (reason === "publication") {
-      if (this.publicationPending) {
-        // Auth refresh can create a display copy after this publication was queued.
-        invalidateModelCatalogCache(client, { agentId });
-      }
-      this.publicationPending = false;
     }
     this.request?.abort();
     const request = new AbortController();
@@ -115,16 +136,21 @@ export class ModelProviderCoreLoader {
     if (reason !== "publication") {
       this.resetCatalog();
     }
-    this.options.onStart(reason);
+    if (!target) {
+      this.options.onStart(reason);
+    }
     this.host.requestUpdate();
     try {
-      const data = await loadModelProvidersData(client, {
-        agentId,
-        ...(reason === "forced" ? { refresh: true } : {}),
-        signal: request.signal,
-      });
+      const data = target
+        ? await loadConnectedProviderData(client, agentId, target, request.signal)
+        : await loadModelProvidersData(client, {
+            agentId,
+            ...(reason === "forced" ? { refresh: true } : {}),
+            signal: request.signal,
+          });
       if (this.request === request) {
         this.active = false;
+        this.retryProvider = target && data.error ? target.providerId : undefined;
         this.options.onComplete({ client, agentId, reason, data });
       }
     } catch {
@@ -134,26 +160,16 @@ export class ModelProviderCoreLoader {
         this.request = null;
         this.active = false;
         this.host.requestUpdate();
-        this.flushPublication();
       }
     }
   }
 
   invalidate(): void {
     this.resetCatalog();
-    this.publicationPending = false;
+    this.retryProvider = undefined;
     this.active = false;
     this.request?.abort();
     this.request = null;
     this.host.requestUpdate();
-  }
-
-  private flushPublication(): void {
-    // Publish after the current completion has applied its data.
-    queueMicrotask(() => {
-      if (this.publicationPending && !this.active && !this.catalogLoading) {
-        this.options.refreshPublication();
-      }
-    });
   }
 }

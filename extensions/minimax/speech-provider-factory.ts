@@ -226,6 +226,7 @@ export function buildMinimaxSpeechProvider({
     resolveTalkOverrides: ({ params }) =>
       readMinimaxOverrides({ ...params, model: params.modelId }),
     listVoices: async () => MINIMAX_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
+    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(
         resolveMinimaxDirectTtsApiKey(readMinimaxProviderConfig(providerConfig, cfg).apiKey) ||

@@ -2,9 +2,11 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   resamplePcm,
+  resolveConfiguredRealtimeVoiceProvider,
   type RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createLazyGoogleRealtimeVoiceProvider } from "./realtime-voice-lazy.js";
 import { buildThinkingConfig } from "./realtime-voice-model-contract.js";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -153,9 +155,41 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     vi.resetModules();
   });
 
+  it.each([
+    ["registered", buildGoogleRealtimeVoiceProvider],
+    ["lazy", createLazyGoogleRealtimeVoiceProvider],
+  ] as const)(
+    "preserves public synchronous resolution for the %s provider",
+    (_kind, buildProvider) => {
+      const resolution = resolveConfiguredRealtimeVoiceProvider({
+        cfg: {},
+        configuredProviderId: "google",
+        providers: [buildProvider()],
+        providerConfigs: {
+          google: {
+            providers: {
+              google: {
+                apiKey: "compat-fixture-key",
+                model: "gemini-live-2.5-flash-preview",
+                voice: "Puck",
+              },
+            },
+          },
+        },
+      });
+
+      expect(resolution.providerConfig).toMatchObject({
+        apiKey: "compat-fixture-key",
+        model: "gemini-live-2.5-flash-preview",
+        voice: "Puck",
+      });
+      expect(resolution.providerConfig).not.toHaveProperty("providers");
+    },
+  );
+
   it("normalizes nested config and applies it to the Live setup", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
-    const providerConfig = provider.resolveConfig?.({
+    const providerConfig = await provider.resolveConfigAsync?.({
       cfg: { models: { providers: { google: { apiKey: "cfg-key" } } } } as never,
       rawConfig: {
         providers: {

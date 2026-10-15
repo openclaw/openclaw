@@ -99,6 +99,54 @@ function createRequest(handler: GatewayRequestHandler, method = "health") {
 
 describe("authenticated Gateway RPC diagnostics", () => {
   it.each([
+    {
+      clientKind: "openclaw-control-ui",
+      params: { view: "configured", agentId: "private-agent", preparedOnly: true },
+      shape: { view: "configured", scope: "agent", preparedOnly: true, refresh: false },
+    },
+    {
+      clientKind: "openclaw-macos",
+      params: { sessionKey: "private-session", agentId: "private-agent", refresh: true },
+      shape: { view: "default", scope: "session", preparedOnly: false, refresh: true },
+    },
+    {
+      clientKind: "gateway-client",
+      params: { view: "provider-config", authProfileId: "private-profile" },
+      shape: {
+        view: "provider-config",
+        scope: "auth-profile",
+        preparedOnly: false,
+        refresh: false,
+      },
+    },
+    {
+      clientKind: "cli",
+      params: { view: "private-view", refresh: "private-refresh" },
+      shape: { view: "other", scope: "global", preparedOnly: false, refresh: false },
+    },
+  ])("attributes model catalog receipt without private values ($clientKind)", async (query) => {
+    const fixture = createRequest(({ respond }) => respond(true, {}), "models.list");
+    const client = createOperatorWsClient({
+      clientInfo: { id: query.clientKind, mode: "backend" },
+    });
+    client.connect.userAgent = "private-user-agent";
+    client.connect.client.displayName = "private-display-name";
+    client.connect.client.instanceId = "private-instance";
+    await fixture.dispatcher.dispatch(
+      { type: "req", id: "private-request", method: "models.list", params: query.params },
+      client,
+    );
+    await fixture.finished;
+    expect(fixture.events.filter((event) => event.phase === "received")).toEqual([
+      expect.objectContaining({
+        method: "models.list",
+        modelsList: { clientKind: query.clientKind, source: "wire", ...query.shape },
+      }),
+    ]);
+    expect(JSON.stringify(fixture.events)).not.toContain("private-");
+  });
+
+  it.each([
     { source: "dashboard", rowMode: "compact", bytes: 204_800, elapsed: 0 },
     { source: "arbitrary-private-caller", rowMode: undefined, bytes: 100, elapsed: 1_000 },
   ])("attributes session list diagnostics without private filters ($source)", async (query) => {

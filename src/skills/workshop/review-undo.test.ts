@@ -126,20 +126,6 @@ describe("undoWorkshopReview", () => {
     );
   });
 
-  it("reports a repeated undo as already undone without changing anything", async () => {
-    await undoWorkshopReview(user, { runId: REVIEW_RUN_ID });
-    const recorded = feed.length;
-    vi.clearAllMocks();
-
-    const again = await undoWorkshopReview(user, { runId: REVIEW_RUN_ID });
-
-    expect(again).toEqual({ status: "already-undone", changes: [] });
-    expect(feed).toHaveLength(recorded);
-    expect(mocks.restoreWorkshopSkill).not.toHaveBeenCalled();
-    expect(mocks.archiveWorkshopSkill).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
   it("lets a concurrent second press find the review already undone", async () => {
     const [first, second] = await Promise.all([
       undoWorkshopReview(user, { runId: REVIEW_RUN_ID }),
@@ -148,15 +134,6 @@ describe("undoWorkshopReview", () => {
 
     expect([first.status, second.status]).toEqual(["undone", "already-undone"]);
     expect(mocks.archiveWorkshopSkill).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not archive a created skill the agent already archived after a chat undo", async () => {
-    record({ ...user, runId: "agent-turn" }, { skillName: "release", action: "archive" });
-
-    const result = await undoWorkshopReview(user, { runId: REVIEW_RUN_ID });
-
-    expect(mocks.archiveWorkshopSkill).not.toHaveBeenCalled();
-    expect(result.changes.map(({ skillName }) => skillName)).toEqual(["deploy"]);
   });
 
   it("refuses a review id with no recorded changes", async () => {

@@ -136,13 +136,15 @@ export function updateChatRunProgressSnapshot(
     ].includes(phase);
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
   const isFallbackStatus = event.stream === "lifecycle" && phase === "fallback_step";
+  const isFinishing = event.stream === "lifecycle" && phase === "finishing";
   const isAssistant =
     event.stream === "assistant" &&
     Boolean(
       snapshot?.events.some(
         (candidate) =>
           candidate.stream === "run_status" ||
-          (candidate.stream === "lifecycle" && candidate.data.phase === "fallback_step"),
+          (candidate.stream === "lifecycle" &&
+            (candidate.data.phase === "fallback_step" || candidate.data.phase === "finishing")),
       ),
     );
   const preambleItemId =
@@ -186,29 +188,18 @@ export function updateChatRunProgressSnapshot(
         candidate.data.phase === "strict_review_required" &&
         candidate.data.reviewId === data.reviewId,
     );
+  const isSummaryProgress =
+    isTool ||
+    isItem ||
+    isUsage ||
+    isRetryStatus ||
+    isFallbackStatus ||
+    isFinishing ||
+    isAssistant ||
+    isNotice;
   if (
-    mode === "summary" &&
-    !isTool &&
-    !isItem &&
-    !isUsage &&
-    !isRetryStatus &&
-    !isFallbackStatus &&
-    !isAssistant &&
-    !isNotice
-  ) {
-    return snapshot;
-  }
-  if (
-    !isTool &&
-    !isItem &&
-    !isUsage &&
-    !isStartupStatus &&
-    !isRetryStatus &&
-    !isFallbackStatus &&
-    !isAssistant &&
-    !isStandaloneGuardian &&
-    !isNotice &&
-    !resolvesStrictReview
+    !isSummaryProgress &&
+    (mode === "summary" || (!isStartupStatus && !isStandaloneGuardian && !resolvesStrictReview))
   ) {
     return snapshot;
   }
@@ -269,6 +260,7 @@ export function updateChatRunProgressSnapshot(
     isStartupStatus ||
     isRetryStatus ||
     isFallbackStatus ||
+    isFinishing ||
     isAssistant ||
     isTool ||
     isItem
@@ -278,7 +270,8 @@ export function updateChatRunProgressSnapshot(
       if (
         candidate.stream === "run_status" ||
         candidate.stream === "assistant" ||
-        (candidate.stream === "lifecycle" && candidate.data.phase === "fallback_step")
+        (candidate.stream === "lifecycle" &&
+          (candidate.data.phase === "fallback_step" || candidate.data.phase === "finishing"))
       ) {
         return true;
       }

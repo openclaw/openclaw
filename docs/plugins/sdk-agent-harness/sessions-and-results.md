@@ -103,7 +103,8 @@ including awaited `lookup`, action-bound `withCurrent`, and the synchronous
 effect guard `assertLeaseCurrent`. Supply its `workerCodec`, record codec,
 acquisition/retention policy, errors, and timing. The old
 `createNativeSessionBindingLifecycle` and its synchronous store view remain
-deprecated compatibility until the next Plugin SDK major.
+deprecated compatibility through 2026-12-31, with removal in the first January
+2027 stable release.
 Pass host authority through `assertCurrent` and validate the expected generation
 in `assertRecordCurrent`. Leases coordinate storage; they grant no execution
 authority. Keep native cleanup after the host transaction commits.

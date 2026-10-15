@@ -102,6 +102,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_http_cancelled_total`                   | counter   | `source` (`client` or `shutdown`)                                                         |
 | `openclaw_gc_duration_seconds`                            | histogram | `kind`, `thread`                                                                          |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
+| `openclaw_models_list_requests_total`                     | counter   | `client_kind`, `source`, `view`, `scope`, `refresh`, `prepared_only`                      |
 | `openclaw_gateway_rpc_first_response_seconds`             | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_response_bytes`                     | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_heap_delta_bytes`           | histogram | `method`                                                                                  |
@@ -200,6 +201,10 @@ worker. These counters describe transport work, not confirmed delivery.
 
 Payload bytes use existing encoded buffer sizes or inexpensive owner estimates;
 they exclude transport framing and do not measure structured-clone allocations.
+Commit receipts reuse their already-computed serialized fact sizes. Memory reports
+count numeric heap counters and GC durations; GC kind labels and object envelopes
+are excluded. Authority includes transaction/commit admission and settlement, not
+just authorization checks; arbitrary admission facts can still be unmeasured.
 Object graphs without a known size increase `openclaw_worker_message_unmeasured_total`
 instead of appearing as measured zero-byte messages. Compare byte rankings with
 this coverage counter before drawing conclusions; nested worker-to-worker traffic
@@ -235,6 +240,21 @@ RPC method labels contain exact core and registered plugin method names, `other`
 for unregistered requests, or `unknown` for unrecognized dedicated worker RPCs.
 Catalog membership is checked at request receipt, so plugin registry replacement
 affects subsequent requests without a separate label cache.
+
+`openclaw_models_list_requests_total` separately attributes catalog reads to the
+handshake's canonical client kind, such as `openclaw-control-ui`, `openclaw-macos`,
+or `gateway-client`. `source="wire"` identifies client request frames;
+`source="internal"` identifies server-dispatched requests with an adapted response,
+including the connection's initial model snapshot. `view` is `default`,
+`configured`, `provider-config`, `all`, or `other` for an invalid value. `scope`
+records parameter presence: `session`, then `auth-profile`, then `agent`, or
+`global` when none is supplied. `refresh` and `prepared_only` record whether the
+corresponding parameter is exactly `true`. Counts include later-rejected requests;
+scope does not describe the authorized result. No agent, session, profile,
+connection, user-agent, or display-name values are exported. Each observed label
+combination uses one sample in the existing shared cap. The method-only request
+counter and timing histograms retain their existing labels.
+
 Outcome totals aggregate by phase and outcome without a
 method dimension. Each method with all four timings, both byte histograms, and the exclusive-sample counter occupies eight aggregate
 samples in the shared 2,048-sample cap. An RPC duration histogram occupies one sample
@@ -622,7 +642,13 @@ reported by Node.js for the main isolate and instrumented workers. `kind` is
 `scavenge` (minor), `mark_sweep_compact` (major), `incremental`, or
 `weak_processing`, taken from the native entry's `detail.kind`. `thread` is `main`
 or an allowlisted worker script basename; unknown worker scripts use `other`.
-Workers of the same kind share series, without thread IDs or paths. Older SDK
+Code Mode Node workers also carry a reusable `slot` label from 1 through 64.
+The worker registry holds a slot until native worker exit, including pending
+retirement, then makes it available for reuse. Concurrent workers beyond 64
+retain script-level attribution without a slot; other worker scripts also retain
+script-level attribution. Slots are not thread IDs or session identities.
+Counters accumulate across occupants of a slot, so a rate window can span more
+than one worker. Older SDK
 producers that omit attribution use `kind="unknown",thread="main"`. SDK-provided
 unknown kinds and worker names fold into `unknown` and `other` at event emission.
 Each observation is one
@@ -660,8 +686,25 @@ sum by (kind, thread) (rate(openclaw_gc_duration_seconds_count[5m]))
 sum by (kind, thread) (rate(openclaw_gc_duration_seconds_sum[5m]))
 ```
 
+To locate a busy Code Mode isolate and compare its latest used heap with its
+actual V8 limit:
+
+```promql
+60 * rate(openclaw_gc_duration_seconds_count{thread="code-mode-node.worker.js",kind="mark_sweep_compact",slot!=""}[5m])
+openclaw_code_mode_worker_heap_bytes{kind="used"}
+  / ignoring(kind) openclaw_code_mode_worker_heap_bytes{kind="limit"}
+```
+
+`openclaw_code_mode_worker_heap_bytes` reuses the existing memory heartbeat and
+labels samples by `slot` and `kind="used"` or `kind="limit"`. Gauges disappear at
+the next memory sample after worker exit or stale sampling; missing limits are
+omitted on runtimes without V8. The script-level worker heap metrics continue to
+include all workers, including slot overflow. No additional heap interrupt or
+sampling timer is introduced.
+
 OpenTelemetry's `openclaw.gc.duration_ms` uses the corresponding
-`openclaw.gc.kind` and `openclaw.gc.thread` attributes.
+`openclaw.gc.kind`, `openclaw.gc.thread`, and optional `openclaw.gc.worker_slot`
+attributes.
 
 ## Label policy
 
@@ -693,6 +736,10 @@ OpenTelemetry's `openclaw.gc.duration_ms` uses the corresponding
 ```promql
 # Gateway RPC requests per second by method
 sum by (method) (rate(openclaw_gateway_rpc_requests_total[5m]))
+
+# Model catalog calls per minute by caller and request shape over ten minutes
+60 * sum by (client_kind, source, view, scope, refresh, prepared_only)
+  (rate(openclaw_models_list_requests_total[10m]))
 
 # 95th percentile first-response latency by method
 histogram_quantile(

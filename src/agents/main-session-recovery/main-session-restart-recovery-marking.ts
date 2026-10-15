@@ -542,13 +542,12 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
       result.marked += storeResult.marked;
       result.skipped += storeResult.skipped;
       params.startupCheckedStorePaths?.add(key);
-      recordStartupRecoveryStoreResult({ target, lifecycleGeneration, outcome: { ok: true } });
+      recordStartupRecoveryStoreResult({ target, outcome: { ok: true } });
     } catch (error) {
       assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
       failedTargets.push(target);
       recordStartupRecoveryStoreResult({
         target,
-        lifecycleGeneration,
         outcome: { ok: false, error },
       });
       mainSessionRecoveryLog.warn(

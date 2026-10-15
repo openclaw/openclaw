@@ -65,7 +65,11 @@ path; it does not permit raw native callers or untrusted proof to reuse a
 lease across revisions.
 Older or missing receipts require stopping the owned lease and allocating a
 fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
-these checks. All providers require Crabbox 0.73.0 or newer.
+these checks. All providers require Crabbox 0.77.0 or newer.
+
+For direct and coordinator-managed leases, TTL is total lifetime from creation, including hydration; idle timeout is the inactivity window, and the earlier deadline wins. Crabbox defaults both to 30 minutes and the maximum to four hours; coordinator owner or organization overrides and trusted direct-provider configuration can allow up to 24 hours. Read effective policy and clamp notices rather than assuming the requested duration was granted. `--keep` skips normal command cleanup but does not prevent expiry. Plain heartbeats and manual desktop use do not extend total TTL; `run` requests bounded auto-extension only while the command executes. Creation-fixed providers need enough TTL at allocation. Extension refusals and budget exhaustion do not authorize another provider or an unlimited chain of leases.
+
+Crabbox trusted configuration owns `directLeases: deny` and its `directLeaseAllow` exceptions; use its configured coordinator route instead of direct credentials when denied. Coordinator-backed `crabbox list` shows live leases by default; `--retained` adds kept terminal resources whose cleanup is unconfirmed. Retain the exact lease ID and local recovery state until blocking `crabbox stop --provider <provider> --id <lease> --wait` confirms cleanup. A successful workload or a missing live-list row is not cleanup proof.
 
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native
@@ -101,7 +105,7 @@ conflicting with required tracked source stops the run before upload.
 The command binds the bundle digest and raw source tree. Before running the payload,
 the receiver applies deletions and restores file bytes, symlink target bytes, and
 Git executable modes, then verifies the filesystem directly. Git text filters do not
-normalize this snapshot. Missing, stale, or mismatched bundles fail closed.
+normalize this snapshot. Missing, stale, or mismatched bundles are rejected.
 Producer-declared deletions must also be absent, even when the remote index has lost
 them. Deletions use the same privacy policy as source selection; unknown ignored
 runtime data is preserved. Unexpected nonignored receiver files stop the run instead
@@ -128,7 +132,7 @@ tests. Use a newly warmed lease dedicated to that untrusted source; never reuse
 a trusted or previously hydrated lease. Launch an installed trusted Crabbox
 binary from a clean trusted `main` checkout and fetch only the remote PR with
 `--fresh-pr`; never execute the untrusted checkout's wrapper or config locally.
-Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail closed unless resolved
+Unset `CRABBOX_AWS_INSTANCE_PROFILE` and refuse to run unless resolved
 `aws.instanceProfile` is empty. Before any install/test, use trusted
 absolute-path tools to require an IMDSv2 token, prove the IAM credentials
 endpoint returns 404, and verify remote `git rev-parse HEAD` equals the full
@@ -421,7 +425,7 @@ absent; recovery does not probe its potentially recycled PID. Same-boot recovery
 still checks PID absence. Missing host provenance and legacy domain mismatches
 remain protected unless explicitly qualified below.
 Idle mirrors retain their separate exclusive-lock recovery contract. Directory
-ownership records include the canonical path, inode, birthtime, and macOS volume
+ownership records include the resolved filesystem path, inode, birthtime, and macOS volume
 UUID, so APFS device-number changes across reboots do not invalidate that identity.
 Legacy device/inode records accept a macOS device-only change only when the
 directory predates its receipt and the existing path and ownership checks pass.

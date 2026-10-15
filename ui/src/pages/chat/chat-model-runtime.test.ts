@@ -1,12 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { createComponent, createSignal, merge } from "solid-js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { switchChatModel } from "./chat-session.ts";
-import { renderChatModelControls } from "./components/chat-model-controls.tsx";
+import { ChatModelControls } from "./components/chat-model-controls.tsx";
 
 const model: ModelCatalogEntry = {
   id: "gpt-5.6-sol",
@@ -20,33 +22,45 @@ const model: ModelCatalogEntry = {
   ],
 };
 
+type ModelControlsProps = Parameters<typeof ChatModelControls>[0];
+const mountedControls = new WeakMap<HTMLElement, (props: ModelControlsProps) => void>();
+
 function renderControls(
   result: SessionsListResult,
   models: ModelCatalogEntry[],
-  options: Pick<
-    Parameters<typeof renderChatModelControls>[0],
-    "onModelSelect" | "onModelSetup" | "modelSelectionLocked"
-  > = {},
+  options: Pick<ModelControlsProps, "onModelSelect" | "onModelSetup" | "modelSelectionLocked"> = {},
   container = document.createElement("div"),
 ) {
-  render(
-    renderChatModelControls({
-      activeRunId: null,
-      connected: true,
-      gatewayAvailable: true,
-      loading: false,
-      modelCatalog: models,
-      modelCatalogState: { hasSnapshot: true, status: "ready" },
-      modelSwitching: false,
-      sending: false,
-      sessionKey: "main",
-      selectedSession: result.sessions[0],
-      sessionsResult: result,
-      stream: null,
-      ...options,
-    }),
-    container,
-  );
+  const props: ModelControlsProps = {
+    activeRunId: null,
+    connected: true,
+    gatewayAvailable: true,
+    loading: false,
+    modelCatalog: models,
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    modelSwitching: false,
+    sending: false,
+    sessionKey: "main",
+    selectedSession: result.sessions[0],
+    sessionsResult: result,
+    stream: null,
+    ...options,
+  };
+  const update = mountedControls.get(container);
+  if (update) {
+    update(props);
+  } else {
+    const [current, setCurrent] = createSignal(props);
+    const view = mountSolid(() => createComponent(ChatModelControls, merge(current)), {
+      container,
+    });
+    mountedControls.set(container, setCurrent);
+    onTestFinished(() => {
+      view.unmount();
+      mountedControls.delete(container);
+    });
+  }
+  flush();
   return container;
 }
 

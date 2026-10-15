@@ -16,6 +16,8 @@ on:
       - scripts/lib/control-ui-i18n-catalog.ts
       - scripts/lib/control-ui-i18n-catalog-values.ts
       - scripts/lib/control-ui-plugin-i18n-catalog.ts
+      - extensions/active-memory/control-ui.presentation.json
+      - extensions/memory-wiki/control-ui.presentation.json
       - extensions/*/package.json
       - extensions/**/i18n/locales/en.ts
       - extensions/**/i18n/locales/translated.json
@@ -302,6 +304,8 @@ jobs:
             scripts/lib/control-ui-i18n-catalog.ts
             scripts/lib/control-ui-i18n-catalog-values.ts
             scripts/lib/control-ui-plugin-i18n-catalog.ts
+            extensions/active-memory/control-ui.presentation.json
+            extensions/memory-wiki/control-ui.presentation.json
             extensions/*/package.json
             extensions/*/openclaw.plugin.json
             extensions/**/*.ts

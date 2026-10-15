@@ -124,6 +124,26 @@ describe("GitHub publication branch history", () => {
 
   it("publishes initial work and fast-forward edits, then reuses an attributed published head across requests", async () => {
     const f = await historyFixture();
+    // Signature display must not prepend diagnostics to machine-readable commit facts.
+    const signedCommit = path.join(root, "signed-commit.txt");
+    await fs.writeFile(
+      signedCommit,
+      [
+        `tree ${await f.git("rev-parse", "HEAD^{tree}")}`,
+        `parent ${await f.git("rev-parse", "HEAD")}`,
+        "author Fixture <fixture@example.invalid> 1700000000 +0000",
+        "committer Fixture <fixture@example.invalid> 1700000000 +0000",
+        "gpgsig -----BEGIN PGP SIGNATURE-----",
+        " synthetic-invalid-signature",
+        " -----END PGP SIGNATURE-----",
+        "",
+        "Signed fixture",
+        "",
+      ].join("\n"),
+    );
+    const signedHead = await f.git("hash-object", "-t", "commit", "-w", signedCommit);
+    await f.git("update-ref", "HEAD", signedHead);
+    await f.git("config", "log.showSignature", "true");
     const first = await f.publish("initial");
     expect(first).toMatchObject({ status: "published", url });
     const firstHead = await f.remoteHead();

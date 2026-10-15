@@ -23,7 +23,10 @@ describe("executeAgentTurn: conversation failures", () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(failure);
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
-    expect(result).toMatchObject({ kind: "final", payload: { text: failure.message } });
+    expect(result).toMatchObject({
+      kind: "final",
+      payload: { text: `${failure.message} This turn will not be continued automatically.` },
+    });
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
   });
 

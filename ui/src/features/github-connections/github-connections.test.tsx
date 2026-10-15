@@ -1,14 +1,15 @@
 /* @vitest-environment jsdom */
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import "./github-connections.tsx";
+import { GitHubConnections } from "./github-connections.tsx";
 
 const system: ToolsGitHubStatusResult["effective"] = {
   source: "system-configured",
@@ -74,11 +75,9 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
       runExternalMutation: vi.fn(),
     },
   } as unknown as ApplicationContext;
-  const provider = createApplicationContextProvider(context);
-  const element = document.createElement("openclaw-github-connections");
-  provider.append(element);
-  document.body.append(provider);
-  onTestFinished(() => provider.remove());
+  const { container: element } = mountSolid(GitHubConnections, {
+    wrapper: createSolidApplicationContextProvider(context).wrapper,
+  });
   return {
     element,
     context,

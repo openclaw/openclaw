@@ -138,11 +138,15 @@ export function restoreFinalizedStartupRun(params: {
     (entry.nextRunAtMs === params.preservedOccurrenceAtMs
       ? params.preservedOccurrenceAtMs
       : undefined) ?? resolveOneShotReplacementAtMs(job, startedAt);
+  const persistedNextRunAtMs = asDateTimestampMs(job.state.nextRunAtMs);
   // Committed edits own scheduling even if the clock repeats or moves back.
-  // Older pending one-shots still retain a later replacement deadline.
+  // Legacy split-write finalization can leave a newer retry deadline in the job row.
   const scheduleOwnership =
     typeof job.state.runningScheduleChangeId === "string" ||
-    (job.schedule.kind === "at" && (!job.enabled || replacementAtMs !== undefined))
+    (job.schedule.kind === "at" &&
+      (!job.enabled ||
+        replacementAtMs !== undefined ||
+        (persistedNextRunAtMs !== undefined && persistedNextRunAtMs > startedAt)))
       ? "stale"
       : "current";
   // A once result can record no next run before a later edit retires its

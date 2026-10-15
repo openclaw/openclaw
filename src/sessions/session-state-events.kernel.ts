@@ -297,14 +297,15 @@ export function recordSessionStateEventInDatabase(
 ): { row?: SessionStateEventRow; notices: SessionStateNotice[] } {
   const occurredAt = clampSessionStateOccurredAt(input.occurredAt, now);
   const notices: SessionStateNotice[] = [];
-  const insert = executeSqliteQuerySync(
+  const insert = executeSqliteQueryTakeFirstSync(
     db,
     getSessionStateKysely(db)
       .insertInto("session_state_events")
       .values(bindSessionStateEvent(input, occurredAt))
-      .onConflict((conflict) => conflict.column("dedupe_key").doNothing()),
+      .onConflict((conflict) => conflict.column("dedupe_key").doNothing())
+      .returningAll(),
   );
-  const insertedSequence = insert.insertId ? Number(insert.insertId) : undefined;
+  const insertedSequence = insert?.sequence;
   if (insertedSequence === undefined) {
     if (!input.dedupeKey) {
       return { notices };
@@ -404,14 +405,7 @@ export function recordSessionStateEventInDatabase(
     });
   }
 
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getSessionStateKysely(db)
-      .selectFrom("session_state_events")
-      .selectAll()
-      .where("sequence", "=", insertedSequence),
-  );
-  return { row, notices };
+  return { row: insert, notices };
 }
 
 /** The caller owns the transaction and schedules retention after notice publication. */

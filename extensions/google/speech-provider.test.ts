@@ -231,9 +231,9 @@ describe("Google speech provider", () => {
       expect(audioBuffer.subarray(44)).toEqual(PCM);
       return Buffer.from("google-opus");
     });
-    expect(buildGoogleSpeechProvider().isConfigured({ providerConfig: {}, timeoutMs: 1 })).toBe(
-      true,
-    );
+    expect(
+      await buildGoogleSpeechProvider().isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 1 }),
+    ).toBe(true);
     const result = await synthesize({
       providerConfig: {},
       target: "voice-note",
@@ -269,7 +269,11 @@ describe("Google speech provider", () => {
       baseUrl: "https://generativelanguage.googleapis.com",
     });
     expect(
-      buildGoogleSpeechProvider().isConfigured({ cfg, providerConfig: {}, timeoutMs: 1 }),
+      await buildGoogleSpeechProvider().isConfiguredAsync?.({
+        cfg,
+        providerConfig: {},
+        timeoutMs: 1,
+      }),
     ).toBe(true);
     await synthesize({ cfg, providerConfig: {} });
     expect(recorded().headers).toMatchObject({ "x-goog-api-key": "model-provider-google-key" });
