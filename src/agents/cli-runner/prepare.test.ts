@@ -1221,11 +1221,12 @@ describe("prepareCliRunContext", () => {
   );
 
   it.each(["missing", "different-profile"] as const)(
-    "rejects a selected managed credential when auth resolution returns %s",
+    "rejects a selected credential when auth resolution returns %s",
     async (resolution) => {
       const { dir } = fixture.session;
       const agentDir = path.join(dir, "agents", "main", "agent");
-      const authProfileId = "anthropic:openclaw-managed";
+      const authProfileId =
+        resolution === "missing" ? "anthropic:openclaw-managed" : "anthropic:account-a";
       const fallbackProfileId = "anthropic:account-b";
       const fallbackCredential = {
         type: "oauth" as const,
