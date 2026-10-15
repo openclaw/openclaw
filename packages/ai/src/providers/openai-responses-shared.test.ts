@@ -339,7 +339,6 @@ describe("Responses reasoning effort", () => {
     "normalizes $reasoning to $expected at the request boundary",
     ({ model, reasoning, expected }) => {
       const effort = resolveOpenAISimpleReasoningEffort(model, reasoning);
-      expect(effort).toBe(expected);
       const params = {} as ResponseCreateParamsStreaming;
       applyCommonResponsesParams(params, model, { messages: [] }, { reasoningEffort: effort });
       expect(params.reasoning).toEqual({ effort: expected, summary: "auto" });

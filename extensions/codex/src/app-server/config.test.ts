@@ -933,7 +933,12 @@ describe("Codex app-server config", () => {
     );
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    options: Parameters<typeof resolveExecPolicy>[1];
+    sandbox: "read-only" | "workspace-write";
+    policy: Parameters<typeof expectRuntimePolicy>[1];
+  }>([
     {
       name: "host",
       options: {
