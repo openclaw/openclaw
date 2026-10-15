@@ -610,6 +610,14 @@ export function parseClaudeCliStreamingDelta(params: {
   if (!supportsCliJsonlToolEvents(params)) {
     return null;
   }
+  // Forwarded child text is not parent reply text, in either record shape. The
+  // cumulative-snapshot branch below has always rejected it; a partial-message
+  // delta carries the same attribution and is rejected here for the same reason.
+  // Both budgets exempt these lines because the parent lane discards them, so a
+  // delta that slipped through would be retained and emitted uncharged.
+  if (isClaudeSubagentRecord(params.parsed)) {
+    return null;
+  }
   if (params.parsed.type === "stream_event" && isRecord(params.parsed.event)) {
     const event = params.parsed.event;
     if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
@@ -624,7 +632,6 @@ export function parseClaudeCliStreamingDelta(params: {
     // `--include-partial-messages` marks cumulative assistant snapshots with an explicit null.
     !isClaudeStreamJsonDialect(params) ||
     params.parsed.type !== "assistant" ||
-    isClaudeSubagentRecord(params.parsed) ||
     !isRecord(params.parsed.message) ||
     params.parsed.message.stop_reason !== null
   ) {

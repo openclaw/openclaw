@@ -25,6 +25,7 @@ import type {
   CliToolResultDelta,
   CliToolUseStartDelta,
 } from "./cli-output-contracts.js";
+import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
 import { dispatchClaudeCliStreamingToolEvent } from "./cli-output-events.js";
 import { isClaudeSubagentJsonlLine } from "./cli-output-jsonl-scan.js";
 import {
@@ -278,6 +279,12 @@ export function createClaudePostBudgetWatcher(params: {
       }
     }
     for (const record of decodeCliRecords(line)) {
+      // The pre-budget path normalizes Claude's echoed binary payloads in place
+      // before anything retains or dispatches the record. This path re-decodes
+      // the line, so it gets a fresh un-normalized record and has to do the same
+      // — including for the record that spent the budget, which arrives here as
+      // a line rather than as the already-normalized object.
+      normalizeClaudeCliStreamJsonRecord(record);
       projectProgress(record);
       if (
         !params.hasTerminalResult() &&

@@ -37,6 +37,15 @@ function subagentLine(text: string) {
   });
 }
 
+/** A forwarded subagent partial-message delta, the other shape child text arrives in. */
+function subagentStreamTextLine(text: string) {
+  return JSON.stringify({
+    type: "stream_event",
+    parent_tool_use_id: PARENT_TOOL_CALL_ID,
+    event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+  });
+}
+
 function parentAssistantTextLine(text: string) {
   return JSON.stringify({
     type: "stream_event",
@@ -210,6 +219,29 @@ describe("CLI stream-json turn budget and forwarded subagent traffic", () => {
     parser.finish();
 
     expect(assistantDeltas).toEqual([]);
+  });
+
+  it("neither charges nor retains forwarded subagent partial-message deltas", () => {
+    // An exemption is only safe if the parent lane really discards the payload.
+    // These two records carry 8.6 MiB of child text past an 8 MiB budget, so if
+    // any of it is retained or emitted the exemption is unbounded retention.
+    const { parser, assistantDeltas } = createRecordingParser();
+    const childChunk = "c".repeat(4_300_000);
+
+    parser.push(`${subagentStreamTextLine(childChunk)}\n`);
+    parser.push(`${subagentStreamTextLine(childChunk)}\n`);
+
+    expect(parser.getErrorText()).toBeNull();
+    expect(assistantDeltas).toEqual([]);
+
+    parser.push(`${parentAssistantTextLine("parent answer")}\n`);
+    parser.push(`${terminalResultLine("parent answer")}\n`);
+    parser.finish();
+
+    expect(parser.getErrorText()).toBeNull();
+    expect(parser.getOutputTruncationText()).toBeNull();
+    expect(assistantDeltas.join("")).toBe("parent answer");
+    expect(parser.getOutput()).toMatchObject({ text: "parent answer" });
   });
 
   it("counts actual blank Claude frames as ordinary lines", () => {
@@ -430,6 +462,59 @@ describe("native compaction lifecycle past a spent budget", () => {
     parser.finish();
 
     expect(compactions).toEqual([]);
+  });
+});
+
+/** A parent tool result carrying Claude's echoed binary payload. */
+function parentImageToolResultLine(toolCallId: string, data: string) {
+  return JSON.stringify({
+    type: "user",
+    parent_tool_use_id: null,
+    message: {
+      content: [
+        {
+          tool_use_id: toolCallId,
+          type: "tool_result",
+          content: [{ type: "image", source: { type: "base64", media_type: "image/png", data } }],
+        },
+      ],
+    },
+  });
+}
+
+describe("echoed binary normalization past a spent budget", () => {
+  const ECHOED = "Qk0".repeat(1_433_333); // 4,299,999 base64 characters
+
+  it("omits an echoed image payload in a tool result that settles after exhaustion", () => {
+    const { parser, toolResults } = createRecordingParser();
+
+    exhaustLineBudget(parser);
+    parser.push(`${parentToolUseLine("toolu_image_after_budget", "Read")}\n`);
+    parser.push(`${parentImageToolResultLine("toolu_image_after_budget", ECHOED)}\n`);
+
+    expect(toolResults.map((result) => result.toolCallId)).toEqual(["toolu_image_after_budget"]);
+    const projected = JSON.stringify(toolResults);
+    expect(projected).not.toContain(ECHOED);
+    expect(projected).toContain('"omitted":true');
+  });
+
+  it("omits an echoed image payload in the tool result that spends the budget", () => {
+    // This record takes the pre-budget path, fails the line charge, and is then
+    // handed to the watcher as a raw line — so it is decoded a second time and
+    // must be normalized a second time.
+    const { parser, toolResults } = createRecordingParser();
+
+    parser.push(`${parentToolUseLine("toolu_image_spender", "Read")}\n`);
+    parser.push(`${parentStatusLine()}\n`.repeat(CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines - 1));
+    expect(parser.getErrorText()).toBeNull();
+
+    parser.push(`${parentImageToolResultLine("toolu_image_spender", ECHOED)}\n`);
+
+    expect(parser.getErrorText()).toContain("JSONL output exceeded 20000 lines");
+    const projected = JSON.stringify(toolResults);
+    expect(toolResults.map((result) => result.toolCallId)).toEqual(["toolu_image_spender"]);
+    expect(projected).not.toContain(ECHOED);
+    expect(projected).toContain('"omitted":true');
   });
 });
 
