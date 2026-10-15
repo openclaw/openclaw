@@ -305,8 +305,18 @@ Setting thinking to `off` preserves thinking disabled instead of mapping to
 `MINIMAL`.
 
 Gemini 2.5 Pro only works in thinking mode and rejects an explicit
-`thinkingBudget: 0`; OpenClaw strips that value for Gemini 2.5 Pro requests
-instead of sending it.
+`thinkingBudget: 0`. With an explicit `maxTokens`, OpenClaw uses its minimum
+thinking budget of 128 when thinking is off. Without an explicit cap, OpenClaw
+continues to omit the rejected zero budget.
+
+Google counts thinking inside its output-token limit. For Gemini API and Vertex
+requests with a numeric thinking budget, OpenClaw adds that budget to the caller's
+`maxTokens`, capped at the model's output limit. Flash with thinking off keeps
+the caller's cap unchanged. Thinking levels and adaptive thinking have no fixed
+token bound; with an explicit cap, those requests use the model's output limit
+to leave room for both thinking and the answer. This also applies to Interactions,
+which exposes levels rather than numeric budgets. In those modes, `maxTokens`
+is not a strict visible-answer limit. Omitted caps remain omitted.
 </Tip>
 
 ## Image generation
