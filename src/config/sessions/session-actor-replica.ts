@@ -502,7 +502,13 @@ export function readSessionActorTranscriptAnchorsFromReplica(
   const current = readCurrentEntryCellForPath(params);
   const snapshot = current?.cell.snapshot;
   return snapshot && snapshot.entry?.sessionId === params.sessionId
-    ? readSessionActorTranscriptAnchors(snapshot, params, selection, current?.cell.transcript?.tail)
+    ? readSessionActorTranscriptAnchors(
+        snapshot,
+        params,
+        selection,
+        current?.cell.transcript?.tail,
+        current?.cell.transcript?.anchors,
+      )
     : undefined;
 }
 
