@@ -128,13 +128,24 @@ it("releases completed payloads while preserving durable reads and subsequent wr
   // Independent flat strings expose sliced-preview and full-row cache retention.
   for (let batch = 0; batch < 4; batch++) {
     await register(
-      ...Array.from({ length: 16 }, (_, index) => ({
-        ...entry(`retained-${batch * 16 + index}`),
-        task: randomBytes(96 * 1024).toString("base64"),
-        execution: { status: "terminal" as const, endedAt: 2, outcome: { status: "ok" as const } },
-        cleanupCompletedAt: 3,
-        completion: { required: false, resultText: randomBytes(96 * 1024).toString("base64") },
-      })),
+      ...Array.from({ length: 16 }, (_, index) => {
+        const resultText = randomBytes(96 * 1024).toString("base64");
+        return {
+          ...entry(`retained-${batch * 16 + index}`),
+          task: randomBytes(96 * 1024).toString("base64"),
+          execution: {
+            status: "terminal" as const,
+            endedAt: 2,
+            outcome: { status: "ok" as const },
+          },
+          cleanupCompletedAt: 3,
+          completion: {
+            required: false,
+            resultText,
+            terminalReply: { disposition: "visible" as const, text: resultText.slice(0, 4096) },
+          },
+        };
+      }),
     );
   }
   await setImmediate();
@@ -157,6 +168,7 @@ it("releases completed payloads while preserving durable reads and subsequent wr
   const durable = loadSubagentRegistryFromSqlite().get("retained-0");
   expect(durable?.task).toBe(full.value?.task);
   expect(durable?.completion?.resultText).toBe(full.value?.completion?.resultText);
+  expect(durable?.completion?.terminalReply).toEqual(full.value?.completion?.terminalReply);
   expect(durable?.label).toBe("updated after completion");
   subagentRuns.clear();
   await restoreSubagentRunsFromDisk({ runs: subagentRuns });
