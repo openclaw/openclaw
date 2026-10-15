@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { cleanupEmbeddedAttemptSessionPhase } from "../agents/embedded-agent-runner/run/attempt-session-settle.js";
 import { createEmbeddedAttemptDeferredLifecycleOwner } from "../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import {
+  deleteSessionEntryLifecycle,
   loadSessionEntry,
   patchSessionEntryCore,
   replaceSessionEntry,
@@ -184,6 +185,58 @@ it("persists repeated events and retains the worker owner without a main-thread 
   });
 });
 
+it("reuses committed trajectory facts across metadata writes and clears them after lifecycle deletion", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "trajectory-window",
+      sessionKey: "agent:main:trajectory-window",
+      storePath: state.statePath("agents", "main", "agent.sqlite"),
+    };
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const events = ["first", "later", "final"].map((type) =>
+      createTrajectoryEvent({ type, sessionId: target.sessionId }),
+    );
+    const maxRuntimeFileBytes = events
+      .slice(0, 2)
+      .reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event), "utf8") + 1, 0);
+    const createSink = () =>
+      createSqliteTrajectoryRuntimeSink({
+        env: state.env,
+        sessionId: target.sessionId,
+        sessionTarget: target,
+        maxRuntimeFileBytes,
+      });
+    const sink = await createSink();
+    assert(sink);
+    const flush = async (event: (typeof events)[number]) => {
+      sink.write(event, JSON.stringify(event));
+      await sink.flush();
+      await retention.accepted;
+    };
+    await flush(events[0]!);
+    await flush(events[1]!);
+    await patchSessionEntryCore(target, { updatedAt: 2 });
+    await flush(events[2]!);
+    expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual(events.slice(1));
+    await deleteSessionEntryLifecycle({
+      ...target,
+      target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+      archiveTranscript: false,
+      deleteTranscriptWithoutArchive: true,
+    });
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 3 });
+    const replacement = await createSink();
+    assert(replacement);
+    replacement.write(events[0]!, JSON.stringify(events[0]));
+    await replacement.flush();
+    await retention.accepted;
+    expect(loadSqliteTrajectoryRuntimeEventRowsSync(target)).toEqual([
+      { event: events[0], seq: 0 },
+    ]);
+  });
+});
+
 it("rolls back the successful attempt's diagnostic prefix with its terminal event and retries once", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const target = {
@@ -337,6 +390,12 @@ it.each(["committed", "unknown"] as const)(
         sessionTarget: target,
       });
       assert(recorder);
+      recorder.recordEvent("seed");
+      await recorder.flush();
+      await retention.accepted;
+      recorder.recordEvent("warm");
+      await recorder.flush();
+      await retention.accepted;
       const committed = createDeferredCore();
       const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
       const failure = new Error("trajectory result was lost after native completion");
@@ -373,14 +432,14 @@ it.each(["committed", "unknown"] as const)(
           expect(recorder.describeFlushState()).toBeUndefined();
           expect(
             (await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type),
-          ).toEqual(["first", "later"]);
+          ).toEqual(["seed", "warm", "first", "later"]);
         } else {
           expect(await next).toMatchObject({ ok: false, error: { code: "outcome-unknown" } });
           await expect(recorder.flush()).rejects.toMatchObject({ code: "outcome-unknown" });
           expect(recorder.describeFlushState()).toContain("pendingRows=2");
           expect(
             (await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type),
-          ).toEqual(["first"]);
+          ).toEqual(["seed", "warm", "first"]);
         }
       } finally {
         settlement.resolve({ kind: "completed" });
