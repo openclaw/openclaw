@@ -179,6 +179,9 @@ const { values } = parseArgs({
 if (values["streaming-reply"] && values["live-events"]) {
   throw new Error("streaming-reply measures an isolated answer; do not combine with live-events");
 }
+if (values["warm-reload"] && !values["probe-dir"]) {
+  throw new Error("warm-reload requires probe-dir with LoAF/mutation and RPC census init scripts");
+}
 if (values["sidebar-list-churn"] && !values["live-events"]) {
   throw new Error("sidebar-list-churn requires live-events");
 }
@@ -424,7 +427,7 @@ try {
   await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
   for (let run = 0; run < runs; run++) {
     if (values["warm-reload"]) {
-      await page.locator(".chat-pane-cache__pane--active").evaluate(async (element) => {
+      await page.locator(".chat-pane-cache__pane--active").evaluate(async (element, sessionKey) => {
         const store = Reflect.get(element, "sessionSnapshotStore");
         if (!store) throw new Error("Missing transcript snapshot owner");
         await store.flush();
@@ -439,11 +442,20 @@ try {
             read.onsuccess = () => resolve(read.result);
             read.onerror = () => reject(read.error);
           });
-          if (!snapshots.length) throw new Error("Warm reload requires a persisted transcript");
+          if (
+            !snapshots.some((value) => {
+              const key =
+                typeof value === "object" && value !== null
+                  ? Reflect.get(value, "sessionKey")
+                  : undefined;
+              return typeof key === "string" && key.endsWith(`\u0000${sessionKey}`);
+            })
+          )
+            throw new Error("Warm reload requires the selected session's persisted transcript");
         } finally {
           database.close();
         }
-      });
+      }, fixture.selectedSessionKey);
     }
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
