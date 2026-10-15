@@ -4,6 +4,7 @@ import type { SessionExactEntriesWorkerResult } from "../config/sessions/session
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentDatabaseRegistryChange } from "../state/openclaw-agent-db-contract.js";
+import type { PreparedSessionFactsSource } from "./session-sharing-source.types.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 
 export type SessionSharingTarget = {
@@ -39,6 +40,7 @@ export type SessionFactsRequest = {
   agentId: string;
   preserveQualifiedAddress?: boolean;
   storageReady?: Promise<void>;
+  preparedSource?: PreparedSessionFactsSource;
 };
 export type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
   readonly storageTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
