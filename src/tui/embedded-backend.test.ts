@@ -602,6 +602,99 @@ describe("EmbeddedTuiBackend", () => {
     expect(buildModelsListResultMock).not.toHaveBeenCalled();
   });
 
+  it("bridges assistant and lifecycle events into chat events", async () => {
+    const pending = deferred<EmbeddedAgentResult>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    const onConnected = vi.fn();
+    backend.onConnected = onConnected;
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+
+    backend.start();
+    await flushMicrotasks();
+    expect(onConnected).toHaveBeenCalledTimes(1);
+
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "hello",
+      runId: "run-local-1",
+      timeoutMs: 300_000,
+    });
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+    expect(agentCommandFromIngressMock.mock.calls[0]?.[0].timeout).toBe("300");
+
+    registeredListener?.({
+      runId: "run-local-1",
+      stream: "assistant",
+      data: { delta: "hello" },
+    });
+    registeredListener?.({
+      runId: "run-local-1",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+
+    pending.resolve({ payloads: [{ text: "hello" }], meta: {} });
+    await flushMicrotasks();
+
+    expect(events).toEqual([
+      {
+        event: "agent",
+        payload: {
+          runId: "run-local-1",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          stream: "assistant",
+          data: { delta: "hello" },
+        },
+      },
+      {
+        event: "chat",
+        payload: {
+          runId: "run-local-1",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          state: "delta",
+          deltaText: "hello",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "hello" }],
+            timestamp: embeddedEventTimestamp,
+          },
+        },
+      },
+      {
+        event: "agent",
+        payload: {
+          runId: "run-local-1",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          stream: "lifecycle",
+          data: { phase: "end", stopReason: "stop" },
+        },
+      },
+      {
+        event: "chat",
+        payload: {
+          runId: "run-local-1",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          state: "final",
+          stopReason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "hello" }],
+            timestamp: embeddedEventTimestamp,
+          },
+        },
+      },
+    ]);
+  });
+
   it("isolates TUI event consumer failures in the agent event bus", async () => {
     const pending = deferred<EmbeddedAgentResult>();
     agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
