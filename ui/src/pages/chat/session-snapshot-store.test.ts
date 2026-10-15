@@ -10,6 +10,7 @@ import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts"
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
+  appendChatMessageToCache,
   cacheChatSessionSnapshot,
   observeChatCache,
   type ChatMessageCache,
@@ -286,6 +287,37 @@ describe("persistent chat session snapshots", () => {
     expect(reader.readSavedAt(orphanedKey)).toBeNull();
     expect(await reader.read(ordinaryKey)).toBeNull();
     expect(reader.readSavedAt(ordinaryKey)).toBeNull();
+  });
+
+  it("does not let an append miss replace a richer persisted snapshot", async () => {
+    const sessionKey = key("agent:main:append-miss");
+    const persisted = {
+      ...snapshot("unused", "session-rich"),
+      deltaCursor: "cursor-rich",
+      messages: ["one", "two", "three", "four", "five"],
+    };
+    const writer = new SessionSnapshotStore();
+    writer.write(sessionKey, persisted);
+    await writer.flush();
+
+    const memoryCache: ChatMessageCache = new Map();
+    const store = new SessionSnapshotStore(memoryCache);
+    store.connect();
+    observeChatCache(memoryCache, store);
+    try {
+      appendChatMessageToCache(
+        memoryCache,
+        snapshotHost,
+        { sessionKey: rawKey(sessionKey) },
+        "newest",
+      );
+      await store.flush();
+
+      expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(persisted);
+    } finally {
+      store.disconnect();
+      await store.whenIdle();
+    }
   });
 
   it("defers snapshot sanitization until flush", async () => {

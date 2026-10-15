@@ -1,5 +1,6 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import {
   isLocalOllamaBaseUrl,
   resolveOllamaDiscoveryResult,
@@ -314,6 +315,7 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
       discoveryMode: "strict",
     });
   });
+
   it.each(
     [
       {
