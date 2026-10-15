@@ -334,7 +334,8 @@ it("creates the lazy shared schema and publishes lifecycle authority before its 
     }),
   );
   const reply = holdNextReply("githubPublications.insert", () => {
-    expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
+    // An uncommitted insert cannot authorize publication from a missing binding.
+    expect(lifecycle.readCurrent()).toBeUndefined();
   });
   const inserting = insertGitHubPublicationRequestAsync(
     {

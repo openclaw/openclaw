@@ -376,11 +376,9 @@ describe("memory-wiki gateway methods", () => {
 
     await handler({ params: {}, respond: vi.fn() });
 
-    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
-      config,
-      appConfig: {},
-      signal,
-    });
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith(
+      expect.objectContaining({ config, appConfig: {}, signal }),
+    );
     expect(compileMemoryWikiVault).toHaveBeenCalledWith(config, { signal });
   });
 

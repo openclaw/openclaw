@@ -73,6 +73,24 @@ describe("cron protocol validators", () => {
     expect(validateCronUpdateParams(update({ state: job.state }))).toBe(false);
   });
 
+  it.each(["streamSourceIdentity", "sourceIdentity"])(
+    "reports %s without accepting it in writable patches",
+    (field) => {
+      const state = { [field]: "owner-generation" };
+      expect(
+        Value.Check(CronJobSchema, {
+          ...minimalAddParams,
+          id: "job-1",
+          enabled: true,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+          state,
+        }),
+      ).toBe(true);
+      expect(validateCronUpdateParams(update({ state }))).toBe(false);
+    },
+  );
+
   it("rejects client-authored scheduled authority provenance", () => {
     const scheduledToolPolicy = { version: 1, mode: "trusted" } as const;
     expectCases(validateCronAddParams, false, [add({ scheduledToolPolicy })]);

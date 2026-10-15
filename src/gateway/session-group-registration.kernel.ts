@@ -1,30 +1,14 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-
-function hasSessionGroup(db: EngineConnection, name: string): boolean {
-  const kysely = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "session_groups">>(db);
-  return Boolean(
-    executeSqliteQuerySync(
-      db,
-      kysely.selectFrom("session_groups").select("name").where("name", "=", name).limit(1),
-    ).rows[0],
-  );
-}
 
 export function registerSessionGroupInDatabase(
   database: OpenClawStateDatabase,
   name: string,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  // Existing categories need no writer admission. Missing names must be checked
-  // again after admission because another writer can register them in between.
-  if (hasSessionGroup(database.db, name)) {
-    return false;
-  }
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "session_groups">>(db);
@@ -33,7 +17,7 @@ export function registerSessionGroupInDatabase(
         kysely.selectFrom("session_groups").select("name"),
       ).rows.map((row) => row.name);
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: { names } });
-      if (hasSessionGroup(db, name)) {
+      if (names.includes(name)) {
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         return false;
       }

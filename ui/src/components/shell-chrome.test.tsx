@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import "./app-topbar.ts";
-import { MacosTitlebarControls } from "./macos-titlebar-controls.runtime.ts";
+import "./app-topbar-solid.tsx";
+import { MacosTitlebarControls } from "./macos-titlebar-controls.runtime-solid.tsx";
 import { renderNewSessionLink } from "./new-session-link.ts";
 
 afterEach(() => {

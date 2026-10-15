@@ -6,6 +6,20 @@ const require = process.getBuiltinModule("module").createRequire(import.meta.url
 const adapterInstalled = Symbol.for("openclaw.vitest.jsdom-adapter");
 export type JsdomCustomElementDefinition = { name: string };
 
+const VITEST_SPY_FRAME = /[\\/]node_modules[\\/]vitest[\\/]dist[\\/]chunks[\\/]spy\.[^\\/]+\.js:/u;
+
+// Conservative on an unreadable stack: retaining source resources can cost a stale generation;
+// dropping dependency resources would break every later file.
+export function isRepoOwnedRegistrationStack(stack: string | undefined): boolean {
+  const frames = (stack ?? "").split("\n").slice(2);
+  // A Vitest spy on registration forwards here, possibly through a fixture's mock
+  // implementation. Neither owns the registered resource; whoever called the spy does.
+  const spyFrame = frames.findIndex((frame) => VITEST_SPY_FRAME.test(frame));
+  const callerFrame =
+    frames.slice(spyFrame + 1).find((frame) => !VITEST_SPY_FRAME.test(frame)) ?? "";
+  return callerFrame.trim() !== "" && !/[\\/]node_modules[\\/]/u.test(callerFrame);
+}
+
 function bindings() {
   // The package entry initializes the mutually dependent generated interfaces.
   require("jsdom");

@@ -352,10 +352,12 @@ final class DashboardManager {
                 controller.documentHost.nativeGatewayAuthProvider = configuration.nativeAuthProvider
                 controller.documentHost.legacyNativeCredentials = configuration.legacyNativeCredentials
                 let updateBridgeEnabled = controller === self.controller && Self.updateBridgeEnabled(mode: mode)
-                if configuration.url == controller.currentURL {
-                    controller.setUpdateBridgeEnabled(updateBridgeEnabled)
-                } else if auth.hasCredential || auth.hasAcceptedNativeBinding || auth.usesBrowserIdentity {
+                // Reconcile failed documents even when the route is unchanged;
+                // update preserves live content and loads already in flight.
+                if auth.hasCredential || auth.hasAcceptedNativeBinding || auth.usesBrowserIdentity {
                     controller.update(url: configuration.url, auth: auth, updateBridgeEnabled: updateBridgeEnabled)
+                } else if configuration.url == controller.currentURL {
+                    controller.setUpdateBridgeEnabled(updateBridgeEnabled)
                 }
                 self.displayedPrimaryRoutes[key] = (routeRevision, previousRoute?.authority)
             }

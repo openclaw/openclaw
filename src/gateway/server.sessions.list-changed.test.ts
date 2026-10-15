@@ -9,6 +9,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { subscribePluginSessionsChanged } from "../plugins/services.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
@@ -31,6 +32,7 @@ import {
   seedSessionListBackfillFixture,
 } from "./session-row-fixtures.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   getGatewayConfigModule,
@@ -463,7 +465,10 @@ test("sessions.changed publishes running status during ordinary startup", async 
 
 test("sessions.list yields for bulk metadata and later serves previews without repairing titles", async () => {
   const { storePath } = await createSessionStoreDir();
-  const keys = await seedSessionListBackfillFixture(storePath, 11);
+  const keys = await seedSessionListBackfillFixture(storePath, 11, 1);
+  // Durable rows publish while the request creates its projection, before the test holds it.
+  const requestProjection = createDeferredCore<SessionRowProjection>();
+  const backfilled = observeSessionRowBackfill(keys, requestProjection.promise);
   const releaseForeground = retainSessionListForegroundWork();
   try {
     const params = { includeDerivedTitles: true, includeLastMessage: true, limit: 11 };
@@ -483,9 +488,12 @@ test("sessions.list yields for bulk metadata and later serves previews without r
 
     expect(respond).not.toHaveBeenCalled();
     await request;
-    expectRespondPayload(respond);
-    const projection = expectDefined(getSessionRowProjection(context), "request projection");
-    const backfilled = observeSessionRowBackfill(keys, projection);
+    expectFields(findSession(expectRespondPayload(respond), "agent:main:bulk-10"), {
+      lastMessagePreview: "last 10",
+    });
+    requestProjection.resolve(
+      expectDefined(getSessionRowProjection(context), "request projection"),
+    );
     releaseForeground();
     await backfilled;
     const refreshed = await invokeSessionsList({

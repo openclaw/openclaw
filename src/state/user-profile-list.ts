@@ -182,9 +182,9 @@ export function listResidentUserProfileDisplayFacts(options: OpenClawStateDataba
   }));
 }
 
-/** Projection readiness follows physical admission; warm checks never inspect SQLite. */
-export function isUserProfileCatalogReady(options: OpenClawStateDatabaseOptions = {}): boolean {
-  const catalog = profileCatalogs.get(profileCatalogPath(options));
+/** Pass the prepared absolute database path for allocation-free checks of live owner state. */
+export function isUserProfileCatalogReady(pathname = profileCatalogPath({})): boolean {
+  const catalog = profileCatalogs.get(pathname);
   return Boolean(catalog?.valid && profileBindings.has(catalog.rows));
 }
 type ProfileCatalog = {

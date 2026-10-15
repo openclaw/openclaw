@@ -1,9 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  type UiPortalPresentation,
+  validateUiCommandParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   createGatewayToolCallerWrapper,
   getGatewayToolCallerIdentity,
@@ -14,7 +18,10 @@ import {
   callPersonalToolUiCommand as call,
   withPersonalToolTurn,
 } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
+import type { GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
+import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
 import type { GatewayClient } from "./types.js";
+import { uiCommandHandlers } from "./ui-command.js";
 
 function client(
   connId: string,
@@ -387,4 +394,101 @@ describe("ui.command gateway method", () => {
     );
     expect(result.broadcastToConnIds).not.toHaveBeenCalled();
   });
+});
+
+describe("portal presentation feedback", () => {
+  function fixture() {
+    const requester = client("portal-requester");
+    const connection = new AbortController();
+    requester.connectionSignal = connection.signal;
+    const respond = vi.fn();
+    const dispatch = vi.fn<GatewayBroadcastToConnIdsFn>();
+    const context = {
+      ...createContext(),
+      getClientConnIds: (filter?: (entry: GatewayClient) => boolean) =>
+        new Set(filter?.(requester) ? [requester.connId!] : []),
+      broadcastToConnIds: dispatch,
+    };
+    const invoke = (
+      method: string,
+      params: Record<string, unknown>,
+      source = requester,
+      reply = respond,
+    ) =>
+      uiCommandHandlers[method]!({
+        req: { type: "req", id: "presentation", method, params },
+        params,
+        client: source,
+        context,
+        respond: reply,
+        isWebchatConnect: () => false,
+      });
+    const show = () =>
+      invoke("ui.command", {
+        command: { kind: "panel", panel: "portal", portalId: "app", open: true },
+      });
+    const report = (presentation: UiPortalPresentation, source = requester) => {
+      const payload = dispatch.mock.calls[0]?.[1];
+      if (!validateUiCommandParams(payload)) {
+        throw new Error("Expected a valid UI command broadcast");
+      }
+      const requestId = expectDefined(payload.requestId, "portal presentation request");
+      const reply = vi.fn();
+      return Promise.resolve(
+        invoke("ui.command.result", { requestId, presentation }, source, reply),
+      ).then(() => reply);
+    };
+    return { show, report, respond, connection };
+  }
+
+  it("returns the requesting browser's block, rejecting another browser and another portal", async () => {
+    const f = fixture();
+    const finished = f.show();
+    const blocked = {
+      portalId: "app",
+      status: "blocked",
+      reason: "remote-ingress-required",
+    } as const;
+    expect(await f.report(blocked, client("other-tab"))).toHaveBeenCalledWith(true, { ok: false });
+    expect(await f.report({ ...blocked, portalId: "other-app" })).toHaveBeenCalledWith(true, {
+      ok: false,
+    });
+    expect(f.respond).not.toHaveBeenCalled();
+    await f.report(blocked);
+    await finished;
+    expect(f.respond).toHaveBeenCalledWith(true, {
+      ok: true,
+      delivery: "dispatched",
+      presentation: blocked,
+    });
+    expect(await f.report(blocked)).toHaveBeenCalledWith(true, { ok: false });
+  });
+
+  it.each(["timeout", "disconnect"] as const)(
+    "never reports delivery verified after %s",
+    async (end) => {
+      vi.useFakeTimers();
+      try {
+        const f = fixture();
+        const finished = f.show();
+        if (end === "disconnect") {
+          f.connection.abort();
+        } else {
+          await vi.advanceTimersByTimeAsync(8_000);
+        }
+        await finished;
+        expect(f.respond).toHaveBeenCalledWith(true, {
+          ok: true,
+          delivery: "dispatched",
+          presentation: {
+            portalId: "app",
+            status: "unverified",
+            reason: end === "timeout" ? "client-timeout" : "client-disconnected",
+          },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });
