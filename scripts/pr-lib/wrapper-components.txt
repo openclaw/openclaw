@@ -2256,6 +2256,8 @@ src/agents/failover/assistant-request-failure-copy.ts
 src/agents/failover/classification-rules.ts
 src/agents/failover/classify-core.ts
 src/agents/failover/context-overflow-tables.ts
+src/agents/failover/error.ts
+src/agents/failover/local-preparation-error.ts
 src/agents/failover/message-patterns.ts
 src/agents/failover/request-error-facets.ts
 src/agents/failover/signal-details.ts

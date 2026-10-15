@@ -210,7 +210,7 @@ echo built >> "$FIXTURE_BUILDS"
     for (const event of ["push", "schedule", "pull_request", "workflow_dispatch"] as const) {
       for (const ref of ["refs/heads/main", "refs/heads/topic"]) {
         for (const allowed of ["true", "false"]) {
-          const context = {
+          const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
             eventName: event,
             ref,
             repository: "openclaw/openclaw",
