@@ -819,7 +819,7 @@ describe("session roster event traffic", () => {
         summaryRequest();
       }
       return {
-        ...sessionsResult([sampled]),
+        ...sessionsResult([sampled], 1),
         ownerSessionCounts: [{ profileId: "ada", open, running }],
         totalCount: open,
         hasMore: true,
