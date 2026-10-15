@@ -4,7 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { getEnvironmentData, threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { notifyListeners } from "../shared/listeners.js";
 import { hasErrnoCode } from "./errno.js";
 import {
   isPostgresSqlConnection,
@@ -117,6 +117,8 @@ export function prepareSqliteDatabaseCleanClose(database: DatabaseSync) {
 const scopedWrites = createSqliteDatabaseWriteReceipts({
   admission,
   pathAdmission,
+  retainedPathAdmission: (location) => state.registry.forLocation(location),
+  writeListeners: state.writeListeners,
   readRevision: readSqliteDatabaseWriteRevision,
   writer: (database) => state.dataWriters.get(database),
   suspended: (database) => state.suspended.has(database),
@@ -126,6 +128,8 @@ const scopedWrites = createSqliteDatabaseWriteReceipts({
   },
 });
 export const {
+  onSqliteDatabaseWriteSettled,
+  invalidateSqliteDatabaseWriteReceiptsForPath,
   retireSqliteDatabaseWriteScopes,
   withSqliteDatabaseWriteScope,
   withoutSqliteDatabaseWriteScope,
@@ -448,23 +452,6 @@ export function beginSqliteDatabaseWrite(database: DatabaseSync, unscoped = fals
     return;
   }
   state.dataWriters.set(database, admission(database));
-}
-
-/** Local sibling writers notify maintenance after publishing their shared write revision. */
-export function onSqliteDatabaseWriteSettled(
-  database: DatabaseSync,
-  listener: () => void,
-): (() => void) | undefined {
-  const record = admission(database);
-  if (!record) {
-    return undefined;
-  }
-  let listeners = state.writeListeners.get(record);
-  if (!listeners) {
-    listeners = new Set();
-    state.writeListeners.set(record, listeners);
-  }
-  return registerListener(listeners, listener);
 }
 
 /** Native settlement invalidates row caches, including failed or rolled-back writes. */

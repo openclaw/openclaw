@@ -39,7 +39,10 @@ import {
   createSqliteWorkerOperationAdmission,
   readSqliteWorkerExecutionAuthority,
 } from "./sqlite-worker-operation-admission.js";
-import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
+import {
+  settleSqliteWorkerDatabaseWrites,
+  type SqliteWorkerOperationSettlement,
+} from "./sqlite-worker-operation-settlement.js";
 import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.js";
 import {
   createSqliteWorkerTransferOwner,
@@ -167,6 +170,10 @@ function prepareSqliteWorkerOperationAdmission(
         }),
         nativeLocations: databasePath ? [databasePath] : [],
       };
+  job.settleNative = (outcome) => {
+    settleSqliteWorkerDatabaseWrites(retained, outcome.kind === "unknown");
+    settlement.resolve(outcome);
+  };
   try {
     bindSqliteWorkerDatabaseAdmissionCursor(
       retained.admission,

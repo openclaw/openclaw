@@ -35,6 +35,8 @@ it("publishes cohort scope discovery once and preserves independent write receip
   const receipts = createSqliteDatabaseWriteReceipts({
     admission: () => record,
     pathAdmission: () => record,
+    retainedPathAdmission: () => record,
+    writeListeners: new WeakMap(),
     readRevision: () => 0,
     writer: () => record,
     suspended: () => false,
@@ -84,6 +86,8 @@ it("invalidates a scope registered by another isolate during an accepted write",
   const receipts = createSqliteDatabaseWriteReceipts({
     admission: (database) => (database === reader ? host : worker),
     pathAdmission: () => host,
+    retainedPathAdmission: () => host,
+    writeListeners: new WeakMap(),
     readRevision: () => 0,
     writer: () => worker,
     suspended: () => false,

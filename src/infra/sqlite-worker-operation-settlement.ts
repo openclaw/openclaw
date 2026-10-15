@@ -5,6 +5,7 @@ import type { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { sqlPublicationAnchor, type PostgresSqlConnection } from "./sql-connection.js";
+import { invalidateSqliteDatabaseWriteReceiptsForPath } from "./sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
@@ -79,6 +80,32 @@ export type SqliteWorkerNativeSettlementOwner = {
     deadlineMs: number,
   ): Extract<SqliteWorkerNativeSettlement, { kind: "completed" }>;
 };
+
+const grantedWriters = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteWorkerGrantedWriters"),
+  () => new WeakSet<SqliteWorkerNativeSettlementOwner>(),
+);
+
+export function recordSqliteWorkerWriteGrant(admission: SqliteWorkerNativeSettlementOwner): void {
+  grantedWriters.add(admission);
+}
+
+export function settleSqliteWorkerDatabaseWrites(
+  {
+    admission,
+    nativeLocations,
+  }: {
+    admission: SqliteWorkerNativeSettlementOwner;
+    nativeLocations: readonly string[];
+  },
+  uncertain: boolean,
+): void {
+  if (grantedWriters.delete(admission) && uncertain) {
+    for (const location of new Set(nativeLocations)) {
+      invalidateSqliteDatabaseWriteReceiptsForPath(location);
+    }
+  }
+}
 
 /** The broker resolves this only from the executing owner's settlement evidence. */
 export type RetainedWorkerTransactionAdmission = {

@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
   isSqliteDatabaseAdmissionRetired as isRetired,
   readSqliteDatabaseGeneration,
@@ -30,11 +31,42 @@ export function sqliteSessionIdWriteScope(sessionId: string): { sessionId: strin
 export function createSqliteDatabaseWriteReceipts(owner: {
   admission(this: void, database: DatabaseSync): Admission | undefined;
   pathAdmission(this: void, location: string): Admission | undefined;
+  retainedPathAdmission(this: void, location: string): Admission | undefined;
+  writeListeners: WeakMap<Admission, Set<() => void>>;
   readRevision(this: void, database: DatabaseSync): number | undefined;
   writer(this: void, database: DatabaseSync): Admission | undefined;
   suspended(this: void, database: DatabaseSync): boolean;
   publish(this: void, record: Admission): void;
 }) {
+  /** Local sibling writers notify maintenance after publishing their shared write revision. */
+  function onSqliteDatabaseWriteSettled(
+    database: DatabaseSync,
+    listener: () => void,
+  ): (() => void) | undefined {
+    const record = owner.admission(database);
+    if (!record) {
+      return undefined;
+    }
+    let listeners = owner.writeListeners.get(record);
+    if (!listeners) {
+      listeners = new Set();
+      owner.writeListeners.set(record, listeners);
+    }
+    return registerListener(listeners, listener);
+  }
+
+  /** A granted writer can commit before dying without publishing its native receipt. */
+  function invalidateSqliteDatabaseWriteReceiptsForPath(location: string): void {
+    const record = owner.retainedPathAdmission(location);
+    if (record) {
+      advanceSqliteDatabaseGeneration(record, "writeRevision");
+      advanceSqliteDatabaseGeneration(record, "unscopedWriteRevision");
+      const listeners = owner.writeListeners.get(record);
+      if (listeners) {
+        notifyListeners(listeners, undefined);
+      }
+    }
+  }
   /** A typed owner certifies all session keys affected by this synchronous kernel. */
   function withSqliteDatabaseWriteScope<T>(
     database: DatabaseSync,
@@ -353,6 +385,8 @@ export function createSqliteDatabaseWriteReceipts(owner: {
         }
       }
     },
+    invalidateSqliteDatabaseWriteReceiptsForPath,
+    onSqliteDatabaseWriteSettled,
     retireSqliteDatabaseWriteScopes,
     withSqliteDatabaseWriteScope,
     withoutSqliteDatabaseWriteScope,
