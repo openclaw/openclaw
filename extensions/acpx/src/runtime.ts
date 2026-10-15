@@ -58,6 +58,12 @@ import { AcpxRuntimeProbe } from "./runtime-probe.js";
 import { prepareAcpxProcessCleanup } from "./runtime-process-cleanup.js";
 import type { CompleteAcpRuntime, CompleteAcpRuntimeTurn } from "./runtime-proxy.js";
 import {
+  normalizeMissingResumeTargetError,
+  prepareResumeSafeSessionInput,
+  withResumeEnsureErrorNormalization,
+  withSessionResumeCapability,
+} from "./runtime-session-ensure.js";
+import {
   type AcpLoadedSessionRecord,
   type ResetAwareSessionStore,
   type AcpxLaunchLeaseContext,
@@ -929,7 +935,10 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       agentId: logicalInput.agentId,
       bridgeSession: logicalInput.bridgeSession,
     };
-    const input = { ...logicalInput, sessionKey: resolveAcpxSessionResource(logicalInput) };
+    const input = prepareResumeSafeSessionInput({
+      input: { ...logicalInput, sessionKey: resolveAcpxSessionResource(logicalInput) },
+      markFresh: (sessionKey) => this.sessionStore.markFresh(sessionKey),
+    });
     const isCodexAcp =
       normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command);
     const dropInheritedCodexMax =
@@ -977,28 +986,36 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     const restoredInput = restoration?.resumeSessionId
       ? { ...ensureInput, resumeSessionId: restoration.resumeSessionId }
       : ensureInput;
-    const handle = await this.runWithLaunchLease({
-      agent: restoredInput.agent,
-      sessionKey: ensureInput.sessionKey,
-      command: stableLaunchCommand,
-      reusableCommand: restoration?.reusableCommand,
+    const handle = await withResumeEnsureErrorNormalization({
+      input: restoredInput,
       run: () =>
-        this.withCodexWrapperDiagnostics({
+        this.runWithLaunchLease({
+          agent: restoredInput.agent,
+          sessionKey: ensureInput.sessionKey,
           command: stableLaunchCommand,
-          fallbackCode: "ACP_SESSION_INIT_FAILED",
-          run: () => {
-            this.generationRegistry.assertCurrentGeneration(generation);
-            return codexModelOverride
-              ? delegate.ensureSession(withAcpxSessionOptions(restoredInput))
-              : ensureSessionWithModelRef((request) => {
-                  this.generationRegistry.assertCurrentGeneration(generation);
-                  return delegate.ensureSession(request);
-                }, restoredInput);
-          },
+          reusableCommand: restoration?.reusableCommand,
+          run: () =>
+            this.withCodexWrapperDiagnostics({
+              command: stableLaunchCommand,
+              fallbackCode: "ACP_SESSION_INIT_FAILED",
+              run: () => {
+                this.generationRegistry.assertCurrentGeneration(generation);
+                return codexModelOverride
+                  ? delegate.ensureSession(withAcpxSessionOptions(restoredInput))
+                  : ensureSessionWithModelRef((request) => {
+                      this.generationRegistry.assertCurrentGeneration(generation);
+                      return delegate.ensureSession(request);
+                    }, restoredInput);
+              },
+            }),
         }),
     });
+    // Enrich the owned handle without stranding its client if capability lookup fails.
+    const record = await this.sessionStore
+      .load(handle.acpxRecordId ?? input.sessionKey)
+      .catch(() => undefined);
     return {
-      ...handle,
+      ...withSessionResumeCapability(handle, record),
       ...logicalTarget,
       ...(appliedModel ? { appliedModel } : {}),
       ...(dropInheritedCodexMax ? { appliedThinking: { kind: "dropped" as const } } : {}),
@@ -1071,7 +1088,11 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         async *[Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {
           const { command, turn } = await turnPromise;
           try {
-            yield* turn.events;
+            for await (const event of turn.events) {
+              yield event.type === "error"
+                ? normalizeMissingResumeTargetError(event, input.handle)
+                : event;
+            }
           } catch (error) {
             if (!isGenericInternalAcpError(error)) {
               throw error;
@@ -1083,6 +1104,12 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       result: turnPromise.then(({ command, turn }) =>
         withTurnDiagnostics(command, async (): Promise<AcpRuntimeTurnResult> => {
           const result = await turn.result;
+          if (result.status === "failed") {
+            const error = normalizeMissingResumeTargetError(result.error, input.handle);
+            if (error !== result.error) {
+              return { ...result, error };
+            }
+          }
           if (
             result.status !== "failed" ||
             !isCodexAcpCommand(command) ||

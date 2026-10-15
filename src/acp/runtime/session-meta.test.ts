@@ -81,6 +81,48 @@ afterEach(async () => {
 });
 
 describe("ACP session metadata SQLite store", () => {
+  it("round-trips resume identity and legacy unflagged metadata across reopen", async () => {
+    await withTestDir({ prefix: "openclaw-acp-resume-compat-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const databasePath = path.join(dir, "state", "openclaw.sqlite");
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const sessionKey = "agent:codex:acp:resume-compat";
+      const target = { cfg, databasePath, sessionKey, agentId: ACP_AGENT_ID };
+      const legacyIdentity = {
+        state: "resolved" as const,
+        source: "status" as const,
+        acpxRecordId: "owned-record",
+        acpxSessionId: "protocol-session",
+        agentSessionId: "agent-session",
+        lastUpdatedAt: 123,
+      };
+      const retained = createMeta("retained-runtime", {
+        mode: "oneshot",
+        cwd: "/repo",
+        runtimeOptions: { cwd: "/repo" },
+        identity: { ...legacyIdentity, sessionResumeSupported: true, sessionResumeReady: true },
+      });
+      await upsertAcpSessionMeta({ ...target, mutate: () => retained });
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+      expect(readAcpSessionEntry(target)?.acp).toEqual(retained);
+
+      // An older writer can omit the additive flags without changing stored ID precedence.
+      const legacy = { ...retained, mode: "persistent" as const, identity: legacyIdentity };
+      await upsertAcpSessionMeta({ ...target, mutate: () => legacy });
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+      expect(readAcpSessionEntry(target)?.acp).toEqual(legacy);
+      const entry = readStoredAcpSessionEntry({ storePath, sessionKey });
+      expect(
+        readAcpSessionMetaForEntry({
+          ...target,
+          entry: { ...entry!, lifecycleRevision: "replaced-lifecycle" },
+        }),
+      ).toBeUndefined();
+    });
+  });
+
   it("reads metadata under external state ownership without write admission", async () => {
     await withTestDir({ prefix: "openclaw-acp-read-only-owner-" }, async (dir) => {
       const env = { OPENCLAW_STATE_DIR: dir };

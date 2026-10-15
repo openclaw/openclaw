@@ -40,6 +40,13 @@ export function markAcpTurnActive(
   };
 }
 
+/** Returns whether this exact session owner has an in-flight ACP turn. */
+export function isAcpTurnActive(target: AcpSessionTarget): boolean {
+  return Boolean(
+    target.sessionKey && getAcpActiveTurnState().activeTurnKeys.has(acpSessionActorKey(target)),
+  );
+}
+
 /** Number of currently owned ACP turns that must settle before restart. */
 export function getActiveAcpTurnCount(): number {
   return getAcpActiveTurnState().activeTurnKeys.size;

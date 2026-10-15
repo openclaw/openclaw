@@ -1,7 +1,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString as normalizeText } from "@openclaw/normalization-core/string-coerce";
 import type { SessionAcpIdentity, SessionAcpIdentitySource, SessionAcpMeta } from "../types.js";
-import type { AcpRuntimeHandle, AcpRuntimeStatus } from "./types.js";
+import type { AcpRuntimeHandle, AcpRuntimeSessionMode, AcpRuntimeStatus } from "./types.js";
 
 /** Normalize an identity object and infer pending/resolved state from stable ids. */
 function normalizeIdentity(
@@ -19,6 +19,12 @@ function normalizeIdentity(
   const acpxRecordId = normalizeText(identity.acpxRecordId);
   const acpxSessionId = normalizeText(identity.acpxSessionId);
   const agentSessionId = normalizeText(identity.agentSessionId);
+  const sessionResumeSupported =
+    typeof identity.sessionResumeSupported === "boolean"
+      ? identity.sessionResumeSupported
+      : undefined;
+  const sessionResumeReady =
+    typeof identity.sessionResumeReady === "boolean" ? identity.sessionResumeReady : undefined;
   const lastUpdatedAt = asFiniteNumber(identity.lastUpdatedAt);
   const hasAnyId = Boolean(acpxRecordId || acpxSessionId || agentSessionId);
   if (!state && !source && !hasAnyId && lastUpdatedAt === undefined) {
@@ -31,6 +37,8 @@ function normalizeIdentity(
     ...(acpxRecordId ? { acpxRecordId } : {}),
     ...(acpxSessionId ? { acpxSessionId } : {}),
     ...(agentSessionId ? { agentSessionId } : {}),
+    ...(sessionResumeSupported !== undefined ? { sessionResumeSupported } : {}),
+    ...(sessionResumeReady !== undefined ? { sessionResumeReady } : {}),
     source: source ?? "status",
     lastUpdatedAt: lastUpdatedAt ?? Date.now(),
   };
@@ -77,11 +85,14 @@ export function identityHasStableSessionId(identity: SessionAcpIdentity | undefi
   return Boolean(identity?.acpxSessionId || identity?.agentSessionId);
 }
 
-/** Resolve the runtime resume id, preferring agent session id over ACP backend id. */
+/** Preserve persistent agent-ID precedence; one-shots prefer the ACP protocol ID. */
 export function resolveRuntimeResumeSessionId(
   identity: SessionAcpIdentity | undefined,
+  mode: AcpRuntimeSessionMode = "persistent",
 ): string | undefined {
-  return normalizeText(identity?.agentSessionId) ?? normalizeText(identity?.acpxSessionId);
+  return mode === "oneshot"
+    ? (normalizeText(identity?.acpxSessionId) ?? normalizeText(identity?.agentSessionId))
+    : (normalizeText(identity?.agentSessionId) ?? normalizeText(identity?.acpxSessionId));
 }
 
 export function isSessionIdentityPending(identity: SessionAcpIdentity | undefined): boolean {
@@ -103,6 +114,8 @@ export function identityEquals(
     a.acpxRecordId === b.acpxRecordId &&
     a.acpxSessionId === b.acpxSessionId &&
     a.agentSessionId === b.agentSessionId &&
+    a.sessionResumeSupported === b.sessionResumeSupported &&
+    a.sessionResumeReady === b.sessionResumeReady &&
     a.source === b.source
   );
 }
@@ -136,6 +149,9 @@ export function mergeSessionIdentity(params: {
     allowIncomingValue && incoming.agentSessionId
       ? incoming.agentSessionId
       : current.agentSessionId;
+  const nextSessionResumeSupported =
+    incoming.sessionResumeSupported ?? current.sessionResumeSupported;
+  const nextSessionResumeReady = incoming.sessionResumeReady ?? current.sessionResumeReady;
 
   const nextResolved = Boolean(nextAcpxSessionId || nextAgentSessionId);
   const nextState = nextResolved || currentResolved ? "resolved" : incoming.state;
@@ -145,6 +161,10 @@ export function mergeSessionIdentity(params: {
     ...(nextRecordId ? { acpxRecordId: nextRecordId } : {}),
     ...(nextAcpxSessionId ? { acpxSessionId: nextAcpxSessionId } : {}),
     ...(nextAgentSessionId ? { agentSessionId: nextAgentSessionId } : {}),
+    ...(nextSessionResumeSupported !== undefined
+      ? { sessionResumeSupported: nextSessionResumeSupported }
+      : {}),
+    ...(nextSessionResumeReady !== undefined ? { sessionResumeReady: nextSessionResumeReady } : {}),
     source: nextSource,
     lastUpdatedAt: params.now,
   };
@@ -155,12 +175,22 @@ export function createIdentityFromEnsure(params: {
   handle: AcpRuntimeHandle;
   now: number;
 }): SessionAcpIdentity | undefined {
-  return buildSessionIdentity({
+  const identity = buildSessionIdentity({
     ids: readIdentityIdsFromHandle(params.handle),
     state: "pending",
     source: "ensure",
     now: params.now,
   });
+  if (params.handle.sessionResumeSupported === undefined) {
+    return identity;
+  }
+  return {
+    state: "pending",
+    source: "ensure",
+    lastUpdatedAt: params.now,
+    ...identity,
+    sessionResumeSupported: params.handle.sessionResumeSupported,
+  };
 }
 
 export function createIdentityFromHandleEvent(params: {
@@ -168,12 +198,15 @@ export function createIdentityFromHandleEvent(params: {
   now: number;
 }): SessionAcpIdentity | undefined {
   const ids = readIdentityIdsFromHandle(params.handle);
-  return buildSessionIdentity({
+  const identity = buildSessionIdentity({
     ids,
     state: ids.agentSessionId ? "resolved" : "pending",
     source: "event",
     now: params.now,
   });
+  return identity && params.handle.sessionResumeSupported !== undefined
+    ? { ...identity, sessionResumeSupported: params.handle.sessionResumeSupported }
+    : identity;
 }
 
 export function createIdentityFromStatus(params: {

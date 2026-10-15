@@ -52,6 +52,7 @@ describe("ACP event ledger", () => {
         },
       });
       await first.startSession(session);
+      await expect(first.readReplayBySessionId(session)).resolves.toMatchObject({ complete: true });
       await expect(
         first.readReplay({ ...session, sessionKey: "agent:main:work" }),
       ).resolves.toEqual({ complete: false, events: [] });

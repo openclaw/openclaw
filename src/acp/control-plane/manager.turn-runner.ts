@@ -19,13 +19,19 @@ import type { AcceptedTurnState } from "./manager.accepted-turns.js";
 import {
   isFailoverWorthyBackendError,
   resolveBackendCandidatePlan,
+  resolveResumePinnedBackend,
   type BackendAttempt,
 } from "./manager.backend-failover.js";
 import { cancelManagerActiveTurn } from "./manager.cancel-session.js";
+import { resolveOneShotResumeIdentity } from "./manager.identity-reconcile.js";
 import { applyManagerRuntimeControls } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
-import { prepareFreshManagerRuntimeHandleRetry } from "./manager.runtime-resume-state.js";
+import {
+  discardPersistedManagerRuntimeState,
+  isConfirmedMissingManagerResumeTargetError,
+  prepareFreshManagerRuntimeHandleRetry,
+} from "./manager.runtime-resume-state.js";
 import { consumeAcpTurnStream } from "./manager.turn-stream.js";
 import {
   ACP_TURN_TIMEOUT_DETAIL_CODE,
@@ -50,6 +56,7 @@ import {
 } from "./manager.utils.js";
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
+const ACP_POST_TURN_STATUS_TIMEOUT_MS = 5_000;
 
 export async function runManagerTurn(params: {
   input: AcpRunTurnInput;
@@ -194,10 +201,11 @@ export async function runManagerTurn(params: {
       }
       throw acpError;
     }
+    const resumedOneShotBackend = resolveResumePinnedBackend(initialMeta);
     const { candidateBackends, describeBackendCandidate } = resolveBackendCandidatePlan({
-      configuredPrimaryBackend: input.cfg.acp?.backend,
+      configuredPrimaryBackend: resumedOneShotBackend ?? input.cfg.acp?.backend,
       resolvedPrimaryBackend: initialMeta.backend,
-      fallbackBackends: input.cfg.acp?.fallbacks,
+      fallbackBackends: resumedOneShotBackend ? [] : input.cfg.acp?.fallbacks,
     });
     const backendAttempts: BackendAttempt[] = [];
     const recordBackendFailure = async (error: AcpRuntimeError) => {
@@ -286,6 +294,9 @@ export async function runManagerTurn(params: {
         let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
         const onModelRevoked = () =>
           params.acceptedTurn.abortController.abort(modelExecution?.signal.reason);
+        let runtimeIdentifiersReconciled = false;
+        let runtimeResumeStateInvalidated = false;
+        let turnReachedTerminal = false;
         try {
           const ensured = await params.ensureRuntimeHandle({
             readAcpControl: () => params.acceptedTurn.cancelConstraint,
@@ -469,6 +480,7 @@ export async function runManagerTurn(params: {
               });
             },
           });
+          turnReachedTerminal = Boolean(turnOutcome.terminalStatus);
           assertActorCurrent();
           modelExecution?.assertCurrent();
           if (!turnOutcome.terminalStatus) {
@@ -476,6 +488,55 @@ export async function runManagerTurn(params: {
               "ACP_TURN_FAILED",
               "ACP turn ended without a terminal done event.",
             );
+          }
+          ({ handle, meta } = await params.reconcileRuntimeSessionIdentifiers({
+            cfg: input.cfg,
+            sessionKey,
+            agentId,
+            isCurrentActor: params.isCurrentActor,
+            runtime,
+            handle,
+            meta,
+            failOnStatusError: false,
+            failOnWriteError: meta.mode === "oneshot",
+            statusTimeoutMs: ACP_POST_TURN_STATUS_TIMEOUT_MS,
+            revalidateControl: () => params.acceptedTurn.revalidateCancel?.("publication"),
+            assertCurrent: () => params.acceptedTurn.assertCancelCurrent?.("publication"),
+          }));
+          runtimeIdentifiersReconciled = true;
+          const resumableIdentity = resolveOneShotResumeIdentity(meta, turnOutcome.terminalStatus);
+          if (resumableIdentity && !params.acceptedTurn.abortController.signal.aborted) {
+            const resumeReadyAt = Date.now();
+            const resumeReadyIdentity = {
+              ...resumableIdentity,
+              sessionResumeReady: true,
+              lastUpdatedAt: resumeReadyAt,
+            };
+            await params.writeSessionMeta({
+              cfg: input.cfg,
+              sessionKey,
+              agentId,
+              isCurrentActor: params.isCurrentActor,
+              failOnError: true,
+              assertCommitAllowed: assertSignalCurrent,
+              mutate: (current, entry) => {
+                assertSignalCurrent();
+                if (!params.isCurrentActor() || !entry || !current) {
+                  return undefined;
+                }
+                return {
+                  ...current,
+                  identity: resumeReadyIdentity,
+                  lastActivityAt: resumeReadyAt,
+                };
+              },
+            });
+            assertSignalCurrent();
+            meta = {
+              ...meta,
+              identity: resumeReadyIdentity,
+              lastActivityAt: resumeReadyAt,
+            };
           }
           params.recordTurnCompletion({
             startedAt: turnStartedAt,
@@ -512,20 +573,41 @@ export async function runManagerTurn(params: {
               : "Could not initialize ACP session runtime.",
           });
           assertActorCurrent();
-          retryFreshHandle = await prepareFreshManagerRuntimeHandleRetry({
-            attempt,
-            cfg: input.cfg,
-            sessionKey,
-            agentId,
-            error: acpError,
-            promptStarted,
-            sawTurnOutput,
-            runtime,
-            meta,
-            runtimeHandles: params.runtimeHandles,
-            writeSessionMeta: params.writeSessionMeta,
-            isCurrentActor: params.isCurrentActor,
-          });
+          if (
+            resumedOneShotBackend &&
+            meta?.mode === "oneshot" &&
+            !isAcpOwnerRepairRequired(acpError) &&
+            isConfirmedMissingManagerResumeTargetError(acpError)
+          ) {
+            // Do not restore an invalidated target from the old handle during final reconciliation.
+            runtimeResumeStateInvalidated = true;
+            await params.acceptedTurn.revalidateCancel?.("publication");
+            assertCancellationPublicationCurrent();
+            await discardPersistedManagerRuntimeState({
+              cfg: input.cfg,
+              sessionKey,
+              agentId,
+              isCurrentActor: params.isCurrentActor,
+              writeSessionMeta: params.writeSessionMeta,
+              assertCommitAllowed: assertCancellationPublicationCurrent,
+              acpControl: params.acceptedTurn.cancelConstraint,
+            });
+          } else {
+            retryFreshHandle = await prepareFreshManagerRuntimeHandleRetry({
+              attempt,
+              cfg: input.cfg,
+              sessionKey,
+              agentId,
+              error: acpError,
+              promptStarted,
+              sawTurnOutput: sawTurnOutput || turnReachedTerminal,
+              runtime,
+              meta,
+              runtimeHandles: params.runtimeHandles,
+              writeSessionMeta: params.writeSessionMeta,
+              isCurrentActor: params.isCurrentActor,
+            });
+          }
           assertActorCurrent();
           if (retryFreshHandle) {
             continue;
@@ -536,7 +618,7 @@ export async function runManagerTurn(params: {
             error: acpError.message,
             code: acpError.code,
             promptStarted,
-            sawOutput: sawTurnOutput,
+            sawOutput: sawTurnOutput || turnReachedTerminal,
           };
           backendAttempts.push(backendAttempt);
           if (
@@ -561,6 +643,8 @@ export async function runManagerTurn(params: {
           if (
             !retryFreshHandle &&
             !skipPostTurnCleanup &&
+            !runtimeIdentifiersReconciled &&
+            !runtimeResumeStateInvalidated &&
             runtime &&
             handle &&
             meta &&

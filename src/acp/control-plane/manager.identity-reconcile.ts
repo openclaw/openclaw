@@ -2,12 +2,15 @@ import {
   createIdentityFromHandleEvent,
   createIdentityFromStatus,
   identityEquals,
+  identityHasStableSessionId,
   mergeSessionIdentity,
   resolveRuntimeHandleIdentifiersFromIdentity,
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
+import type { SessionAcpIdentity } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
+import { runAbortableTimeout } from "../../node-host/with-timeout.js";
 import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import type {
@@ -37,9 +40,15 @@ export async function reconcileManagerRuntimeSessionIdentifiers(
     try {
       runtimeStatus = await withAcpRuntimeErrorBoundary({
         run: async () =>
-          await params.runtime.getStatus!({
-            handle: params.handle,
-          }),
+          await runAbortableTimeout(
+            async (signal) =>
+              await params.runtime.getStatus!({
+                handle: params.handle,
+                signal,
+              }),
+            params.statusTimeoutMs,
+            "ACP runtime status refresh",
+          ),
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "Could not read ACP runtime status.",
       });
@@ -143,6 +152,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(
   await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    failOnError: params.failOnWriteError,
     agentId: params.agentId,
     isCurrentActor,
     assertCommitAllowed: assertCurrent,
@@ -161,4 +171,19 @@ export async function reconcileManagerRuntimeSessionIdentifiers(
     meta: nextMeta,
     runtimeStatus,
   };
+}
+
+/** Resolves the stable identity that a terminal one-shot can durably expose for resume. */
+export function resolveOneShotResumeIdentity(
+  meta: SessionAcpMeta,
+  terminalStatus: "completed" | "cancelled" | undefined,
+): SessionAcpIdentity | undefined {
+  const identity = resolveSessionIdentityFromMeta(meta);
+  return meta.mode === "oneshot" &&
+    terminalStatus === "completed" &&
+    identity?.state === "resolved" &&
+    identity?.sessionResumeSupported === true &&
+    identityHasStableSessionId(identity)
+    ? identity
+    : undefined;
 }

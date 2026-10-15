@@ -78,6 +78,34 @@ const replayTypes = [
 ];
 
 describe("ACP translator event ledger replay", () => {
+  it("recovers canonical bridge routing after restart without retained replay", async () => {
+    const first = createHarness(createTestAcpEventLedger());
+    const { sessionId } = await first.agent.newSession(createNewSessionRequest());
+    const implicitKey = sessionRef(first, sessionId).sessionKey;
+    const canonicalKey = `agent:main:${implicitKey}`;
+    const ledger = createTestAcpEventLedger();
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "sessions.resolve") {
+        return { ok: true, key: params?.key === implicitKey ? canonicalKey : params?.key };
+      }
+      if (method === "sessions.list") {
+        return { sessions: [{ key: canonicalKey, kind: "direct", updatedAt: 1 }] };
+      }
+      return { ok: true };
+    });
+    for (let restart = 0; restart < 2; restart++) {
+      const sessionStore = createInMemorySessionStore();
+      const agent = createAcpGatewayAgent(
+        createAcpConnection(),
+        createAcpGateway(request as GatewayClient["request"]),
+        { eventLedger: ledger, sessionStore },
+      );
+      await agent.resumeSession({ sessionId, cwd: "/tmp", mcpServers: [] });
+      expect(sessionStore.getSession(sessionId)?.sessionKey).toBe(canonicalKey);
+    }
+    expect(request.mock.calls.some(([method]) => method === "sessions.get")).toBe(false);
+  });
+
   it("replays complete sessions by ACP ID and Gateway key into one canonical ledger", async () => {
     const ledger = createTestAcpEventLedger();
     const recorded = createDeferred();
