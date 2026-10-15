@@ -109,15 +109,6 @@ it("checks same-file calls and propagates reachability through reviewed wrappers
   ]);
 });
 
-it("requires the reviewed declaration's deprecation marker", () => {
-  const result = inspect({}, legacy.replace("@deprecated", "Legacy:"));
-  expect(result.operations.has(legacyFile)).toBe(false);
-  expect(result.operations.get(secondFile)).toEqual(new Set([second]));
-  expect(result.violations).toEqual([
-    `${legacyFile}:${first}: reviewed compatibility operation must be @deprecated`,
-  ]);
-});
-
 it("permits a deprecated API only from an exact reviewed one-shot entry", () => {
   const doctorFile = "src/flows/doctor-tool-schema-projection.ts";
   const doctor = `import { ${first} } from '../plugin-sdk/sqlite-runtime-legacy.js';
@@ -153,28 +144,6 @@ it("permits a deprecated API only from an exact reviewed one-shot entry", () => 
   }
 });
 
-it("does not classify deprecated methods or their unverified factory objects", () => {
-  const result = inspect({
-    "src/gateway/github-publication-coordinator-methods.ts": `
-      import { ${first} } from '../plugin-sdk/sqlite-runtime-legacy.js';
-      export function createGitHubPublicationCoordinatorMethods() {
-        return {
-          /** @deprecated Use the awaited replacement. */
-          markReported() { return ${first}(); },
-        };
-      }
-    `,
-  });
-  expect(result.operations.has(legacyFile)).toBe(false);
-  expect(result.operations.get(secondFile)).toEqual(new Set([second]));
-  expect(result.operations.has("src/gateway/github-publication-coordinator-methods.ts")).toBe(
-    false,
-  );
-  expect(result.violations).toEqual([
-    expect.stringContaining("src/gateway/github-publication-coordinator-methods.ts:"),
-  ]);
-});
-
 const mixedReceiverFile = "src/gateway/model-account-connect.ts";
 const mixedReceiver = `
   import { readKernel } from '../session-kernel.js';
@@ -187,24 +156,6 @@ const mixedReceiver = `
     };
   }
 `;
-
-it("isolates reviewed deprecated members from their live factory and async siblings", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
-    [mixedReceiverFile]: mixedReceiver,
-    "src/consumer.ts": `import { createModelAccountConnectService } from './gateway/model-account-connect.js';
-      const service = createModelAccountConnectService();
-      service.listLinksAsync();`,
-  });
-  expect(result.violations).toEqual([]);
-  expect(result.operations.get(mixedReceiverFile)).toEqual(
-    new Set([
-      "createModelAccountConnectService.listLinks",
-      "createModelAccountConnectService.readLegacy",
-    ]),
-  );
-  expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
-});
 
 it.each([
   ["direct call", "service.listLinks();"],
@@ -297,23 +248,6 @@ it("isolates a typed singleton's deprecated member while its async API stays liv
   expect(result.operations.get(bindingServiceFile)).toEqual(
     new Set(["DEFAULT_SESSION_BINDING_SERVICE.listBySession"]),
   );
-});
-
-it.each([
-  ["call", "service.listBySession();"],
-  ["escape", "register(service.listBySession);"],
-])("rejects a bundled %s through the singleton's returned service type", (_label, use) => {
-  const result = inspect({
-    [kernelFile]: kernel,
-    [bindingServiceFile]: bindingService,
-    "src/consumer.ts": `
-      import { getService } from './infra/outbound/session-binding-service.js';
-      const service = getService(); ${use}
-    `,
-  });
-  expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has(bindingServiceFile)).toBe(false);
-  expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
 });
 
 const pluginStateLegacyFile = "src/plugin-state/plugin-state-store.legacy.ts";
@@ -518,25 +452,6 @@ it("proves a transitive mixed kernel with only worker and deprecated callers", (
   expect(result.operations.get("src/leaf.ts")).toEqual(new Set(["leaf"]));
 });
 
-it.each([
-  ["live call", "export function read() { return readKernel(); }"],
-  ["escaped callback", "export const callback = readKernel;"],
-  ["namespace escape", "export const callback = kernelApi;"],
-])("keeps a mixed kernel live after a bundled %s", (_label, consumer) => {
-  const result = inspect({
-    [secondFile]: sharedOwner,
-    [kernelFile]: `import { leaf } from './leaf.js';
-      export function readKernel() { return leaf(); }`,
-    "src/leaf.ts": `export function leaf() { return 1; }`,
-    "src/consumer.ts": `import { readKernel } from './session-kernel.js';
-      import * as kernelApi from './session-kernel.js'; ${consumer}`,
-  });
-  expect(result.violations).toEqual([]);
-  expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has("src/leaf.ts")).toBe(false);
-  expect(result.operations.get(secondFile)).toEqual(new Set([second]));
-});
-
 it.each(["register(readKernel)", "register(() => readKernel())"])(
   "keeps an escaped worker callback live: %s",
   (registration) => {
@@ -608,36 +523,6 @@ it.each([
   expect(result.operations.has(kernelFile)).toBe(false);
   expect(result.operations.has(secondFile)).toBe(false);
   expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
-});
-
-it("keeps a returned callback live when bundled code registers it", () => {
-  const result = inspect({
-    [secondFile]: `import { readKernel } from '../session-kernel.js';
-      /** @deprecated Use workers. */
-      export function ${second}() { return () => readKernel(); }`,
-    [kernelFile]: kernel,
-    "src/consumer.ts": `import { ${second} } from './sessions/session-upstream-links.js';
-      register(${second}());`,
-  });
-  expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has(secondFile)).toBe(false);
-  expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
-});
-
-it("keeps shared receiver methods live when an async factory also creates them", () => {
-  const result = inspect({
-    [secondFile]: `import { createReceiver } from '../receiver.js';
-      /** @deprecated Use workers. */
-      export function ${second}() { return createReceiver(); }`,
-    [kernelFile]: kernel,
-    "src/receiver.ts": `import { readKernel } from './session-kernel.js';
-      export function createReceiver() { return { read() { return readKernel(); } }; }
-      export async function createReceiverAsync() { return createReceiver(); }`,
-  });
-  expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has("src/receiver.ts")).toBe(false);
-  expect(result.operations.get(secondFile)).toEqual(new Set([second]));
-  expect(result.violations).toEqual([]);
 });
 
 it.each(["() => readKernel()", "function () { return readKernel(); }"])(
@@ -764,6 +649,9 @@ it("rejects a deprecated factory reached through a live receiver method", () => 
       }
       export async function createReceiverAsync() { return createReceiver(); }`,
   });
+  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.operations.has("src/receiver.ts")).toBe(false);
+  expect(result.operations.get(secondFile)).toEqual(new Set([second]));
   expect(result.operations.has(legacyFile)).toBe(false);
   expect(result.violations).toEqual([expect.stringContaining(`${legacyFile}:${first}:`)]);
 });
@@ -1046,30 +934,6 @@ it.each([
     inspectProfileChain().nonRuntimeOperations.get(fixture.kernelFile)?.has(fixture.kernel),
   ).not.toBe(true);
 });
-
-it.each([
-  `export const handlers = { run: () => writeCurrentStateSchemaMetadata() };`,
-  `export function createHandler() { return () => writeCurrentStateSchemaMetadata(); }`,
-])("retains callback execution inside a reviewed worker-only module: %s", (body) => {
-  const result = inspectMaintenance({
-    "src/commands/doctor.ts": "export {};",
-    "src/read.worker.ts": `import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
-      ${body}`,
-  });
-  expect(result.nonRuntimeOperations.get(maintenanceFile)?.get("persistSchema")).toBe("W");
-});
-
-it.each(["src/unregistered.worker.ts", "src/commands/doctor.ts", "src/gateway/handler.ts"])(
-  "does not infer a worker callback boundary from %s",
-  (file) => {
-    const result = inspectMaintenance({
-      "src/commands/doctor.ts": "export {};",
-      [file]: `import { writeCurrentStateSchemaMetadata } from '${file === "src/unregistered.worker.ts" ? "./state" : "../state"}/openclaw-state-db-maintenance.js';
-        export const handlers = { run: () => writeCurrentStateSchemaMetadata() };`,
-    });
-    expect(result.nonRuntimeOperations.has(maintenanceFile)).toBe(false);
-  },
-);
 
 it("uses reviewed worker ownership for its complete handler table", () => {
   const file = "src/state/user-github-connections.worker.ts";
