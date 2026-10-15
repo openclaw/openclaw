@@ -11,11 +11,9 @@ import {
 } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
-import {
-  readUpdateStateSchemaVersions,
-  updateStateSchemaVersionsMatch,
-} from "./update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
+import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 let root: string;
 beforeEach(async () => {

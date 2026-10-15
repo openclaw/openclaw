@@ -20,14 +20,12 @@ import {
   prepareUpdateCandidatePlugins,
 } from "./update-candidate-plugins.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
-import {
-  readUpdateStateSchemaVersions,
-  updateStateSchemaVersionsMatch,
-} from "./update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import {
   materializeUpdateCandidateStateWorker,
   runUpdateCandidateSnapshotWorker,
 } from "./update-candidate-state.test-support.js";
+import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 let root: string;
 beforeEach(async () => {
@@ -239,6 +237,11 @@ it("keeps absent stores explicit and observes newly created databases for rollba
   ).toBe(false);
   expect(updateStateSchemaVersionsMatch(after, before, candidate)).toBe(false);
   expect(updateStateSchemaVersionsMatch(after, after.toReversed(), candidate)).toBe(true);
+  const daemon = path.join(stateDir, "control", "services.sqlite");
+  await createDatabase(daemon, "PRAGMA user_version = 1;");
+  const withDaemon = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+  expect(updateStateSchemaVersionsMatch(after, withDaemon, candidate)).toBe(true);
+  expect(updateStateSchemaVersionsMatch(withDaemon, after, candidate)).toBe(false);
 });
 
 it.runIf(process.platform !== "win32")(

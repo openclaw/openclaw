@@ -10,11 +10,11 @@ import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
-  readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,
   updateStateSchemaVersionsMatch,
-} from "../../infra/update-candidate-state.js";
+} from "../../infra/update-candidate-state.versions.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";

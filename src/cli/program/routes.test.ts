@@ -48,6 +48,20 @@ describe("program routes", () => {
     await expectRunFalse(routeArgv("gateway status --ssh-identity ~/.ssh/id_test"));
   });
 
+  it("routes local runtime intent with config and plugin startup disabled", async () => {
+    await expect(
+      tryRouteCli(routeArgv("gateway status --runtime-intent-only --json")),
+    ).resolves.toBe(true);
+    expect(runDaemonStatusMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeIntentOnly: true, json: true }),
+    );
+    expect(ensureCliExecutionBootstrap).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startupPolicy: expect.objectContaining({ skipConfigGuard: true, loadPlugins: false }),
+      }),
+    );
+  });
+
   it("routes status --json through the lean JSON command", async () => {
     await expect(
       tryRouteCli(routeArgv("status --json --deep --usage --agent beta --timeout 5000")),

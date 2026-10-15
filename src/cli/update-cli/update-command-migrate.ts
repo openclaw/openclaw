@@ -220,6 +220,9 @@ export async function updateMigrateCommand(backupRoot: string): Promise<void> {
       lock.assertCurrent();
       const snapshots = (backup.databaseOwners ?? []).flatMap(
         (owner): BackupSqliteSnapshotFact[] => {
+          if (owner.role === "daemon") {
+            return [];
+          }
           const identity = databaseIdentities[owner.path];
           if (!identity) {
             return [];

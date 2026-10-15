@@ -100,6 +100,7 @@ it.each(["legacy", "current"] as const)(
         ? undefined
         : [
             { path: f.shared, role: "global" },
+            { path: path.join(f.stateDir, "control", "services.sqlite"), role: "daemon" },
             {
               path: path.join(f.stateDir, "agents/main/agent/openclaw-agent.sqlite"),
               role: "agent",

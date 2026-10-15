@@ -122,8 +122,9 @@ export async function inspectImmutableUpdateCoverage(params: {
         }
         const stateDir = descriptor.service.stateDir;
         const config = snapshot.sourceConfig;
-        const { readUpdateStateSchemaVersions, resolveUpdateStateContentVersion } =
-          await import("./update-candidate-state.js");
+        const { readUpdateStateSchemaVersions } = await import("./update-candidate-state.js");
+        const { resolveUpdateStateContentVersion } =
+          await import("./update-candidate-state.versions.js");
         let inventory: ReadonlyMap<string, StateDatabaseDiscovery> = new Map();
         const versions = await readUpdateStateSchemaVersions({
           stateDir,

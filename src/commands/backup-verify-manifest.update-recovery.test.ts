@@ -110,6 +110,11 @@ describe("update recovery manifest", () => {
           { path: second, role: "agent", agentId: "main" },
         ],
       },
+      {
+        ...value,
+        entries: [...value.entries, missing(second, true)],
+        databases: [...databases, { path: second, role: "daemon" }],
+      },
       { ...value, warnings: [warning] },
     ];
     for (const capture of captures) {

@@ -73,7 +73,7 @@ it("does not turn malformed or stale pin records into absence", async () => {
     throw new Error("stale pin");
   });
   expect(await inspectServiceRuntimeIntent(params)).toEqual({
-    runtimeIntent: { status: "unknown" },
+    runtimeIntent: { status: "unknown", error: "stale pin" },
   });
 });
 

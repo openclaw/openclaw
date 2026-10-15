@@ -3,6 +3,7 @@ import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js
 import type { GatewayService, GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { hasGatewayServiceLauncherOverride } from "../../daemon/service-types.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { projectDaemonServiceForJson } from "./shared.js";
 
 export type CliRuntimeStatus = {
@@ -22,7 +23,7 @@ export async function inspectCliRuntime(): Promise<CliRuntimeStatus> {
 }
 
 export type ServiceRuntimeIntentStatus =
-  | { runtimeIntent: { status: "unknown" } }
+  | { runtimeIntent: { status: "unknown"; error?: string } }
   | {
       runtimeIntent: DaemonRuntimePinSnapshot & { status: "known" };
       revision: string;
@@ -67,8 +68,8 @@ export async function inspectServiceRuntimeIntent(params: {
       definitionMutation: capability?.kind ?? "unknown",
       launcherOverridden: hasGatewayServiceLauncherOverride(params.command),
     };
-  } catch {
+  } catch (error) {
     // Missing, unreadable, malformed, and stale metadata cannot authorize adoption.
-    return { runtimeIntent: { status: "unknown" } };
+    return { runtimeIntent: { status: "unknown", error: formatErrorMessage(error) } };
   }
 }

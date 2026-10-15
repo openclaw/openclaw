@@ -646,6 +646,50 @@ extension GatewayLaunchAgentManager {
     static let runtimePinSelectionChanged = "Gateway service or runtime pin changed before installation. " +
         "The newer selection was preserved; inspect it before retrying."
 
+    struct RuntimeIntent: Decodable, Equatable, Sendable {
+        struct Pin: Decodable, Equatable, Sendable {
+            let runtime: String
+            let path: String
+        }
+
+        let status: String
+        let revision: String
+        let stored: Bool
+        let definition: String?
+        let pin: Pin?
+    }
+
+    private struct RuntimeIntentStatus: Decodable {
+        struct Service: Decodable {
+            let runtimeIntent: RuntimeIntent
+        }
+
+        let service: Service
+    }
+
+    static func hasRuntimePin(stateDirectory: URL, profile: AppProfile) async throws -> Bool {
+        try await self.runtimePinRecord(stateDirectory: stateDirectory, profile: profile) != nil
+    }
+
+    static func runtimePinRecord(stateDirectory: URL, profile: AppProfile) async throws -> RuntimeIntent? {
+        let runtime = BundledRuntime.isBundledApp ? try BundledRuntime.resolve(bundle: .main) : nil
+        let invocation = await self.daemonInvocation(
+            runtime: runtime, profile: profile, stateDirectory: stateDirectory)
+        let observation = await self.executeDaemonCommand(
+            ["status", "--runtime-intent-only", "--json"],
+            invocation: invocation,
+            timeout: Self.startupMigrationTolerance,
+            quiet: true)
+        guard case let .success(payload?) = observation,
+              let status = try? JSONDecoder().decode(RuntimeIntentStatus.self, from: payload),
+              status.service.runtimeIntent.status == "known"
+        else {
+            throw GatewayHostingError(message: Self.runtimePinSelectionChanged)
+        }
+        let intent = status.service.runtimeIntent
+        return intent.stored ? intent : nil
+    }
+
     private struct DaemonInvocation {
         let prefix: [String]
         let environment: [String: String]
@@ -730,20 +774,16 @@ extension GatewayLaunchAgentManager {
         let invocation = await self.daemonInvocation(runtime: runtime, installedCLI: selectedCLI)
         if args.first == "install", invocation.supportsExpectedRuntimePin {
             let observation = await self.executeDaemonCommand(
-                ["status", "--deep", "--json", "--no-probe"],
+                ["status", "--runtime-intent-only", "--json"],
                 invocation: invocation,
                 timeout: timeout,
                 quiet: true)
             guard case let .success(payload?) = observation,
-                  let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
-                  let service = json["service"] as? [String: Any],
-                  let intent = service["runtimeIntent"] as? [String: Any],
-                  intent["status"] as? String == "known",
-                  let revision = intent["revision"] as? String,
-                  intent["definition"] == nil || intent["definition"] is NSNull || intent["definition"] is String,
+                  let status = try? JSONDecoder().decode(RuntimeIntentStatus.self, from: payload),
+                  status.service.runtimeIntent.status == "known",
                   let expected = try? JSONSerialization.data(withJSONObject: [
-                      "revision": revision,
-                      "definition": intent["definition"] ?? NSNull(),
+                      "revision": status.service.runtimeIntent.revision,
+                      "definition": status.service.runtimeIntent.definition as Any? ?? NSNull(),
                   ], options: [.sortedKeys, .withoutEscapingSlashes]),
                   let expectation = String(bytes: expected, encoding: .utf8)
             else { return .failure(self.runtimePinSelectionChanged) }
@@ -820,7 +860,9 @@ extension GatewayLaunchAgentManager {
 
     private static func daemonInvocation(
         runtime: BundledRuntime? = nil,
-        installedCLI: InstalledServiceCLI? = nil) async -> DaemonInvocation
+        installedCLI: InstalledServiceCLI? = nil,
+        profile: AppProfile = .current,
+        stateDirectory: URL? = nil) async -> DaemonInvocation
     {
         let runtime = runtime ??
             (BundledRuntime.isBundledApp && installedCLI == nil ? try? BundledRuntime.seeded() : nil)
@@ -829,15 +871,18 @@ extension GatewayLaunchAgentManager {
         resolveCLI = self.testingState.withLock { $0.resolveCLI } ?? resolveCLI
         #endif
         let prefix: [String] = if let cli = installedCLI?.prefix ?? runtime?.cliCommand {
-            AppProfile.current.localCLICommand(prefix: cli, arguments: ["gateway"])
+            profile.localCLICommand(prefix: cli, arguments: ["gateway"])
         } else {
-            await CommandResolver.localOpenclawCommand(subcommand: "gateway", resolveCLI: resolveCLI)
+            await CommandResolver.localOpenclawCommand(subcommand: "gateway", profile: profile, resolveCLI: resolveCLI)
+        }
+        var environment = self.daemonEnvironment(runtime: runtime, installedCLI: installedCLI, profile: profile)
+        if let stateDirectory {
+            environment["OPENCLAW_STATE_DIR"] = stateDirectory.path
+            environment["OPENCLAW_CONFIG_PATH"] = stateDirectory.appendingPathComponent("openclaw.json").path
         }
         return DaemonInvocation(
             prefix: prefix,
-            environment: self.daemonEnvironment(
-                runtime: runtime,
-                installedCLI: installedCLI),
+            environment: environment,
             // Only an explicitly selected bundled CLI carries this interop contract.
             supportsExpectedRuntimePin: runtime.map {
                 installedCLI == nil || installedCLI?.matchesBundledRuntime($0) == true

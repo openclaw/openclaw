@@ -30,7 +30,12 @@ function readWitness(
     // sqlite-allow-raw: disable schema-defined functions while inspecting an immutable backup.
     db.exec("PRAGMA trusted_schema = OFF;");
     assertSqliteIntegrity(db, entry.sourcePath);
-    return captureOpenClawMigrationWitness(db, owner, registry);
+    // Local service intent requires exact preservation, without shared/agent transformations.
+    return captureOpenClawMigrationWitness(
+      db,
+      owner?.role === "daemon" ? undefined : owner,
+      registry,
+    );
   } finally {
     db.close();
   }

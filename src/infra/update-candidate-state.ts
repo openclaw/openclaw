@@ -4,8 +4,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveDaemonRuntimePinStorePath } from "../daemon/runtime-pin-store.js";
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
-import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -91,48 +91,6 @@ type CandidateStateDatabase = Pick<
   DB,
   "agent_databases" | "agent_database_leases" | "state_leases"
 >;
-
-/** Older inspection workers report only the published version; agent stores never defer it. */
-export function resolveUpdateStateContentVersion(entry: UpdateStateSchemaVersion): number | null {
-  return entry.contentVersion ?? entry.userVersion;
-}
-
-export function updateStateSchemaVersionsMatch(
-  before: readonly UpdateStateSchemaVersion[],
-  after: readonly UpdateStateSchemaVersion[],
-  params: { sharedPath: string; candidateSchemaVersions?: OpenClawSchemaVersions },
-): boolean {
-  const versions = new Map(
-    after.map((entry) => [entry.path, resolveUpdateStateContentVersion(entry)]),
-  );
-  const candidate = params.candidateSchemaVersions;
-  if (!candidate) {
-    return (
-      before.length === after.length &&
-      before.every((entry) => versions.get(entry.path) === resolveUpdateStateContentVersion(entry))
-    );
-  }
-  const baseline = new Map(
-    before.map((entry) => [entry.path, resolveUpdateStateContentVersion(entry)]),
-  );
-  return (
-    before.every(
-      (entry) =>
-        resolveUpdateStateContentVersion(entry) === null ||
-        versions.get(entry.path) === resolveUpdateStateContentVersion(entry),
-    ) &&
-    after.every((entry) => {
-      const version = resolveUpdateStateContentVersion(entry);
-      if (version === null || baseline.get(entry.path) === version) {
-        return true;
-      }
-      // Verification can create a store for the first time. All collected paths
-      // except the shared database are configured or registered agent stores.
-      const supported = entry.path === params.sharedPath ? candidate.state : candidate.agent;
-      return baseline.get(entry.path) == null && version === supported;
-    })
-  );
-}
 
 const UpdateCandidateStateInventorySchema = z
   .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
@@ -226,6 +184,7 @@ export async function collectStateDatabasePaths(
     queueStateDatabaseSpelling(files, stateRoot, file, owner);
   };
   queue(shared, { role: "global" });
+  queue(resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: stateRoot }), { role: "daemon" });
   const directories =
     options.includeUnconfiguredAgents !== false
       ? (await listDefaultAgentDatabasePaths(input.stateDir)).map((entry) => entry.agentId)
@@ -418,7 +377,12 @@ export async function readUpdateStateSchemaVersionsInProcess(
       continue;
     }
     input.onProgress?.({
-      phase: file === shared ? "shared database inspection" : "agent schema inspection",
+      phase:
+        file === shared
+          ? "shared database inspection"
+          : discovery.owners?.some((owner) => owner.role === "daemon")
+            ? "daemon schema inspection"
+            : "agent schema inspection",
       path: file,
     });
     // Missing stores stay explicit so creation is checked and loss blocks rollback.

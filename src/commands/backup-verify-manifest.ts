@@ -65,6 +65,7 @@ const updateRecoveryManifestSchema = z.strictObject({
     .array(
       z.discriminatedUnion("role", [
         z.strictObject({ path: recoveryPath, role: z.literal("global") }),
+        z.strictObject({ path: recoveryPath, role: z.literal("daemon") }),
         z.strictObject({
           path: recoveryPath,
           role: z.literal("agent"),

@@ -1,7 +1,6 @@
 import Darwin
 import Foundation
 import Observation
-import OpenClawNativeState
 import Synchronization
 import Testing
 @testable import OpenClaw
@@ -125,7 +124,8 @@ struct GatewayProcessManagerTests {
                 #expect(manager.desiredActive == (scenario == "request"))
             }
             #expect(manager.gatewayStartTask == nil)
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .allSatisfy { $0.first == "status" })
         }
     }
 
@@ -409,7 +409,8 @@ struct GatewayProcessManagerTests {
         mode: String = "local",
         port: Int? = nil,
         homeDirectory: URL? = nil,
-        statusPayload: String? = #"{"ok":true,"service":{"loaded":false}}"#,
+        statusPayload: String? =
+            #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#,
         statusPayloads: [String]? = nil,
         commandDelayNanoseconds: UInt64 = 0,
         commandHook: (@Sendable ([String]) async -> Void)? = nil,
@@ -555,6 +556,7 @@ struct GatewayProcessManagerTests {
         """
         {"ok":true,"service":{
           "loaded":true,
+          "runtimeIntent":{"status":"known","stored":false,"revision":"absent"},
           "runtime":{"status":"running","pid":\(pid)},
           "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
           "configAudit":\(configAudit)
@@ -752,7 +754,10 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    @Test(arguments: ["outside-entrypoint", "unsupported-command", "malformed-plist", "absent"])
+    @Test(arguments: [
+        "outside-entrypoint", "unsupported-command", "malformed-plist", "absent",
+        "unknown-runtime-intent", "changed-runtime-intent",
+    ])
     func `pause preserves unretainable services and distinguishes absence`(_ definition: String) async throws {
         try await self.withLaunchAgentEnvironment(port: AppProfile.current.defaultGatewayPort) {
             let manager = self.manager
@@ -772,8 +777,19 @@ struct GatewayProcessManagerTests {
                 ? [state.appendingPathComponent("bin/openclaw").path]
                 : [
                     state.appendingPathComponent("tools/node-version/bin/node").path,
-                    LaunchAgentPlist.homeDirectoryURL.appendingPathComponent("outside-package/openclaw.mjs").path,
+                    definition.hasSuffix("runtime-intent")
+                        ? state.appendingPathComponent("tools/node-version/lib/node_modules/openclaw/openclaw.mjs").path
+                        : LaunchAgentPlist.homeDirectoryURL.appendingPathComponent("outside-package/openclaw.mjs").path,
                 ]
+            if definition == "unknown-runtime-intent" {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                    #"{"service":{"runtimeIntent":{"status":"unknown","stored":true,"revision":"malformed"}}}"#)
+            } else if definition == "changed-runtime-intent" {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayloads([
+                    #"{"service":{"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#,
+                    Self.pinnedStatus(executable: prefix[0]),
+                ])
+            }
             let original = try definition == "malformed-plist" ? Data("invalid plist".utf8) :
                 PropertyListSerialization.data(fromPropertyList: [
                     "ProgramArguments": prefix + ["gateway", "--port", String(AppProfile.current.defaultGatewayPort)],
@@ -825,21 +841,9 @@ struct GatewayProcessManagerTests {
                 ? "runtime/build-one/lib/node_modules/openclaw/openclaw.mjs"
                 : "lib/node_modules/openclaw/openclaw.mjs"
             let prefix = [executable, state.appendingPathComponent(package).path]
-            let databaseURL = state.appendingPathComponent("state/openclaw.sqlite")
             let hadRuntimePin = runtimeLocation == "pinned-managed-node"
             if hadRuntimePin {
-                try Self.writeRuntimePinFixture(
-                    databaseURL: databaseURL,
-                    key: GatewayLaunchAgentManager.runtimePinKey(
-                        profile: .current, configPath: state.appendingPathComponent("openclaw.json").path),
-                    executable: executable)
-            }
-            defer {
-                if hadRuntimePin {
-                    for path in [databaseURL.path, databaseURL.path + "-wal", databaseURL.path + "-shm"] {
-                        try? FileManager.default.removeItem(atPath: path)
-                    }
-                }
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(Self.pinnedStatus(executable: executable))
             }
             let sqlite = state.appendingPathComponent("tools/sqlite/libsqlite3.dylib").path
             let artifacts = GatewayLaunchAgentManager.generatedEnvironmentArtifacts(
@@ -866,10 +870,8 @@ struct GatewayProcessManagerTests {
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true, beforeReturning: { arguments in
                 if arguments.first == "uninstall" {
                     try? FileManager.default.removeItem(at: plist)
-                    if hadRuntimePin {
-                        let database = try? OpenClawNativeStateSQLite(databaseURL: databaseURL, createIfMissing: false)
-                        try? database?.execute("DELETE FROM config_machine_state")
-                    }
+                    GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                        #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
                 }
             })
             manager.stop()
@@ -962,21 +964,8 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    private static func writeRuntimePinFixture(databaseURL: URL, key: String, executable: String) throws {
-        let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
-        try database.execute("""
-        PRAGMA user_version = 1;
-        CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER);
-        INSERT INTO schema_meta VALUES ('primary', 'global', 1);
-        CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);
-        """)
-        let value = try JSONSerialization.data(withJSONObject: [
-            "version": 1, "pin": ["runtime": "node", "path": executable], "definition": "fixture",
-        ])
-        let insert = try database.prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
-        try insert.bindText(key, at: 1)
-        try insert.bindText(String(decoding: value, as: UTF8.self), at: 2)
-        _ = try insert.step()
+    private nonisolated static func pinnedStatus(executable: String) -> String {
+        #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":true,"revision":"operator-pin","definition":"fixture","pin":{"runtime":"node","path":"\#(executable)"}}}}"#
     }
 
     @Test func `invalid retained service command prevents a missing service Bun install`() async throws {
@@ -996,7 +985,7 @@ struct GatewayProcessManagerTests {
     @Test func `coalesces concurrent launch agent enable requests`() async throws {
         let port = 19081
         try await self.withLaunchAgentEnvironment(
-            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#)
+            statusPayload: #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
         {
             let manager = self.manager
             async let first: String? = manager.enableLaunchAgentIfNeeded(port: port).error
@@ -1153,9 +1142,18 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `hosting changes retain resume intent across failed service removal`() async throws {
-        try await self.withLaunchAgentEnvironment(
-            statusPayload: #"{"ok":false,"message":"fixture uninstall failed"}"#)
-        {
+        let pinReads = Mutex(0)
+        try await self.withLaunchAgentEnvironment(commandHook: { args in
+            guard args.contains("--runtime-intent-only") else { return }
+            let count = pinReads.withLock { value in
+                value += 1
+                return value
+            }
+            if count == 2 {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                    #"{"ok":false,"message":"fixture uninstall failed"}"#)
+            }
+        }) {
             let previousHosting = AppDefaults.standard.object(forKey: GatewayHosting.defaultsKey)
             AppDefaults.standard.set(GatewayHosting.service.rawValue, forKey: GatewayHosting.defaultsKey)
             defer { AppDefaults.standard.set(previousHosting, forKey: GatewayHosting.defaultsKey) }
@@ -1174,7 +1172,9 @@ struct GatewayProcessManagerTests {
             #expect(manager.desiredActive)
             #expect(manager.lastFailureReason == "fixture uninstall failed")
 
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true}"#)
+            GatewayLaunchAgentManager
+                .setTestingDaemonStatusPayload(
+                    #"{"ok":true,"service":{"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
             manager.stop(preservingActivationIntent: true)
             await manager.waitForStartupAttempt()
             #expect(manager.desiredActive)
@@ -1254,7 +1254,7 @@ struct GatewayProcessManagerTests {
     {
         let port = AppProfile.current.defaultGatewayPort
         try await self.withLaunchAgentEnvironment(port: port, statusPayload: """
-        {"ok":true,"service":{"runtimeIntent":{"status":"known","revision":"before-restore"}}}
+        {"ok":true,"service":{"runtimeIntent":{"status":"known","stored":false,"revision":"before-restore"}}}
         """, commandHook: { args in
             if args.first == "status", outcome == "install-failure" {
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":false,"message":"install failed"}"#)
@@ -1386,19 +1386,10 @@ struct GatewayProcessManagerTests {
     @Test func `operator repin before prior-build restoration dispatch is preserved, not overwritten`() async throws {
         try await self.withLaunchAgentEnvironment {
             let state = AppProfile.current.stateDirectoryURL()
-            let databaseURL = state.appendingPathComponent("state/openclaw.sqlite")
-            try #require(!FileManager.default.fileExists(atPath: databaseURL.path))
-            defer {
-                for path in [databaseURL.path, databaseURL.path + "-wal", databaseURL.path + "-shm"] {
-                    try? FileManager.default.removeItem(atPath: path)
-                }
-            }
-            let key = try GatewayLaunchAgentManager.runtimePinKey(
-                profile: .current, configPath: state.appendingPathComponent("openclaw.json").path)
             let refusal = GatewayLaunchAgentManager.runtimePinSelectionChanged
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
             {"ok":true,"service":{"loaded":false,
-            "runtimeIntent":{"status":"known","revision":"before-restore","definition":"failed-service"}}}
+            "runtimeIntent":{"status":"known","stored":false,"revision":"before-restore","definition":"failed-service"}}}
             """)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { args in
                 if args.first == "status" {
@@ -1406,14 +1397,9 @@ struct GatewayProcessManagerTests {
                     {"ok":false,"error":"\(refusal)"}
                     """)
                 } else if args.first == "install" {
-                    do {
-                        try await Self.writeRuntimePinFixture(
-                            databaseURL: databaseURL, key: key, executable: "/operator/bin/node")
-                        if !args.contains("--expected-runtime-pin") {
-                            let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
-                            try database.execute("DELETE FROM config_machine_state")
-                        }
-                    } catch { Issue.record(error) }
+                    #expect(args.contains("--expected-runtime-pin"))
+                    GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                        Self.pinnedStatus(executable: "/operator/bin/node"))
                 }
             }
             let previous = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/previous-build"))
@@ -1447,11 +1433,11 @@ struct GatewayProcessManagerTests {
                 #expect(error.localizedDescription.contains("Previous Gateway recovery: " + refusal))
             }
             #expect(healthChecks == 0)
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(try await GatewayLaunchAgentManager
                 .runtimePinRecord(stateDirectory: state, profile: .current) != nil)
-            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls == [
-                ["status", "--deep", "--json", "--no-probe"],
+                ["status", "--runtime-intent-only", "--json"],
                 [
                     "install",
                     "--force",
@@ -1468,6 +1454,7 @@ struct GatewayProcessManagerTests {
                 ],
             ])
             #expect(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                .filter { $0.contains("install") }
                 .allSatisfy { Array($0.prefix(2)) == installer.cliCommand })
         }
     }
@@ -1531,7 +1518,7 @@ struct GatewayProcessManagerTests {
         let firstPort = 19091
         let secondPort = 19092
         try await self.withLaunchAgentEnvironment(
-            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#,
+            statusPayload: #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#,
             commandDelayNanoseconds: 100_000_000)
         {
             let manager = self.manager
@@ -1607,7 +1594,7 @@ struct GatewayProcessManagerTests {
         defer { finishInstall.open() }
         try await self.withLaunchAgentEnvironment(
             statusPayloads: [
-                #"{"ok":true,"service":{"loaded":false}}"#,
+                #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#,
                 self.loadedGatewayStatus(port: secondPort),
             ],
             commandHook: { arguments in
@@ -1645,7 +1632,7 @@ struct GatewayProcessManagerTests {
         let firstPort = 19095
         let secondPort = 19096
         try await self.withLaunchAgentEnvironment(
-            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#,
+            statusPayload: #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#,
             commandDelayNanoseconds: 100_000_000)
         {
             let manager = self.manager
@@ -1694,7 +1681,7 @@ struct GatewayProcessManagerTests {
         let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: .current)
         try await self.withLaunchAgentEnvironment(
             homeDirectory: home,
-            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#,
+            statusPayload: #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#,
             commandDelayNanoseconds: 100_000_000,
             commandHook: { arguments in
                 if arguments.first == "uninstall" { try? FileManager.default.removeItem(at: plist) }
@@ -2153,7 +2140,7 @@ struct GatewayProcessManagerTests {
     @Test func `protects an unmanaged listener during persistence ensure`() async throws {
         let port = 19100
         try await self.withLaunchAgentEnvironment(
-            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#)
+            statusPayload: #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
         {
             let listener = self.gatewayDescriptor(
                 pid: 4243,
@@ -2173,7 +2160,7 @@ struct GatewayProcessManagerTests {
     @Test func `does not force install when launchd starts during ownership inspection`() async throws {
         let port = 19102
         let statuses = [
-            #"{"ok":true,"service":{"loaded":false}}"#,
+            #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#,
             self.loadedGatewayStatus(port: port),
         ]
         try await self.withLaunchAgentEnvironment(statusPayloads: statuses) {
@@ -2196,6 +2183,7 @@ struct GatewayProcessManagerTests {
                 """
                 {"ok":true,"service":{
                   "loaded":true,
+                  "runtimeIntent":{"status":"known","stored":false,"revision":"absent"},
                   "runtime":{"status":"stopped"},
                   "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
                   "configAudit":{"ok":true,"issues":[]}
@@ -2204,6 +2192,7 @@ struct GatewayProcessManagerTests {
                 """
                 {"ok":true,"service":{
                   "loaded":true,
+                  "runtimeIntent":{"status":"known","stored":false,"revision":"absent"},
                   "runtime":{"status":"running","pid":4242},
                   "command":{"programArguments":["openclaw","gateway","--port","19084"]},
                   "configAudit":{"ok":true,"issues":[]}
@@ -2212,6 +2201,7 @@ struct GatewayProcessManagerTests {
                 """
                 {"ok":true,"service":{
                   "loaded":true,
+                  "runtimeIntent":{"status":"known","stored":false,"revision":"absent"},
                   "runtime":{"status":"running","pid":4242},
                   "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
                   "configAudit":{"ok":false,"issues":[{"code":"gateway-entrypoint-mismatch"}]}
@@ -2323,7 +2313,7 @@ struct GatewayProcessManagerTests {
 
         try await self.withLaunchAgentEnvironment(
             port: port,
-            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#)
+            statusPayload: #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
         {
             #expect(GatewayEnvironment.gatewayPort() == port)
             manager.desiredActive = true
