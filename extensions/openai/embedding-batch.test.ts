@@ -87,6 +87,56 @@ afterEach(() => {
 });
 
 describe("OpenAI embedding batch output", () => {
+  it.each(["/files", "/batches", "/files/output-0/content"])(
+    "refreshes and retries only the rejected %s request",
+    async (expiredPath) => {
+      let bearer = "Bearer fixture-old";
+      let rejected = false;
+      const requests: Array<{ path: string; bearer: string | null }> = [];
+      const resolveRequestHeaders = vi.fn(async ({ forceRefresh }: { forceRefresh: boolean }) => {
+        if (forceRefresh) {
+          bearer = "Bearer fixture-new";
+        }
+        return { Authorization: bearer };
+      });
+      const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = new URL(fetchInputUrl(input)).pathname.replace(/^\/v1/, "");
+        requests.push({ path, bearer: new Headers(init?.headers).get("Authorization") });
+        if (path === expiredPath && !rejected) {
+          rejected = true;
+          return Response.json({ error: { code: "token_expired" } }, { status: 401 });
+        }
+        if (path === "/files") {
+          return Response.json({ id: "input-0" });
+        }
+        if (path === "/batches") {
+          expect(parseStringBody(init)).toMatchObject({ input_file_id: "input-0" });
+          return Response.json({ id: "batch-0", status: "completed", output_file_id: "output-0" });
+        }
+        return Response.json({
+          custom_id: "0",
+          response: { status_code: 200, body: { data: [{ embedding: [3, 5] }] } },
+        });
+      });
+      const params = singleRequestBatchParams(fetchImpl, 1, 10_000);
+      params.openAi.resolveRequestHeaders = resolveRequestHeaders;
+      await expect(runOpenAiEmbeddingBatches(params)).resolves.toEqual(new Map([["0", [3, 5]]]));
+      const paths = ["/files", "/batches", "/files/output-0/content"];
+      expect(requests.map((request) => request.path)).toEqual(
+        paths.flatMap((path) => (path === expiredPath ? [path, path] : [path])),
+      );
+      const rejectedIndex = requests.findIndex((request) => request.path === expiredPath);
+      expect(requests.map((request) => request.bearer)).toEqual(
+        requests.map((_, index) =>
+          index <= rejectedIndex ? "Bearer fixture-old" : "Bearer fixture-new",
+        ),
+      );
+      expect(resolveRequestHeaders.mock.calls.filter(([call]) => call.forceRefresh)).toHaveLength(
+        1,
+      );
+    },
+  );
+
   it("preserves configured query parameters through real batch upload, create, status, and output", async () => {
     const received: Array<{ url: string; authorization: string | undefined }> = [];
     const server = createServer((request, response) => {

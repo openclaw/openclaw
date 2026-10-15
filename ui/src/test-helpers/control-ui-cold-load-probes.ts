@@ -4,10 +4,20 @@ export function installColdLoadProbes(input: {
   frameGapMs: number;
   events: Array<{ event: string; payload: unknown }>;
 }) {
+  Reflect.set(Error, "stackTraceLimit", 40);
   const updates = new Map<string, { count: number; ms: number }>();
-  const rpcs: Array<{ method: string; requestBytes: number; responseBytes: number; ms: number }> =
-    [];
-  const pending = new Map<string, { method: string; bytes: number; at: number }>();
+  const rpcs: Array<{
+    method: string;
+    requestBytes: number;
+    responseBytes: number;
+    ms: number;
+    params: unknown;
+    stack: string | undefined;
+  }> = [];
+  const pending = new Map<
+    string,
+    { method: string; bytes: number; at: number; params: unknown; stack: string | undefined }
+  >();
   let lastActivity = performance.now();
   let queued = 0;
   let sentEvents = 0;
@@ -53,6 +63,8 @@ export function installColdLoadProbes(input: {
           if (frame.type === "req") {
             pending.set(frame.id, {
               method: frame.method,
+              params: frame.params,
+              stack: new Error().stack,
               bytes: new TextEncoder().encode(data).length,
               at: performance.now(),
             });
@@ -103,6 +115,8 @@ export function installColdLoadProbes(input: {
               pending.delete(frame.id);
               rpcs.push({
                 method: request.method,
+                params: request.params,
+                stack: request.stack,
                 requestBytes: request.bytes,
                 responseBytes: new TextEncoder().encode(event.data).length,
                 ms: performance.now() - request.at,

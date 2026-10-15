@@ -398,7 +398,7 @@ export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
                   </p>
                 ) : null}
               </div>
-              <div class="exec-approval-actions">
+              <openclaw-modal-actions class="exec-approval-actions">
                 <button type="button" class="btn" autofocus onClick={() => view().onClose()}>
                   {t("common.close")}
                 </button>
@@ -430,7 +430,7 @@ export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
                     )}
                   </button>
                 ) : null}
-              </div>
+              </openclaw-modal-actions>
             </section>
           </openclaw-modal-dialog>
         );

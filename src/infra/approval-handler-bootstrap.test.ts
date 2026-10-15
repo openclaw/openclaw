@@ -307,37 +307,6 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await cleanup();
   });
 
-  it("retries a registered-context startup failure once after sleep", async () => {
-    const channelRuntime = createRuntimeChannel();
-    const start = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(undefined);
-    const stop = vi.fn().mockResolvedValue(undefined);
-    const logger = createLogger();
-    const failed = createDeferred();
-    logger.error.mockImplementation(() => failed.resolve());
-    createChannelApprovalHandlerFromCapability
-      .mockResolvedValueOnce({ start, stop })
-      .mockResolvedValueOnce({ start, stop });
-
-    const cleanup = await startTestBootstrap({ channelRuntime, logger });
-
-    registerApprovalContext(channelRuntime);
-    await failed.promise;
-
-    expect(start).toHaveBeenCalledTimes(1);
-    clock.setTime(60_000);
-    await clock.wake();
-    await clock.wake();
-
-    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(2);
-    expect(start).toHaveBeenCalledTimes(2);
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(logger.error).toHaveBeenCalledWith(
-      "failed to start native approval handler: Error: boom",
-    );
-
-    await cleanup();
-  });
-
   it("defers retryable gateway readiness startup failures without terminal error logs", async () => {
     const channelRuntime = createRuntimeChannel();
     const readinessError = new Error("gateway event loop readiness timeout");

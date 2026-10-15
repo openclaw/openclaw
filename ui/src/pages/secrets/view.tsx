@@ -285,7 +285,7 @@ function SecretDialog(props: {
             {props.view.formError}
           </div>
         </Show>
-        <div class="secrets-store-dialog__actions">
+        <openclaw-modal-actions class="secrets-store-dialog__actions">
           <button
             class="btn primary"
             type="submit"
@@ -302,7 +302,7 @@ function SecretDialog(props: {
           <button class="btn" type="button" disabled={props.view.busy} onClick={close}>
             {t("common.cancel")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </form>
     </openclaw-modal-dialog>
   );

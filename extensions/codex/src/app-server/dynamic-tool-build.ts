@@ -517,7 +517,10 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     params.requireWorkspaceOnly === true ||
     params.pluginHarnessToolPolicyRestricted === true ||
     isCodexMemoryFlushRun(params) ||
-    params.disableTools
+    params.disableTools ||
+    // Codex's environment policy is a serialized overlay, not a launch binding.
+    // Let the common host tools own credentials, approvals, and process lifetime.
+    params.hostCapabilities.preparedEnvironment?.().hostExecutionRequired === true
   ) {
     return false;
   }

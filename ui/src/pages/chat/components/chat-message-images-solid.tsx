@@ -17,6 +17,7 @@ import {
 import {
   isManagedOutgoingMediaSource,
   loadAssistantAttachmentAvailability,
+  reportAssistantImageFailure,
   resolveAssistantAttachmentAvailability,
   retryAssistantAttachmentAvailability,
   retainAssistantImage,
@@ -138,7 +139,6 @@ class MessageImagePresentation {
       event.type === "error" &&
       !this.managed &&
       this.image?.url &&
-      !isLocalAssistantAttachmentSource(this.image.url) &&
       !isInlineImageSource(this.image.url)
     ) {
       this.failImage();
@@ -378,7 +378,15 @@ class MessageImagePresentation {
 
   private failImage() {
     this.releaseRetainedImage();
-    this.retained = { status: "unavailable" };
+    this.element = undefined;
+    if (this.image?.url && isLocalAssistantAttachmentSource(this.image.url)) {
+      reportAssistantImageFailure(this.image.url, {
+        ...this.options,
+        onRequestUpdate: this.options?.onRequestUpdate ? this.refreshImage : undefined,
+      });
+    } else {
+      this.retained = { status: "unavailable" };
+    }
     this.refreshImage();
   }
 

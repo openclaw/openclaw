@@ -123,11 +123,9 @@ async function settle(page: Page, enumerationId: number, rejectEnumeration = fal
   return page.evaluate(
     ({ id, reject }) => {
       const owner = document.querySelector("openclaw-config-page");
-      const pageId = owner ? Reflect.get(owner, "pageId") : undefined;
       const surface = {
         route: location.pathname,
         ownerConnected: owner?.isConnected ?? false,
-        ownerPageId: typeof pageId === "string" ? pageId : null,
         pageTitle:
           owner?.querySelector(".content-header--settings .page-title")?.textContent?.trim() ??
           null,
@@ -224,7 +222,7 @@ suite.define(() => {
           } else if (transition !== "stay") {
             await sidebar.locator('a[href="/settings/advanced"]').click();
             await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/advanced");
-            // History moves before the route module and Lit view commit. Retire the
+            // History moves before the route module and view commit. Retire the
             // actual Appearance surface before releasing its pending enumeration.
             const pageTitle = page.locator(
               "openclaw-config-page .content-header--settings .page-title",
@@ -247,7 +245,6 @@ suite.define(() => {
             expect(settlementSurface).toMatchObject({
               route: "/settings/advanced",
               ownerConnected: true,
-              ownerPageId: "advanced",
               pageTitle: "Advanced",
               appearancePickerCount: 0,
             });

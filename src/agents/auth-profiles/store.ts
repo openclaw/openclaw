@@ -190,7 +190,7 @@ export function applyScopedAuthReadThrough(store: AuthProfileStore): AuthProfile
   );
 }
 
-function isEnvOnlyAuthProfileRuntime(): boolean {
+export function isEnvOnlyAuthProfileRuntime(): boolean {
   return authProfileRuntimeMode.getStore()?.kind === "env-only";
 }
 

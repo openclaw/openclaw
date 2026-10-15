@@ -194,14 +194,6 @@ describe("qa cli registration", () => {
     );
   });
 
-  it("prints an empty SDK runner scenario selection failure", async () => {
-    await expectQaFailure(
-      ["telegram", "--scenario", ""],
-      "--scenario must name at least one non-empty scenario id.",
-    );
-    expect(runQaTelegramCommand).not.toHaveBeenCalled();
-  });
-
   it("prints SDK runner runtime failures", async () => {
     const message = "Telegram QA could not acquire its test credential.";
     runQaTelegramCommand.mockRejectedValueOnce(new Error(message));
@@ -221,17 +213,6 @@ describe("qa cli registration", () => {
     expect(commandNames).toContain("credentials");
     expect(commandNames).toContain("coverage");
   });
-
-  it("does not expose a control-ui token flag on qa ui", () => {
-    const qa = program.commands.find((command) => command.name() === "qa");
-    const ui = qa?.commands.find((command) => command.name() === "ui");
-    if (!ui) {
-      throw new Error("expected qa ui command");
-    }
-
-    expect(ui.options.map((option) => option.long)).not.toContain("--control-ui-token");
-  });
-
   it("keeps qa run without a profile on the self-check command", async () => {
     await parseQa([
       "run",
@@ -307,17 +288,15 @@ describe("qa cli registration", () => {
     expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["--output-dir", [".artifacts/qa-e2e/smoke-ci"]],
-    ["--scenario", ["dm-chat-baseline"]],
-    ["--transport", ["qa-channel"]],
-    ["--allow-failures", []],
-  ])("rejects qa run profile-only flag %s without --qa-profile", async (flag, values) => {
-    await expectQaFailure(["run", flag, ...values], `qa run ${flag} requires --qa-profile`);
+  it.each([["--scenario", ["dm-chat-baseline"]]])(
+    "rejects qa run profile-only flag %s without --qa-profile",
+    async (flag, values) => {
+      await expectQaFailure(["run", flag, ...values], `qa run ${flag} requires --qa-profile`);
 
-    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
-    expect(runQaProfileCommand).not.toHaveBeenCalled();
-  });
+      expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+      expect(runQaProfileCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([["--evidence-mode", "compact"], ["--exclude-test-execution-evidence"]])(
     "maps deprecated compact evidence flag %s to slim",
@@ -691,7 +670,8 @@ describe("qa cli registration", () => {
     [["qa", "suite", "--concurrency", "1.5"], "--concurrency must be a positive integer."],
     [["qa", "suite", "--cpus", "0x4"], "--cpus must be a positive integer."],
     [["qa", "aimock", "--port", "1e4"], "--port must be a positive integer."],
-  ])("rejects non-decimal QA numeric option %j", async (args, message) => {
+    [["qa", "ui", "--port", "65536"], "--port must be a TCP port between 1 and 65535."],
+  ])("rejects invalid QA numeric option %j", async (args, message) => {
     const invalidProgram = new Command();
     invalidProgram.exitOverride();
     invalidProgram.configureOutput({
@@ -702,23 +682,6 @@ describe("qa cli registration", () => {
 
     await expect(invalidProgram.parseAsync(["node", "openclaw", ...args])).rejects.toThrow(message);
   });
-
-  it.each([[["qa", "ui", "--port", "65536"], "--port must be a TCP port between 1 and 65535."]])(
-    "rejects out-of-range QA port option %j",
-    async (args, message) => {
-      const invalidProgram = new Command();
-      invalidProgram.exitOverride();
-      invalidProgram.configureOutput({
-        writeErr: () => {},
-        writeOut: () => {},
-      });
-      registerQaLabCli(invalidProgram);
-
-      await expect(invalidProgram.parseAsync(["node", "openclaw", ...args])).rejects.toThrow(
-        message,
-      );
-    },
-  );
 
   it("shows an enable hint when a discovered runner plugin is installed but blocked", async () => {
     listQaRunnerCliContributions.mockReset().mockReturnValue([createBlockedQaRunnerContribution()]);

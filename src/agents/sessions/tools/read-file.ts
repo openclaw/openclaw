@@ -6,8 +6,13 @@ import { isPathInside, safeRealpathSync } from "@openclaw/fs-safe/path";
 import { resolveStateDir } from "../../../config/state-dir.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../../../infra/runtime-worker-url.js";
-import { withCommandProcessScope } from "../../../process/exec-spawn.js";
+import {
+  resolveCommandProcessSignal,
+  withCommandProcessScope,
+} from "../../../process/exec-spawn.js";
 import { runCommandBuffered } from "../../../process/exec.js";
+import { getSpawnBroker } from "../../../process/spawn-broker/context.js";
+import { withChildProcessOperation } from "../../../process/spawn-diagnostics.js";
 import type { FileReadResult } from "./read-file.worker.js";
 
 function requiresIsolatedRead(filePath: string): boolean {
@@ -31,19 +36,26 @@ export async function readLocalFile(filePath: string, signal?: AbortSignal): Pro
     return (await readRegularFile({ filePath })).buffer;
   }
   // Closing a raw descriptor in any Gateway thread drops SQLite's POSIX locks on that inode.
+  const broker = getSpawnBroker();
+  if (broker) {
+    return await broker.readFile(filePath, resolveCommandProcessSignal(signal));
+  }
+  // Standalone CLI callers have no Gateway broker to retain a separate-process reader.
   return await withCommandProcessScope(async () => {
-    const result = await runCommandBuffered(
-      [
-        process.execPath,
-        ...resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("fileToolRead")),
-        filePath,
-      ],
-      {
-        input: "",
-        signal,
-        // Preserve fs.readFile's byte limit, including the serialized result envelope.
-        maxOutputBytes: { stdout: Number.MAX_SAFE_INTEGER, stderr: 64 * 1024 },
-      },
+    const result = await withChildProcessOperation("agent.file-read", () =>
+      runCommandBuffered(
+        [
+          process.execPath,
+          ...resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("fileToolRead")),
+          filePath,
+        ],
+        {
+          input: "",
+          signal,
+          // Preserve fs.readFile's byte limit, including the serialized result envelope.
+          maxOutputBytes: { stdout: Number.MAX_SAFE_INTEGER, stderr: 64 * 1024 },
+        },
+      ),
     );
     if (result.code !== 0 || result.termination !== "exit") {
       throw result.error ?? new Error(`File read failed: ${result.termination}`);

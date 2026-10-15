@@ -699,6 +699,42 @@ describe("controlUi.sessionPullRequests.checks", () => {
     });
   });
 
+  it.each(["before", "during"] as const)(
+    "denies missing-client reads when roles are enabled %s GitHub loading",
+    async (when) => {
+      await withOpenClawTestState({ label: "ci-details-missing-client-roles" }, async () => {
+        let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+        const enableRoles = () => {
+          cfg = { ...cfg, gateway: { roles: { definitions: {} } } };
+          setRuntimeConfigSnapshot(cfg);
+        };
+        setRuntimeConfigSnapshot(cfg);
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: params.sessionKey },
+          { sessionId: "role-bound-ci", updatedAt: 1, spawnedCwd: "/synthetic/ci" },
+        );
+        if (when === "before") {
+          enableRoles();
+        }
+        const load = vi.fn(async () => {
+          enableRoles();
+          return result;
+        });
+        const respond = vi.fn<RespondFn>();
+        await expectDefined(
+          createControlUiHandlers(undefined, load)["controlUi.sessionPullRequests.checks"],
+          "CI checks handler",
+        )(requestOptions(params, respond, { context: { getRuntimeConfig: () => cfg } }));
+        expect(load).toHaveBeenCalledTimes(when === "before" ? 0 : 1);
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+      });
+    },
+  );
+
   it.each([{ incognito: true as const }, { visibility: "draft" as const }])(
     "does not expose a hidden session to another profile: %j",
     async (hidden) => {

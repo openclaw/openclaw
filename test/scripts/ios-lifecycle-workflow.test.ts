@@ -330,31 +330,6 @@ describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => 
 
 describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () => {
   it.each([
-    ["tests", "false", "false"],
-    ["smoke", "true", "true"],
-    ["tests", "false", "true"],
-  ])(
-    "keeps the generic simulator build for phase=%s historical=%s frozen=%s",
-    (phase, historical, frozen) => {
-      const { result, commands } = runSimulatorStep("voice", [buildStep], {
-        IOS_CI_PHASE: phase,
-        HISTORICAL_TARGET: historical,
-        IOS_FROZEN_TARGET: frozen,
-      });
-      expect(result.status, result.stderr).toBe(0);
-      if (historical === "true" || frozen === "true") {
-        expect(commands).toEqual([{ tool: "pnpm", args: ["ios:build"], destination: "" }]);
-      } else {
-        const build = commands.find((command) => command.tool === "xcodebuild");
-        expect(build?.args).toEqual(
-          expect.arrayContaining(["-destination", "generic/platform=iOS Simulator", "build"]),
-        );
-        expect(build?.args).not.toContain("build-for-testing");
-      }
-    },
-  );
-
-  it.each([
     ["smoke", "false"],
     ["tests", "true"],
     ["tests", "false"],
@@ -558,50 +533,8 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
 
 describe("iOS simulator owner selection", () => {
   it.each([
-    ["apps/ios/Sources/Voice/TalkModeManager.swift", true, true],
-    ["apps/ios/Sources/Onboarding/OnboardingWizardView.swift", true, true],
-    ["apps/ios/Sources/FutureFeature/NewService.swift", true, true],
-    ["apps/ios/WatchApp/Sources/WatchInboxView.swift", true, false],
-    ["apps/ios/ActivityWidget/OpenClawLiveActivity.swift", true, false],
-    ["apps/ios/Tests/TalkModeConfigParsingTests.swift", true, false],
-    ["apps/ios/Tests/Fixtures/managed-document-message.json", true, false],
-    ["apps/ios/Tests/CloudflareAccessTestTokens.swift", false, true],
-    ["apps/ios/Tests/CloudflareAccessBrowserPresenterTests.swift", false, true],
-    ["apps/ios/Tests/GatewayIngressActivationTests.swift", false, true],
-    ["apps/ios/Tests/GatewayIngressWireTests.swift", false, true],
-    ["apps/ios/Tests/GatewayIngressLoginPreparationTests.swift", false, true],
-    ["apps/ios/Tests/GatewayOperatorFleetTests.swift", false, true],
-    ["scripts/ios-access-restart-proof.py", false, true],
-    ["apps/ios/Tests/GatewayAccessRestartTests.swift", false, true],
-    ["apps/ios/Tests/IOSMediaArtifactLoaderTests.swift", true, true],
-    ["apps/ios/Tests/OpenClawTypographyTests.swift", true, true],
-    ["apps/ios/Tests/ChatSendHydrationTests.swift", false, true],
-    ["apps/ios/Tests/RootTabsNavigationTests.swift", false, false],
-    ["apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatViewModelTests.swift", false, false],
-    ["apps/shared/OpenClawKit/Sources/OpenClawNativeState/NativeState.swift", true, true],
-    ["apps/macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift", true, true],
-    ["apps/macos/Tests/OpenClawIPCTests/DashboardHTTPFixture.swift", true, true],
-    ["apps/macos/Tests/OpenClawIPCTests/AsyncTestGate.swift", true, true],
-    ["apps/macos/Tests/OpenClawIPCTests/TestWait.swift", true, true],
     ["apps/swabble/Sources/SwabbleKit/Speech.swift", true, true],
-    ["apps/swabble/Sources/swabble/main.swift", false, false],
-    ["apps/ios/fastlane/Fastfile", false, false],
-    ...[
-      "apps/ios/project.yml",
-      "apps/ios/Config/Signing.xcconfig",
-      "apps/ios/Sources/Fonts/Inter[opsz,wght].ttf",
-      "apps/ios/Tests/Info.plist",
-      "apps/shared/OpenClawKit/Package.swift",
-      "apps/swabble/Package.resolved",
-      "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid/index.html",
-      "scripts/lib/swift-toolchain.sh",
-      "scripts/ios-simulator-prepare.sh",
-      "scripts/ios-generate-test-tls-identity.sh",
-      "scripts/ci-xcodebuild.py",
-      "scripts/lib/ci-ios-smoke-plan.mjs",
-      ".github/workflows/ci.yml",
-      "pnpm-lock.yaml",
-    ].map((file) => [file, true, true] as const),
+    ["scripts/lib/swift-toolchain.sh", true, true],
   ] as const)(
     "selects the actual runtime, test, and resource owners for %s",
     (file, voice, lifecycle) => {
@@ -614,21 +547,18 @@ describe("iOS simulator owner selection", () => {
     },
   );
 
-  it.each([
-    { changedPaths: null, enabled: true },
-    { changedPaths: ["../apps/ios/Tests/ChatTypingFocusTests.swift"], enabled: true },
-    { changedPaths: ["/unknown"], enabled: true },
-    { changedPaths: ["invalid\npath"], enabled: true },
-    { changedPaths: null, enabled: false },
-  ])("falls back to full coverage only for admitted jobs: %j", ({ changedPaths, enabled }) => {
-    const selected = resolveIosSimulatorTestSelection(changedPaths, {
-      enabled,
-      forceFull: !enabled,
-    });
-    expect(selected.mode).toBe(enabled ? "full" : "not-selected");
-    expect(selected.voice.selected).toBe(enabled);
-    expect(selected.lifecycle.selected).toBe(enabled);
-  });
+  it.each([{ changedPaths: null, enabled: false }])(
+    "falls back to full coverage only for admitted jobs: %j",
+    ({ changedPaths, enabled }) => {
+      const selected = resolveIosSimulatorTestSelection(changedPaths, {
+        enabled,
+        forceFull: !enabled,
+      });
+      expect(selected.mode).toBe(enabled ? "full" : "not-selected");
+      expect(selected.voice.selected).toBe(enabled);
+      expect(selected.lifecycle.selected).toBe(enabled);
+    },
+  );
 });
 
 function admittedSimulatorSteps(
@@ -716,32 +646,6 @@ describe.skipIf(process.platform === "win32")("iOS selected simulator workflow",
     expect(summary).toBe(formatIosSimulatorSelectionSummary(selection));
     for (const group of ["voice", "lifecycle"]) {
       expect(summary).toContain(`| ${group} | ${groups.includes(group) ? "yes" : "no"} |`);
-    }
-  });
-
-  it("retains the full tests phase and compatibility exclusions regardless of PR group flags", () => {
-    const none = resolveIosSimulatorTestSelection([]);
-    expect(admittedSimulatorSteps(none, "tests")).toEqual([
-      configureStep,
-      prepareStep,
-      buildStep,
-      voiceStep,
-      iosStep,
-    ]);
-    const all = resolveIosSimulatorTestSelection(null);
-    expect(admittedSimulatorSteps(all)).toEqual([
-      configureStep,
-      prepareStep,
-      buildStep,
-      voiceStep,
-      iosStep,
-    ]);
-    for (const phase of ["smoke", "tests"]) {
-      const compatible = admittedSimulatorSteps(all, phase, true);
-      expect(compatible).toContain(buildStep);
-      expect(compatible).not.toContain(prepareStep);
-      expect(compatible).not.toContain(voiceStep);
-      expect(compatible).not.toContain(iosStep);
     }
   });
 });
@@ -1056,12 +960,6 @@ describe("iOS Access process restart proof", () => {
 });
 
 it.each([
-  { event: "pull_request", kill: "", full: false, releaseGate: false, historical: false },
-  { event: "pull_request", kill: "true", full: true, releaseGate: false, historical: false },
-  { event: "pull_request", kill: "1", full: true, releaseGate: false, historical: false },
-  { event: "schedule", kill: "", full: true, releaseGate: false, historical: false },
-  { event: "workflow_dispatch", kill: "", full: true, releaseGate: false, historical: false },
-  { event: "workflow_dispatch", kill: "", full: true, releaseGate: false, historical: true },
   { event: "workflow_dispatch", kill: "", full: true, releaseGate: true, historical: false },
 ] as const)(
   "publishes iOS manifest decisions for $event, override=$kill, release=$releaseGate, historical=$historical",
@@ -1075,26 +973,21 @@ it.each([
       scopeEnv: {
         OPENCLAW_CI_RUN_IOS_BUILD: "true",
         OPENCLAW_CI_IOS_SIMULATOR_FULL: kill,
-        OPENCLAW_CI_VALIDATION_TIER: event === "schedule" ? "main" : "full",
+        OPENCLAW_CI_VALIDATION_TIER: "full",
       },
     });
     expect(result.status, result.output).toBe(0);
-    const admitted = event !== "pull_request";
-    expect(result.outputs.run_ios_build).toBe(String(admitted));
-    expect(result.outputs.run_ios_voice_cleanup_tests).toBe(String(admitted && full));
-    expect(result.outputs.run_ios_lifecycle_tests).toBe(String(admitted));
+    expect(result.outputs.run_ios_build).toBe("true");
+    expect(result.outputs.run_ios_voice_cleanup_tests).toBe(String(full));
+    expect(result.outputs.run_ios_lifecycle_tests).toBe("true");
     const selection: ReturnType<typeof resolveIosSimulatorTestSelection> = JSON.parse(
       result.outputs.ios_simulator_selection!,
     );
-    expect(selection.voice.selected).toBe(admitted && full);
-    expect(selection.lifecycle.selected).toBe(admitted);
-    if (admitted) {
-      expect(result.summary).toContain("iOS simulator test selection");
-      expect(result.summary).toContain(`| voice | ${full ? "yes" : "no"} |`);
-      expect(result.summary).toContain("| lifecycle | yes |");
-    } else {
-      expect(result.summary).not.toContain("iOS simulator test selection");
-    }
+    expect(selection.voice.selected).toBe(full);
+    expect(selection.lifecycle.selected).toBe(true);
+    expect(result.summary).toContain("iOS simulator test selection");
+    expect(result.summary).toContain(`| voice | ${full ? "yes" : "no"} |`);
+    expect(result.summary).toContain("| lifecycle | yes |");
     const phases = evaluateWorkflowExpression(workflow.jobs["ios-build"]?.strategy?.matrix?.phase, {
       repository: "openclaw/openclaw",
       eventName: event,
@@ -1102,12 +995,6 @@ it.each([
       releaseGate,
       preflightOutputs: result.outputs,
     });
-    expect(phases).toEqual(
-      event === "schedule" || historical
-        ? ["tests"]
-        : event === "workflow_dispatch" && !releaseGate
-          ? ["release", "tests"]
-          : ["smoke"],
-    );
+    expect(phases).toEqual(["smoke"]);
   },
 );

@@ -20,6 +20,8 @@ export type DiagnosticRuntimeMeasurementFields =
       kind?: GcSample["kind"];
       /** main or an allowlisted worker script basename (other for unknown scripts). */
       thread?: string;
+      /** Reusable Code Mode isolate slot (1–64), owned until native worker exit. */
+      workerSlot?: number;
     };
 
 export type DiagnosticWorkerRequestFields = {
@@ -90,6 +92,8 @@ export type DiagnosticMemoryUsage = {
     /** Actual V8 isolate limit; unavailable on runtimes without V8. */
     heapSizeLimitBytes?: number;
     threadId?: number;
+    /** Same bounded slot as diagnostic.gc; absent for overflow and other scripts. */
+    workerSlot?: number;
     external?: number;
     /** Missing for native-only samplers; zero is a measured value. Included in external. */
     arrayBuffers?: number;

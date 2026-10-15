@@ -158,8 +158,6 @@ export function createGatewayWorkerPlacementRuntime(
   });
   const runMoveBarrier = createGatewayWorkerPlacementMoveBarrier({
     placements: params.placements,
-    awaitTurnClaimRelease: (sessionId, wait) =>
-      dispatchService.awaitTurnClaimRelease(sessionId, wait),
     loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
     persistAbandonedPartial: params.persistAbandonedPartial,
     revokeSessionAuthority: params.revokeSessionAuthority,
@@ -235,8 +233,6 @@ export function createGatewayWorkerPlacementRuntime(
       ...reclaimBarriers,
       runLocalBarrier: createGatewayWorkerPlacementLocalDispatchBarrier({
         placements: params.placements,
-        awaitTurnClaimRelease: (sessionId, wait) =>
-          dispatchService.awaitTurnClaimRelease(sessionId, wait),
         revokeSessionAuthority: params.revokeSessionAuthority,
       }),
       runActivationBarrier: async ({ authorize, activate, ...identity }) =>

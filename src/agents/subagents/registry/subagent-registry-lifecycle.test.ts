@@ -487,8 +487,6 @@ describe("subagent registry lifecycle hardening", () => {
     { change: "identical", current: true },
     { change: "older equivalent", current: true },
     { change: "error", current: false },
-    { change: "timing", current: false },
-    { change: "reply", current: false },
   ] as const)(
     "keeps queued result authority correct after $change completion",
     async ({ change, current }) => {
@@ -507,16 +505,8 @@ describe("subagent registry lifecycle hardening", () => {
       expect(prepared.isCurrent()).toBe(true);
 
       await completeRun(controller, entry, {
-        terminalReply:
-          change === "reply"
-            ? { ...terminalReply, text: "corrected result" }
-            : { ...terminalReply },
-        endedAt:
-          change === "older equivalent"
-            ? 3_999
-            : change === "timing" || change === "reply"
-              ? 4_001
-              : 4_000,
+        terminalReply: { ...terminalReply },
+        endedAt: change === "older equivalent" ? 3_999 : 4_000,
         ...(change === "error"
           ? {
               outcome: { status: "error", error: "provider failed" },

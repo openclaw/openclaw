@@ -151,7 +151,8 @@ ticket; replacing the file or restarting the Gateway requires a new allowance.
 When gateway auth is configured, assistant local-media previews use a two-step route:
 
 - `GET /__openclaw__/assistant-media?meta=1&source=<path>&sessionKey=<key>&agentId=<id>` requires the normal Control UI operator auth and access to the selected session; the browser sends the gateway token as a bearer header when checking availability.
-- Successful metadata responses include a short-lived `mediaTicket` scoped to the file and session. Explicit outside-image allowances use an authenticated administrator `POST` to the same route with `meta=1&allow=1`.
+- Saved message attachments also carry `messageId`. Readers with `operator.sessions.read` can open an attachment only when its current, visible message belongs to a conversation they can read, including retained queued or stopped inputs. The Gateway verifies the source against that message’s saved attachment references or supported assistant media directives; a session key or filename alone never grants file access. These reads retain the same filesystem restrictions. Standalone file reads still require `operator.read`.
+- Successful metadata responses include a short-lived `mediaTicket` scoped to the file, session, and message when applicable. Explicit outside-image allowances use an authenticated administrator `POST` to the same route with `meta=1&allow=1`.
 - Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
 
 Tickets remain bound to the issuing reader's current access. Losing session
@@ -161,6 +162,8 @@ before they expire.
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 
 Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. That failure tolerance applies only to the mounted image; it does not extend its media ticket or authorize fresh reads. Scrolling can reuse a successfully decoded image from the bounded in-memory preview cache while its existing metadata and ticket remain valid, without another image download or loading placeholder. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image. When the UI receives a sharing invalidation, a role-configuration change, or the connection close for a role reassignment, cached previews must pass fresh admission before remounting.
+
+If uploaded or local image bytes fail to load or decode after the availability check succeeds, the broken preview becomes an **Unavailable** card with **Retry**. Native image errors do not reveal the HTTP status, so the UI does not automatically repeat the byte request. **Retry** checks current availability and access before loading the image again; it does not grant an outside-folder allowance or extend an existing ticket.
 
 Uploaded images also stay visible while a new session's workspace or worktree details arrive. Media access is rechecked in the background without replacing the loaded preview with a loading card.
 

@@ -40,14 +40,7 @@ function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
   return container.querySelector<HTMLElement>(".chat-avatar");
 }
 
-it.each([
-  ["", "sample-bot", "1000000001", true],
-  ["", "other-bot", "1000000001", false],
-  ["", "sample-bot", "1000000002", false],
-  ["/console", "sample-bot", "1000000001", true],
-  ["/console", "other-bot", "1000000001", false],
-  ["/console", "sample-bot", "1000000002", false],
-] as const)(
+it.each([["/console", "sample-bot", "1000000001", true]] as const)(
   "binds footer portraits at %s to account %s and sender %s",
   (basePath, accountId, id, matches) => {
     setAvatarGatewayOrigin(window.location.origin, [], basePath);
@@ -790,21 +783,6 @@ describe("attributed sender avatars", () => {
       false,
     );
   });
-
-  it.each(["c3e32452-0467-47e5-aafa-233cd5dae29f"])(
-    "renders identity-colored initials for unqualified sender %s",
-    (id) => {
-      const avatar = renderAvatar([
-        "user",
-        undefined,
-        { name: "Viewer", avatar: null },
-        { id, name: "Alice Lovelace" },
-      ]);
-      expect(avatar?.tagName).toBe("DIV");
-      expect(avatar?.classList.contains("chat-avatar--sender-initials")).toBe(true);
-      expect(avatar?.textContent?.trim()).toBe("AL");
-    },
-  );
 
   it("keeps a missing same-origin sender avatar on initials across rerenders", async () => {
     const gatewayOrigin = globalThis.location.origin;

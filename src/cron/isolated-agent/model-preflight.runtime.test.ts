@@ -158,16 +158,18 @@ describe("preflightCronModelProvider", () => {
   });
 
   it("includes DNS resolution in the same deadline", async () => {
-    const lookup = vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementationOnce(
-      (_hostname, { signal } = {}) =>
-        new Promise((_resolve, reject) => {
+    const lookup = vi
+      .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
+      .mockImplementationOnce((_hostname, options = {}) => {
+        const { signal } = options;
+        return new Promise((_resolve, reject) => {
           signal?.addEventListener(
             "abort",
             () => reject(new Error("DNS lookup canceled", { cause: signal.reason })),
             { once: true },
           );
-        }),
-    );
+        });
+      });
     try {
       const pending = preflightCronModelProvider(makeLocalPreflightParams("ollama"));
       await vi.advanceTimersByTimeAsync(2500);

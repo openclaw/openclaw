@@ -241,7 +241,7 @@ export class LazyCustomElementRequestController {
 export const COMMAND_PALETTE_ELEMENT = {
   tagName: "openclaw-command-palette",
   label: "command palette",
-  loadModule: () => import("../components/command-palette.ts"),
+  loadModule: () => import("../components/command-palette.tsx"),
 } satisfies OptionalCustomElement;
 
 export const DEBUG_OVERLAY_ELEMENT = {
@@ -273,7 +273,7 @@ const MACOS_TITLEBAR_TAG = "openclaw-macos-titlebar-controls";
 export const MACOS_TITLEBAR_ELEMENT = {
   tagName: MACOS_TITLEBAR_TAG,
   label: MACOS_TITLEBAR_TAG,
-  loadModule: () => import("../components/macos-titlebar-controls.runtime.ts"),
+  loadModule: () => import("../components/macos-titlebar-controls.runtime-solid.tsx"),
 } satisfies OptionalCustomElement;
 
 export const SIDEBAR_ATTENTION_ELEMENT = {

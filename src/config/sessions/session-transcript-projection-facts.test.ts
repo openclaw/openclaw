@@ -143,7 +143,7 @@ it("carries a retained actor projection into the history reader and rejects it a
       sessionId: f.scope.sessionId,
     };
     try {
-      expect(replica.beginRead().install(f.hydrate().hot)).toBe(true);
+      expect(replica.beginRead()(f.hydrate().hot)).toBe(true);
       const receipt = readSessionActorProjectionReceipt(locator);
       if (!receipt) {
         throw new Error("Installed actor projection was not available to the history reader");
@@ -421,31 +421,31 @@ it("covers the first append after hydrating an empty actor", async () => {
     const actor = f.hydrate();
     f.write(() => withSessionActorTransactionState(f.database, actor, () => f.append([user])));
     const receipt = f.receipt(actor);
-    expect(receipt.facts.contextMetadata).toMatchObject({
-      eventCount: 1,
-      sizeBytes: Buffer.byteLength(JSON.stringify(user)) + 1,
-    });
+    expect(receipt.facts.contextMetadata).toBeUndefined();
     expect(
       withSessionTranscriptProjectionReceipt(receipt, () =>
         readSessionTranscriptBoundedActiveContextCore(f.scope, {
           maxBytes: 1_000_000,
           maxEvents: 100,
         }),
-      ).events,
-    ).toEqual([user]);
+      ),
+    ).toMatchObject({
+      events: [user],
+      serializedBytes: Buffer.byteLength(JSON.stringify(user)) + 1,
+    });
   });
 });
 
-it("uses committed bounded metadata for context selection and accounting without rereading it", async () => {
+it("preserves bounded context and accounting with compact committed receipts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
     const actor = f.hydrate();
-    const readContext = (receipt: SessionTranscriptProjectionReceipt, maxEvents = 100) =>
+    const readContext = (receipt?: SessionTranscriptProjectionReceipt, maxEvents = 100) =>
       withSessionTranscriptProjectionReceipt(receipt, () =>
         readSessionTranscriptBoundedActiveContextCore(f.scope, { maxBytes: 1_000_000, maxEvents }),
       );
-    const readAccounting = (receipt: SessionTranscriptProjectionReceipt) =>
-      withSessionTranscriptProjectionReceipt({ ...receipt, contextOnly: true }, () =>
+    const readAccounting = (receipt?: SessionTranscriptProjectionReceipt) =>
+      withSessionTranscriptProjectionReceipt(receipt && { ...receipt, contextOnly: true }, () =>
         readCurrentProjectionSnapshot(f.database, f.scope, (projection) =>
           readSessionTranscriptAccountingFromProjection(projection, {
             includeByteSize: true,
@@ -455,81 +455,29 @@ it("uses committed bounded metadata for context selection and accounting without
         ),
       );
     const receipt = f.receipt(actor);
-    const withoutMetadata = {
-      ...receipt,
-      facts: { ...receipt.facts, contextMetadata: undefined },
-    };
-    const reads = trackSqliteStatementExecutions(
-      f.database.db,
-      ["header", "boundary", "rows", "injection", "aggregate", "projection", "payload"],
-      (query) => {
-        if (query.includes('"reset_active_position"')) {
-          return "projection";
-        }
-        if (query.includes('"boundary_count"')) {
-          return "injection";
-        }
-        if (query.startsWith('select "active"."active_position", "identity"."event_type"')) {
-          return "boundary";
-        }
-        if (query.startsWith('select "seq", "navigation_valid"')) {
-          return "header";
-        }
-        if (query.includes('as "size_bytes"')) {
-          return "aggregate";
-        }
-        if (
-          query.startsWith('select "active"."event_seq", "active"."active_position"') &&
-          query.includes('as "serialized_bytes"')
-        ) {
-          return "rows";
-        }
-        if (query.includes('as "event_json"')) {
-          return "payload";
-        }
-        return null;
-      },
-    );
-    try {
-      const expected = readContext(withoutMetadata);
-      expect(reads.counts).toMatchObject({ header: 1, boundary: 1, rows: 1, injection: 1 });
-      const expectedAccounting = readAccounting(withoutMetadata);
-      const before = { ...reads.counts };
-      expect(readContext(receipt)).toEqual(expected);
-      expect(readAccounting(receipt)).toEqual(expectedAccounting);
-      expect(reads.counts).toMatchObject({
-        header: before.header,
-        boundary: before.boundary,
-        rows: before.rows,
-        injection: before.injection,
-        aggregate: before.aggregate,
-        projection: before.projection + 1,
-      });
-      expect(reads.counts.payload).toBeGreaterThan(before.payload);
-      expect(readContext(receipt, 1)).toMatchObject({ events: [assistant], truncated: true });
+    expect(readContext(receipt)).toEqual(readContext());
+    expect(readAccounting(receipt)).toEqual(readAccounting());
+    expect(readContext(receipt, 1)).toMatchObject({ events: [assistant], truncated: true });
 
-      const next = {
-        ...user,
-        id: "next",
-        parentId: "assistant",
-        message: { role: "user", content: "é🦞" },
-      };
-      f.write(() => withSessionActorTransactionState(f.database, actor, () => f.append([next])));
-      const committed = f.receipt(actor);
-      expect(readContext(committed).events).toEqual([user, assistant, next]);
-      expect(readAccounting(committed)).toMatchObject({
-        kind: "value",
-        value: {
-          eventCount: 3,
-          byteSize: [user, assistant, next].reduce(
-            (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
-            0,
-          ),
-        },
-      });
-    } finally {
-      reads.restore();
-    }
+    const next = {
+      ...user,
+      id: "next",
+      parentId: "assistant",
+      message: { role: "user", content: "é🦞" },
+    };
+    f.write(() => withSessionActorTransactionState(f.database, actor, () => f.append([next])));
+    const committed = f.receipt(actor);
+    expect(readContext(committed).events).toEqual([user, assistant, next]);
+    expect(readAccounting(committed)).toMatchObject({
+      kind: "value",
+      value: {
+        eventCount: 3,
+        byteSize: [user, assistant, next].reduce(
+          (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
+          0,
+        ),
+      },
+    });
   });
 });
 

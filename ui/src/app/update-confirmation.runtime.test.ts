@@ -625,6 +625,8 @@ it.each([
         await flushMicrotasks();
         await operation;
       }
+      const retainedView = modal.querySelector(".update-run-view");
+      expect(retainedView).not.toBeNull();
       // Reconnect the same target before exercising recovery from its retained report.
       harness.update({ phase: "reconnecting", selfUser: undefined });
       harness.update({ phase: "connected", selfUser: undefined });
@@ -633,10 +635,20 @@ it.each([
       rejectRunReads = true;
       harness.emitEvent("update.run.changed", { ...run, updatedAtMs: run.updatedAtMs + 1 });
       await flushMicrotasks();
-      const view = modal.querySelector<HTMLElement & { run: unknown }>("openclaw-update-run-view")!;
       flush();
+      const view = modal.querySelector(".update-run-view")!;
       expect(modal.textContent).toContain("Run status read failed");
-      expect(view.run).toEqual(run);
+      expect(view).toBe(retainedView);
+      expect(view.getAttribute("data-run-id")).toBe(run.runId);
+      expect(view.getAttribute("data-run-status")).toBe(status);
+      expect(view.querySelector("h3")?.textContent).toContain(
+        status === "running"
+          ? "OpenClaw update in progress: verifying"
+          : status === "succeeded"
+            ? "OpenClaw updated"
+            : `OpenClaw update ${status}`,
+      );
+      const reportText = view.textContent;
       const check = findButton("Check status");
       expect(check.disabled).toBe(false);
       if (status !== "failed") {
@@ -667,7 +679,8 @@ it.each([
       flush();
       expect(modal.textContent).not.toContain("Run status read failed");
       expect(modal.querySelector('[role="status"]')?.textContent).toContain("Status refreshed.");
-      expect(view.run).toEqual(run);
+      expect(modal.querySelector(".update-run-view")).toBe(view);
+      expect(view.textContent).toBe(reportText);
       expect(checkoutReads()).toHaveLength(checkoutReadsBeforeCheck + 1);
 
       statusResponse = Promise.reject(new Error("Status refresh unavailable"));
@@ -679,13 +692,15 @@ it.each([
       );
       expect(modal.textContent).not.toContain("Status refreshed.");
       expect(findButton("Check status").disabled).toBe(false);
-      expect(view.run).toEqual(run);
+      expect(modal.querySelector(".update-run-view")).toBe(view);
+      expect(view.textContent).toBe(reportText);
       statusResponse = Promise.resolve();
       findButton("Check status").click();
       await statusOperation;
       flush();
       expect(modal.textContent).not.toContain("Could not check for updates");
-      expect(view.run).toEqual(run);
+      expect(modal.querySelector(".update-run-view")).toBe(view);
+      expect(view.textContent).toBe(reportText);
       harness.update({ phase: "connecting", client: null });
       await flushMicrotasks();
       expect(findButton("Check status").disabled).toBe(true);
