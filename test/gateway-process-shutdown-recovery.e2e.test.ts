@@ -73,7 +73,8 @@ function writePartial(response: ServerResponse, scenario: Scenario, ordinal: num
 
 function nodeCommand(source: string): string {
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-  return `${quote(process.execPath)} -e ${quote(source)}`;
+  // This fixture owns one tool process; descendant-tree cleanup has separate coverage.
+  return `exec ${quote(process.execPath)} -e ${quote(source)}`;
 }
 
 function writeExec(response: ServerResponse, command: string, ordinal: number) {

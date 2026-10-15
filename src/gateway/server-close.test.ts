@@ -1062,9 +1062,7 @@ describe("createGatewayCloseHandler", () => {
       );
       expect(drainActiveSessionsForShutdown).toHaveBeenCalledOnce();
       expect(firstMockCall(drainActiveSessionsForShutdown)?.[0]?.reason).toBe(reason);
-      expect(order).toStrictEqual(
-        reason === "restart" ? ["reply-drain", "session-end"] : ["session-end"],
-      );
+      expect(order).toStrictEqual(["reply-drain", "session-end"]);
       expect(result.warnings.includes("session-end-drain")).toBe(timedOut);
     },
   );
