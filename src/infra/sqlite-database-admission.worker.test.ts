@@ -586,7 +586,7 @@ it("shares admission published after dispatch with existing isolates and revalid
     expect(replacement.sql.length).toBeGreaterThan(0);
     const sharedReplacement = await first!.execute({ type: "read", input: { path: location } });
     expect(sharedReplacement.values).toEqual([43]);
-    expect(sharedReplacement.sql).toEqual(replacement.sql);
+    expect(sharedReplacement.sql).toEqual([]);
 
     const holder = openNodeSqliteDatabase(location);
     admitSqliteSchema(holder);
