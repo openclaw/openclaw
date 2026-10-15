@@ -14,6 +14,12 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  preparePendingAgentDatabase,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
+import { withAgentDatabasePreparationContext } from "../state/agent-database-preparation-context.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -166,6 +172,47 @@ function lastNotification() {
 }
 
 describe("background exec completion obligations", () => {
+  it("rescans pending stores after their admission owner completes", async () => {
+    await withFixture(async ({ background, recover, read }) => {
+      await background();
+      rotateAgentEventLifecycleGeneration();
+      const refusal = createAgentDatabaseInspectionRefusal({
+        agentId: "main",
+        paths: [resolveSessionStorePathCore(undefined, { agentId: "main" })],
+        reason: "synthetic pending unclean-close inspection",
+        pending: true,
+      });
+      recordAgentDatabaseAdmissions([refusal]);
+      const joined = createDeferredCore();
+      const prepared = createDeferredCore();
+      const recovery = withAgentDatabasePreparationContext(
+        () => ({
+          waitForAgentPreparation: () => {
+            joined.resolve();
+            return prepared.promise;
+          },
+        }),
+        () => recover(),
+      );
+      try {
+        await Promise.race([joined.promise, recovery]);
+        expect(enqueue).not.toHaveBeenCalled();
+        await preparePendingAgentDatabase(refusal, { assertCurrent: () => {} }, async () => {});
+        prepared.resolve();
+        await recovery;
+        expect(enqueue).toHaveBeenCalledTimes(1);
+        await lastNotification().options.onAdopted?.();
+        await recover();
+        expect(enqueue).toHaveBeenCalledTimes(1);
+        expect((await read())?.pendingExecNotifications).toBeUndefined();
+      } finally {
+        prepared.resolve();
+        await recovery;
+        recordAgentDatabaseAdmissions([]);
+      }
+    });
+  });
+
   it("records a compact durable obligation without command text, environment or output", async () => {
     await withFixture(async ({ background, read }) => {
       const process = await background();
