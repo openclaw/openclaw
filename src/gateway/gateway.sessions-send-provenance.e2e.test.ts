@@ -94,9 +94,10 @@ async function verifyRegisteredRequesterPolicy(signal: AbortSignal) {
   for (const spec of cases) {
     const sourceKey = `agent:${spec.agent}:telegram:direct:provenance-${spec.id === "allowed" ? "denied" : spec.id}`;
     const scenario = createScenario(spec, sourceKey);
-    using _diagnostic = addAbortListener(signal, () => {
+    using diagnostic = addAbortListener(signal, () => {
       process.stderr.write(`[provenance proof aborted] requester case=${spec.id}\n`);
     });
+    void diagnostic;
     let incumbent: Promise<unknown> | undefined;
     let source: ReturnType<typeof runProofIngress> | undefined;
     let changedQueuedPolicy = false;
@@ -825,7 +826,7 @@ async function verifyCrossHumanAdmission(
   let alice: ReturnType<typeof runHuman> | undefined;
   let bob: ReturnType<typeof runHuman> | undefined;
   let stage = "queue-setting application";
-  using _diagnostic = addAbortListener(signal, () => {
+  using diagnostic = addAbortListener(signal, () => {
     process.stderr.write(
       `[provenance proof aborted] ${JSON.stringify({
         case: id,
@@ -839,6 +840,7 @@ async function verifyCrossHumanAdmission(
       })}\n`,
     );
   });
+  void diagnostic;
   using steering = await observeProofSteeringAdmission(scenario.sourcePrompt);
   // Disposal retains a body failure when restoring config also fails.
   await using _ = {
@@ -988,9 +990,10 @@ it(
   async ({ signal }) => {
     let phase = "registered requester policy";
     // Native timeout can win over wrapped errors from an awaited scenario.
-    using _diagnostic = addAbortListener(signal, () => {
+    using diagnostic = addAbortListener(signal, () => {
       process.stderr.write(`[provenance proof aborted] phase=${phase}\n`);
     });
+    void diagnostic;
     await verifyRegisteredRequesterPolicy(signal);
     phase = "native spawn";
     await verifyNativeSpawnRequester(signal, false);
