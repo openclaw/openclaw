@@ -592,6 +592,8 @@ export function createSessionsSpawnTool(
           agentTo: opts?.agentTo,
           agentThreadId: opts?.agentThreadId,
           currentChannelId: opts?.currentChannelId,
+          currentThreadTs: opts?.currentThreadTs,
+          currentConversationOrigin: opts?.currentConversationOrigin,
           currentMessageId: opts?.currentMessageId,
           agentGroupSpace: opts?.agentGroupSpace,
           agentMemberRoleIds: opts?.agentMemberRoleIds,

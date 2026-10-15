@@ -103,6 +103,7 @@ export function ensureReplicaSubscription(): void {
     const publishedKey =
       !("all" in change) && !change.factsInvalidated ? change.sessionKey : undefined;
     const created = publishedKey ? readPreparedSessionEntryChange(change, publishedKey) : undefined;
+    const source = readPreparedSessionEntryPublicationSource(change);
     if (publishedKey && created?.fullEntry && typeof created.source.identity === "string") {
       const target: FileTarget = {
         sessionKey: publishedKey,
@@ -139,21 +140,13 @@ export function ensureReplicaSubscription(): void {
       const { database, sessionKey } = cell.target;
       if (
         database.kind !== "file" ||
-        !sessionChangeAffectsStoredRow(change, {
-          sessionKeys: collectSessionEntryLookupKeys(sessionKey),
-          storePaths: new Set([database.nativeLocation]),
-          databaseIdentities: new Set([database.physicalIdentity]),
-        })
+        !sessionChangeAffectsStoredRow(change, cell.publicationScope)
       ) {
         continue;
       }
       // A command's partial publication precedes its full receipt. Its native
       // token rejects superseded postimages without cancelling that receipt.
-      const prepared =
-        !("all" in change) && !change.factsInvalidated && change.sessionKey === sessionKey
-          ? readPreparedSessionEntryChange(change, sessionKey)
-          : undefined;
-      const source = readPreparedSessionEntryPublicationSource(change);
+      const prepared = publishedKey === sessionKey ? created : undefined;
       const unchangedMarker =
         !prepared &&
         !("all" in change) &&
@@ -275,6 +268,27 @@ function targetKey(target: SessionActorTarget): string {
       ? [database.kind, database.physicalIdentity, database.birthtime, sessionKey]
       : [database.kind, database.handle, database.incarnation, sessionKey],
   );
+}
+
+function getOrCreateCell(target: FileTarget): ReplicaCell {
+  const key = targetKey(target);
+  let cell = pool.cells.get(key);
+  if (!cell) {
+    cell = {
+      target,
+      // Matching depends only on this cell's fixed physical target, never its receipts.
+      publicationScope: {
+        sessionKeys: collectSessionEntryLookupKeys(target.sessionKey),
+        storePaths: new Set([target.database.nativeLocation]),
+        databaseIdentities: new Set([target.database.physicalIdentity]),
+      },
+      handles: 0,
+      bytes: 0,
+      transcriptBytes: 0,
+    };
+    pool.cells.set(key, cell);
+  }
+  return cell;
 }
 
 function discard(cell: ReplicaCell): void {
@@ -583,12 +597,7 @@ export function retainSessionActorEntryFacts(
   }
   for (const [index, { target, facts, dependencySessionIds }] of prepared.entries()) {
     const writeToken = tokens[index]!;
-    const key = targetKey(target);
-    let cell = pool.cells.get(key);
-    if (!cell) {
-      cell = { target, handles: 0, bytes: 0, transcriptBytes: 0 };
-      pool.cells.set(key, cell);
-    }
+    const cell = getOrCreateCell(target);
     if (cell.snapshot) {
       const current = scopedWriteToken(target, cell.snapshot.dependencySessionIds);
       if (current === cell.snapshot.writeToken) {
@@ -610,12 +619,7 @@ export function createSessionActorReplica(params: {
   ensureReplicaSubscription();
   const target = structuredClone(params.target);
   const key = targetKey(target);
-  let cell = pool.cells.get(key);
-  if (!cell) {
-    cell = { target, handles: 0, bytes: 0, transcriptBytes: 0 };
-    pool.cells.set(key, cell);
-  }
-  const owned = cell;
+  const owned = getOrCreateCell(target);
   owned.handles += 1;
   let closed = false;
 

@@ -37,6 +37,7 @@ import {
 } from "./session-row-presentation.js";
 import {
   selectionRow,
+  type Lookup,
   type Query as SessionRowQuery,
   type SelectionRow as SelectionTarget,
 } from "./session-row-projection-record.js";
@@ -503,18 +504,18 @@ export async function listProjectedSessions(params: {
       projection,
       () => {
         page = selectPage();
-        return page.selection.entries.flatMap(([key]) => {
+        const queries: Lookup[] = [];
+        for (const [key] of page.selection.entries) {
           const target = page.prepared.getTarget(key);
-          return target
-            ? [
-                {
-                  agentId: target.agentId,
-                  key: target.key,
-                  storePath: target.storeTarget.storePath,
-                },
-              ]
-            : [];
-        });
+          if (target) {
+            queries.push({
+              agentId: target.agentId,
+              key: target.key,
+              storePath: target.storeTarget.storePath,
+            });
+          }
+        }
+        return queries;
       },
       () => {
         const resumed = performance.now();
@@ -527,10 +528,12 @@ export async function listProjectedSessions(params: {
         try {
           let materializedRowCount = 0;
           projection.setArchivePageSize(selection.entries.length);
-          const sessions = selection.entries.flatMap(([key], index) => {
+          const sessions: GatewaySessionRow[] = [];
+          for (let index = 0; index < selection.entries.length; index++) {
+            const [key] = selection.entries[index]!;
             const target = getTarget(key);
             if (!target) {
-              return [];
+              continue;
             }
             const includeTranscriptFields =
               index < SESSIONS_LIST_TRANSCRIPT_LIMIT + selection.ownerCount;
@@ -550,18 +553,19 @@ export async function listProjectedSessions(params: {
               },
             );
             if (!sharedRow || !record) {
-              return [];
+              continue;
             }
             if ((record.materializedSequence ?? 0) > materializedBefore) {
               materializedRowCount++;
             }
             if (params.acceptsSerializedJson) {
-              return [sharedRow];
+              sessions.push(sharedRow);
+            } else {
+              const row = { ...sharedRow };
+              bindSessionListRowRead(row, { projection, record, client });
+              sessions.push(row);
             }
-            const row = { ...sharedRow };
-            bindSessionListRowRead(row, { projection, record, client });
-            return [row];
-          });
+          }
           diagnostics?.mark("decoration");
           const result = buildSessionsListResult(
             prepared,

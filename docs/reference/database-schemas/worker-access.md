@@ -3058,12 +3058,13 @@ Session creation retains this original-absence witness when a sibling finishes
 admission while caller authority is being prepared, including shared stores.
 It still refuses replacement files and changed aliases or shared-state owners.
 
-Cold session readers join the same physical writer queue before dispatch, so they
-cannot observe the database file before its first schema admission completes.
-They use the existing target-discovery lane while holding that queue, so a history
-search waiting for writer-backed index status cannot block their worker dispatch.
-Already admitted readers retain their independent read path. The queue reservation
-ends before consumer callbacks run, and the existing request deadline, cancellation,
+Cold session readers share the database's schema-admission turn before dispatch,
+so they cannot observe the file before its first schema admission completes.
+They use the existing target-discovery lane during that turn, so a history search
+waiting for writer-backed index status cannot block their worker dispatch. Pure
+reads never reserve the agent writer; already admitted readers retain their
+independent read path. The schema-admission turn ends before consumer callbacks
+run, and the existing request deadline, cancellation,
 and database revocation cover admission waiting. Read-only access never creates a
 missing store; idle agents still have no durable database until their first write.
 Session event capture retains the physical source reported by the worker after

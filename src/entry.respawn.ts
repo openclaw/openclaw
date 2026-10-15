@@ -146,7 +146,19 @@ export function buildCliRespawnPlan(
     !hasExperimentalWarningSuppressed({ env, execArgv })
   ) {
     childEnv[OPENCLAW_NODE_OPTIONS_READY] = "1";
-    childExecArgv.unshift(EXPERIMENTAL_WARNING_FLAG);
+    const standaloneRootUrl =
+      // SAFETY: Only the standalone bootstrap publishes this optional runtime-root URL.
+      (globalThis as typeof globalThis & { __openclawStandaloneRootUrl?: string })[
+        "__openclawStandaloneRootUrl"
+      ];
+    if (standaloneRootUrl !== undefined) {
+      // Compiled Bun treats runtime flags as CLI arguments, but honors NODE_OPTIONS.
+      childEnv.NODE_OPTIONS = [childEnv.NODE_OPTIONS, EXPERIMENTAL_WARNING_FLAG]
+        .filter(Boolean)
+        .join(" ");
+    } else {
+      childExecArgv.unshift(EXPERIMENTAL_WARNING_FLAG);
+    }
     needsRespawn = true;
   }
 
