@@ -18,7 +18,7 @@ function isEmojiSegment(segment: string): boolean {
   return keycapEmojiPattern.test(segment) || emojiLikeSegmentPattern.test(segment);
 }
 
-export function resolveFeishuIdentityEmoji(raw: string | undefined): string | undefined {
+function resolveFeishuIdentityEmoji(raw: string | undefined): string | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;

@@ -351,6 +351,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       const runInspector = document.querySelector("#activity-run-panel");
       const diagnostics: ReturnType<ControlUiReadiness["hook"]["diagnostics"]> | undefined =
         window.openclawControlUi?.diagnostics();
+      const readiness = window.openclawControlUi?.snapshot();
       const agentsState = diagnostics?.roster;
       const gatewaySnapshot = diagnostics?.gateway;
       const customElementCounts: Record<string, number> = {};
@@ -393,6 +394,17 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       );
       return {
         failureSummary: {
+          readiness: readiness
+            ? {
+                generation: readiness.generation,
+                booted: readiness.booted,
+                gatewayPhase: readiness.gatewayPhase,
+                routeReady: readiness.routeReady,
+                rosterReady: readiness.rosterReady,
+                ready: readiness.ready,
+                settlementFailed: diagnostics?.settlementError != null,
+              }
+            : null,
           sessionGroupDefaults: groupMode
             ? {
                 open: Reflect.get(groupMode, "open") === true,

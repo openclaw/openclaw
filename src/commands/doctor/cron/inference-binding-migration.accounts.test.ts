@@ -48,7 +48,7 @@ function job(id: string, model?: string): CronStoredJob {
   };
 }
 
-it("preserves explicit selections while refusing ambiguity, missing accounts and direct keys instead of pinning a previous fallback", async () => {
+it("preserves explicit selections and direct keys while refusing ambiguity and missing accounts instead of pinning a previous fallback", async () => {
   await withOpenClawTestState(
     {
       label: "cron-inference-account-selection",
@@ -237,7 +237,8 @@ it("preserves explicit selections while refusing ambiguity, missing accounts and
         expect(warnings).toContain("More than one inference account");
         expect(warnings).toContain("openai:missing");
         expect(warnings).toContain("previous-fallback");
-        expect(warnings).toContain("direct");
+        // A provider-config key needs no adoption: the job keeps running on it unbound.
+        expect(warnings).not.toContain("Automation direct (direct)");
         expect(warnings).toContain("deleted-agent");
         expect(warnings).toContain("unavailable-model");
         expect(warnings).toContain("modelPolicy.allow");
