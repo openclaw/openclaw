@@ -47,27 +47,12 @@ function legacyImportComparisonJson(eventJson: string): string {
   return JSON.stringify(parsed);
 }
 
-function samePersistedLegacyEvent(storedJson: string, sourceJson: string): boolean {
-  if (storedJson === sourceJson) {
-    return true;
-  }
-  return legacyImportComparisonJson(storedJson) === legacyImportComparisonJson(sourceJson);
-}
-
-function legacyRowIsStored(stage: StagedEventRows, eventJson: string): boolean {
-  if (stage.contains(eventJson)) {
-    return true;
-  }
-  const comparison = legacyImportComparisonJson(eventJson);
-  return comparison !== eventJson && stage.contains(comparison);
-}
-
 function scanLegacyRetryRows(stage: StagedEventRows): LegacyRetryScan {
   const scan: LegacyRetryScan = { conflicts: [], missing: [] };
   let firstMissing: string | undefined;
   for (const row of stage.rows(0)) {
     const id = legacyEventId(row.eventJson, row.seq);
-    if (legacyRowIsStored(stage, row.eventJson)) {
+    if (stage.contains(row.eventJson)) {
       if (firstMissing !== undefined && scan.firstRefusal === undefined) {
         scan.firstRefusal = { kind: "prefix", missing: firstMissing, existing: id };
       }
@@ -100,7 +85,16 @@ export function verifyTranscriptEvents(
       false,
       readTranscriptFingerprint(source.path),
       source.originalPath,
-    )((event) => stage.append(0, seq++, JSON.stringify(canonicalizeTranscriptEventMedia(event))));
+    )((event) => {
+      const eventJson = JSON.stringify(canonicalizeTranscriptEventMedia(event));
+      // Normalize spelling before branch repair so it cannot turn a valid missing
+      // suffix into a refusal. Historical receipts still require the stored bytes.
+      stage.append(
+        0,
+        seq++,
+        mode === "ordered" ? eventJson : legacyImportComparisonJson(eventJson),
+      );
+    });
     const repair = stage.repairLegacyTranscript(0, mode !== "ordered");
     if (mode === "ordered") {
       // Receipt adoption retains its original order and branch-repair contract.
@@ -127,20 +121,17 @@ export function verifyTranscriptEvents(
           .where("session_id", "=", source.sessionId)
           .orderBy("seq", "asc"),
       )) {
+        const eventJson =
+          mode === "ordered" ? event.event_json : legacyImportComparisonJson(event.event_json);
         if (mode !== "ordered") {
-          stage.addSeen(event.event_json);
-          const entry: unknown = JSON.parse(event.event_json);
+          stage.addSeen(eventJson);
+          const entry: unknown = JSON.parse(eventJson);
           if (isRecord(entry) && typeof entry.id === "string") {
             stage.addSeen(`id\0${entry.id}`);
           }
         }
         if (!expected.done) {
-          // Ordered receipts stay byte-identical. Spelling equivalence is only for a retry.
-          const sameEvent =
-            mode === "ordered"
-              ? event.event_json === expected.value.eventJson
-              : samePersistedLegacyEvent(event.event_json, expected.value.eventJson);
-          if (sameEvent) {
+          if (eventJson === expected.value.eventJson) {
             expected = sourceRows.next();
             if (expected.done) {
               break;
@@ -160,7 +151,7 @@ export function verifyTranscriptEvents(
       validate();
       return { events: repair.events, missingEvents: 0, sqliteEvents };
     }
-    // Header-only repair kept message bytes. Re-run the importer's full repair
+    // Header-only repair kept branch structure. Re-run the importer's full repair
     // before refusing: a stored parent link or a dropped legacy row is not a second copy.
     const branchRepair = stage.repairLegacyTranscript(0);
     const repaired = scanLegacyRetryRows(stage);

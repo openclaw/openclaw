@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
@@ -154,6 +155,39 @@ it("treats importer-normalized Codex metadata as the same event on a retry", asy
     // Receipt adoption still refuses a transcript whose stored bytes were rewritten.
     expect(verifyTranscriptEvents(database.db, source, "ordered")).toBeUndefined();
 
+    const suffix = {
+      type: "message",
+      id: "m2",
+      parentId: "m1",
+      message: { role: "user", content: "appended after the interrupted import" },
+    };
+    await state.writeText(
+      "legacy.jsonl",
+      `${JSON.stringify(header)}\n${JSON.stringify(legacy)}\n${JSON.stringify(suffix)}\n`,
+    );
+    expect(verifyTranscriptEvents(database.db, source, "appendable")).toEqual({
+      events: 3,
+      missingEvents: 1,
+      sqliteEvents: 2,
+    });
+    expect(verifyTranscriptEvents(database.db, source, "contained")).toBeUndefined();
+
+    await state.writeText(
+      "legacy.jsonl",
+      `${JSON.stringify(header)}\n${JSON.stringify(suffix)}\n${JSON.stringify(legacy)}\n`,
+    );
+    expect(() => verifyTranscriptEvents(database.db, source, "appendable")).toThrow(
+      "only a missing suffix can be appended",
+    );
+    await state.writeText(
+      "legacy.jsonl",
+      `${JSON.stringify(header)}\n${JSON.stringify(legacy)}\n${JSON.stringify({
+        type: "unknown-legacy-payload",
+        id: "unrecognized",
+      })}\n`,
+    );
+    expect(verifyTranscriptEvents(database.db, source, "appendable")).toBeUndefined();
+
     await state.writeText(
       "legacy.jsonl",
       `${JSON.stringify(header)}\n${JSON.stringify({
@@ -275,6 +309,20 @@ it("keeps ordered receipt adoption on exact bytes when only the Codex spelling d
       missingEvents: 0,
       sqliteEvents: 2,
     });
+    await state.writeText(
+      "legacy.jsonl",
+      `${JSON.stringify(header)}\n${JSON.stringify(canonical)}\n${JSON.stringify({
+        type: "message",
+        id: "m2",
+        parentId: "m1",
+        message: { role: "assistant", content: "new suffix" },
+      })}\n`,
+    );
+    expect(verifyTranscriptEvents(database.db, source, "appendable")).toEqual({
+      events: 3,
+      missingEvents: 1,
+      sqliteEvents: 2,
+    });
   });
 });
 
@@ -336,7 +384,7 @@ it("accepts a retry after import rewrote a parent link and dropped the unselecte
       readTranscriptEvents: createTranscriptEventReader(filename, sessionId),
     });
     const storedIds = loadTranscriptEventsSync(scope).map((event) =>
-      typeof event.id === "string" ? event.id : "",
+      isRecord(event) && typeof event.id === "string" ? event.id : "",
     );
     expect(storedIds).toEqual([sessionId, "parent", "visible", "answer", "selection"]);
     expect(loadTranscriptEventsSync(scope).at(-1)).toMatchObject({
@@ -356,10 +404,9 @@ it("accepts a retry after import rewrote a parent link and dropped the unselecte
 
     const changed = events.map((event) =>
       event.id === "answer"
-        ? {
-            ...event,
+        ? Object.assign({}, event, {
             message: { role: "assistant", content: [{ type: "text", text: "changed answer" }] },
-          }
+          })
         : event,
     );
     await state.writeText(

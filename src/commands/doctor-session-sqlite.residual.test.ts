@@ -188,37 +188,58 @@ async function retryImportedStore(store: ReturnType<typeof createLegacyStore>) {
   return { warnings, targets };
 }
 
-it("archives a Doctor retry when SQLite already holds the importer's Codex spelling", async () => {
-  const store = createLegacyStore({ transcriptLines: CODEX_TRANSCRIPT_LINES });
-  const scope = {
-    agentId: "main",
-    env: store.env,
-    sessionId: "session-1",
-    sessionKey: "agent:main:main",
-    storePath: store.storePath,
-  };
-  await importSqliteSessionRows({
-    ...scope,
-    entry: { sessionId: "session-1", updatedAt: 5000 },
-    repairLegacyTranscript: true,
-    readTranscriptEvents: createTranscriptEventReader(store.transcriptPath, "session-1"),
-  });
-  expect(loadTranscriptEventsSync(scope)[1]).toMatchObject({
-    message: { provider: "openai", api: "openai-chatgpt-responses" },
-  });
-  const original = fs.readFileSync(store.transcriptPath);
-  const { warnings, targets } = await retryImportedStore(store);
-  const move = targets
-    .flatMap((target) => target.completedMoves)
-    .find((candidate) => candidate.sourcePath === store.transcriptPath);
-  expect(warnings).toEqual([]);
-  expect(fs.existsSync(store.storePath)).toBe(false);
-  expect(move).toBeDefined();
-  expect(fs.readFileSync(move!.archivePath)).toEqual(original);
-  expect(move!.artifact?.classification).toBe("imported");
-  expect(targets.some((target) => target.validationBeforeArchive === "failed")).toBe(false);
-  expect(targets.some((target) => target.validationBeforeArchive === "passed")).toBe(true);
-});
+it.each([false, true])(
+  "archives a normalized Doctor retry with appended suffix=%s",
+  async (suffix) => {
+    const store = createLegacyStore({ transcriptLines: CODEX_TRANSCRIPT_LINES });
+    const scope = {
+      agentId: "main",
+      env: store.env,
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath: store.storePath,
+    };
+    await importSqliteSessionRows({
+      ...scope,
+      entry: { sessionId: "session-1", updatedAt: 5000 },
+      repairLegacyTranscript: true,
+      readTranscriptEvents: createTranscriptEventReader(store.transcriptPath, "session-1"),
+    });
+    expect(loadTranscriptEventsSync(scope)[1]).toMatchObject({
+      message: { provider: "openai", api: "openai-chatgpt-responses" },
+    });
+    const imported = loadTranscriptEventsSync(scope);
+    const appended = {
+      type: "message",
+      id: "two",
+      parentId: "one",
+      message: { role: "assistant", content: [{ type: "text", text: "appended history" }] },
+    };
+    if (suffix) {
+      fs.appendFileSync(store.transcriptPath, `${JSON.stringify(appended)}\n`);
+    }
+    const original = fs.readFileSync(store.transcriptPath);
+    const { warnings, targets } = await retryImportedStore(store);
+    const move = targets
+      .flatMap((target) => target.completedMoves)
+      .find((candidate) => candidate.sourcePath === store.transcriptPath);
+    expect(warnings).toEqual([]);
+    expect(fs.existsSync(store.storePath)).toBe(false);
+    expect(move).toBeDefined();
+    expect(fs.readFileSync(move!.archivePath)).toEqual(original);
+    expect(move!.artifact?.classification).toBe(suffix ? "repair-original" : "imported");
+    expect(targets.some((target) => target.validationBeforeArchive === "failed")).toBe(false);
+    expect(targets.some((target) => target.validationBeforeArchive === "passed")).toBe(true);
+    expect(loadTranscriptEventsSync(scope)).toEqual(suffix ? [...imported, appended] : imported);
+    expect(() =>
+      assertSessionStoreMigrationComplete({
+        cfg: { agents: { entries: { main: {} } } },
+        env: store.env,
+        operation: "doctor",
+      }),
+    ).not.toThrow();
+  },
+);
 
 it("keeps a Doctor retry blocked when the imported message itself changed", async () => {
   const store = createLegacyStore({ transcriptLines: CODEX_TRANSCRIPT_LINES });
