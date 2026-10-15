@@ -25,7 +25,7 @@ describe("Control UI cached output identity", () => {
       const source = "export const answer = 42;";
       const assets = [
         { fileName: assetName, source: Buffer.from(source) },
-        ...createControlUiPrecompressedAssetVariants(assetName, source),
+        ...(await createControlUiPrecompressedAssetVariants(assetName, source)),
       ];
       for (const asset of assets) {
         await writeFile(path.join(output, asset.fileName), asset.source);

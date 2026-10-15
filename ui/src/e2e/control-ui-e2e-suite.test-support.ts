@@ -131,15 +131,36 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
   const release = () => gate.resolve();
   let requests = 0;
   const installed = page.route(module, async (route) => {
-    requests += 1;
+    const requestNumber = ++requests;
+    const closingAtStart = held.closing;
+    let phase = "fetch";
     try {
       const response = await route.fetch();
       expect(response.status()).toBe(200);
       request.resolve(route.request().url());
+      phase = "held";
       await gate.promise;
+      phase = "fulfill";
       await route.fulfill({ response });
     } catch (error) {
       request.reject(error);
+      try {
+        writeSync(
+          2,
+          `[control-ui-e2e] held response failed: ${JSON.stringify({
+            path: new URL(route.request().url()).pathname,
+            resourceType: route.request().resourceType(),
+            requestNumber,
+            totalRequests: requests,
+            phase,
+            closingAtStart,
+            closing: held.closing,
+            pageClosed: page.isClosed(),
+          })}\n`,
+        );
+      } catch {
+        // Preserve the route failure if diagnostics cannot be written.
+      }
       throw error;
     }
   });

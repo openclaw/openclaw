@@ -98,11 +98,18 @@ export type TaskSuggestionDeliveryMode = "gateway";
 
 /** Correlates queued reply ownership transfer with later delivery drains. */
 export type QueuedReplyDeliveryCorrelation = {
+  /** Source-owned suppression for origin-routed replies that bypass the dispatcher.
+   * A collected batch is suppressed only when all participating policies agree. */
+  shouldSuppressReply?: (payload: ReplyPayload) => boolean;
+  /** Called only after the origin transport confirms visible delivery. */
+  onReplyDelivered?: (payload: ReplyPayload) => void;
   /** No settlement means a source retry or a separate source-owned delivery outcome. */
   begin: () =>
     | ((settlement?: {
         visibleReplySent: boolean;
         failed: boolean;
+        /** True only for a successfully completed execution, not cancellation. */
+        completed?: boolean;
         /** Transport retained delivery without a callback to this source; clear activity UI. */
         transportPending?: boolean;
       }) => void)

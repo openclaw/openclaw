@@ -1,5 +1,5 @@
 import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
 import { nativeGatewaysCapability } from "./native-gateways.runtime.ts";
 
 export function isNativeLocalGateway(): boolean {

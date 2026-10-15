@@ -34,7 +34,11 @@ function createApi(allowPromptInjection = true, config: OpenClawConfig = {}) {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime,
   });
-  const record = createPluginRecord({ id: "steering-plugin", origin: "bundled" });
+  const record = createPluginRecord({
+    id: "steering-plugin",
+    name: "Steering Plugin",
+    origin: "bundled",
+  });
   builder.registry.plugins.push(record);
   const api = builder.createApi(record, { config: {}, hookPolicy: { allowPromptInjection } });
   setActivePluginRegistry(builder.registry);
@@ -179,7 +183,14 @@ describe("plugin active-run steering", () => {
         display: false,
         idempotencyKey: "review-1",
         provenance: { kind: "internal_system", sourceTool: "plugin:steering-plugin" },
-        __openclaw: { senderIsOwner: false },
+        __openclaw: {
+          senderIsOwner: false,
+          pluginSteering: {
+            pluginId: "steering-plugin",
+            pluginName: "Steering Plugin",
+            displayText: "Check the result.",
+          },
+        },
       });
       expect(message).not.toHaveProperty(["__openclaw", "senderId"]);
       expect(message).not.toHaveProperty(["__openclaw", "senderIdentity"]);
@@ -189,6 +200,7 @@ describe("plugin active-run steering", () => {
       api.session.workflow.steerActiveRun({
         sessionKey,
         text: "Check the current result.",
+        displayText: "Check the result.",
         idempotencyKey: "review-1",
       }),
     ).resolves.toEqual({ steered: true, runId: "steered-run" });

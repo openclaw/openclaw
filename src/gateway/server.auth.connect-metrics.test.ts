@@ -158,7 +158,6 @@ test("measures connect delivery and closed admission without payloads", async ()
                 attachMs: expect.any(Number),
                 deviceAuthorizationMs: expect.any(Number),
                 deviceLookupMs: expect.any(Number),
-                deviceMetadataMs: expect.any(Number),
                 deviceTokensMs: expect.any(Number),
                 nodePreparationMs: expect.any(Number),
                 identityMs: expect.any(Number),

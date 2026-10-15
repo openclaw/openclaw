@@ -9,12 +9,12 @@ import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createIdleImport } from "../../lib/idle-import.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import {
   ControllerHost,
   SubscriptionsController,
   viewState,
-} from "../../lit/subscriptions-controller.ts";
+} from "../../lib/subscriptions-controller.ts";
+import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";

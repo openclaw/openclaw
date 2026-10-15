@@ -33,18 +33,15 @@ import {
   isReplyOperationPreBackendPhase,
   isReplyRunCompacting,
   isReplyRunEvidenceStale,
-  mergeReplyRunAdmissionSource,
   replyRunState,
   resolveReplyRunForCurrentSessionId,
   resolveReplyRunWaitKey,
   type ReplyRunAdmissionBarrier,
-  type ReplyRunAdmissionSource,
   type ReplyRunWaiter,
 } from "./reply-run-registry.state.js";
 
 type ReplyRunAdmissionSettlement = {
   settled: boolean;
-  sources?: ReplyRunAdmissionSource[];
 };
 
 type ReplyOperationSessionTarget = {
@@ -335,14 +332,13 @@ async function waitForReplyRunAdmissionBarrier(params: {
       ? Date.now() +
         resolveTimerTimeoutMs(params.timeoutMs, params.minimumTimeoutMs, params.minimumTimeoutMs)
       : undefined;
-  const sources = new Map<ReplyRunAdmissionSource["databaseIdentity"], ReplyRunAdmissionSource>();
   while (true) {
     if (params.signal?.aborted) {
       return { settled: false };
     }
     const barrier = params.barriersByKey.get(params.sessionKey);
     if (!barrier) {
-      return { settled: true, ...(sources.size ? { sources: [...sources.values()] } : {}) };
+      return { settled: true };
     }
     const remainingMs = deadline === undefined ? undefined : deadline - Date.now();
     if (remainingMs !== undefined && remainingMs <= 0) {
@@ -364,15 +360,6 @@ async function waitForReplyRunAdmissionBarrier(params: {
     params.signal?.removeEventListener("abort", abortHandler);
     if (!outcome) {
       return { settled: false };
-    }
-    for (const [identity, source] of barrier.sources) {
-      sources.set(
-        identity,
-        mergeReplyRunAdmissionSource(
-          { ...source, sessionIds: new Set(source.sessionIds) },
-          sources.get(identity),
-        ),
-      );
     }
   }
 }
