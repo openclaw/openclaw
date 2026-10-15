@@ -8,7 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   closeOpenClawStateDatabaseForTest,
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -93,6 +93,8 @@ export function createWhatsAppPollStoreFaultError(code: string | undefined): Err
   return Object.assign(new Error("injected plugin state failure"), code ? { code } : {});
 }
 
+const TEST_AUTHORITY = { assertCurrent() {} };
+
 /**
  * The real plugin-state SQLite store in a temp state dir. Faults wrap single
  * methods and are the only fakes allowed.
@@ -105,12 +107,15 @@ export async function createWhatsAppPollStateForTest() {
   });
   const faults: WhatsAppPollStoreFault[] = [];
   const opened = new Set<string>();
-  const openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T> => {
+  const openKeyedStoreV2 = <T>(
+    options: OpenAsyncKeyedStoreOptions,
+  ): PluginStateKeyedStore<T, 2> => {
     opened.add(options.namespace);
-    const store = createPluginStateKeyedStoreForTests<T>("whatsapp", {
-      ...options,
-      env: state.env,
-    });
+    const store = createPluginStateKeyedStoreV2ForTests<T>(
+      "whatsapp",
+      { ...options, env: state.env },
+      TEST_AUTHORITY,
+    );
     const fault = (method: WhatsAppPollStoreFault["method"]) => {
       const match = faults.find(
         (entry) => entry.namespace === options.namespace && entry.method === method,
@@ -152,10 +157,14 @@ export async function createWhatsAppPollStateForTest() {
     faults,
     logger,
     opened,
-    openKeyedStore,
+    openKeyedStoreV2,
     /** Direct access to one namespace of the same real store, for assertions. */
     openStore<T>(options: OpenAsyncKeyedStoreOptions) {
-      return createPluginStateKeyedStoreForTests<T>("whatsapp", { ...options, env: state.env });
+      return createPluginStateKeyedStoreV2ForTests<T>(
+        "whatsapp",
+        { ...options, env: state.env },
+        TEST_AUTHORITY,
+      );
     },
     async cleanup() {
       resetPluginStateStoreForTests();
@@ -168,7 +177,9 @@ export async function createWhatsAppPollStateForTest() {
 /** Installs a WhatsApp runtime whose keyed stores are the real store above. */
 export async function installWhatsAppPollStateRuntimeForTest() {
   const pollState = await createWhatsAppPollStateForTest();
-  const runtime = createPluginRuntimeMock({ state: { openKeyedStore: pollState.openKeyedStore } });
+  const runtime = createPluginRuntimeMock({
+    state: { openKeyedStoreV2: pollState.openKeyedStoreV2 },
+  });
   vi.spyOn(runtime.logging, "getChildLogger").mockReturnValue(
     pollState.logger as unknown as ReturnType<typeof runtime.logging.getChildLogger>,
   );

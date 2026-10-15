@@ -54,7 +54,7 @@ beforeEach(async () => {
   const runtime = getOptionalWhatsAppRuntime() as unknown as { state: Record<string, unknown> };
   setWhatsAppRuntime({
     ...runtime,
-    state: { ...runtime.state, openKeyedStore: pollState.openKeyedStore },
+    state: { ...runtime.state, openKeyedStoreV2: pollState.openKeyedStoreV2 },
     logging: { getChildLogger: () => pollState.logger },
   } as never);
 });

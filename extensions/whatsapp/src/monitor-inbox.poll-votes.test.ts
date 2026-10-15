@@ -48,7 +48,7 @@ beforeEach(async () => {
   // Keep the harness ingress queue; poll state goes to the real plugin-state store.
   setWhatsAppRuntime({
     ...runtime,
-    state: { ...runtime.state, openKeyedStore: pollState.openKeyedStore },
+    state: { ...runtime.state, openKeyedStoreV2: pollState.openKeyedStoreV2 },
     logging: { getChildLogger: () => pollState.logger },
   } as never);
 });

@@ -170,12 +170,12 @@ export async function runWhatsAppPollStoreOperation<T>(params: {
 
 export function openWhatsAppPollStore<T>(
   options: OpenKeyedStoreOptions,
-): PluginStateKeyedStore<T> | undefined {
+): PluginStateKeyedStore<T, 2> | undefined {
   const runtime = getOptionalWhatsAppRuntime();
-  if (typeof runtime?.state?.openKeyedStore !== "function") {
+  if (typeof runtime?.state?.openKeyedStoreV2 !== "function") {
     return undefined;
   }
-  return runtime.state.openKeyedStore<T>(options);
+  return runtime.state.openKeyedStoreV2<T>(options);
 }
 
 /** Bounds untrusted poll ids before they can reach storage keys. */

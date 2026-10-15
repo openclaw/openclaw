@@ -112,7 +112,7 @@ type TallyRow = { key: string; value: WhatsAppPollTallyValue };
  * LID only later), so rows match on their key or any stored voter JID.
  */
 async function findVoterRows(
-  store: PluginStateKeyedStore<WhatsAppPollTallyValue>,
+  store: PluginStateKeyedStore<WhatsAppPollTallyValue, 2>,
   prefix: string,
   voterJids: readonly string[],
 ): Promise<TallyRow[]> {
