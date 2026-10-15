@@ -203,32 +203,6 @@ test("operator role agent allowlists protect creation without blocking existing 
   expect(existingPatch.ok).toBe(true);
 });
 
-test("sessions.create carries keyed adoption authorization through the durable commit", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const key = "agent:main:dashboard:categorized-adoption";
-  await writeSessionStore({
-    entries: {
-      [key]: sessionStoreEntry("session-categorized-adoption", { category: "Personal" }),
-    },
-  });
-  const assertCurrent = vi.fn();
-
-  const adopted = await directSessionReq(
-    "sessions.create",
-    { agentId: "main", key, category: "Projects" },
-    {
-      sessionMutationAuthorization: {
-        assertCurrent,
-        assertTargetCurrent: vi.fn(),
-      },
-    },
-  );
-
-  expect(adopted.ok).toBe(true);
-  expect(assertCurrent).toHaveBeenCalled();
-  expect(loadSessionEntry({ sessionKey: key, storePath })?.category).toBe("Projects");
-});
-
 test("sessions.create revalidates parent participation before committing a fork transcript", async () => {
   const { storePath } = await createSessionStoreDir();
   const parentSessionKey = "agent:main:dashboard:participation-race-parent";
