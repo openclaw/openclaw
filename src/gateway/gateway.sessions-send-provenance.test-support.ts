@@ -74,18 +74,23 @@ export function registerProofModelScript(
 }
 
 export async function observeProofSteeringAdmission(prompt: string) {
-  const { AgentSession } = await import("../agents/sessions/agent-session.js");
+  const injection = await import("../auto-reply/reply/reply-run-registry.message-injection.js");
   const admitted = createDeferred();
-  const steer = AgentSession.prototype.steer;
-  const observer = vi.spyOn(AgentSession.prototype, "steer").mockImplementation(async function (
-    this: InstanceType<typeof AgentSession>,
-    ...args: Parameters<typeof steer>
-  ) {
-    await steer.apply(this, args);
-    if (args[0].includes(prompt)) {
-      admitted.resolve();
-    }
-  });
+  const begin = injection.beginReplyMessageInjectionTarget;
+  const observer = vi
+    .spyOn(injection, "beginReplyMessageInjectionTarget")
+    .mockImplementation(async (...args) => {
+      const attempt = await begin(...args);
+      if (args[1].includes(prompt)) {
+        // Queue acceptance precedes transcript commitment while Alice's tool is held.
+        void attempt.acceptance.then((accepted) => {
+          if (accepted) {
+            admitted.resolve();
+          }
+        }, admitted.reject);
+      }
+      return attempt;
+    });
   return { admitted: admitted.promise, [Symbol.dispose]: () => observer.mockRestore() };
 }
 export type Scenario = {
