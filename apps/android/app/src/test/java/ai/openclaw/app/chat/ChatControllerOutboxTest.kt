@@ -941,13 +941,14 @@ class ChatControllerOutboxTest {
             GatewaySession.ErrorShape(
               code = "UNAVAILABLE",
               message = "Gateway is restarting",
-              details = GatewayErrorDetails(
-                code = null,
-                canRetryWithDeviceToken = false,
-                recommendedNextStep = null,
-                reason = "gateway-restarting",
-                retryable = true,
-              ),
+              details =
+                GatewayErrorDetails(
+                  code = null,
+                  canRetryWithDeviceToken = false,
+                  recommendedNextStep = null,
+                  reason = "gateway-restarting",
+                  retryable = true,
+                ),
             ),
           )
         chat.sendMessageAwaitAcceptance(message = "survive the restart", thinkingLevel = "off", attachments = emptyList())

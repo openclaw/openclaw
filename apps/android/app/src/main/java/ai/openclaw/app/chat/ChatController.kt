@@ -5863,8 +5863,10 @@ class ChatController internal constructor(
         }
 
         err is GatewayRequestNotEnqueued ||
-          (err is GatewayRequestRejected && err.gatewayError.code == "UNAVAILABLE" &&
-            err.gatewayError.details?.reason == "gateway-restarting" && err.gatewayError.details.retryable) -> {
+          (
+            err is GatewayRequestRejected && err.gatewayError.code == "UNAVAILABLE" &&
+              err.gatewayError.details?.reason == "gateway-restarting" && err.gatewayError.details.retryable
+          ) -> {
           // The restart admission fence rejected before execution; preserve the same ID for reconnect.
           persist(ChatOutboxStatus.Queued, if (direct != null) err.message else err.message ?: "send failed")
           direct?.let { settleDirectSendRun(it, item.id) }
