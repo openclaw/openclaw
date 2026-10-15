@@ -198,8 +198,9 @@ suite.define(() => {
           },
           1,
         );
-        expect(upward.before - upward.released).toBeGreaterThan(120);
-        expect(upward.released - upward.settled).toBeGreaterThan(20);
+        const upwardProof = JSON.stringify(upward);
+        expect(upward.before - upward.released, upwardProof).toBeGreaterThan(120);
+        expect(upward.released - upward.settled, upwardProof).toBeGreaterThan(20);
         await gateway.emitGatewayEvent("chat", {
           sessionKey,
           runId,

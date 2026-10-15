@@ -4,7 +4,7 @@ import { personActivityLink } from "../../../components/person-activity-link.ts"
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { emptyLegacyContent as litNothing, LitContent } from "../../../lit/solid-content.tsx";
+import { emptyLegacyContent as litNothing } from "../../../lit/solid-content.tsx";
 import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
@@ -38,11 +38,10 @@ import type { AssistantMessageDisclosure } from "./chat-message-text-view.tsx";
 import { MessageMeta } from "./chat-message-timestamp-view.tsx";
 import {
   NO_REPLY_LINE,
-  renderReplyLine,
-  renderReplyLineConnector,
   resolveGroupReplyLine,
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
+import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
 import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
@@ -319,7 +318,7 @@ function FramedMessage(props: {
         fallback={
           <>
             {frame().isPeerGroup ? (
-              <LitContent value={renderReplyLine(line(), frame().options)} />
+              <ReplyLineView line={line()} actions={frame().options} />
             ) : undefined}
             <PreparedMessage
               group={frame().group}
@@ -332,7 +331,7 @@ function FramedMessage(props: {
         }
       >
         <div class="chat-message--reply">
-          <LitContent value={renderReplyLine(line(), frame().options)} />
+          <ReplyLineView line={line()} actions={frame().options} />
           <PreparedMessage
             group={frame().group}
             item={props.item}
@@ -341,9 +340,7 @@ function FramedMessage(props: {
             prepared={prepared()}
           />
           <GroupAvatar frame={props.frame} />
-          <LitContent
-            value={renderReplyLineConnector(line(), frame().hasAvatar ? true : litNothing)}
-          />
+          <ReplyLineConnector line={line()} avatar={frame().hasAvatar ? true : litNothing} />
         </div>
       </Show>
       <Show when={showActions()}>
@@ -402,7 +399,7 @@ function FramedMessageGroup(props: {
         <Show when={frame().forwardedSource}>
           <ForwardedAttribution group={props.group} options={options()} />
         </Show>
-        <LitContent value={renderReplyLine(frame().replyLine, options())} />
+        <ReplyLineView line={frame().replyLine} actions={options()} />
         <Show
           when={options().frameContent !== undefined}
           fallback={
@@ -486,9 +483,7 @@ function FramedMessageGroup(props: {
           </div>
         </Show>
       </Show>
-      <LitContent
-        value={renderReplyLineConnector(frame().replyLine, frame().hasAvatar ? true : litNothing)}
-      />
+      <ReplyLineConnector line={frame().replyLine} avatar={frame().hasAvatar ? true : litNothing} />
     </div>
   );
 }

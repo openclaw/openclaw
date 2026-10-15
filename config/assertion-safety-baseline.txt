@@ -33,7 +33,7 @@ extensions/browser/src/browser-node-proxy.ts	2
 extensions/browser/src/browser-proxy-upload.ts	1
 extensions/browser/src/browser-tool-binding.ts	3
 extensions/browser/src/browser-tool-session-tabs.ts	1
-extensions/browser/src/browser-tool.actions.ts	6
+extensions/browser/src/browser-tool.actions.ts	1
 extensions/browser/src/browser-tool.ts	5
 extensions/browser/src/browser/bridge-server.ts	2
 extensions/browser/src/browser/cdp-page-session.ts	3
@@ -181,7 +181,7 @@ extensions/cua-computer/src/commands.ts	2
 extensions/cua-computer/src/driver-artifact-verification.ts	1
 extensions/cua-computer/src/driver-artifacts.ts	1
 extensions/cua-computer/src/driver-client.ts	9
-extensions/cua-computer/src/driver-result.ts	4
+extensions/cua-computer/src/driver-result.ts	3
 extensions/cua-computer/src/mcp-driver-client.ts	3
 extensions/cua-computer/src/window-actions.ts	3
 extensions/deepinfra/provider-models.ts	1
@@ -286,7 +286,6 @@ extensions/discord/src/voice/realtime-turns.ts	3
 extensions/discord/src/voice/receive-recovery.ts	1
 extensions/discord/src/voice/sdk-runtime.ts	1
 extensions/discord/src/voice/segment.ts	1
-extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
 extensions/exa/src/exa-web-search-provider.runtime.ts	1
 extensions/fal/video-generation-provider.ts	3
@@ -327,9 +326,6 @@ extensions/feishu/src/tool-account.ts	1
 extensions/feishu/src/typing-backoff.ts	2
 extensions/feishu/src/wiki.ts	1
 extensions/file-transfer/index.ts	4
-extensions/file-transfer/src/node-host/dir-fetch.ts	1
-extensions/file-transfer/src/node-host/dir-list.ts	1
-extensions/file-transfer/src/node-host/file-fetch.ts	1
 extensions/file-transfer/src/node-host/file-write.ts	2
 extensions/file-transfer/src/shared/node-invoke-policy.ts	2
 extensions/file-transfer/src/shared/policy.ts	6
@@ -577,7 +573,6 @@ extensions/msteams/src/sdk-proactive.ts	3
 extensions/msteams/src/sdk.ts	3
 extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/user-agent.ts	1
-extensions/mxc/src/fs-bridge.ts	1
 extensions/nextcloud-talk/src/approval-auth.ts	1
 extensions/nextcloud-talk/src/channel.ts	2
 extensions/nextcloud-talk/src/gateway.ts	2
@@ -2632,7 +2627,7 @@ ui/src/pages/chat/chat-thread-items.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-selection-popup.ts	1
 ui/src/pages/chat/components/chat-session-workspace.ts	1
-ui/src/pages/chat/components/chat-thread-interactions.ts	2
+ui/src/pages/chat/components/chat-thread-interactions.ts	1
 ui/src/pages/chat/components/widget-card.ts	3
 ui/src/pages/chat/components/widget-export.ts	1
 ui/src/pages/chat/connect-error.ts	1

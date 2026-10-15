@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -146,7 +147,7 @@ it("selects a reopened historical question ahead of another pending request", as
   expect(container.querySelector<HTMLInputElement>(".chat-question-panel__other")?.value).toBe("");
 });
 
-it("refreshes a mounted question summary when a canonical answer appears or is replaced", () => {
+it("refreshes a mounted question summary when a canonical answer appears or is replaced", async () => {
   const question = { ...audience, __openclaw: { id: "audience-question", seq: 1 } };
   const answer = {
     role: "user",
@@ -161,19 +162,25 @@ it("refreshes a mounted question summary when a canonical answer appears or is r
   const draw = () => renderChatPropsInto(container, props);
   const summary = () => container.querySelector(".chat-question-summary")?.textContent;
   draw();
-  expect(summary()).toContain("Answer above");
+  await waitForSolid(() => expect(summary()).toContain("Answer above"));
   props.messages = [question, answer];
   draw();
-  expect(summary()).toContain("Everyone");
-  expect(summary()).not.toContain("Answer above");
+  await waitForSolid(() => {
+    expect(summary()).toContain("Everyone");
+    expect(summary()).not.toContain("Answer above");
+  });
   props.messages = [question, { ...answer, content: "> Which audience?\n\nEngineers" }];
   draw();
-  expect(summary()).toContain("Engineers");
-  expect(summary()).not.toContain("Everyone");
+  await waitForSolid(() => {
+    expect(summary()).toContain("Engineers");
+    expect(summary()).not.toContain("Everyone");
+  });
   props.messages = [question];
   draw();
-  expect(summary()).toContain("Answer above");
-  expect(summary()).not.toContain("Engineers");
+  await waitForSolid(() => {
+    expect(summary()).toContain("Answer above");
+    expect(summary()).not.toContain("Engineers");
+  });
 });
 
 it.each(["discard", "consumed"] as const)(

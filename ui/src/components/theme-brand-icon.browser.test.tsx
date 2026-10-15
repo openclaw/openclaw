@@ -7,7 +7,7 @@ import {
   setAvatarGatewayOrigin,
 } from "../lib/identity-avatar-context.ts";
 import { LitContent } from "../lit/solid-content.tsx";
-import { renderSubagentActivity } from "../pages/chat/components/chat-subagent-activity.ts";
+import { SubagentActivity } from "../pages/chat/components/chat-subagent-activity.tsx";
 import { ChatWorkingIndicator } from "../pages/chat/components/chat-working-indicator.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -46,8 +46,8 @@ it.each([
     );
     const view = mountSolid(() =>
       kind === "subagent" ? (
-        <LitContent
-          value={renderSubagentActivity([
+        <SubagentActivity
+          rows={[
             {
               key: "agent:main:synthetic-subagent",
               label: "Synthetic review",
@@ -59,7 +59,7 @@ it.each([
                 updatedAt: null,
               },
             },
-          ])}
+          ]}
         />
       ) : (
         <ChatWorkingIndicator

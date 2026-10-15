@@ -10,10 +10,11 @@ import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { renderSolidRef } from "../../../test-helpers/render-solid-ref.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
-import { renderMessageMarkdown } from "./chat-message-text.ts";
+import { renderMessageMarkdown } from "./chat-message-text.test-support.ts";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
 
@@ -206,12 +207,14 @@ describe("user message disclosure", () => {
 
       draw(`${markdown}Retired before measurement.`);
       part.setConnected(false);
+      flush();
       measure.mockClear();
       await settle();
       fonts.dispatchEvent(new Event("loadingdone"));
       await settle();
       expect(measure).not.toHaveBeenCalled();
       part.setConnected(true);
+      flush();
       await settle();
       expect(measure).toHaveBeenCalled();
     } finally {

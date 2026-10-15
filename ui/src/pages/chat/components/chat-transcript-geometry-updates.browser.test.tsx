@@ -1,14 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { html } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
+import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
 import { ChatPaneRuntime } from "../chat-pane-render.ts";
 import { createPaneTestHost } from "../chat-pane.test-support.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import { nativePaneLayout } from "./chat-transcript-native-pane.test-support.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 
@@ -18,7 +18,7 @@ class GeometryPane extends ChatPaneRuntime {
   private rows: TranscriptRow[] = Array.from({ length: 100 }, (_, index) => ({
     kind: "content",
     key: `row-${index}`,
-    content: html`<div style="height: 120px">Row ${index}</div>`,
+    content: <div style="height: 120px">Row {index}</div>,
   }));
 
   initialize(context: ApplicationContext, followEnd = false) {
@@ -29,7 +29,7 @@ class GeometryPane extends ChatPaneRuntime {
       this.rows = this.rows.map((row, index) => ({
         kind: "content",
         key: row.key,
-        content: html`<div style="height: 360px">Row ${index}</div>`,
+        content: <div style="height: 360px">Row {index}</div>,
       }));
     }
     saveChatSessionScrollPosition(this.paneId, this.sessionKey, {
@@ -39,31 +39,40 @@ class GeometryPane extends ChatPaneRuntime {
   }
 
   override render() {
+    const layout = this.transcript.renderSession(this.sessionKey, (session) => {
+      if (!(session instanceof ChatSessionVirtualizerHost)) {
+        throw new Error("Expected the session virtualizer owner");
+      }
+      this.session = session;
+      const virtualizer = session["virtualizer"];
+      this.renderedRects.push(virtualizer.scrollRect && { ...virtualizer.scrollRect });
+      return {
+        contents: session.render(
+          this.rows,
+          (row) => (row.kind === "content" ? row.content : null),
+          null,
+          false,
+        ),
+        size: virtualizer.getTotalSize(),
+      };
+    });
     return {
-      layout: html`
-        <div class="chat-thread-viewport" style="height: 400px; flex: none; padding: 20px 0">
-          <div class="chat-thread" style="overflow-anchor: none">
-            ${this.transcript.renderSession(this.sessionKey, (session) => {
-              if (!(session instanceof ChatSessionVirtualizerHost)) {
-                throw new Error("Expected the session virtualizer owner");
-              }
-              this.session = session;
-              const virtualizer = session["virtualizer"];
-              this.renderedRects.push(virtualizer.scrollRect && { ...virtualizer.scrollRect });
-              return html`${session.render(
-                  this.rows,
-                  (row) => (row.kind === "content" ? row.content : null),
-                  null,
-                  false,
-                )}<output>${virtualizer.getTotalSize()}</output>`;
-            })}
-          </div>
-        </div>
-      `,
+      layout: nativePaneLayout(GeometryLayout, layout),
       dialog: undefined,
       capabilityDialogs: undefined,
     };
   }
+}
+
+function GeometryLayout(props: { contents: HTMLDivElement; size: number }) {
+  return (
+    <div class="chat-thread-viewport" style="height: 400px; flex: none; padding: 20px 0">
+      <div class="chat-thread" style="overflow-anchor: none">
+        {props.contents}
+        <output>{props.size}</output>
+      </div>
+    </div>
+  );
 }
 
 let pane: (GeometryPane & HTMLElement) | undefined;

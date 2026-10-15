@@ -1,12 +1,14 @@
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
-import { renderChatTranscriptFeed } from "./chat-transcript-feed.ts";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { ChatTranscriptFeed } from "./chat-transcript-feed.ts";
 
-afterEach(() => document.body.replaceChildren());
+afterEach(cleanupSolid);
 
 function mount(messages: unknown[]) {
-  const container = document.body.appendChild(document.createElement("div"));
-  render(renderChatTranscriptFeed(messages), container);
+  const { container } = mountSolid(() => <ChatTranscriptFeed messages={messages} />);
+  flush();
   return container;
 }
 
@@ -312,15 +314,21 @@ describe("chat transcript feed", () => {
     };
     const one = anonymous("message-one", "echo one");
     const two = anonymous("message-two", "echo two");
-    const container = mount([first, one, two]);
+    const [messages, setMessages] = createSignal([first, one, two]);
+    const { container } = mountSolid(() => <ChatTranscriptFeed messages={messages()} />);
+    flush();
+    const originalGroup = container.querySelector<HTMLDetailsElement>(
+      ".chat-task-feed__tool-group",
+    )!;
+    originalGroup.querySelector("summary")!.click();
     const original = container.querySelectorAll<HTMLDetailsElement>(".chat-task-feed__tool-line");
     original[2]!.querySelector("summary")!.click();
     expect(original[2]!.open).toBe(true);
-    render(
-      renderChatTranscriptFeed([first, anonymous("inserted-message", "echo inserted"), one, two]),
-      container,
-    );
+    setMessages([first, anonymous("inserted-message", "echo inserted"), one, two]);
+    flush();
     const current = container.querySelectorAll<HTMLDetailsElement>(".chat-task-feed__tool-line");
+    expect(container.querySelector(".chat-task-feed__tool-group")).toBe(originalGroup);
+    expect(originalGroup.open).toBe(true);
     expect([...current].map((row) => row.querySelector("code")?.textContent)).toEqual([
       "echo anchor",
       "echo inserted",

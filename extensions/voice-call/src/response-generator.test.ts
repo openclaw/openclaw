@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
-import { VoiceCallConfigSchema } from "./config.js";
+import { normalizeVoiceCallConfig } from "./config.js";
 import { generateVoiceResponse } from "./response-generator.js";
 
 type TestSessionEntry = {
@@ -206,7 +206,7 @@ async function runGenerateVoiceResponse(
     senderIsOwner?: boolean;
   },
 ) {
-  const voiceConfig = VoiceCallConfigSchema.parse({
+  const voiceConfig = normalizeVoiceCallConfig({
     responseTimeoutMs: 5000,
   });
   const coreConfig = {} as OpenClawConfig;
@@ -544,7 +544,7 @@ describe("generateVoiceResponse", () => {
       contextTokens: 123,
       authProfileOverride: "old-auth-profile",
     };
-    const voiceConfig = VoiceCallConfigSchema.parse({
+    const voiceConfig = normalizeVoiceCallConfig({
       responseModel: "openai/gpt-4.1-nano",
       responseTimeoutMs: 5000,
     });
@@ -598,7 +598,7 @@ describe("generateVoiceResponse", () => {
       modelProvider: "openai",
       modelSelectionLocked: true,
     };
-    const voiceConfig = VoiceCallConfigSchema.parse({
+    const voiceConfig = normalizeVoiceCallConfig({
       responseModel: "openai/gpt-4.1-nano",
       responseTimeoutMs: 5000,
     });
@@ -650,7 +650,7 @@ describe("generateVoiceResponse", () => {
         },
       },
     };
-    const voiceConfig = VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 });
+    const voiceConfig = normalizeVoiceCallConfig({ responseTimeoutMs: 5000 });
 
     const result = await generateVoiceResponse({
       voiceConfig,
@@ -713,7 +713,7 @@ describe("generateVoiceResponse", () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Matrix context."}' },
     ]);
-    const voiceConfig = VoiceCallConfigSchema.parse({
+    const voiceConfig = normalizeVoiceCallConfig({
       agentId: "voice",
       responseTimeoutMs: 5000,
     });
@@ -753,7 +753,7 @@ describe("generateVoiceResponse", () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Main context."}' },
     ]);
-    const voiceConfig = VoiceCallConfigSchema.parse({
+    const voiceConfig = normalizeVoiceCallConfig({
       agentId: "voice",
       responseTimeoutMs: 5000,
     });
@@ -782,7 +782,7 @@ describe("generateVoiceResponse", () => {
 
     await expect(
       generateVoiceResponse({
-        voiceConfig: VoiceCallConfigSchema.parse({ agentId: "voice" }),
+        voiceConfig: normalizeVoiceCallConfig({ agentId: "voice" }),
         coreConfig: {},
         agentRuntime: runtime,
         callId: "call-unowned",
@@ -815,7 +815,7 @@ describe("generateVoiceResponse", () => {
     } as OpenClawConfig;
 
     const result = await generateVoiceResponse({
-      voiceConfig: VoiceCallConfigSchema.parse({
+      voiceConfig: normalizeVoiceCallConfig({
         agentId: "main",
         responseModel: "ollama/qwen2.5:1.5b",
         responseTimeoutMs: 5000,

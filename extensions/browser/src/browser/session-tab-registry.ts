@@ -5,7 +5,6 @@
 import {
   captureBrowserSessionTabAuthority,
   isBrowserStateRuntimeCurrent,
-  readCurrentBrowserState,
   type BrowserSessionTabAuthority,
 } from "../browser-runtime-state.js";
 import {
@@ -188,32 +187,17 @@ async function prepareTrackedTabCleanup(
   params: CloseParams & { sessionKeys?: Array<string | undefined> },
 ) {
   let dashboardClosed = 0;
-  const readDurable = () =>
-    readCurrentBrowserState(
-      params.authority?.runtime,
-      () => readDurableTabs(params.onWarn, params.authority),
-      params.isCurrent,
-    );
-  let durable = await readDurable();
-  if (!durable) {
-    return { dashboardClosed, durable };
-  }
+  let durable = await readDurableTabs(params.onWarn, params.authority);
   const hasDashboard =
     durable.some((tab) => tab.dashboard) ||
-    (
-      await readCurrentBrowserState(
-        params.authority?.runtime,
-        () => readBrowserDashboardStopIntents(params.authority),
-        params.isCurrent,
-      )
-    )?.length;
+    (await readBrowserDashboardStopIntents(params.authority)).length;
   if (hasDashboard) {
     const { reconcileBrowserDashboards } = await import("../browser-dashboard.js");
     if (!isCleanupCurrent(params)) {
       return { dashboardClosed, durable: undefined };
     }
     dashboardClosed = await reconcileBrowserDashboards(params);
-    durable = await readDurable();
+    durable = await readDurableTabs(params.onWarn, params.authority);
   }
   return { dashboardClosed, durable: isCleanupCurrent(params) ? durable : undefined };
 }
