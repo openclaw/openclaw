@@ -13,8 +13,8 @@ const { detectBinaryMock, execFileSyncMock, readFileMock, runCommandWithTimeoutM
     execFileSyncMock: vi.fn<(file: string, args: readonly string[]) => string>(() => ""),
     readFileMock: vi.fn(async () => "6.8.0-generic"),
     runCommandWithTimeoutMock: vi.fn<
-    (argv: string[], optionsOrTimeout?: number | { timeoutMs?: number }) => Promise<SpawnResult>
-  >(async () => ({
+      (argv: string[], optionsOrTimeout?: number | { timeoutMs?: number }) => Promise<SpawnResult>
+    >(async () => ({
       stdout: "",
       stderr: "",
       code: 0,
@@ -106,9 +106,7 @@ describe("openLocalFile", () => {
       termination: "exit",
     });
 
-    await expect(openLocalFile("/tmp/openclaw-browser-handoff-X/handoff.html")).resolves.toBe(
-      true,
-    );
+    await expect(openLocalFile("/tmp/openclaw-browser-handoff-X/handoff.html")).resolves.toBe(true);
     const argv = runCommandWithTimeoutMock.mock.calls[0]![0];
     expect(argv[0]).toBe("xdg-open");
     expect(argv).toHaveLength(2);
@@ -120,7 +118,9 @@ describe("openLocalFile", () => {
     mockProcessPlatform("win32");
 
     await expect(
-      openLocalFile("C:\\Users\\Alice\\AppData\\Local\\Temp\\openclaw-browser-handoff-ABC123\\handoff.html"),
+      openLocalFile(
+        "C:\\Users\\Alice\\AppData\\Local\\Temp\\openclaw-browser-handoff-ABC123\\handoff.html",
+      ),
     ).resolves.toBe(true);
     const argv = runCommandWithTimeoutMock.mock.calls[0]![0];
     expect(argv.at(-2)).toBe("url.dll,FileProtocolHandler");

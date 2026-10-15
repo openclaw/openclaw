@@ -1,6 +1,6 @@
 import { readConfigFileSnapshot } from "../config/config.js";
-import { copyToClipboard } from "../infra/clipboard.js";
 import { openUrlPrivately } from "../infra/browser-handoff.js";
+import { copyToClipboard } from "../infra/clipboard.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
 import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {

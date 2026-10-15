@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
+import { openUrlPrivately } from "../infra/browser-handoff.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { sleep } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
@@ -19,7 +20,6 @@ import {
   waitForControlUiDocument,
   type ControlUiHandoffTarget,
 } from "./control-ui-handoff.js";
-import { openUrlPrivately } from "../infra/browser-handoff.js";
 import {
   detectBrowserOpenSupport,
   formatControlUiSshHint,
