@@ -19,6 +19,7 @@ import {
 } from "solid-js";
 
 export type { TemplateResult as LegacyTemplateResult } from "lit";
+export type { DirectiveResult as LegacyDirectiveResult } from "lit/directive.js";
 
 /** Render opaque plugin SDK templates with their event receiver. */
 export function renderLegacyTemplate(template: unknown, target: HTMLElement, host?: object): void {

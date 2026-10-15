@@ -14,7 +14,9 @@ import type {
   Actor,
   Job,
   SqliteWorkerOpenCustody,
+  StoreClient,
 } from "./sqlite-worker-broker.types.js";
+import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import { readDatabasePathIdentity, type DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
@@ -52,13 +54,57 @@ export function validateSqliteWorkerDatabaseLocator(databasePath: string): void 
   }
 }
 
+export function reserveSqliteWorkerClient(
+  clients: Set<object>,
+  stores: Iterable<StoreClient>,
+  limit: number,
+  client: object,
+): boolean {
+  const reserved = clients.size < limit;
+  if (!reserved && ![...stores].some((store) => store.retireIdle)) {
+    throw new SqliteWorkerError("SQLite worker store capacity reached", "overloaded");
+  }
+  if (reserved) {
+    clients.add(client);
+  }
+  return reserved;
+}
+
+export async function reclaimSqliteWorkerClient(
+  options: PreparedSqliteWorkerOpen,
+  stores: Iterable<StoreClient>,
+  tryReserve: () => boolean,
+  isClosing: () => boolean,
+): Promise<void> {
+  const assertCurrent = () => {
+    options.signal?.throwIfAborted();
+    options.assertCurrent?.();
+    if (isClosing()) {
+      throw new SqliteWorkerError("SQLite worker host is closing", "closed");
+    }
+  };
+  assertCurrent();
+  for (const store of stores) {
+    if (tryReserve()) {
+      return;
+    }
+    if (store.actor.runtimeGeneration === options.runtimeGeneration) {
+      await store.retireIdle?.();
+    }
+    assertCurrent();
+  }
+  if (!tryReserve()) {
+    throw new SqliteWorkerError("SQLite worker store capacity reached", "overloaded");
+  }
+}
+
 export function captureSqliteWorkerOpen(
   options: SqliteWorkerStoreOptions,
   stateContext?: SqliteWorkerStateContext,
   assertCurrent?: () => void,
   custody: SqliteWorkerOpenCustody = {},
 ): PreparedSqliteWorkerOpen {
-  const { createAdmission, preparation, ...native } = custody;
+  const { createAdmission, preparation, retireIdle, ...native } = custody;
   const inCaller = AsyncLocalStorage.snapshot();
   const ownedAdmission = options.admission;
   const checkOpening = ownedAdmission
@@ -81,6 +127,7 @@ export function captureSqliteWorkerOpen(
   const carrierUrl = options.runtimeGeneration?.resolve(carrier) ?? carrier;
   return {
     ...native,
+    retireIdle: retireIdle ? () => inCaller(retireIdle) : undefined,
     maintenanceScope: custody.maintenanceScope ?? getOpenClawDatabaseMaintenanceScope(),
     ...(preparation !== undefined ? { preparation: serialize(preparation) } : {}),
     runtimeGeneration: options.runtimeGeneration,
@@ -291,15 +338,38 @@ export function assertSqliteWorkerActorReusable(
   assertSqliteWorkerActorStateContext(actor, stateContext);
 }
 
-export function prepareSqliteWorkerActorContext(actor: Actor | undefined, job: Job): void {
+export function prepareSqliteWorkerActorContext(
+  actor: Actor | undefined,
+  job: Job,
+): SqliteWorkerStateContext | undefined {
   const { request } = job;
   const stateContext = request.stateContext ?? actor?.stateContext;
   if (actor && stateContext) {
     assertSqliteWorkerActorStateContext(actor, stateContext);
     request.stateDatabasePath = actor.stateDatabasePath ?? actor.databasePath;
-    request.stateContext = {
+    const delivered = {
       ...stateContext,
-      scheduledMaintenanceSuspension: actor.stateContext?.scheduledMaintenanceSuspension,
+      ...(actor.stateContext?.scheduledMaintenanceSuspension
+        ? { scheduledMaintenanceSuspension: actor.stateContext.scheduledMaintenanceSuspension }
+        : {}),
     };
+    if (request.type !== "open") {
+      const previous = actor.deliveredStateContext;
+      request.stateContext = {
+        ...delivered,
+        ...(delivered.scheduledMaintenanceSuspension &&
+        delivered.scheduledMaintenanceSuspension === previous?.scheduledMaintenanceSuspension
+          ? { scheduledMaintenanceSuspension: undefined }
+          : {}),
+        ...(Object.hasOwn(delivered, "stateIntegrity") &&
+        delivered.stateIntegrity === previous?.stateIntegrity
+          ? { stateIntegrity: undefined }
+          : {}),
+      };
+    } else {
+      request.stateContext = delivered;
+    }
+    return delivered;
   }
+  return undefined;
 }

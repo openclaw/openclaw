@@ -155,6 +155,7 @@ export function buildChannelAllowBotsSchema<
 }
 
 /** Build native exec-approval routing with channel-specific approver ids and extras. */
+// oxlint-disable-next-line typescript/no-generated-empty-object-type -- A keyless Zod shape preserves named fields without a string index signature.
 export function buildChannelExecApprovalsSchema<T extends ZodRawShape = Record<never, never>>(
   approverSchema: ZodTypeAny,
   extraShape?: T,
@@ -186,16 +187,14 @@ type EnumSchema<TValues extends StringEnumValues> = z.ZodEnum<{
 
 type EnumShape<TValues, TKey extends string> = TValues extends StringEnumValues
   ? { [TResultKey in TKey]: z.ZodOptional<EnumSchema<TValues>> }
-  : Record<never, never>;
+  : object;
 type ChannelReactionShape<TOptions extends ChannelReactionShapeOptions> = ZodRawShape &
   EnumShape<TOptions["notificationModes"], "reactionNotifications"> &
   EnumShape<TOptions["reactionLevels"], "reactionLevel"> &
   (TOptions["reactionAllowlist"] extends true
     ? { reactionAllowlist: z.ZodOptional<z.ZodArray<z.ZodUnion<[z.ZodString, z.ZodNumber]>>> }
-    : Record<never, never>) &
-  (TOptions["ackReaction"] extends ZodTypeAny
-    ? { ackReaction: TOptions["ackReaction"] }
-    : Record<never, never>);
+    : object) &
+  (TOptions["ackReaction"] extends ZodTypeAny ? { ackReaction: TOptions["ackReaction"] } : object);
 
 /** Build the repeated reaction leaves while retaining each channel's exact enum. */
 export function buildChannelReactionShape<const TOptions extends ChannelReactionShapeOptions>(

@@ -98,6 +98,16 @@ function notify(directory: Directory, filename?: string) {
   }
 }
 
+// libuv aborts the process when a Windows directory watch was opened through an
+// 8.3 short path (e.g. C:\Users\RUNNER~1\...) and a child event resolves to its
+// long form (libuv/libuv#5010, fixed upstream by libuv/libuv#5152 but not yet in
+// shipped Node). Watch the long form; the short spelling stays the shared key.
+function watchPath(candidate: string): string {
+  return process.platform === "win32" && candidate.includes("~")
+    ? fs.realpathSync.native(candidate)
+    : candidate;
+}
+
 function attach(directory: Directory) {
   let candidate = directory.path;
   while (true) {
@@ -109,7 +119,7 @@ function attach(directory: Directory) {
     }
     try {
       const watcher = runInDetachedAsyncContext(() =>
-        fs.watch(candidate, { persistent: false }, (event, filename) => {
+        fs.watch(watchPath(candidate), { persistent: false }, (event, filename) => {
           const source = sources.get(candidate);
           if (!source || source.watcher !== watcher) {
             return;
@@ -124,8 +134,17 @@ function attach(directory: Directory) {
           // A renamed directory's watcher can remain bound to its retired inode.
           // Child-file renames do not retire the directory or its queued events.
           if (event === "rename") {
-            const renamedRoot = !filename || filename === path.basename(candidate);
-            const readmit = affected.filter((entry) => renamedRoot || entry.path !== candidate);
+            const renamed = filename?.toString();
+            const renamedRoot = !renamed || renamed === path.basename(candidate);
+            // An absent directory waits on its nearest ancestor. Only the next segment
+            // toward it can move that attach point; closing a native watch for other
+            // children (SQLite sidecars) can block the main thread for seconds on macOS.
+            const readmit = affected.filter(
+              (entry) =>
+                renamedRoot ||
+                (entry.path !== candidate &&
+                  path.relative(candidate, entry.path).split(path.sep, 1)[0] === renamed),
+            );
             for (const entry of readmit) {
               detach(entry);
             }

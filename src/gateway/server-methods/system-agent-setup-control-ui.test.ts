@@ -4,8 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../../ui/src/i18n/index.ts";
 import { createFirstRunContext } from "../../../ui/src/pages/model-setup/model-setup-first-run.test-support.ts";
-import "../../../ui/src/pages/model-setup/model-setup-page.tsx";
+import { page as modelSetupRoute } from "../../../ui/src/pages/model-setup/route.ts";
 import { createApplicationContextProvider } from "../../../ui/src/test-helpers/application-context.ts";
+import { cleanupSolid, mountSolid } from "../../../ui/src/test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../../ui/src/test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../ui/src/test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../../ui/src/test-helpers/storage.ts";
 import { applyWizardMetadata } from "../../commands/onboard-helpers.js";
@@ -104,6 +106,7 @@ describe("selected-agent Gateway detection and Model Setup consent", () => {
     await i18n.setLocale("en");
   });
   afterEach(async () => {
+    cleanupSolid();
     document.body.replaceChildren();
     await vi.dynamicImportSettled();
     vi.restoreAllMocks();
@@ -161,10 +164,17 @@ describe("selected-agent Gateway detection and Model Setup consent", () => {
         throw new Error(`Unexpected setup RPC: ${method}`);
       });
       const provider = createApplicationContextProvider(context);
-      const page = document.createElement("openclaw-model-setup-page");
-      page.routeData = { firstRun: true };
-      provider.append(page);
       document.body.append(provider);
+      const route = await modelSetupRoute.component();
+      const { container: page } = mountSolid(
+        () =>
+          route.renderSolid({
+            data: { firstRun: true },
+            loaderPending: false,
+            presented: true,
+          }),
+        { container: provider, wrapper: createSolidApplicationContextProvider(context).wrapper },
+      );
       await waitForSolid(() => expect(request).toHaveBeenCalled());
       await request.mock.results[0]!.value;
       await waitForSolid(() =>

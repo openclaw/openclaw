@@ -10,7 +10,6 @@ import {
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { ModelProviderAccountRecovery, ModelProviderLoginView } from "./login-view.tsx";
 import { ModelProvidersController } from "./model-providers-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
@@ -91,22 +90,6 @@ export type ModelProvidersPageProps = {
   loaderPending?: boolean;
 };
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-model-providers-page": HTMLAttributes<HTMLElement> & {
-        [Key in keyof ModelProvidersPageProps as `prop:${Key}`]?: ModelProvidersPageProps[Key];
-      };
-    }
-  }
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-model-providers-page": SolidBridgeElement<ModelProvidersPageProps>;
-  }
-}
-
 export function ModelProvidersPageBody(props: ModelProvidersPageProps & { host: HTMLElement }) {
   const context: ApplicationContext = useApplication();
   const [revision, setRevision] = createSignal(0);
@@ -132,13 +115,11 @@ export function ModelProvidersPageBody(props: ModelProvidersPageProps & { host: 
   return <ModelProvidersContent controller={controller} revision={revision} />;
 }
 
-export const ModelProvidersPage = defineSolidBridge<ModelProvidersPageProps>(
-  "openclaw-model-providers-page",
-  (props, host) => <ModelProvidersPageBody {...props} host={host} />,
-  {
-    properties: {
-      routeData: { default: undefined, attribute: false },
-      loaderPending: { default: false, attribute: false },
-    },
-  },
-);
+export function ModelProvidersPage(props: ModelProvidersPageProps) {
+  let host!: HTMLElement;
+  return (
+    <openclaw-model-providers-page ref={(element) => (host = element)}>
+      <ModelProvidersPageBody {...props} host={host} />
+    </openclaw-model-providers-page>
+  );
+}

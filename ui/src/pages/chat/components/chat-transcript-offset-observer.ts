@@ -12,8 +12,6 @@ import {
 } from "./chat-transcript-scroll-events.ts";
 import type { ChatTranscriptPendingScrollOffset } from "./chat-transcript-session.ts";
 
-type TranscriptScrollRenderState = { atEnd: boolean; touchActive: boolean };
-
 /** State shared by native input observation and transcript commands. */
 export class TranscriptOffsetState {
   pendingScrollOffset: ChatTranscriptPendingScrollOffset | null = null;
@@ -23,7 +21,7 @@ export class TranscriptOffsetState {
     | null = null;
   touching = false;
   touchScrolling = false;
-  renderedScrollState = { atEnd: false, touchActive: false };
+  renderedTouchActive = false;
   maintenanceScrollOffset: number | null = null;
   pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null = null;
   syncNativeOffset: (() => void) | null = null;
@@ -32,10 +30,6 @@ export class TranscriptOffsetState {
 
   get touchActive(): boolean {
     return this.touching || this.touchScrolling;
-  }
-
-  renderState(atEnd: boolean): TranscriptScrollRenderState {
-    return { atEnd, touchActive: this.touchActive };
   }
 }
 
@@ -118,7 +112,7 @@ type OffsetOwner = {
   cancelScroll(): void;
   onLayoutCorrection(before: number, after: number): void;
   requestUpdate(): void;
-  onOffset(): boolean;
+  onOffset(): void;
   onReaderScroll(towardEnd?: boolean): void;
   onComposerLayout(changed: boolean): void;
 };
@@ -218,12 +212,10 @@ export function observeTranscriptOffset(
       programmatic,
     });
     callback(offset, scrolling);
-    const atEnd = owner.onOffset();
+    owner.onOffset();
     // Range/isScrolling and pane follow policy already invalidate themselves.
-    // The rail observes offsets directly; only changed lifecycle gates need a pane commit.
-    const rendered = owner.state.renderedScrollState;
-    const current = owner.state.renderState(atEnd);
-    if (current.atEnd !== rendered.atEnd || current.touchActive !== rendered.touchActive) {
+    // The rail observes offsets directly; only touch-held history needs a pane commit.
+    if (owner.state.touchActive !== owner.state.renderedTouchActive) {
       owner.requestUpdate();
     }
   };

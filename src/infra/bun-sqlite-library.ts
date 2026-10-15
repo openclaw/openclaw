@@ -329,9 +329,9 @@ export function captureSqliteWorkerClosePolicy(): boolean {
 }
 
 /** Retained supervisors forward the caller's current facts when creating each descendant. */
-export function captureSqliteWorkerEnvironmentData(): ReadonlyArray<
-  readonly [string, Parameters<typeof setEnvironmentData>[1]]
-> {
+export function captureSqliteWorkerEnvironmentData(
+  databaseAdmissions = getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY),
+): ReadonlyArray<readonly [string, Parameters<typeof setEnvironmentData>[1]]> {
   return [
     [WORKER_SELECTION_KEY, ensureSqliteLibrarySelected()],
     [WORKER_CAPABILITIES_KEY, getSqliteRuntimeCapabilities()],
@@ -341,7 +341,7 @@ export function captureSqliteWorkerEnvironmentData(): ReadonlyArray<
       SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY,
       getEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY),
     ],
-    [SQLITE_DATABASE_ADMISSIONS_KEY, getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY)],
+    [SQLITE_DATABASE_ADMISSIONS_KEY, databaseAdmissions],
   ];
 }
 
