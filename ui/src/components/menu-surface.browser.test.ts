@@ -1,12 +1,14 @@
 import { html, render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
-import { solidTemplate } from "../pages/chat/components/chat-composer-controls.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
-import { renderComposerLibraryMenuSolid } from "../pages/chat/components/chat-composer-library-menu.tsx";
+import { solidContent } from "../lit/solid-content.tsx";
+import { composerLibraryMenuItems } from "../pages/chat/components/chat-composer-library-menu.tsx";
 import { renderComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
+import "@awesome.me/webawesome/dist/styles/themes/default.css";
+import { ChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "../pages/chat/components/browser-tab-card.tsx";
-import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import "../test-helpers/load-styles.ts";
 import "./agent-select-registration.ts";
 import "./menu-surface.ts";
@@ -95,30 +97,6 @@ function hitTestOnDivider(menu: HTMLElement, divider: HTMLElement): Element | nu
   return document.elementFromPoint(x, y);
 }
 
-type Dropdown = HTMLElementTagNameMap["wa-dropdown"];
-
-function menuSurface(dropdown: Dropdown): HTMLElement {
-  const surface = dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-  if (!surface) {
-    throw new Error("expected rendered menu surface");
-  }
-  return surface;
-}
-
-async function openMenu(dropdown: Dropdown) {
-  const shown = new Promise<Event>((resolve) => {
-    dropdown.addEventListener("wa-after-show", resolve, { once: true });
-  });
-  dropdown.open = true;
-  await shown;
-}
-
-async function expectMenuInTopLayer(dropdown: Dropdown) {
-  const popup = dropdown.shadowRoot?.querySelector("wa-popup");
-  const surface = popup?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
-  await expect.poll(() => surface?.matches(":popover-open")).toBe(true);
-}
-
 async function browserCardMenu(card: HTMLElementTagNameMap["openclaw-browser-tab-card"]) {
   await card.updateComplete;
   const menu = card.querySelector<HTMLElement>(".oc-menu");
@@ -167,35 +145,48 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     expect(menu.contains(hit)).toBe(true);
     expect(surface.getBoundingClientRect().width).toBe(0);
     menu.style.left = "250px";
-    await expect.poll(() => nearby).toEqual([false, true]);
+    // Occlusion samples geometry on animation frames. Wait for that boundary
+    // rather than racing a wall-clock poll against background WebKit frames.
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    expect(nearby).toEqual([false, true]);
     expect(distant).toEqual([false]);
     menu.style.left = "850px";
-    await expect.poll(() => nearby).toEqual([false, true, false]);
-    await expect.poll(() => distant).toEqual([false, true]);
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    expect(nearby).toEqual([false, true, false]);
+    expect(distant).toEqual([false, true]);
   });
 
-  it("paints a dropdown above the divider through its own popover", async () => {
+  it("paints a native menu above the divider through its own popover", async () => {
     await useDesktopViewport();
     const { nav, divider } = mountShell();
     const dividerBounds = divider.getBoundingClientRect();
-    const dropdown = document.createElement("wa-dropdown");
-    dropdown.className = "sidebar-session-sort-menu";
-    const trigger = document.createElement("button");
-    trigger.slot = "trigger";
-    trigger.style.position = "fixed";
-    trigger.style.left = `${Math.round(dividerBounds.left) - 120}px`;
-    trigger.style.top = "100px";
-    const item = document.createElement("wa-dropdown-item");
-    item.className = "sidebar-session-sort-menu__item";
-    item.textContent = "Created";
-    dropdown.append(trigger, item);
-    nav.append(dropdown);
-    // Popover membership precedes positioning; hit-test only after the completed show.
-    await openMenu(dropdown);
-    await expectMenuInTopLayer(dropdown);
-    expect(dropdown.closest("openclaw-menu-surface")).toBeNull();
-
-    const menu = menuSurface(dropdown);
+    const mounted = mountSolid(
+      () =>
+        createComponent(Menu, {
+          id: "sort-menu-stacking",
+          label: "Sort sessions",
+          panelClass: "sidebar-session-sort-menu",
+          triggerAttributes: {
+            style: {
+              position: "fixed",
+              left: `${Math.round(dividerBounds.left) - 120}px`,
+              top: "100px",
+            },
+          },
+          items: [{ id: "created", label: "Created" }],
+        }),
+      { container: nav },
+    );
+    onTestFinished(mounted.unmount);
+    nav.querySelector<HTMLButtonElement>(".oc-menu-trigger")!.click();
+    const menu = nav.querySelector<HTMLElement>(".oc-menu")!;
+    await expect.poll(() => menu.getAttribute("data-phase")).toBe("open");
+    expect(menu.matches(":popover-open")).toBe(true);
+    expect(menu.closest("openclaw-menu-surface")).toBeNull();
     const menuBounds = menu.getBoundingClientRect();
     expect(menuBounds.right).toBeGreaterThan(dividerBounds.left);
     const hit = document.elementFromPoint(
@@ -203,7 +194,7 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
       menuBounds.top + menuBounds.height / 2,
     );
     expect(hit).not.toBeNull();
-    expect(dropdown.contains(hit)).toBe(true);
+    expect(menu.contains(hit)).toBe(true);
   });
 });
 
@@ -313,40 +304,43 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const host = document.createElement("div");
       host.style.padding = "400px 40px 0";
       document.body.append(host);
-      render(
-        renderChatComposerPlusMenu({
-          attachments: {},
-          disabled: false,
-          open: false,
-          view: "root",
-          toolOverrides: null,
-          onOpenChange: () => {},
-          onViewChange: () => {},
-          capabilityMenu: {
-            basePath: "",
-            skills: [],
-            skillsLoading: false,
-            skillsError: false,
-            mcpServers: [],
-            toolsEffectiveResult: null,
-            toolsEffectiveLoading: false,
-            toolsEffectiveError: false,
-            toolAccessMutationBlockedReason: null,
-            webSearchBaseEnabled: true,
-            mutationBlockedReason: null,
-            canAdmin: true,
-            adminBlockedReason: null,
-            onLoadSkills: () => {},
-            onPatchToolOverrides: () => {},
-            onNavigate: () => {},
-          },
-        }),
-        host,
+      mountSolid(
+        () =>
+          createComponent(ChatComposerPlusMenu, {
+            menu: {
+              attachments: {},
+              disabled: false,
+              open: false,
+              view: "root",
+              toolOverrides: null,
+              onOpenChange: () => {},
+              onViewChange: () => {},
+              capabilityMenu: {
+                basePath: "",
+                skills: [],
+                skillsLoading: false,
+                skillsError: false,
+                mcpServers: [],
+                toolsEffectiveResult: null,
+                toolsEffectiveLoading: false,
+                toolsEffectiveError: false,
+                toolAccessMutationBlockedReason: null,
+                webSearchBaseEnabled: true,
+                mutationBlockedReason: null,
+                canAdmin: true,
+                adminBlockedReason: null,
+                onLoadSkills: () => {},
+                onPatchToolOverrides: () => {},
+                onNavigate: () => {},
+              },
+            },
+          }),
+        { container: host },
       );
       const { page } = await import("vitest/browser");
-      await page.elementLocator(host.querySelector<HTMLElement>('[slot="trigger"]')!).click();
-      const photo = host.querySelector<HTMLElement>('wa-dropdown-item[value="photo"]')!;
-      const skills = host.querySelector<HTMLElement>('wa-dropdown-item[value="open-skills"]')!;
+      await page.elementLocator(host.querySelector<HTMLElement>('[aria-haspopup="menu"]')!).click();
+      const photo = host.querySelector<HTMLElement>('[data-value="photo"]')!;
+      const skills = host.querySelector<HTMLElement>('[data-value="open-skills"]')!;
       await hoverBackground(photo, highlight);
       const attachmentHover = getComputedStyle(photo).backgroundColor;
       await hoverBackground(skills, attachmentHover);
@@ -361,26 +355,28 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const host = document.createElement("div");
       document.body.append(host);
       const { page } = await import("vitest/browser");
-      render(
-        html`<wa-dropdown>
-          <button slot="trigger">Library</button>
-          ${solidTemplate(renderComposerLibraryMenuSolid, {
-            result: null,
-            loading: false,
-            busy: false,
-            error: "Library unavailable",
-            notice: null,
-            canWrite: false,
-            onReload: () => {},
-            onRead: () => {},
-            onActivate: () => {},
-          })}
-        </wa-dropdown>`,
-        host,
+      mountSolid(
+        () =>
+          createComponent(Menu, {
+            id: "library-menu-test",
+            label: "Library",
+            items: composerLibraryMenuItems({
+              result: null,
+              loading: false,
+              busy: false,
+              error: "Library unavailable",
+              notice: null,
+              canWrite: false,
+              onReload: () => {},
+              onRead: () => {},
+              onActivate: () => {},
+            }),
+          }),
+        { container: host },
       );
-      await page.elementLocator(host.querySelector<HTMLElement>('[slot="trigger"]')!).click();
+      await page.elementLocator(host.querySelector<HTMLElement>('[aria-haspopup="menu"]')!).click();
       await hoverBackground(
-        host.querySelector<HTMLElement>('[value="library-reload"]')!,
+        host.querySelector<HTMLElement>('[data-value="library-reload"]')!,
         highlight,
       );
     },
@@ -408,7 +404,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const reference = document.createElement("div");
       document.body.append(reference);
       render(
-        solidTemplate(Menu, {
+        solidContent(Menu, {
           id: "browser-card-reference",
           label: "Reference menu",
           class: "session-menu",
@@ -441,7 +437,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       document.body.append(host);
       const renderOption = (active: boolean) => {
         render(
-          solidTemplate(renderComposerMenuOption, {
+          solidContent(renderComposerMenuOption, {
             id: "hover-command",
             active,
             select: () => {},

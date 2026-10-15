@@ -1,10 +1,10 @@
 import { createSignal, untrack } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
-import type { ConfirmDialogOptions } from "./confirm-dialog-types.ts";
+import type { ConfirmDialogChoice, ConfirmDialogOptions } from "./confirm-dialog-types.ts";
 
 export function ConfirmDialogView(props: {
-  options: ConfirmDialogOptions;
-  finish(value: boolean): void;
+  options: ConfirmDialogOptions & { alternativeLabel?: string };
+  finish(value: ConfirmDialogChoice): void;
 }) {
   const options = untrack(() => props.options);
   const title = () => options.title ?? t("common.confirm");
@@ -14,7 +14,7 @@ export function ConfirmDialogView(props: {
     <openclaw-modal-dialog
       label={title()}
       description={options.message}
-      onModal-cancel={() => props.finish(false)}
+      onModal-cancel={() => props.finish(null)}
     >
       <div class="exec-approval-card">
         <div class="exec-approval-header">
@@ -49,7 +49,7 @@ export function ConfirmDialogView(props: {
             <span>{t("common.dontAskAgain")}</span>
           </label>
         ) : undefined}
-        <div class="exec-approval-actions">
+        <openclaw-modal-actions class="exec-approval-actions">
           <button
             type="button"
             class={["btn", options.danger ? "danger" : "primary"]}
@@ -61,15 +61,29 @@ export function ConfirmDialogView(props: {
               if (skipRequested) {
                 options.skipPreference?.remember();
               }
-              props.finish(true);
+              props.finish("confirm");
             }}
           >
             {options.confirmLabel ?? t("common.confirm")}
           </button>
-          <button type="button" class="btn" autofocus onClick={() => props.finish(false)}>
+          {options.alternativeLabel ? (
+            <button
+              type="button"
+              class="btn"
+              disabled={!acknowledged()}
+              onClick={() => {
+                if (acknowledged()) {
+                  props.finish("alternative");
+                }
+              }}
+            >
+              {options.alternativeLabel}
+            </button>
+          ) : undefined}
+          <button type="button" class="btn" autofocus onClick={() => props.finish(null)}>
             {options.cancelLabel ?? t("common.cancel")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </div>
     </openclaw-modal-dialog>
   );

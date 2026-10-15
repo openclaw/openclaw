@@ -1,12 +1,44 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, vi } from "vitest";
-import type { ChromeMcpSession } from "./chrome-mcp-contracts.js";
-import { resetChromeMcpSessionsForTest } from "./chrome-mcp-session.js";
+import * as chromeMcpConnect from "./chrome-mcp-connect.js";
+import type {
+  ChromeMcpSession,
+  NormalizedChromeMcpProfileOptions,
+} from "./chrome-mcp-contracts.js";
+import { closeChromeMcpSession } from "./chrome-mcp-session.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 
 const { resetChromeMcpProcessMocks } = await vi.hoisted(
   () => import("./chrome-mcp-process.test-support.js"),
 );
+
+export type ChromeMcpSessionFactory = (
+  profileName: string,
+  options?: NormalizedChromeMcpProfileOptions,
+) => ChromeMcpSession;
+
+const ownedProfiles = new Set<string>();
+
+export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFactory | null): void {
+  if (!factory) {
+    if (vi.isMockFunction(chromeMcpConnect.createChromeMcpSession)) {
+      vi.mocked(chromeMcpConnect.createChromeMcpSession).mockRestore();
+    }
+    return;
+  }
+  vi.spyOn(chromeMcpConnect, "createChromeMcpSession").mockImplementation(
+    (_owner, profileName, options) => {
+      ownedProfiles.add(profileName);
+      return factory(profileName, options);
+    },
+  );
+}
+
+export async function resetChromeMcpSessionsForTest(): Promise<void> {
+  await Promise.all([...ownedProfiles].map((profileName) => closeChromeMcpSession(profileName)));
+  ownedProfiles.clear();
+  setChromeMcpSessionFactoryForTest(null);
+}
 
 export function waitForChromeMcpState<T>(assertion: () => T | Promise<T>): Promise<T> {
   return vi.waitFor(assertion, { interval: 1 });

@@ -210,6 +210,44 @@ describe("zai provider plugin", () => {
     }
   });
 
+  it("applies Z.AI effort policy to each direct completion request", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    for (const modelId of ["glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1"]) {
+      const model = { ...createGlm47Template(), id: modelId };
+      let payload: Record<string, unknown> = {};
+      const streamFn: StreamFn = (streamModel, context, options) => {
+        payload = buildOpenAICompletionsParams(streamModel, context, options ?? {});
+        options?.onPayload?.(payload, streamModel);
+        return {} as ReturnType<StreamFn>;
+      };
+      const wrapped = provider.wrapSimpleCompletionStreamFn?.({
+        provider: "zai",
+        modelId,
+        sourceApi: "openai-completions",
+        streamFn,
+      });
+      if (!wrapped) {
+        throw new Error("Expected Z.AI direct completion wrapper");
+      }
+      for (const reasoning of [undefined, "off", "low", "high", "max"] as const) {
+        void wrapped(model, { messages: [] }, { reasoning });
+        if (modelId.startsWith("glm-5.3")) {
+          expect(payload.reasoning_effort).toBe(
+            reasoning === undefined || reasoning === "max"
+              ? "max"
+              : reasoning === "high"
+                ? "high"
+                : "low",
+          );
+          expect(payload).not.toHaveProperty("thinking");
+          expect(payload).not.toHaveProperty("enable_thinking");
+        } else if (reasoning === undefined || reasoning === "off") {
+          expect(payload.thinking).toEqual({ type: "disabled" });
+        }
+      }
+    }
+  });
+
   it("enables Z.AI preserved thinking only when requested", async () => {
     const withoutPreserve = await captureStreamPayload({ thinkingLevel: "low" });
     expect(withoutPreserve.tool_stream).toBe(true);

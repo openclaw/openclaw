@@ -3,7 +3,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import { renderCommentPreviewChip, renderCommentPreviewRow } from "./chat-comment-preview.ts";
+import { renderCommentPreviewChip, renderCommentPreviewRows } from "./chat-comment-preview.tsx";
 import "../../../styles/chat/selection-annotations.css";
 
 registerChatMessageMetadataEnglish();
@@ -28,13 +28,13 @@ export function renderChatSelectionAnnotations(props: ChatAttachmentControlsProp
   return comments.length
     ? renderCommentPreviewChip(
         comments.length,
-        html`<ol class="chat-comment-preview__list" role="list">
-          ${comments.map((attachment, index) =>
-            renderCommentPreviewRow(
-              attachment.selectionAnnotation!,
-              html`<span class="chat-comment-preview__actions">
-                ${(["edit", "delete"] as const).map(
-                  (action) => html`<button
+        renderCommentPreviewRows(
+          comments.map((attachment, index) => ({
+            comment: attachment.selectionAnnotation!,
+            actions: html`<span class="chat-comment-preview__actions">
+              ${(["edit", "delete"] as const).map(
+                (action) =>
+                  html`<button
                     type="button"
                     data-comment-delete=${action === "delete" ? attachment.id : nothing}
                     aria-label=${action === "edit" ? t("chat.messages.editAnnotation", { number: String(index + 1) }) : t("chat.messages.deleteAnnotation")}
@@ -43,11 +43,10 @@ export function renderChatSelectionAnnotations(props: ChatAttachmentControlsProp
                   >
                     ${action === "edit" ? icons.pencil : icons.trash}
                   </button>`,
-                )}
-              </span>`,
-            ),
-          )}
-        </ol>`,
+              )}
+            </span>`,
+          })),
+        ),
         undefined,
         {
           onRemove: (event) => dispatchChatCommentAction(event, undefined, "delete-all"),

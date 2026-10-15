@@ -300,21 +300,46 @@ afterEach(() => {
 describe("initSessionState guarded initialization", () => {
   registerSessionInitializationAdmissionTests({ makeStorePath });
 
-  it("reuses accepted activity without losing a later in-process entry update", async () => {
+  it("reuses unchanged initialization without losing related entries or later in-process updates", async () => {
     const storePath = await makeStorePath("openclaw-session-accepted-activity-");
     const sessionKey = "agent:main:dashboard:accepted-activity";
     const sessionId = "accepted-activity";
+    const storedParentKey = "agent:main:dashboard:stored-parent";
+    const modelParentKey = "agent:main:dashboard:model-parent";
     const at = Date.now() - 1_000;
     await writeSessionStoreFast(storePath, {
-      [sessionKey]: { sessionId, updatedAt: at, lastInteractionAt: at },
+      [sessionKey]: {
+        sessionId,
+        updatedAt: at,
+        lastInteractionAt: at,
+        parentSessionKey: storedParentKey,
+      },
+      [storedParentKey]: { sessionId: "stored-parent", updatedAt: at, label: "Stored parent" },
+      [modelParentKey]: { sessionId: "model-parent", updatedAt: at, modelOverride: "test-model" },
     });
     const params = {
       cfg: { session: { store: storePath } } as OpenClawConfig,
-      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "webchat", Surface: "webchat" },
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+        ModelParentSessionKey: modelParentKey,
+        Provider: "webchat",
+        Surface: "webchat",
+      },
       recordedSessionActivity: { sessionId, sessionKey, at },
     };
     const initialized = await initSessionState(params);
     expect(initialized.sessionEntry).toMatchObject({ updatedAt: at, lastInteractionAt: at });
+    const unchanged = await initSessionState(params);
+    expect(unchanged.sessionEntry).toEqual(initialized.sessionEntry);
+    expect(unchanged.sessionEntryHandle.get(storedParentKey)).toMatchObject({
+      sessionId: "stored-parent",
+      label: "Stored parent",
+    });
+    expect(unchanged.sessionEntryHandle.get(modelParentKey)).toMatchObject({
+      sessionId: "model-parent",
+      modelOverride: "test-model",
+    });
 
     const updated = expectDefined(
       await upsertSessionEntryCore(
@@ -1219,7 +1244,7 @@ describe("initSessionState RawBody", () => {
     expect(explicitCommandWithEmptyRaw.resetTriggered).toBe(false);
   });
 
-  it("preserves a user model override across an implicit daily stale rollover (#90119)", async () => {
+  it("preserves user selections and repository workspace across implicit daily rollover (#90119, #159452)", async () => {
     // Regression: a user-set /model override persisted on a session that then
     // goes stale at the daily reset boundary must survive the implicit
     // rollover. Previously the carryover was gated on resetTriggered, so the
@@ -1245,6 +1270,7 @@ describe("initSessionState RawBody", () => {
       label: "Other",
       autoLabel: "Device",
       displayName: "Dashboard Chat",
+      deviceFolder: { deviceId: "rollover-device", path: "/existing/project" },
       pendingDeliveryNotice: {
         createdAt: staleStartedAt,
         context: { channel: "telegram", to: "chat-1", accountId: "default" },
@@ -1264,6 +1290,7 @@ describe("initSessionState RawBody", () => {
         modelOverride: "m2.7",
         modelOverrideSource: "user",
         agentRuntimeOverride: "native-runtime",
+        repositoryWorkspaceId: "repo-workspace-159452",
       },
     });
 
@@ -1290,6 +1317,7 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionEntry.modelOverride).toBe("m2.7");
     expect(result.sessionEntry.modelOverrideSource).toBe("user");
     expect(result.sessionEntry.agentRuntimeOverride).toBe("native-runtime");
+    expect(result.sessionEntry.repositoryWorkspaceId).toBe("repo-workspace-159452");
 
     expect(result.sessionEntry).toMatchObject(preserved);
     const store = readSessionStoreFast(storePath);
@@ -1297,6 +1325,7 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.modelOverride).toBe("m2.7");
     expect(store[sessionKey]?.modelOverrideSource).toBe("user");
     expect(store[sessionKey]?.agentRuntimeOverride).toBe("native-runtime");
+    expect(store[sessionKey]?.repositoryWorkspaceId).toBe("repo-workspace-159452");
   });
 
   it.each([
@@ -1346,33 +1375,6 @@ describe("initSessionState RawBody", () => {
       expect(
         resolvePreparedSandboxRuntimeStatus({ cfg, sessionKey, preparedSessionEntry: stored }),
       ).toMatchObject({ sandboxed: required, sandboxRequired: required });
-    },
-  );
-
-  it.each(["hello again", "/reset"])(
-    "preserves device-folder affinity through reply-session rollover (%s)",
-    async (body) => {
-      const storePath = await makeStorePath("openclaw-rollover-device-folder-");
-      const sessionKey = "agent:main:dashboard:device-folder-rollover";
-      const deviceFolder = { deviceId: "rollover-device", path: "/existing/project" };
-      const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
-      await writeSessionStoreFast(storePath, {
-        [sessionKey]: {
-          sessionId: "device-folder-before-rollover",
-          updatedAt: staleStartedAt,
-          sessionStartedAt: staleStartedAt,
-          lastInteractionAt: staleStartedAt,
-          deviceFolder,
-        },
-      });
-      const result = await initSessionState({
-        ctx: { RawBody: body, ChatType: "direct", SessionKey: sessionKey },
-        cfg: { session: { store: storePath, reset: { mode: "daily", atHour: 4 } } },
-      });
-      expect(result.isNewSession).toBe(true);
-      expect(result.resetTriggered).toBe(body === "/reset");
-      expect(result.sessionEntry.deviceFolder).toEqual(deviceFolder);
-      expect(loadSessionEntry({ storePath, sessionKey })?.deviceFolder).toEqual(deviceFolder);
     },
   );
 
@@ -1443,44 +1445,6 @@ describe("initSessionState RawBody", () => {
       errorMessage: "placement identity changed",
     });
     expect(placement.workspace).toEqual({ kind: "local", path: worktree.repoRoot });
-  });
-
-  it("preserves the session-owned repository workspace binding across an implicit daily stale rollover (#159452)", async () => {
-    const storePath = await makeStorePath("openclaw-daily-rollover-repo-workspace-");
-    const sessionKey = "agent:main:dashboard:repo-workspace-rollover";
-    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: "session-before-repo-workspace-rollover",
-        updatedAt: staleStartedAt,
-        sessionStartedAt: staleStartedAt,
-        lastInteractionAt: staleStartedAt,
-        systemSent: true,
-        repositoryWorkspaceId: "repo-workspace-159452",
-      },
-    });
-
-    const result = await initSessionState({
-      ctx: {
-        RawBody: "hello again",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-      },
-      cfg: {
-        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
-      } as OpenClawConfig,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(false);
-    expect(result.sessionEntry.repositoryWorkspaceId).toBe("repo-workspace-159452");
-
-    const store = readSessionStoreFast(storePath) as Record<
-      string,
-      { repositoryWorkspaceId?: string }
-    >;
-    expect(store[sessionKey]?.repositoryWorkspaceId).toBe("repo-workspace-159452");
   });
 
   it.each(["required"] as const)(
@@ -2560,6 +2524,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         verboseLevel: "on",
         category: "Channels",
         pinnedAt: 123,
+        deviceFolder: { deviceId: "rollover-device", path: "/existing/project" },
         authProfileOverride: "20251001",
         authProfileOverrideSource: "user",
         authProfileOverrideCompactionCount: 2,

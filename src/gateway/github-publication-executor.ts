@@ -193,8 +193,6 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
   let worktreeOwner:
     | Awaited<ReturnType<typeof readLocalGitHubPublicationWorktreeOwner>>
     | undefined;
-  using _ = { [Symbol.dispose]: () => worktreeOwner?.release() };
-
   const currentWorktree = () => {
     if (!worktreeOwner) {
       throw new GitHubPublicationRecoveryPendingError(
@@ -277,9 +275,6 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         );
       }
     }
-    let headCommit = await command(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
-      cwd: worktree.path,
-    });
     let identity = await refreshIdentity();
     const { pushRepository, repository, branch, baseBranch, pushOwner, githubHost } =
       await prepareGitHubPublicationTarget({
@@ -345,6 +340,15 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     }
     const marker = `${PUBLICATION_MARKER}: ${row.request_id}`;
     const pullRequestMarker = `<!-- openclaw-publication:${row.request_id} -->`;
+    const head = await command(
+      ["git", "show", "-s", "--no-show-signature", "--format=%H%n%T%n%P%n%B", "HEAD"],
+      {
+        cwd: worktree.path,
+      },
+    );
+    const [initialHead, currentTree, parents, ...message] = head.split("\n");
+    let headCommit = initialHead!;
+    const currentMessage = message.join("\n").trim();
     const findPullRequest = () =>
       findGitHubPublicationPullRequest({
         repository,
@@ -361,16 +365,9 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         },
         assertCurrent: assertAuthority,
       });
-    const currentMessage = await command(["git", "show", "-s", "--format=%B", "HEAD"], {
-      cwd: worktree.path,
-    });
     const markerPresent = currentMessage.split(/\r?\n/u).includes(marker);
-    const currentTree = await command(["git", "rev-parse", "HEAD^{tree}"], {
-      cwd: worktree.path,
-    });
     if (markerPresent) {
-      const markerParent = await command(["git", "rev-parse", "HEAD^"], { cwd: worktree.path });
-      if (markerParent !== sourceHeadCommit || currentTree !== workspaceTree) {
+      if (parents!.split(" ", 1)[0] !== sourceHeadCommit || currentTree !== workspaceTree) {
         throw new GitHubPublicationWorkspaceChangedError(
           "GitHub publication workspace changed after its accepted snapshot.",
         );

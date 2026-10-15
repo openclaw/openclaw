@@ -1,16 +1,16 @@
-import { icons } from "../../../components/icons.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
 } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
-import { renderAttachmentRemove } from "./chat-attachment-file.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { AttachmentRemove } from "./chat-attachment-file.tsx";
+import { ChatPastedText } from "./chat-pasted-text.tsx";
 
 function readTextFromDataUrl(dataUrl: string): string | null {
   const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
@@ -46,7 +46,7 @@ function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentCont
   props.onRequestUpdate?.();
 }
 
-function ComposerPastedText(componentProps: {
+export function ComposerPastedText(componentProps: {
   attachment: ChatAttachment;
   controls: ChatAttachmentControlsProps;
 }) {
@@ -81,7 +81,6 @@ function ComposerPastedText(componentProps: {
       {t("chat.attachments.showInTextField")}
     </button>
   );
-  const renderRestoreAction = () => solidTemplate(restoreAction, {});
   const open = () => {
     if (!current()) {
       return;
@@ -104,7 +103,7 @@ function ComposerPastedText(componentProps: {
           : { status: "unavailable" };
       },
       renderActions: () =>
-        solidTemplate(
+        solidContent(
           () => (
             <>
               {restoreAction()}
@@ -115,7 +114,7 @@ function ComposerPastedText(componentProps: {
                 disabled={componentProps.controls.disabled}
                 onClick={remove}
               >
-                <LitContent value={icons.trash} />
+                <Icon name="trash" />
               </button>
             </>
           ),
@@ -124,24 +123,19 @@ function ComposerPastedText(componentProps: {
     });
   };
   return (
-    <openclaw-chat-pasted-text
-      prop:src={getChatAttachmentDataUrl(componentProps.attachment) ?? undefined}
-      prop:sizeBytes={componentProps.attachment.sizeBytes}
-      prop:scope={componentProps.attachment.id}
-      prop:onOpen={open}
-      prop:composerAction={renderRestoreAction()}
-      prop:composerRemoveAction={renderAttachmentRemove(
-        removeLabel(),
-        componentProps.controls.disabled,
-        remove,
-      )}
-    ></openclaw-chat-pasted-text>
+    <ChatPastedText
+      src={getChatAttachmentDataUrl(componentProps.attachment) ?? undefined}
+      sizeBytes={componentProps.attachment.sizeBytes}
+      scope={componentProps.attachment.id}
+      onOpen={open}
+      composerAction={restoreAction()}
+      composerRemoveAction={
+        <AttachmentRemove
+          label={removeLabel()}
+          disabled={componentProps.controls.disabled}
+          onClick={remove}
+        />
+      }
+    />
   );
-}
-
-export function renderComposerPastedText(
-  attachment: ChatAttachment,
-  controls: ChatAttachmentControlsProps,
-) {
-  return solidTemplate(ComposerPastedText, { attachment, controls });
 }

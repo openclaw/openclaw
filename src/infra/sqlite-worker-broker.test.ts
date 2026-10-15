@@ -236,6 +236,82 @@ it("does not wait on permanent refusal or another database's admission", async (
   expect(await read(store)).toEqual([]);
 });
 
+it("borrows an open database while an unrelated cold open awaits its reply", async ({ signal }) => {
+  const broker = new SqliteWorkerBroker();
+  const warmPath = databasePath();
+  const coldPath = databasePath();
+  const openStore = (pathname: string) =>
+    broker.open<FixtureOperations>({
+      moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+      databasePath: pathname,
+      input: undefined,
+    });
+  const pending: Promise<unknown>[] = [];
+  const held = createDeferredCore();
+  let release: (() => void) | undefined;
+  const requests = vi.spyOn(Worker.prototype, "postMessage");
+  const messages = vi.spyOn(Worker.prototype, "emit");
+  try {
+    const warm = await openStore(warmPath);
+    assert(warm, "Warm store missing");
+    const seed = await append(warm, "seed");
+    messages.mockImplementation(function (
+      this: Worker,
+      event: string | symbol,
+      ...args: unknown[]
+    ) {
+      const reply = args[0];
+      if (
+        event === "message" &&
+        isRecord(reply) &&
+        typeof reply.ok === "boolean" &&
+        requests.mock.calls.some(
+          ([request], index) =>
+            requests.mock.contexts[index] === this &&
+            isRecord(request) &&
+            request.type === "open" &&
+            request.databasePath === coldPath &&
+            request.id === reply.id,
+        )
+      ) {
+        messages.mockRestore();
+        release = () => EventEmitter.prototype.emit.call(this, event, ...args);
+        held.resolve();
+        return true;
+      }
+      return EventEmitter.prototype.emit.call(this, event, ...args);
+    });
+    const cold = openStore(coldPath);
+    pending.push(cold);
+    await withinTest(held.promise, signal);
+    expect(await withinTest(read(warm), signal)).toEqual(["seed"]);
+
+    const started = performance.now();
+    const borrowing = openStore(warmPath);
+    pending.push(borrowing);
+    const borrowed = await withinTest(borrowing, signal);
+    assert(borrowed, "Borrowed store missing");
+    expect(await withinTest(append(borrowed, "borrowed"), signal)).toEqual({
+      ...seed,
+      writes: 2,
+    });
+    console.info("sqlite-warm-borrow-measurement", {
+      borrowAndWriteMs: performance.now() - started,
+      coldReplyHeld: release !== undefined,
+    });
+    expect(release).toBeDefined();
+    await borrowed.close();
+    expect(await append(warm, "original survives")).toEqual({ ...seed, writes: 3 });
+    expect(await read(warm)).toEqual(["seed", "borrowed", "original survives"]);
+  } finally {
+    requests.mockRestore();
+    messages.mockRestore();
+    release?.();
+    await Promise.allSettled(pending);
+    await broker.close();
+  }
+});
+
 it("cancels queued opens without overtaking an accepted open or abandoning its settlement", async ({
   signal,
 }) => {

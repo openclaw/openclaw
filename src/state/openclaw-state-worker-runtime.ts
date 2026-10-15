@@ -9,7 +9,6 @@ import { patchConfigHealthEntryInDatabase } from "../config/io.health-state.kern
 import {
   executeCronStateCommand,
   isCronStateWorkerCommand,
-  prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-read.worker.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
@@ -67,31 +66,24 @@ import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerRuntimeCommand,
 } from "./openclaw-state-worker-contract.js";
-import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 import type { WorkerWriteOperationContext } from "./worker-operation-registry.js";
 
 export { openUpdateRunWriter } from "../infra/update-run-mutation.worker.js";
 
-export function prepareSharedStateCommand(type: PropertyKey): Promise<void> | undefined {
-  return stateWorkerRegistry.prepare(type) ?? prepareCronStateWorkerCommand(type);
-}
+export { prepareCronStateWorkerCommand as prepareSharedStateCommand } from "../cron/store/dispatch.worker.js";
 
 export function executeSharedStateCommand(
   command: OpenClawStateWorkerRuntimeCommand,
   context: { databasePath: string },
   open: () => OpenClawStateDatabase,
   write: WorkerWriteOperationContext["write"],
-  writeAdmitted: WorkerWriteOperationContext["writeAdmitted"],
   updateRunWriter: () => ExistingOpenClawStateWriter,
 ): ReturnType<OpenClawStateWorkerBackend["execute"]> {
   const stateOptions = () => ({
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   });
-  if (stateWorkerRegistry.has(command)) {
-    return stateWorkerRegistry.execute(command, { open, write, writeAdmitted, stateOptions });
-  }
   if (
     command.type === "updateRuns.recordStep" ||
     command.type === "updateRuns.recordPhase" ||
@@ -123,7 +115,7 @@ export function executeSharedStateCommand(
       return readClawInstallSchemaVersionRows(db);
     }, stateOptions());
   }
-  if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
+  if (command.type === "userPreferences.write") {
     return executeUserPreferenceCommand(command, {
       database: open(),
       ...stateOptions(),

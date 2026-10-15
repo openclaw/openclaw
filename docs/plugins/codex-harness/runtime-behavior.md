@@ -271,6 +271,13 @@ When native interruption and subscription cleanup are confirmed, stopping one
 chat leaves other chats running on the shared client. A follow-up can resume the
 stopped thread without waiting for those chats to finish.
 
+If native children are still running when their parent stops or calls
+`sessions_yield`, OpenClaw keeps the parent's subscription to observe their
+results. The same conversation can accept another message after Codex confirms
+that exact parent turn has ended. Child results stay attached to the original
+session lifecycle; a reset, replaced binding, or revoked source cannot inherit
+its retained authority.
+
 Managed local connections share a bounded inference relay. Up to 16 request
 preparations and uploads run at once, with another 16 waiting in arrival order.
 Responses keep streaming after their upload capacity is released, so a long
@@ -319,6 +326,11 @@ same native thread through multiple controllers; observing native teardown alone
 does not reserve it against a subsequent native reload.
 
 ## Runtime boundaries
+
+Native provider throttling and overload retain their structured status whether
+Codex rejects turn startup or reports a failed turn. Both paths use OpenClaw's
+shared retry and failure guidance in channel chats and the Control UI. Temporary
+throttling does not inherit a subscription usage-limit reset cooldown.
 
 The Codex harness changes the low-level embedded agent executor only.
 

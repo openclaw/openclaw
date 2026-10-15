@@ -173,16 +173,6 @@ describe("sessions_send communication boundary", () => {
     receive.resolve();
     (await pending).close();
   });
-  it.each(["refused", "expired", "cancelled"])(
-    "%s never delivers or releases a backlog",
-    async (reason) => {
-      const input = operation(endpoint("source", { communication: { send: "ask" } }));
-      state.approve.mockRejectedValue(new Error(reason));
-      await expect(prepareSessionsSendCommunication(input)).rejects.toThrow(reason);
-      state.config = { session: { communication: { send: "always" } } };
-      expect(input.callGateway).not.toHaveBeenCalled();
-    },
-  );
   it("rejects policy changes during approval", async () => {
     const input = operation(endpoint("source", { communication: { send: "ask" } }));
     state.approve.mockImplementation(async () => {

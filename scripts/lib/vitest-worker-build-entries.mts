@@ -121,6 +121,7 @@ export const preservedModuleBuildSources = [
   "scripts/check-plugin-gateway-gauntlet.mts",
   "scripts/lib/managed-child-process.mts",
   "scripts/e2e/kitchen-sink-rpc-walk.mts",
+  "scripts/code-mode-model-matrix.ts",
   "scripts/control-ui-i18n.ts",
   "scripts/test-docker-all.mts",
   "scripts/run-tsgo-core-test-shards.mts",
@@ -274,6 +275,7 @@ export const preservedModuleBuildAssets = [
   "scripts/e2e/parallels/parallels-exec.py",
   ".github/workflows/plugin-npm-release.yml",
   "scripts/lib/vitest-worker-bootstrap.mts",
+  "scripts/lib/vitest-worker-descriptor.mts",
 ];
 
 // Test-only roots share the invocation generation without changing package entries.

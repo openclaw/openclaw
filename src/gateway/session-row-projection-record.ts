@@ -663,13 +663,18 @@ export function acquireSessionRowEntry(params: {
     return undefined;
   }
   const lineage = readSessionRowLineage(row, storedEntry, cfg, context, params.referenced);
+  const entryChanged = !isDeepStrictEqual(lineage.entry, row.entry);
+  // Selection and profile indexes retain entry identity until its metadata changes.
+  if (!entryChanged && row.entry) {
+    lineage.entry = row.entry;
+  }
   const { entry, parents } = lineage;
   // Equal timestamps still need the full metadata comparison.
   const changed =
     !isDeepStrictEqual(row.parents, parents) ||
     !Object.is(storedEntry.updatedAt, row.storedEntry?.updatedAt) ||
     !isDeepStrictEqual(storedEntry, row.storedEntry) ||
-    !isDeepStrictEqual(entry, row.entry);
+    entryChanged;
   // Archive custody can retain new stored metadata before its lineage is acquired.
   const includeChildren =
     changesSessionRowDependents(row.storedEntry, storedEntry) ||

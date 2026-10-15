@@ -272,7 +272,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved async auth-snapshot publication with retained sync compatibility.
       // +1: approved lexical database-engine admission scope for workboard boot/migrations.
       // +1: async auth-provider preparation for Codex and voice model-session patches.
-      3759,
+      // +1: isHostNoticePayload for agent-to-agent reply filtering.
+      // +1: approved jsonPathValue on the experimental database-engine worker entrypoint.
+      3761,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -306,7 +308,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved async auth-snapshot publication with retained sync compatibility.
       // +1: the same lexical database-engine admission scope.
       // +1: the same prepareAuthProfileProvider operation on model-session-runtime.
-      2194,
+      // +1: the same host-notice classifier on reply-payload.
+      // +1: the same approved database-engine JSON path helper.
+      2196,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

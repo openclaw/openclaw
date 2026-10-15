@@ -2,14 +2,7 @@ function readDiscordChannelPropertySafe(channel: unknown, key: string): unknown 
   if (!channel || typeof channel !== "object") {
     return undefined;
   }
-  try {
-    if (!(key in channel)) {
-      return undefined;
-    }
-    return (channel as Record<string, unknown>)[key];
-  } catch {
-    return undefined;
-  }
+  return (channel as Record<string, unknown>)[key];
 }
 
 function resolveDiscordChannelStringPropertySafe(

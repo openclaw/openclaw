@@ -1,16 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type {
-  OpenAsyncKeyedStoreOptions,
-  OpenKeyedStoreOptions,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
@@ -18,6 +9,7 @@ import { handleReefCommand } from "./commands.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefFriendManager } from "./friends.js";
 import { createReefRuntimeAuthority } from "./runtime.js";
+import { createRuntime } from "./state.test-support.js";
 import type { ReefTransportClient } from "./transport.js";
 import { ReefRelayError } from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
@@ -54,20 +46,7 @@ function relayFriend(
 }
 
 function runtime() {
-  const mockRuntime = createPluginRuntimeMock();
-  mockRuntime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateSyncKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-  mockRuntime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => {
-    const store = createPluginStateKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    return store;
-  };
-  return mockRuntime;
+  return createRuntime(stateDir);
 }
 
 function config() {
@@ -165,17 +144,6 @@ describe("ReefFriendManager pairing", () => {
       safetyNumberChanged: false,
     });
     expect(pairing.values).toEqual(new Set());
-  });
-
-  it("consumes approval before accepting or pinning an inbound friendship", async () => {
-    const pending = relayFriend("alice", "pending");
-    const { relay, store, pairing, manager } = pairingFixture(pending);
-    pairing.remove.mockRejectedValue(new Error("approval store unavailable"));
-    await addApproval(store, pairing, pending);
-
-    await expect(manager.reconcile()).rejects.toThrow("approval store unavailable");
-    expect(relay.respondFriend).not.toHaveBeenCalled();
-    expect(await store.get("alice")).toBeUndefined();
   });
 
   it("does not reuse an approval another reconciler already consumed", async () => {
@@ -598,20 +566,6 @@ describe("ReefFriendManager pairing", () => {
       store,
       pairing,
     );
-
-    await expect(manager.reconcile()).resolves.toEqual([]);
-    expect(await store.get("alice")).toBeUndefined();
-    expect(pairing.values).toEqual(new Set());
-  });
-
-  it("rejects a bound approval after the relay keys change", async () => {
-    const active = relayFriend("alice", "active");
-    const { store, pairing, manager } = pairingFixture(active);
-    await addApproval(store, pairing, active);
-    const nextIdentity = generateIdentity();
-    active.ed25519_pub = nextIdentity.signing.publicKey;
-    active.x25519_pub = nextIdentity.encryption.publicKey;
-    active.key_epoch += 1;
 
     await expect(manager.reconcile()).resolves.toEqual([]);
     expect(await store.get("alice")).toBeUndefined();

@@ -163,6 +163,42 @@ disabling or narrowing the job itself stops later requests and retries in the
 current invocation. A confirmed write still returns its result if authority ends
 while the response is pending.
 
+### Inference account continuity
+
+New isolated agent-turn jobs privately retain their selected stored inference account
+and compatible authentication route. OAuth and API keys can remain enabled together:
+changing interactive defaults, profile order, or the job’s plain model selection does
+not switch the job’s account or billing route. Automatic ownership remains distinct
+from an explicit user profile pin. Token refresh within the same authorization is
+allowed; deleting, replacing, or revoking that authorization stops the job rather
+than falling back to another account. Model and route compatibility still apply.
+
+To change an account deliberately, update the job with a model/profile selection,
+for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
+For legacy jobs without a recorded inference owner, `openclaw doctor --fix` can
+record the currently selected explicit stored account or the only eligible stored
+account. This is a one-time adoption of the current authorized account, not a claim
+about which account every historical run used. Doctor uses normal automation model
+selection, preserves inherited defaults and fallback lists, leaves existing bindings
+unchanged, and backs up cron state before committing. Multiple eligible accounts
+without an explicit selection, missing accounts, and personal accounts needing their
+owner's authorization are left unchanged with job-specific adoption instructions.
+
+Managed updates and the standard container entrypoint run repairing Doctor before
+activation. A manual source upgrade must include `openclaw doctor --fix` before
+starting the Gateway. Startup reports potentially unmigrated host-account jobs
+before scheduling; it does not capture credentials or rewrite jobs.
+
+Environment-only and provider-config API keys have no durable account ownership,
+so Doctor reports them instead of silently substituting a stored account. New
+host-managed jobs reject them at creation. Store the key in an auth profile and
+select that profile instead. Credentialless models remain usable without an account.
+Native runtime-owned jobs retain their runtime’s existing authorization checks, and a
+native connection cannot silently replace a job’s recorded host-managed inference account.
+An explicit update from an authorized native creator can adopt its runtime authority.
+Moving a job to an agent with a different credential owner requires explicit account adoption.
+Tool and delivery accounts remain separate from the inference account.
+
 `--model` sets the job's primary model; it does not replace a session `/model` override, so configured fallback chains still apply on top of it. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
 
 A fallback after a provider timeout continues the same scheduled turn and reuses its saved user input. Failed attempts do not complete the turn or duplicate the scheduled prompt.
@@ -184,7 +220,7 @@ Fast mode follows the resolved live selection. Isolated automation resolves it i
 
 When a runtime reports token usage without a cost, automation estimates use the selected agent's local `models.json` prices and the model metadata retained for that run.
 
-If a run hits a live model-switch handoff, the scheduler retries with the switched provider/model and persists that selection (and any new auth profile) for the active run. Retries are bounded: after the initial attempt plus 2 switch retries, the scheduler aborts instead of looping.
+If a run hits a live model-switch handoff, the scheduler retries with the switched provider/model and persists that model selection for the active run. A job with a recorded inference account retains that account and its compatible authentication route; a switch cannot adopt a different account. Retries are bounded: after the initial attempt plus 2 switch retries, the scheduler aborts instead of looping.
 
 Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one check instead of a request storm. Skipped preflight runs do not increment execution-error backoff. They use the existing [failure-alert policy](/automation/cron-jobs/delivery#failure-notifications) without requiring `failureAlert.includeSkipped`; recurring jobs remain enabled and recover automatically when a later preflight finds the provider reachable.
 
@@ -338,7 +374,7 @@ With `announce`, agent, command, and script results belong to the chat or topic 
 
   </Accordion>
   <Accordion title="Subagent and Discord delivery">
-    When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation. A `delivery.mode: "none"` run whose turn only handed work to a child waits for the child under the same deadline and records the child's final reply as the run output without sending it. A child that deliberately stays silent (`NO_REPLY`) leaves a quiet successful run; a child that times out or ends without a reply fails the run.
+    When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation. A `delivery.mode: "none"` run whose turn only handed work to a child waits for the child under the same deadline and records the child's final reply as the run output without sending it. Subagents must return a meaningful result or a concrete blocker, even when delivery is `none`. A child that returns only `NO_REPLY` enters [missing-answer recovery](/tools/subagents/announce#announce); if it still produces no result or times out, the automation fails.
 
     For text-only Discord announce targets, OpenClaw sends the final assistant text once instead of replaying both streamed/intermediate text and the final answer. Media and structured Discord payloads are still delivered separately so attachments and components are not dropped.
 

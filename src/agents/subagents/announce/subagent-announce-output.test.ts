@@ -66,6 +66,23 @@ function sessionsYieldTurn(message = "Waiting for subagent completion.") {
 }
 
 describe("dedupeLatestChildCompletionRows", () => {
+  it("retains independent agents' children when they share a raw session key", () => {
+    const children = ["main", "research"].map((childAgentId, index) => ({
+      runId: `${childAgentId}-run`,
+      childSessionKey: "global",
+      childAgentId,
+      generation: index + 1,
+      task: `${childAgentId} task`,
+      createdAt: 1_000,
+      execution: {},
+    }));
+
+    expect(dedupeLatestChildCompletionRows(children).map((child) => child.runId)).toEqual([
+      "main-run",
+      "research-run",
+    ]);
+  });
+
   it("prefers the newer generation when child runs share a creation timestamp", () => {
     const childSessionKey = "agent:main:subagent:reused";
     const older = {
@@ -288,6 +305,84 @@ describe("readSubagentOutput", () => {
 });
 
 describe("buildChildCompletionFindings", () => {
+  it.each(["<"])("bounds 92 large child results after escaping %s", (padding) => {
+    const children = Array.from({ length: 92 }, (_, index) => ({
+      childSessionKey: `agent:main:subagent:${String(index).padStart(2, "0")}`,
+      task: `Task ${index}`,
+      createdAt: 1,
+      announceResult: `Result ${index}: `.padEnd(11_500, padding),
+      execution: { outcome: { status: "ok" as const } },
+    }));
+    const findings = buildChildCompletionFindings(children)!;
+
+    expect(findings.length).toBeLessThanOrEqual(160_000);
+    expect(findings.match(/^status: ok$/gm)).toHaveLength(92);
+    for (const [index, child] of children.entries()) {
+      expect(findings).toContain(`${index + 1}. Child task`);
+      expect(findings).toContain(`\nTask ${index}\n</prompt-data>`);
+      expect(findings).toContain(`\nResult ${index}: `);
+      expect(findings).toContain(
+        `[result truncated; sessions_history sessionKey="${child.childSessionKey}" (text fields truncated to 4,000 characters)]`,
+      );
+    }
+    expect(buildChildCompletionFindings(children.toReversed())).toBe(findings);
+  });
+
+  it("strictly bounds thousands of children with an ordered, counted overflow summary", () => {
+    const children = Array.from({ length: 5_000 }, (_, index) => ({
+      childSessionKey: `agent:main:subagent:${String(index).padStart(4, "0")}`,
+      task: `Task ${index}`,
+      createdAt: 1,
+      announceResult: `Result ${index}: `.padEnd(512, "x"),
+      execution: { outcome: { status: "ok" as const } },
+    }));
+    const findings = buildChildCompletionFindings(children)!;
+    const shown = [...findings.matchAll(/\nTask (\d+)\n<\/prompt-data>/g)].map((match) =>
+      Number(match[1]),
+    );
+    const summary = findings.split("\n").at(-1)!;
+    const omitted = Number(summary.match(/^(\d+) additional child results omitted;/)?.[1]);
+
+    expect(findings.length).toBeLessThanOrEqual(160_000);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(omitted).toBeGreaterThan(0);
+    expect(shown.length + omitted).toBe(children.length);
+    expect(shown).toEqual(Array.from({ length: shown.length }, (_, index) => index));
+    expect(findings.match(/^status: ok$/gm)).toHaveLength(shown.length);
+    const heads = findings.match(/^Result \d+: x+(?=\[result truncated;)/gm) ?? [];
+    expect(heads).toHaveLength(shown.length);
+    for (const [index, head] of heads.entries()) {
+      expect(head).toMatch(new RegExp(`^Result ${index}: `));
+      expect(head.length).toBeGreaterThanOrEqual(64);
+    }
+    expect(summary.length).toBeLessThanOrEqual(1_024);
+    for (const child of children.slice(shown.length, shown.length + 3)) {
+      expect(summary).toContain(child.childSessionKey);
+    }
+    expect(summary).toContain(
+      "Inspect remaining children with the session tools available to you.",
+    );
+    expect(buildChildCompletionFindings(children.toReversed())).toBe(findings);
+  });
+
+  it("preserves a small answer beside a truncated large sibling", () => {
+    const children = ["x".repeat(500_000), "small <answer> with required tail"].map(
+      (announceResult, index) => ({
+        childSessionKey: `agent:main:subagent:${index}`,
+        task: `Task ${index}`,
+        createdAt: index,
+        announceResult,
+        execution: { outcome: { status: "ok" as const } },
+      }),
+    );
+    const findings = buildChildCompletionFindings(children)!;
+
+    expect(findings.length).toBeLessThanOrEqual(160_000);
+    expect(findings.match(/\[result truncated;/g)).toHaveLength(1);
+    expect(findings).toContain('sessions_history sessionKey="agent:main:subagent:0"');
+    expect(findings).toContain("\nsmall &lt;answer&gt; with required tail\n</prompt-data>");
+  });
+
   it.each([
     {
       name: "cancelled child with an authoritative kill reason",
@@ -313,26 +408,6 @@ describe("buildChildCompletionFindings", () => {
     },
   );
 
-  it("includes the stopped recovery reason in parent-visible findings", () => {
-    const findings = buildChildCompletionFindings([
-      {
-        childSessionKey: "agent:main:subagent:replaced",
-        task: "interrupted task",
-        createdAt: 1,
-        execution: {
-          interruptionReason: "gateway-restart",
-          outcome: {
-            status: "error",
-            error: "Original child session was replaced; no child work was changed.",
-          },
-        },
-      },
-    ]);
-    expect(findings).toContain(
-      "status: interrupted by gateway restart: Original child session was replaced; no child work was changed.",
-    );
-  });
-
   it("bounds failure metadata while preserving the complete escaped child result", () => {
     const findings = buildChildCompletionFindings([
       {
@@ -350,42 +425,6 @@ describe("buildChildCompletionFindings", () => {
     expect(title).toBe(`${"L".repeat(255)}…`);
     expect(status).toBe(`error: ${"E".repeat(248)}…`);
     expect(findings).toContain(`${"&lt;".repeat(2_000)}-required-tail\n</prompt-data>`);
-  });
-
-  it("does not recover result text from delivery metadata after completion text is cleared", () => {
-    const findings = buildChildCompletionFindings([
-      {
-        childSessionKey: "agent:main:subagent:child",
-        task: "child task",
-        createdAt: 1,
-        completion: { resultText: null },
-        execution: { outcome: { status: "ok" } },
-      },
-    ]);
-
-    expect(findings).toContain("(no output)");
-  });
-
-  it.each([
-    { name: "successful NO_REPLY", status: "ok", resultText: "NO_REPLY" },
-    { name: "blank failed", status: "error", resultText: "" },
-  ] as const)("uses captured fallback output for a $name completion", ({ status, resultText }) => {
-    const findings = buildChildCompletionFindings([
-      {
-        childSessionKey: "agent:main:subagent:child",
-        task: "child task",
-        createdAt: 1,
-        completion: {
-          resultText,
-          fallbackResultText: "findings captured before the wake",
-        },
-        execution: { outcome: { status } },
-      },
-    ]);
-
-    expect(findings).toContain("findings captured before the wake");
-    expect(findings).not.toContain("(no output)");
-    expect(findings).not.toContain("NO_REPLY");
   });
 
   it.each(["HEARTBEAT_OK"])(
@@ -428,27 +467,5 @@ describe("buildChildCompletionFindings", () => {
 
     expect(findings).toMatch(/1\. Child task[^\n]*\n<prompt-data>\nvisible task\n/);
     expect(findings).not.toContain("2. Child task");
-  });
-
-  it("orders same-timestamp child completions by stable session identity", () => {
-    const laterKey = {
-      childSessionKey: "agent:main:subagent:z",
-      task: "Z task",
-      createdAt: 1_000,
-      completion: { resultText: "Z result" },
-      execution: { endedAt: 2_000, outcome: { status: "ok" as const } },
-    };
-    const earlierKey = {
-      ...laterKey,
-      childSessionKey: "agent:main:subagent:a",
-      task: "A task",
-      completion: { resultText: "A result" },
-    };
-
-    const forward = buildChildCompletionFindings([laterKey, earlierKey]);
-    const reverse = buildChildCompletionFindings([earlierKey, laterKey]);
-
-    expect(forward).toBe(reverse);
-    expect(forward).toMatch(/1\. Child task[\s\S]*A task[\s\S]*2\. Child task[\s\S]*Z task/);
   });
 });

@@ -1,14 +1,79 @@
 import { responsesServiceTierObserver } from "@openclaw/ai/internal/openai";
 import { createAssistantMessageEventStream, type Model, type StreamFn } from "@openclaw/llm-core";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createOpenAIResponsesTransportStreamFn } from "../../../../packages/ai/src/transports/openai-responses-client.js";
 import { createPreparedAccountCatalogAccess } from "../../../agents/prepared-model-runtime.catalog-auth.js";
+import {
+  registerAgentRunContext,
+  resetAgentRunRegistryForTest,
+} from "../../../infra/agent-run-registry.js";
 import { createOpenAIServiceTierObservationWrapper } from "./openai-service-tier-observation.js";
 import { createOpenAIFastModeWrapper } from "./openai.js";
 
-const log = vi.hoisted(() => ({ info: vi.fn() }));
+const log = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  debug: vi.fn(),
+  error: vi.fn(),
+  isEnabled: () => false,
+}));
 // mock-isolation: Capture records without opening process-global file/console sinks.
 vi.mock("../../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
-beforeEach(() => log.info.mockClear());
+const provider = vi.hoisted(() => ({
+  tiers: [] as unknown[],
+  rejectUltrafast: true,
+  elapsedMs: 0,
+}));
+// Fake provider I/O; request assembly, recovery, parsing, and observations stay real.
+vi.mock("openai", () => {
+  class FakeOpenAI {
+    responses = {
+      create: (request: Record<string, unknown>) => {
+        provider.tiers.push(request.service_tier);
+        provider.elapsedMs += 100;
+        const rejected = provider.rejectUltrafast && request.service_tier === "ultrafast";
+        return {
+          withResponse: async () => ({
+            response: new Response(null, { status: 200 }),
+            data: (async function* () {
+              yield rejected
+                ? {
+                    type: "response.failed",
+                    response: {
+                      output: [],
+                      error: { code: "invalid_prompt", message: "Invalid service_tier argument" },
+                    },
+                  }
+                : {
+                    type: "response.completed",
+                    response: {
+                      id: "resp_fixture",
+                      status: "completed",
+                      service_tier: request.service_tier,
+                      output: [],
+                      usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
+                    },
+                  };
+            })(),
+          }),
+        };
+      },
+    };
+  }
+  return { default: FakeOpenAI, AzureOpenAI: FakeOpenAI };
+});
+beforeEach(() => {
+  log.info.mockClear();
+  log.debug.mockClear();
+  provider.tiers.length = 0;
+  provider.rejectUltrafast = true;
+  provider.elapsedMs = 0;
+  registerAgentRunContext("run-fixture", {});
+});
+afterEach(() => {
+  resetAgentRunRegistryForTest();
+  vi.useRealTimers();
+});
 const attribution = {
   runId: "run-fixture",
   sessionId: "session-fixture",
@@ -76,7 +141,8 @@ it("keeps requesting Ultrafast after a downgrade and clears it on the first hono
   }
   expect(payloads).toEqual(Array.from({ length: 3 }, () => ({ service_tier: "ultrafast" })));
   expect(previous).toHaveBeenCalledTimes(3);
-  expect(log.info).toHaveBeenCalledTimes(2);
+  expect(log.info).toHaveBeenCalledTimes(1);
+  expect(log.debug).toHaveBeenCalledTimes(1);
 });
 
 it("attributes a successful slower retry to the original rejected tier without altering overrides", async () => {
@@ -127,4 +193,84 @@ it("attributes a successful slower retry to the original rejected tier without a
     requestedTier: "ultrafast",
     responseTier: "ultrafast",
   });
+});
+
+async function providerTurn(
+  runId = attribution.runId,
+  replacement = false,
+  record: Parameters<typeof createOpenAIServiceTierObservationWrapper>[1] = () => true,
+) {
+  // Worker inference recreates the wrapper for each model call in the same run.
+  const stream = createOpenAIServiceTierObservationWrapper(
+    createOpenAIFastModeWrapper(createOpenAIResponsesTransportStreamFn(), "ultrafast"),
+    record,
+    { ...attribution, runId },
+  );
+  const result = await stream(
+    model,
+    { messages: [] },
+    {
+      apiKey: "synthetic-key",
+      ...(replacement
+        ? {
+            onPayload: async (payload: unknown) => ({
+              ...Object(payload),
+              service_tier: "ultrafast",
+            }),
+          }
+        : {}),
+    },
+  );
+  expect((await result.result()).stopReason).toBe("stop");
+}
+
+it("bounds persistent rejections across 30 model calls and probes after 20 cooldown calls", async () => {
+  const record = vi.fn(() => true);
+  for (let turn = 0; turn < 30; turn++) {
+    await providerTurn(attribution.runId, true, record);
+  }
+  expect(record).toHaveBeenLastCalledWith(model, {
+    requestedTier: "ultrafast",
+    responseTier: "priority",
+  });
+  expect(provider.tiers).toEqual([
+    "ultrafast",
+    "priority",
+    "ultrafast",
+    "priority",
+    ...Array(20).fill("priority"),
+    "ultrafast",
+    "priority",
+    ...Array(7).fill("priority"),
+  ]);
+  // Fixed fake-provider latency: 30 useful requests plus only three rejected requests.
+  expect(provider.elapsedMs).toBe(3_300);
+});
+
+it("probes after ten minutes, resets on success, and isolates a new run", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(1_000);
+  await providerTurn();
+  await providerTurn();
+  vi.setSystemTime(600_999);
+  await providerTurn();
+  expect(provider.tiers.at(-1)).toBe("priority");
+  vi.setSystemTime(601_000);
+  provider.rejectUltrafast = false;
+  await providerTurn();
+  expect(provider.tiers.at(-1)).toBe("ultrafast");
+  provider.rejectUltrafast = true;
+  await providerTurn();
+  await providerTurn();
+  await providerTurn();
+  expect(provider.tiers.slice(-5)).toEqual([
+    "ultrafast",
+    "priority",
+    "ultrafast",
+    "priority",
+    "priority",
+  ]);
+  registerAgentRunContext("fresh-run", {});
+  await providerTurn("fresh-run");
+  expect(provider.tiers.slice(-2)).toEqual(["ultrafast", "priority"]);
 });

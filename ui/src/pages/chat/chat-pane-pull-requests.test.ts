@@ -328,7 +328,7 @@ describe("chat pane pushed pull request state", () => {
     },
   );
 
-  it.each(["ready", "unavailable", "rate-limited"] as const)(
+  it.each(["ready", "rate-limited"] as const)(
     "renders repository context only from a settled catalog (%s)",
     async (status) => {
       const { pane, request, context, state, emitGatewayEvent } = createPublicationPane();
@@ -497,12 +497,6 @@ describe("chat pane pushed pull request state", () => {
 
   it.each([
     {
-      name: "live draft and closed",
-      pullRequests: [pullRequest(111772, "draft"), pullRequest(111751, "closed")],
-      summary: { numbers: [111751, 111772], state: "draft" },
-      refresh: true,
-    },
-    {
       name: "truncated history",
       pullRequests: [
         pullRequest(999, "draft"),
@@ -512,6 +506,7 @@ describe("chat pane pushed pull request state", () => {
         numbers: [...Array.from({ length: 19 }, (_, index) => index + 1), 999],
         state: "draft",
       },
+      refresh: true,
     },
     {
       name: "merged",

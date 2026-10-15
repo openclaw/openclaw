@@ -1,15 +1,20 @@
-import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
-import { createEffect, For, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, For, onCleanup, onSettled, Show } from "solid-js";
+import {
+  createOverlay,
+  findOverlayParent,
+  type Overlay,
+} from "../../../components/overlay-lifecycle.ts";
 import { TextareaTokenAnchor } from "../../../components/textarea-token-anchor.ts";
+import "../../../components/solid/overlay.css";
 import {
   emojiForShortcode,
   EmojiTargetResolver,
   suggestEmoji,
   type EmojiTarget,
 } from "../../../lib/chat/emoji.ts";
+import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
 import "../../../styles/chat/emoji-menu.css";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import {
   handleComposerMenuKeydown,
@@ -32,16 +37,16 @@ export class ComposerEmojiMenu {
     this.dismiss(this.textarea);
     update?.();
   });
-  private popup: WaPopup | null = null;
+  private popup: Overlay | null = null;
   private textarea: HTMLTextAreaElement | null = null;
-  readonly popupRef = (element?: Element) => {
-    this.popup = element instanceof WaPopup ? element : null;
+  readonly popupRef = (overlay?: Overlay) => {
+    this.popup = overlay ?? null;
     this.syncAnchor();
   };
 
   private syncAnchor() {
     if (this.popup && this.textarea && this.target && this.open) {
-      this.anchor.update(this.popup, this.textarea, this.target.start);
+      this.anchor.updateNative(this.popup, this.textarea, this.target.start);
     } else {
       this.anchor.close();
     }
@@ -52,18 +57,18 @@ export class ComposerEmojiMenu {
   }
   close() {
     this.acceptedEnter = false;
+    this.items = [];
     this.anchor.close();
     this.requestUpdate = null;
     this.textarea = null;
     this.target = null;
-    this.items = [];
     this.index = 0;
     this.dismissed = null;
     this.resolver.reset();
   }
   dismiss(textarea: HTMLTextAreaElement | null) {
     this.close();
-    // Window-level picker dismissal runs before the textarea key handler.
+    // Overlay dismissal runs before the textarea key handler.
     this.dismissed = textarea ? { value: textarea.value, caret: textarea.selectionStart } : null;
   }
   activeId(paneId: string) {
@@ -232,10 +237,6 @@ export class ComposerEmojiMenu {
     this.insert(textarea, target, emoji, requestUpdate);
   }
 
-  render(paneId: string, textarea: HTMLTextAreaElement | null, requestUpdate: () => void) {
-    return solidTemplate(EmojiMenu, { args: [this, paneId, textarea, requestUpdate] });
-  }
-
   updatePresentation(textarea: HTMLTextAreaElement, requestUpdate: () => void) {
     this.requestUpdate = requestUpdate;
     this.textarea = textarea;
@@ -296,6 +297,25 @@ function EmojiPopup(props: {
   requestUpdate: () => void;
   revision: unknown;
 }) {
+  let surface!: HTMLDivElement;
+  const overlay = createOverlay(paneDomId(props.paneId, "emoji-popup"), undefined, {
+    acquireOcclusion: acquireNativeOverlaySurface,
+    exclusiveGroup: "menu",
+    dismissOutsideFocus: false,
+  });
+  onSettled(() => {
+    overlay.bindSurface(surface);
+    overlay.setParent(findOverlayParent(props.textarea));
+    const unsubscribe = overlay.subscribe((open) => {
+      if (!open && props.menu.open) {
+        props.menu.dismiss(props.textarea);
+        props.requestUpdate();
+      }
+    });
+    props.menu.popupRef(overlay);
+    return unsubscribe;
+  });
+  onCleanup(() => overlay.dispose());
   createEffect(
     () => props.revision,
     () => {
@@ -312,7 +332,13 @@ function EmojiPopup(props: {
     return props.menu.renderOptions(props.paneId, props.textarea, props.requestUpdate);
   };
   return (
-    <wa-popup ref={(node) => untrack(() => props.menu.popupRef(node))} class="emoji-menu-popup">
+    <div
+      ref={(node) => {
+        surface = node;
+      }}
+      class="oc-overlay emoji-menu-popup"
+      popover="manual"
+    >
       <ComposerMenu
         class="emoji-menu"
         id={paneDomId(props.paneId, "emoji-menu-listbox")}
@@ -322,6 +348,6 @@ function EmojiPopup(props: {
       >
         {options()}
       </ComposerMenu>
-    </wa-popup>
+    </div>
   );
 }

@@ -56,7 +56,7 @@ afterEach(() => {
 
 async function migrateLegacyInterruption(sessionKey: string, stateDir: string) {
   const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-  // Restore the previous writer's certified bytes; current writers accept outcomes only.
+  // Retain certification with legacy bytes; startup must still normalize them.
   db.prepare(
     "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.status', 'running') WHERE session_key = ?",
   ).run(sessionKey);

@@ -30,7 +30,7 @@ import { type AttachmentItem, projectMessageMedia } from "./chat-message-media.t
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { resolveCollapsedToolDetail } from "./chat-tool-cards.ts";
+import { resolveCollapsedToolDetail } from "./chat-tool-cards.solid.tsx";
 
 function messageVideoSlots(
   projection: Pick<
@@ -103,6 +103,7 @@ export function prepareGroupedMessage(
     (item) => item.type !== "attachment" || !videoPreviews.includes(item),
   );
   const hasUserFiles = normalizedRole === "user" && hasUserFileAttachments(cardAttachments);
+  const messageId = readSessionMessageIdentity(message)?.id ?? undefined;
   const imageRenderOptions = {
     galleryImages: images,
     galleryVideos: (selected: AttachmentItem) => {
@@ -110,26 +111,34 @@ export function prepareGroupedMessage(
       const slot = local.indexOf(selected);
       const turn = opts.getTurnVideoMessages?.(messageKey);
       if (!turn || slot < 0) {
-        return { index: slot, items: local };
+        return {
+          index: slot,
+          items: local.map(({ type, attachment }) => ({ type, attachment, messageId })),
+        };
       }
-      const items: AttachmentItem[] = [];
+      const items: (AttachmentItem & { messageId?: string })[] = [];
       let index = -1;
       for (const entry of turn) {
         if (entry.key === messageKey) {
           index = items.length + slot;
-          items.push(...local);
+          items.push(...local.map(({ type, attachment }) => ({ type, attachment, messageId })));
         } else {
           const prepared = prepareChatMessageRender(entry.message);
           items.push(
             ...messageVideoSlots(
               projectMessageMedia(prepared.message, prepared.normalizedMessage.content),
-            ),
+            ).map(({ type, attachment }) => ({
+              type,
+              attachment,
+              messageId: readSessionMessageIdentity(prepared.message)?.id ?? undefined,
+            })),
           );
         }
       }
       return { index, items };
     },
     sessionKey: opts.sessionKey,
+    messageId,
     agentId: opts.agentId,
     policyKey: opts.mediaPolicyKey,
     ...(hasImages ? imageMessageIdentity(message, opts.sessionKey) : {}),

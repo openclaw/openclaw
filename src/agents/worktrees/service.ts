@@ -66,6 +66,12 @@ import {
 import { assertExactStateOwner } from "./removal-git.js";
 import { removeSettledManagedWorktree, type RemoveWorktreeParams } from "./removal.js";
 import {
+  resolveRepository,
+  resolveRepositoryIdentity,
+  resolveRepositoryPaths,
+  type ResolvedRepository,
+} from "./repository-paths.js";
+import {
   completeRepositoryWorktreeSetup,
   type MaterializedRepositoryWorktree,
 } from "./repository-setup.js";
@@ -81,12 +87,9 @@ import {
   prepareWorktreeDestination,
   readWorktreeGitInventory,
   findWorktreeByName,
-  resolveRepository,
   rebindLiveWorktreeRepository,
-  resolveRepositoryIdentity,
   withWorktreeSource,
   withWorktreeSources,
-  type ResolvedRepository,
   type WorktreeSourceCustody,
 } from "./service-preparation.js";
 import {
@@ -738,9 +741,9 @@ export class ManagedWorktreeService {
     canonicalRoot: string;
     sourceRoot: string;
   }> {
-    const resolved = await resolveRepository(repoRoot);
+    const resolved = await resolveRepositoryPaths(repoRoot);
     return {
-      canonicalRoot: resolved.repoRoot,
+      canonicalRoot: resolved.canonicalRoot,
       sourceRoot: resolved.sourceRoot,
     };
   }
@@ -1061,7 +1064,7 @@ export class ManagedWorktreeService {
       assertCurrent();
       if (params.retryDeferred) {
         // Repair before cleanup can defer the repository for those same missing objects.
-        await this.maintainGit(params);
+        await this.maintainGit({ ...params, progress });
         assertCurrent();
         this.orphanCleanupFailures.clear();
       }
@@ -1146,7 +1149,7 @@ export class ManagedWorktreeService {
       assertCurrent();
       if (!params.retryDeferred) {
         // Cleanup has released allocation ownership and retired its refs before maintenance.
-        await this.maintainGit(params);
+        await this.maintainGit({ ...params, progress });
       }
       assertCurrent();
       return progress.result;

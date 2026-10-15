@@ -10,6 +10,7 @@ import type {
   SessionRowEventListener,
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -21,7 +22,6 @@ import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import {
   installTranscriptDomMocks,
@@ -701,7 +701,7 @@ describe("mounted pane session event ownership", () => {
       const container = document.createElement("div");
       const draw = () => {
         render(
-          solidTemplate(ChatPermissionPicker, composerControls(state).permissionPicker),
+          solidContent(ChatPermissionPicker, composerControls(state).permissionPicker),
           container,
         );
         return container.querySelector<HTMLButtonElement>("[data-chat-permission-select]");

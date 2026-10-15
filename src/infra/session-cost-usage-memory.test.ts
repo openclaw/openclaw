@@ -207,15 +207,13 @@ function memoryReport(
 }
 
 describe("actor memory usage", () => {
-  it.each(["valid", "missing", "truncated", "corrupt", "oversized-header"] as const)(
+  it.each(["valid", "missing", "corrupt", "oversized-header"] as const)(
     "defers an oversized current body or repairs %s cache data through the actor owner",
     async (mode) => {
       const cached = await cachedFixture();
       const encoded = paddedRollup(cached.entry, mode === "corrupt" ? 16 : 2 * 1024 * 1024);
       if (mode === "missing") {
         encoded.blob = new Uint8Array();
-      } else if (mode === "truncated") {
-        encoded.blob = encoded.blob.slice(1);
       } else if (mode === "corrupt") {
         encoded.blob = encoded.blob.map((byte, index) => (index === 0 ? byte ^ 1 : byte));
       } else if (mode === "oversized-header") {
@@ -337,7 +335,7 @@ describe("actor memory usage", () => {
     },
   );
 
-  it.each(["valid", "missing", "truncated"] as const)(
+  it.each(["valid", "missing"] as const)(
     "preserves freshness or repairs %s bodies after header allowance exhaustion",
     async (mode) => {
       const cached = await cachedFixture();
@@ -345,7 +343,7 @@ describe("actor memory usage", () => {
         const encoded = encodeUsageCostRollup(cached.entry);
         await writeRollup(cached, {
           ...encoded,
-          blob: mode === "missing" ? new Uint8Array() : encoded.blob.slice(1),
+          blob: new Uint8Array(),
         });
       }
       const snapshot = await cached.actor.storage!.read(

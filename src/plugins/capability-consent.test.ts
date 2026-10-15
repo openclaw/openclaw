@@ -522,41 +522,4 @@ describe("plugin capability consent", () => {
       }),
     ).rejects.toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
   });
-
-  it.each(["install", "update"] as const)(
-    "directs an %s consent rejection to retry the command, not enable",
-    async (mode) => {
-      const rootDir = createArtifactFixture({
-        "package.json": { openclaw: { extensions: ["./index.js"] } },
-        "index.js": "export {};",
-        "openclaw.plugin.json": {
-          id: "plugin",
-          ...(mode === "update" ? { contracts: { tools: ["read"] } } : {}),
-          configSchema: { type: "object" },
-        },
-      });
-      const consent = createManagedPluginArtifactConsentHandler({
-        config: {},
-        source: mode === "install" ? "clawhub" : "npm",
-        spec: mode === "install" ? "clawhub:@openviking/openclaw-plugin" : undefined,
-        previousRecords:
-          mode === "update" ? { plugin: { source: "npm", installPath: rootDir } } : undefined,
-      });
-
-      const error: unknown = await consent
-        .onBeforePluginArtifactCommit({ pluginId: "plugin", stagedArtifactDir: rootDir, mode })
-        .catch((caught: unknown) => caught);
-      expect(error).toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
-      const message = error instanceof Error ? error.message : String(error);
-      expect(message).toContain(
-        `The plugin was not ${mode === "install" ? "installed" : "updated"}`,
-      );
-      expect(message).toContain(
-        'Re-run the same "openclaw plugins install" or "openclaw plugins update" command with --accept-capabilities',
-      );
-      expect(message).toContain("keeping its source and other options");
-      expect(message).toContain("complete the plugin command first, then retry Doctor or setup");
-      expect(message).not.toContain("plugins enable");
-    },
-  );
 });

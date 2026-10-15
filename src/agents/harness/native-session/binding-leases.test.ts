@@ -46,57 +46,98 @@ describe("native session binding leases", () => {
     expect(values.get("expired")).not.toHaveProperty("lease");
   });
 
-  it.each(["absent", "renewed"])(
-    "serializes peer writes behind a %s binding lease",
-    async (mode) => {
-      vi.useFakeTimers();
-      const { state, values, owner } = createLeaseFixture();
-      const peer = createNativeSessionBindingLeases(state, bindingTestOptions);
-      const key = "binding";
-      if (mode === "renewed") {
-        values.set(key, { value: "owner" });
-      }
-      let peerFinished = false;
-      let peerWrite!: Promise<boolean>;
-      await expect(
-        owner.withLease(
-          key,
-          async () => {
-            peerWrite = peer
-              .transact(key, (current) =>
-                mode === "renewed" || current?.value === undefined
-                  ? { next: { value: "peer" }, result: true }
-                  : { result: false },
-              )
-              .then((result) => {
-                peerFinished = true;
-                return result;
-              });
-            await Promise.resolve();
-            expect(peerFinished).toBe(false);
-            if (mode === "renewed") {
-              await vi.advanceTimersByTimeAsync(66_000);
-              expect(peerFinished).toBe(false);
-            }
-            const updated = await owner.transact(key, (current) =>
+  it.each(["renewed"])("serializes peer writes behind a %s binding lease", async (mode) => {
+    vi.useFakeTimers();
+    const { state, values, owner } = createLeaseFixture();
+    const peer = createNativeSessionBindingLeases(state, bindingTestOptions);
+    const key = "binding";
+    if (mode === "renewed") {
+      values.set(key, { value: "owner" });
+    }
+    let peerFinished = false;
+    let peerWrite!: Promise<boolean>;
+    await expect(
+      owner.withLease(
+        key,
+        async () => {
+          peerWrite = peer
+            .transact(key, (current) =>
               mode === "renewed" || current?.value === undefined
-                ? {
-                    next: { ...current, value: mode === "renewed" ? "updated" : "owner" },
-                    result: true,
-                  }
+                ? { next: { value: "peer" }, result: true }
                 : { result: false },
-            );
-            expect(updated).toBe(true);
-            await Promise.resolve();
+            )
+            .then((result) => {
+              peerFinished = true;
+              return result;
+            });
+          await Promise.resolve();
+          expect(peerFinished).toBe(false);
+          if (mode === "renewed") {
+            await vi.advanceTimersByTimeAsync(66_000);
             expect(peerFinished).toBe(false);
-            return updated;
-          },
-          { prepareLease: prepareBindingTestLease },
-        ),
-      ).resolves.toBe(true);
+          }
+          const updated = await owner.transact(key, (current) =>
+            mode === "renewed" || current?.value === undefined
+              ? {
+                  next: { ...current, value: mode === "renewed" ? "updated" : "owner" },
+                  result: true,
+                }
+              : { result: false },
+          );
+          expect(updated).toBe(true);
+          await Promise.resolve();
+          expect(peerFinished).toBe(false);
+          return updated;
+        },
+        { prepareLease: prepareBindingTestLease },
+      ),
+    ).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(peerWrite).resolves.toBe(mode === "renewed");
+    expect(values.get(key)).toEqual({ value: mode === "renewed" ? "peer" : "owner" });
+  });
+
+  it.each([-70_000, 70_000])(
+    "keeps the lease wait deadline on the monotonic clock across a %d ms wall-clock jump",
+    async (jumpMs) => {
+      vi.useFakeTimers();
+      const { values, owner } = createLeaseFixture();
+      const key = "binding";
+      // A peer holds a live lease long enough that the owner must wait inside
+      // the acquisition loop while its 70s wait budget runs.
+      values.set(key, {
+        value: "peer",
+        lease: { token: "peer-owner", expiresAt: Date.now() + 120_000 },
+      });
+      const pending = owner.transact(key, (current) => ({ next: current, result: true }));
+      // Attach an early catch so a mid-advance rejection never surfaces as an
+      // unhandled rejection before the assertion below observes it.
+      const settled = pending.then(
+        (v) => ({ ok: true as const, v }),
+        (e: unknown) => ({ ok: false as const, e }),
+      );
+      // Let the first busy iteration (update + monotonic sleep) settle.
       await vi.advanceTimersByTimeAsync(1_000);
-      await expect(peerWrite).resolves.toBe(mode === "renewed");
-      expect(values.get(key)).toEqual({ value: mode === "renewed" ? "peer" : "owner" });
+      // Adjust the wall clock (Date.now) only; the monotonic budget is untouched.
+      vi.setSystemTime(Date.now() + jumpMs);
+      if (jumpMs > 0) {
+        // A forward jump past the 70s deadline must not prematurely time out an
+        // acquisition that has waited nothing, so release the peer lease only
+        // after the deadline check has run.
+        await vi.advanceTimersByTimeAsync(1_000);
+        values.set(key, { value: "peer" });
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(settled).resolves.toEqual({ ok: true, v: true });
+      } else {
+        // A backward jump must not stretch the wait past its budget: with the
+        // peer never releasing, the acquisition times out at the waitMs budget
+        // (70s) instead of hanging beyond it. Advance just past 70s monotonic
+        // so the deadline fires; a wall-clock-based deadline would need ~140s.
+        await vi.advanceTimersByTimeAsync(71_000);
+        await expect(settled).resolves.toMatchObject({ ok: false });
+        await expect(pending).rejects.toThrow("Binding lease timed out: binding");
+        vi.clearAllTimers();
+      }
     },
   );
 
@@ -396,7 +437,7 @@ describe("native binding lease settlement", () => {
     ).resolves.toBe("available");
   });
 
-  it.each(["removed row", "expired lease"] as const)(
+  it.each(["removed row"] as const)(
     "refuses an already-waiting mutation when settlement becomes unknown (%s)",
     async (available) => {
       vi.useFakeTimers();

@@ -173,7 +173,21 @@ describe("resolveArtifactDownloadSource", () => {
   );
 
   it.each([
-    { failure: "network", mimeType: "image/png", type: "image", reject: false },
+    { failure: "network", mimeType: "image/png", type: "image", reject: false, variant: undefined },
+    {
+      failure: "network",
+      mimeType: "image/png",
+      type: "image",
+      reject: true,
+      variant: "thumbnail" as const,
+    },
+    {
+      failure: "missing route",
+      mimeType: "image/png",
+      type: "image",
+      reject: true,
+      variant: "thumbnail" as const,
+    },
     { failure: "missing route", mimeType: "image/png", type: "image", reject: false },
     { failure: "SPA fallback", mimeType: "image/png", type: "image", reject: false },
     { failure: "wrong content type", mimeType: "image/png", type: "image", reject: false },
@@ -182,7 +196,7 @@ describe("resolveArtifactDownloadSource", () => {
     { failure: "non-image artifact", mimeType: "image/png", type: "file", reject: true },
   ])(
     "reauthorizes failed transfers but rejects unsafe blobs: $failure",
-    async ({ failure, mimeType, type, reject }) => {
+    async ({ failure, mimeType, type, reject, variant }) => {
       vi.stubGlobal("location", new URL("https://control.test"));
       vi.stubGlobal(
         "fetch",
@@ -209,7 +223,7 @@ describe("resolveArtifactDownloadSource", () => {
         .mockResolvedValue(reject ? download : inline);
       const result = await resolveArtifactDownloadSource(
         { connected: true, client: { gatewayUrl: "wss://control.test", request } as never },
-        { sessionKey: "agent:main:main", artifactId: artifact.id },
+        { sessionKey: "agent:main:main", artifactId: artifact.id, variant },
       );
       if (reject) {
         expect(result).toBeNull();
@@ -350,17 +364,12 @@ describe("failed run recovery actions", () => {
         state.chatSending = true;
       }),
     };
-    const openModelPicker = vi.fn();
     let current = true;
     const actions = createChatPaneRunRecoveryActions(state, {
       canSend: true,
-      canChangeModel: true,
       isCurrent: () => current,
       latestFailedRunId: () => "run-a",
-      openModelPicker,
     });
-    actions.onChangeFailureModel?.("run-a");
-    expect(openModelPicker).toHaveBeenCalledOnce();
     actions.onRetryRun?.("old-run");
     expect(state.handleSendChat).not.toHaveBeenCalled();
     actions.onRetryRun?.("run-a");
@@ -371,9 +380,7 @@ describe("failed run recovery actions", () => {
     state.chatSending = false;
     current = false;
     actions.onRetryRun?.("run-a");
-    actions.onChangeFailureModel?.("run-a");
     expect(state.handleSendChat).toHaveBeenCalledOnce();
-    expect(openModelPicker).toHaveBeenCalledOnce();
   });
   it("does not expose actions without their capabilities", () => {
     const state = {
@@ -386,11 +393,9 @@ describe("failed run recovery actions", () => {
     expect(
       createChatPaneRunRecoveryActions(state, {
         canSend: false,
-        canChangeModel: false,
         isCurrent: () => true,
         latestFailedRunId: () => "run-a",
-        openModelPicker: vi.fn(),
       }),
-    ).toEqual({ onRetryRun: undefined, onChangeFailureModel: undefined });
+    ).toEqual({ onRetryRun: undefined });
   });
 });

@@ -30,7 +30,7 @@ async function selectSessionPlacementTarget(params: {
   row: GatewaySessionRow;
   requiredProfile?: string;
 }): Promise<SessionMoveTarget | null> {
-  const { showSessionPlacementTargetDialog } = await import("./session-placement-move-dialog.ts");
+  const { showSessionPlacementTargetDialog } = await import("./session-placement-move-dialog.tsx");
   const runtime = params.row.agentRuntime;
   const gatewayAccess = readSessionMethodAccess(params.gatewaySnapshot, {
     method: params.mode === "restart" ? "sessions.reclaim" : "sessions.move",

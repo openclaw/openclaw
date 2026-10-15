@@ -215,6 +215,7 @@ describe("production lint suppressions", () => {
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
         "src/agents/provider-http-errors.ts|preserve-caught-error|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/channels/plugins/config-schema.ts|typescript/no-generated-empty-object-type|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         // Account defaults and heterogeneous registries erase plugin-specific callback families;
         // unknown rejects concrete account/probe/audit callbacks. Gateway versions remain checked.
@@ -232,6 +233,7 @@ describe("production lint suppressions", () => {
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
         // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
         "src/config/sessions/transcript-json.ts|unicorn/prefer-structured-clone|1",
+        "src/config/zod-schema.channel-messaging-common.ts|typescript/no-generated-empty-object-type|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-row-mapping.ts|typescript/no-unnecessary-type-parameters|1",
@@ -243,6 +245,12 @@ describe("production lint suppressions", () => {
         "src/infra/sqlite-database-admission.worker.test-support.ts|typescript/unbound-method|1",
         // Iterator wrappers capture native next/return and invoke them with the caller's receiver.
         "src/infra/sqlite-native-observer.ts|typescript/unbound-method|2",
+        // The Bun transfer probe calls the captured native method with its Worker receiver.
+        "src/infra/sqlite-worker-input.bun.test-support.ts|typescript/unbound-method|1",
+        // The dispatch observer captures postMessage before mocking and supplies its worker receiver.
+        "src/infra/sqlite-worker-shared-state-admission.test-support.ts|typescript/unbound-method|1",
+        // Worker hooks preserve custom methods and later prototype instrumentation with .call(this).
+        "src/infra/worker-cpu.ts|typescript/unbound-method|4",
         "src/node-host/invoke-payload.ts|typescript/no-unnecessary-type-parameters|1",
         "src/node-host/mcp.ts|unicorn/prefer-add-event-listener|1",
         "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",
@@ -288,6 +296,7 @@ describe("production lint suppressions", () => {
         "ui/src/app/native-gateway-auth.ts|unicorn/prefer-add-event-listener|1",
         "ui/src/app/native-gateway-auth.ts|unicorn/require-post-message-target-origin|2",
         "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
+        "ui/src/components/session-progress-card.test-support.tsx|no-underscore-dangle|2",
         // These Solid sinks consume HTML sanitized or escaped by their content owners.
         "ui/src/components/solid/markdown-html.tsx|solid/no-innerhtml|1",
         "ui/src/components/solid/sanitized-html.tsx|solid/no-innerhtml|1",

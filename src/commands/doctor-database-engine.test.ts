@@ -31,7 +31,7 @@ describe("Doctor database engines", () => {
       "Database engines",
     );
     const output = String(vi.mocked(note).mock.calls[0]?.[0]);
-    expect(output).toContain("Logbook: sqlite");
+    expect(output).toContain("Logbook: postgres");
     expect(output.match(/experimental/g)).toHaveLength(1);
     expect(output).toContain("Stores without a registered PostgreSQL schema remain on SQLite");
     expect(collectDatabaseEngineHealthFindings(cfg)).toEqual([

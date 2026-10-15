@@ -27,6 +27,7 @@ import {
   updateSqliteTranscriptEventJsonInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { replaceSqliteTranscriptSuffixInTransaction } from "./session-accessor.sqlite-transcript-suffix.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
@@ -411,7 +412,7 @@ describe("SQLite exact transcript rewrite", () => {
             { seq: 2, expectedEventJson: JSON.stringify(events[2], null, 2), event: events[2] },
           ]);
         }, scope),
-      ).toThrow("changed before exact rewrite");
+      ).toThrow(SqliteTranscriptMutationConflictError);
       expect(snapshot()).toEqual(before);
       expect(readTranscriptStatsSync(scope)).toEqual(stats);
     }, events);
@@ -824,53 +825,6 @@ describe("SQLite exact transcript suffix replacement", () => {
         readIdempotencyOwners(db, scope.sessionId, ...owners.map((row) => row.event_id)),
       ).toEqual(owners);
     }, events);
-  });
-
-  it("preserves the established idempotency owner across retained suffix rows", async () => {
-    const duplicateKeyEvents = [
-      rewriteEvents[0],
-      keyedAssistant("first", "root", "retry"),
-      { type: "custom", id: "removed", parentId: "first" },
-      keyedAssistant("owner", "removed", "retry"),
-    ] as const;
-    await withRewriteFixture(({ db, scope }) => {
-      db.prepare(
-        "UPDATE transcript_events SET created_at = CASE seq WHEN 1 THEN 101 WHEN 3 THEN 303 ELSE created_at END WHERE session_id = ?",
-      ).run(scope.sessionId);
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = NULL, created_at = 101 WHERE session_id = ? AND event_id = ?",
-      ).run(scope.sessionId, "first");
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = ?, created_at = 303 WHERE session_id = ? AND event_id = ?",
-      ).run("retry", scope.sessionId, "owner");
-
-      replaceTranscriptSuffixForTest(scope, duplicateKeyEvents, [
-        duplicateKeyEvents[0],
-        duplicateKeyEvents[1],
-        { ...duplicateKeyEvents[3], parentId: "first" },
-      ]);
-
-      expect(
-        db
-          .prepare(
-            "SELECT event_id, message_idempotency_key, created_at FROM transcript_event_identities WHERE session_id = ? AND event_id IN ('first', 'owner') ORDER BY event_id",
-          )
-          .all(scope.sessionId),
-      ).toEqual([
-        { event_id: "first", message_idempotency_key: null, created_at: 101 },
-        { event_id: "owner", message_idempotency_key: "retry", created_at: 303 },
-      ]);
-      expect(
-        db
-          .prepare(
-            "SELECT seq, created_at FROM transcript_events WHERE session_id = ? AND seq IN (1, 2) ORDER BY seq",
-          )
-          .all(scope.sessionId),
-      ).toEqual([
-        { seq: 1, created_at: 101 },
-        { seq: 2, created_at: 303 },
-      ]);
-    }, duplicateKeyEvents);
   });
 
   it.each([

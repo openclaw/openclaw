@@ -225,6 +225,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         group_delete: displayAction("delete group", ["name"]),
       },
     },
+    sessions_create: displayTool("layers", "New session", ["label", "agentId", "cwd", "group"]),
     sessions_list: displayTool("layers", "Sessions", [
       "kinds",
       "label",

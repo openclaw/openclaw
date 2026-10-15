@@ -171,14 +171,13 @@ async function loadClientBundleValidator(version: 1 | 2 = 1) {
     "packages/model-catalog-core/src/remote-catalog-bundle.ts",
   );
   const module = await importToolingTypeScript(pathToFileURL(modulePath).href, import.meta.url);
-  const name =
-    version === 1
-      ? "validateAndSanitizeRemoteModelCatalogBundle"
-      : "validateAndSanitizeRemoteModelCatalogBundleV2";
-  if (typeof module[name] !== "function") {
+  const name = version === 1 ? "parseRemoteModelCatalogBundle" : "parseRemoteModelCatalogBundleV2";
+  const parse = module[name];
+  const sanitize = module.sanitizeRemoteModelCatalogBundle;
+  if (typeof parse !== "function" || typeof sanitize !== "function") {
     throw new Error("remote catalog bundle validator export is unavailable");
   }
-  return module[name];
+  return (bundle: unknown) => sanitize(parse(bundle));
 }
 
 export async function assembleModelCatalogBundle(options: {
@@ -214,9 +213,6 @@ export async function assembleModelCatalogBundle(options: {
       delete providers[providerId];
     }
   }
-  if (!Object.hasOwn(providers, "anthropic") || !Object.hasOwn(providers, "openai")) {
-    throw new Error("catalog must include anthropic and openai providers");
-  }
   const bundle = {
     schemaVersion: 1,
     generatedAt: options.generatedAt,
@@ -226,13 +222,21 @@ export async function assembleModelCatalogBundle(options: {
   };
   const validateBundle = options.validateBundle ?? (await loadClientBundleValidator());
   const validated = validateBundle(bundle);
-  const summary = summarizeModelCatalogBundle(validated);
+  assertModelCatalogCompleteness(validated);
+  return validated;
+}
+
+function assertModelCatalogCompleteness(bundle: PublishedModelCatalogBundle) {
+  if (!Object.hasOwn(bundle.providers, "anthropic") || !Object.hasOwn(bundle.providers, "openai")) {
+    throw new Error("catalog must include anthropic and openai providers");
+  }
+  const summary = summarizeModelCatalogBundle(bundle);
   if (summary.models < MODEL_CATALOG_MIN_MODELS) {
     throw new Error(
       `catalog model count ${summary.models} is below required floor ${MODEL_CATALOG_MIN_MODELS}`,
     );
   }
-  return validated;
+  return summary;
 }
 
 export function summarizeModelCatalogBundle(bundle: PublishedModelCatalogBundle) {
@@ -1132,6 +1136,34 @@ export async function enrichModelCatalogPricing(options: {
   return { modelsEnriched: enriched, pricingEntries: hosted.size };
 }
 
+// Both hosted formats serve released clients whose input enum predates video.
+function projectReleasedModelInputs(bundle: PublishedModelCatalogBundle): void {
+  for (const [id, provider] of Object.entries(bundle.providers)) {
+    const omitted = new Set<string>();
+    provider.models = provider.models.filter((model) => {
+      const input = model.input?.filter(
+        (value) => value === "text" || value === "image" || value === "document",
+      );
+      if (input?.length === 0) {
+        omitted.add(model.id);
+        return false;
+      }
+      if (input) {
+        model.input = input;
+      }
+      return true;
+    });
+    for (const field of ["defaultModel", "defaultUtilityModel"] as const) {
+      if (provider[field] && omitted.has(provider[field])) {
+        delete provider[field];
+      }
+    }
+    if (provider.models.length === 0) {
+      delete bundle.providers[id];
+    }
+  }
+}
+
 export function serializeModelCatalogBundle(bundle: PublishedModelCatalogBundle): string {
   const providers = Object.fromEntries(
     Object.entries(bundle.providers)
@@ -1291,8 +1323,7 @@ export async function assembleModelCatalogBundleV2(
     }
   }
   const validateBundle = await loadClientBundleValidator(2);
-  // The first supporting release is not assigned yet. schemaVersion gates v2;
-  // never copy v1's older client floor onto a new wire contract.
+  // schemaVersion gates v2; never copy v1's older client floor onto this wire contract.
   const upstreamPricing = serializeStandalonePricing(standalonePricing?.upstream);
   const providerPricing = serializeStandalonePricing(standalonePricing?.provider);
   return validateBundle({
@@ -1376,6 +1407,7 @@ export async function runPublishModelCatalog(
   const loadSource = createModelCatalogSourceLoader(options.fetchImpl);
   const hydrationResult = await hydrateModelCatalogFromModelsDev({ bundle, manifests, loadSource });
   const retirementResult = await retireUnservedModels({ bundle, loadSource });
+  projectReleasedModelInputs(bundle);
   const featuredResult = args.outV2
     ? await resolveProviderFeaturedModels({ bundle, loadSource })
     : {};
@@ -1403,7 +1435,7 @@ export async function runPublishModelCatalog(
       )
     : undefined;
   bundle = validateBundle(bundle);
-  const summary = summarizeModelCatalogBundle(bundle);
+  const summary = assertModelCatalogCompleteness(bundle);
   const serialized = serializeModelCatalogBundle(bundle);
   const bundleBytes = Buffer.byteLength(serialized);
   const serializedV2 = bundleV2 ? serializeModelCatalogBundleV2(bundleV2) : undefined;

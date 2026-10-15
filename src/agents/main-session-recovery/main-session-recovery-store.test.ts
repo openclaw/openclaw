@@ -234,41 +234,6 @@ describe("main session recovery store", () => {
     });
   });
 
-  it("transfers a resumed recovery run to one durable lifecycle owner", async () => {
-    await write(
-      interruptedEntry({
-        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-old" }],
-        mainRestartRecovery: {
-          cycleId: "cycle-1",
-          revision: 2,
-          chargedAttempts: 1,
-          reservation: { runId: "recovery-1", attempt: 1, lifecycleGeneration },
-        },
-      }),
-    );
-
-    const admitted = await commitRecovery({
-      kind: "admit_recovery",
-      lifecycleGeneration,
-      now: 300,
-      runId: "recovery-1",
-      sessionId: "session-1",
-    });
-
-    expect(admitted.transition).toEqual({
-      kind: "admitted_recovery",
-      admission: {
-        cycleId: "cycle-1",
-        attempt: 1,
-        lifecycleGeneration,
-        runId: "recovery-1",
-        sessionId: "session-1",
-      },
-    });
-    expect(read().restartRecoveryRuns).toEqual([{ runId: "recovery-1", lifecycleGeneration }]);
-    expect(read().abortedLastRun).toBe(false);
-  });
-
   it.each(["recovery-1", "recovery-2"])(
     "does not let delayed restoration interrupt a newer admission of %s",
     async (successorRunId) => {
@@ -428,20 +393,11 @@ describe("main session recovery store", () => {
     },
   );
 
-  it.each([
-    ["claim", false],
-    ["inspect", false],
-    ["claim", true],
-    ["inspect", true],
-  ] as const)("%s follows a moved session with lifecycle rotation=%s", async (kind, rotate) => {
+  it.each(["claim", "inspect"] as const)("%s follows a moved session", async (kind) => {
     useIsolatedMovedSessionStore();
     const movedKey = "agent:main:moved";
     const replacement = { sessionId: "replacement", updatedAt: 200 };
     await seedExact({ [movedKey]: interruptedEntry(), [sessionKey]: replacement });
-    if (rotate) {
-      rotateLifecycleBeforeRecoveryUpdate();
-    }
-
     const result =
       kind === "claim"
         ? await claimRecovery()
@@ -452,15 +408,11 @@ describe("main session recovery store", () => {
           });
 
     expect(result).toMatchObject(
-      rotate
-        ? { kind: "invalidated", reason: "stale_generation" }
-        : kind === "claim"
-          ? { kind: "claimed", sessionKey: movedKey }
-          : { kind: "required" },
+      kind === "claim" ? { kind: "claimed", sessionKey: movedKey } : { kind: "required" },
     );
     expect(read()).toMatchObject(replacement);
     const moved = sessionAccessor.loadSessionEntry({ sessionKey: movedKey, storePath });
-    expect(Boolean(moved?.mainRestartRecovery?.foregroundClaims)).toBe(kind === "claim" && !rotate);
+    expect(Boolean(moved?.mainRestartRecovery?.foregroundClaims)).toBe(kind === "claim");
   });
 
   it.each([

@@ -368,14 +368,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           },
         } as OpenClawConfig,
       },
-      createSession: () => {
-        const session = createDefaultEmbeddedSession();
-        const setActiveToolsByName = session.setActiveToolsByName;
-        session.setActiveToolsByName = (toolNames) => {
-          setActiveToolsByName(toolNames);
-          activeToolNames.push([...toolNames]);
-        };
-        return session;
+      sessionPrompt: async (session) => {
+        activeToolNames.push(session.getActiveToolNames());
       },
     });
 
@@ -986,7 +980,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seen.messages).toStrictEqual([]);
     expect(seen.systemPrompt ?? "").toBe("");
     expect(result.finalPromptText).toBe("hello");
-    expect(result.systemPromptReport?.systemPrompt ?? "").toBe("");
+    expect(result.systemPromptReport?.systemPrompt).toEqual({
+      chars: 0,
+      hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      projectContextChars: 0,
+      nonProjectContextChars: 0,
+    });
     expect(result.messagesSnapshot).toHaveLength(1);
     const sessionOptions = mockParams(hoisted.createAgentSessionMock);
     expect(sessionOptions.customTools).toStrictEqual([]);

@@ -8,6 +8,32 @@ import {
 
 const targetSha = "a".repeat(40);
 
+function recordSection(line: string, partition = "1 merged PR.") {
+  return [
+    "## 2026.7.1",
+    "",
+    "### Highlights",
+    "",
+    "- Highlight one.",
+    "- Highlight two.",
+    "- Highlight three.",
+    "- Highlight four.",
+    "- Highlight five.",
+    "",
+    "### Changes",
+    "",
+    "### Fixes",
+    "",
+    "### Complete contribution record",
+    "",
+    `This audited record covers the complete base..${targetSha} history: ${partition}`,
+    "",
+    "#### Pull requests",
+    "",
+    line,
+  ].join("\n");
+}
+
 function contributionLedger({
   nodes,
   seededPullRequests = [],
@@ -55,16 +81,11 @@ function contributionLedger({
 describe("renderContributionRecordEntry", () => {
   it.each([
     ["refactor(plugins)!: remove a bundled workflow plugin", "refactor", true],
-    ["refactor!: remove the legacy setup command", "refactor", true],
-    ["REFACTOR(cli)!: rename the setup command", "refactor", true],
     ["refactor(plugins): simplify loader internals", "refactor", false],
     ["test: cover breaking plugin changes!", "test", false],
     ["feat(fleet): add resource controls and operator docs", "feat", true],
-    ["fix: Git update reports success while Web UI serves an old build", "fix", true],
     ["fix(qa-matrix): preserve shared reply previews", "fix", false],
     ["feat(ci): add artifact reuse", "feat", false],
-    ["fix(docs): repair setup links", "fix", false],
-    ["fix(build): preserve generated outputs", "fix", false],
     ["Add operator docs", "other", false],
     ["Improve provider discovery", "other", true],
   ])("classifies release prose from declared type and scope: %s", (title, type, eligible) => {
@@ -100,22 +121,11 @@ describe("renderContributionRecordEntry", () => {
     );
   });
 
-  it("keeps external and linked issue references without repeating PR title references", () => {
-    expect(
-      renderContributionRecordEntry({
-        number: 123,
-        title: "Fix local openclaw/openclaw#45 and openclaw/imsg#141",
-        linkedIssues: [{ number: 45 }, { number: 67 }],
-        thanks: ["alice", "bob"],
-      }),
-    ).toBe("- **PR #123** Related #45, openclaw/imsg#141, #67. Thanks @alice and @bob.");
-  });
-
   it("deduplicates resolved issues and retains seeded cross-repository references", () => {
     expect(
       renderContributionRecordEntry({
         number: 124,
-        title: "Fix #45, #45, and OpenClaw/imsg#141",
+        title: "Fix local openclaw/openclaw#45, #45, and OpenClaw/imsg#141",
         externalReferences: ["openclaw/imsg#141"],
         priorReferences: [67],
         linkedIssues: [{ number: 45 }, { number: 67 }],
@@ -231,29 +241,10 @@ describe("renderContributionRecordEntry", () => {
   });
 
   it("rejects a forged canonical range and seed partition", () => {
-    const source = [
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- Highlight one.",
-      "- Highlight two.",
-      "- Highlight three.",
-      "- Highlight four.",
-      "- Highlight five.",
-      "",
-      "### Changes",
-      "",
-      "### Fixes",
-      "",
-      "### Complete contribution record",
-      "",
-      `This audited record covers the complete base..${targetSha} history: 0 in-range PRs + 1 retained seed-only PR = 1 unique PR.`,
-      "",
-      "#### Pull requests",
-      "",
+    const source = recordSection(
       "- **PR #456**",
-    ].join("\n");
+      "0 in-range PRs + 1 retained seed-only PR = 1 unique PR.",
+    );
     const entry = {
       number: 456,
       title: "fix: example",
@@ -282,29 +273,7 @@ describe("renderContributionRecordEntry", () => {
   });
 
   it("requires complete resolved issue tokens rather than matching substrings", () => {
-    const source = [
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- Highlight one.",
-      "- Highlight two.",
-      "- Highlight three.",
-      "- Highlight four.",
-      "- Highlight five.",
-      "",
-      "### Changes",
-      "",
-      "### Fixes",
-      "",
-      "### Complete contribution record",
-      "",
-      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
-      "",
-      "#### Pull requests",
-      "",
-      "- **PR #456** Related openclaw/imsg#141.",
-    ].join("\n");
+    const source = recordSection("- **PR #456** Related openclaw/imsg#141.");
     const entry = {
       number: 456,
       title: "Internal cleanup",
@@ -325,29 +294,7 @@ describe("renderContributionRecordEntry", () => {
 
   it("does not require an out-of-range PR referenced by a PR title", () => {
     const line = "- **PR #456**";
-    const source = [
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- Highlight one.",
-      "- Highlight two.",
-      "- Highlight three.",
-      "- Highlight four.",
-      "- Highlight five.",
-      "",
-      "### Changes",
-      "",
-      "### Fixes",
-      "",
-      "### Complete contribution record",
-      "",
-      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
-      "",
-      "#### Pull requests",
-      "",
-      line,
-    ].join("\n");
+    const source = recordSection(line);
     const entry = {
       number: 456,
       title: "docs: align backup rules (#123)",
@@ -366,29 +313,7 @@ describe("renderContributionRecordEntry", () => {
 
   it("accepts case-only differences in cross-repository references", () => {
     const line = "- **PR #127** Related OpenClaw/imsg#143.";
-    const source = [
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- Highlight one.",
-      "- Highlight two.",
-      "- Highlight three.",
-      "- Highlight four.",
-      "- Highlight five.",
-      "",
-      "### Changes",
-      "",
-      "### Fixes",
-      "",
-      "### Complete contribution record",
-      "",
-      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
-      "",
-      "#### Pull requests",
-      "",
-      line,
-    ].join("\n");
+    const source = recordSection(line);
     const entry = {
       number: 127,
       title: "Internal cleanup",

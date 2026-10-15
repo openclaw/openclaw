@@ -7,6 +7,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { prepareSecretsRuntimeFastPathSnapshot } from "../../secrets/runtime-fast-path.js";
 import { activateSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import {
   withCanonicalAuthProfileCredentialObserver,
@@ -37,6 +38,7 @@ import {
 } from "./sqlite.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreForCatalogAsync,
   loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForRuntime,
   saveAuthProfileStore,
@@ -58,6 +60,60 @@ const { tempDirs, saveOptions, apiKey, store, snapshotAt, unreadableOuter, seedR
   createAuthOwnerTestFixtures();
 
 describe("auth publication owner receipts", () => {
+  it("refreshes catalog credentials and their display source after committed owner writes", async () => {
+    const stateDir = tempDirs.make("openclaw-catalog-auth-owner-");
+    const agentDir = path.join(stateDir, "agents", "catalog", "agent");
+    const localPath = resolveAuthProfileDatabasePath(agentDir);
+    await withEnvAsync(
+      { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: undefined },
+      async () => {
+        await persistAuthProfileBatch({
+          stateDir,
+          profiles: [{ profileId: "shared", credential: apiKey("shared") }],
+        });
+        const inherited = await loadAuthProfileStoreForCatalogAsync(agentDir);
+        expect(inherited.displayPath).toBe(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+        );
+        expect(inherited.store.profiles.shared).toEqual(apiKey("shared"));
+        expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles.shared).toEqual(
+          apiKey("shared"),
+        );
+
+        saveAuthProfileStore({ version: 1, profiles: {} }, agentDir, saveOptions);
+        const emptyLocal = await loadAuthProfileStoreForCatalogAsync(agentDir);
+        expect(emptyLocal.displayPath).toBe(localPath);
+        expect(emptyLocal.store.profiles.shared).toEqual(apiKey("shared"));
+
+        for (const key of ["local", "replaced"]) {
+          await persistAuthProfileBatch({
+            stateDir,
+            agentDir,
+            profiles: [{ profileId: "shared", credential: apiKey(key) }],
+          });
+          const catalog = await loadAuthProfileStoreForCatalogAsync(agentDir);
+          expect(catalog.displayPath).toBe(localPath);
+          expect(catalog.store.profiles.shared).toEqual(apiKey(key));
+          expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles.shared).toEqual(
+            apiKey(key),
+          );
+        }
+
+        const unreadableAgentDir = path.join(stateDir, "agents", "unreadable", "agent");
+        writePersistedAuthProfileStoreRaw(
+          { version: 1, profiles: "invalid-profile-map" },
+          unreadableAgentDir,
+        );
+        await expect(loadAuthProfileStoreForCatalogAsync(unreadableAgentDir)).rejects.toThrow(
+          "is unreadable",
+        );
+        expect(() => loadAuthProfileStoreWithoutExternalProfiles(unreadableAgentDir)).toThrow(
+          "is unreadable",
+        );
+      },
+    );
+  });
+
   it.each(["native", "async"] as const)(
     "publishes a cold default snapshot through %s",
     async (mode) => {

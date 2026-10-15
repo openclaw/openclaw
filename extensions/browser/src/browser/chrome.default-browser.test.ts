@@ -286,6 +286,9 @@ describe("browser default executable detection", () => {
       for (const [name, value] of Object.entries(aliases ?? {})) {
         vi.stubEnv(name, value);
       }
+      vi.spyOn(process, "arch", "get").mockReturnValue(
+        linuxDir === "chrome-linux-arm64" ? "arm64" : "x64",
+      );
       vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", cachePath);
       vi.stubEnv("XDG_CACHE_HOME", xdgCacheHome);
       vi.stubEnv("INIT_CWD", initCwd);
@@ -306,6 +309,7 @@ describe("browser default executable detection", () => {
   );
 
   it("preserves executable and cache precedence when ARM64 Chromium is installed", () => {
+    vi.spyOn(process, "arch", "get").mockReturnValue("arm64");
     const browserCache = "/tmp/browsers";
     const configured = `${browserCache}/chromium-1243/chrome-linux-arm64/chrome`;
     const defaultCache = "/tmp/xdg-cache/ms-playwright";

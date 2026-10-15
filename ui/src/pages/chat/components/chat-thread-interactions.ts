@@ -152,10 +152,10 @@ export type ChatThreadProps = ChatSendStatusActions &
     persistCommentary?: boolean;
     runActive?: boolean;
     runWorking?: boolean;
+    runFinalizing?: boolean;
     startupLabel?: string;
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
-    onChangeFailureModel?: (runId: string) => void;
     failureActionsRunId?: string;
     waitingApproval?: boolean;
     questionPrompts?: readonly QuestionPrompt[];

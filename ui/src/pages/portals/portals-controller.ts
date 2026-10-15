@@ -3,6 +3,7 @@ import type {
   PortalCloseResult,
   PortalListResult,
   PortalSummary,
+  UiPortalPresentation,
 } from "@openclaw/gateway-protocol";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -33,6 +34,7 @@ export class PortalsController {
   portalProbeState: PortalProbeState | null = null;
   pendingEnvironment: EnvironmentSummary | null = null;
   environmentFailure: { environmentId: string; message: string } | null = null;
+  private presentationRequest: { requestId: string; portalId?: string } | null = null;
   private environmentLoading = false;
   private readonly portalProbeCache = new Map<string, PortalReachability>();
   private readonly listeners = new Set<() => void>();
@@ -83,10 +85,81 @@ export class PortalsController {
     };
   }
   private notify() {
+    this.reportPresentation();
     for (const listener of this.listeners) {
       listener();
     }
   }
+  observePresentation(requestId: string, portalId?: string) {
+    this.presentationRequest = { requestId, portalId };
+    // Report this view's diagnosis without re-probing and discarding its live
+    // iframe document. The explicit Retry action owns a fresh network check.
+    this.reportPresentation();
+  }
+
+  private reportPresentation() {
+    const request = this.presentationRequest;
+    if (!request || !this.connected || !this.presentation().presented) {
+      return;
+    }
+    const portalId = request.portalId ?? this.selectedPortalId ?? undefined;
+    let outcome: Pick<UiPortalPresentation, "status" | "reason"> | undefined;
+    if (!this.canReadPortalState) {
+      outcome = { status: "blocked", reason: "access-required" };
+    } else if (this.pendingEnvironmentId && !request.portalId) {
+      outcome = { status: "unverified", reason: "waiting-for-app" };
+    } else if (
+      !this.loaded ||
+      this.loading ||
+      (request.portalId && this.presentation().requestedPortalId !== request.portalId)
+    ) {
+      return;
+    } else {
+      const portal = this.portals.find((entry) => entry.id === portalId);
+      if (!portal || this.error) {
+        outcome = { status: "blocked", reason: "portal-unavailable" };
+      } else if (!portal.url || !portal.tokenQuery) {
+        outcome = { status: "blocked", reason: "access-required" };
+      } else if (this.portalProbeState?.key === `${portal.id}\u0000${portal.url}`) {
+        switch (this.portalProbeState.status) {
+          case "probing":
+            return;
+          case "ingress-required":
+            outcome = { status: "blocked", reason: "remote-ingress-required" };
+            break;
+          case "new-tab-required":
+            outcome = { status: "new-tab-required", reason: "new-tab-required" };
+            break;
+          case "unreachable":
+            outcome = { status: "blocked", reason: "network-unreachable" };
+            break;
+          // An opaque fetch can reach a proxy waiting/error page. Neither this
+          // nor iframe load proves the application rendered or is usable.
+          case "reachable":
+            outcome = { status: "unverified", reason: "network-reachable" };
+            break;
+          case "blocked":
+            outcome = { status: "unverified", reason: "probe-blocked" };
+            break;
+        }
+      }
+    }
+    if (!outcome) {
+      return;
+    }
+    this.presentationRequest = null;
+    const client = this.context.gateway.snapshot.client;
+    void client
+      ?.request("ui.command.result", {
+        requestId: request.requestId,
+        presentation: { ...(portalId ? { portalId } : {}), ...outcome },
+      })
+      .catch(() => {
+        // Disconnects or expired requests leave the caller unverified; never
+        // replay an old browser observation onto a replacement connection.
+      });
+  }
+
   dispose() {
     for (const unsubscribe of this.unsubscribers) {
       unsubscribe();
@@ -193,6 +266,7 @@ export class PortalsController {
   }
 
   resetGatewayState() {
+    this.presentationRequest = null;
     this.resetPendingEnvironment();
     this.portals = [];
     this.selectedPortalId = null;

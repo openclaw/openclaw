@@ -251,7 +251,7 @@ function createStandardNativeApprovalRouting(
   };
 }
 
-/** @deprecated Use createApproverRestrictedNativeApprovalCapabilityAsync with awaited account eligibility. */
+/** @deprecated Use createApproverRestrictedNativeApprovalCapabilityAsync with awaited account eligibility. Final compatibility day: 2026-12-31. */
 export function createApproverRestrictedNativeApprovalCapability(
   params: ApproverRestrictedNativeApprovalCommonParams & ApproverRestrictedNativeApprovalFlatParams,
 ): ChannelApprovalCapability {
@@ -528,7 +528,7 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
   };
 }
 
-/** @deprecated Use createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync for worker-owned session reads. */
+/** @deprecated Use createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync for worker-owned session reads. Final compatibility day: 2026-12-31. */
 export function createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes(
   params: ApproverRestrictedNativeApprovalCommonParams &
     ApproverRestrictedNativeApprovalRoutedParams,

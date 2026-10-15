@@ -25,6 +25,7 @@ import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
 import { CronJobsStoreChangedError } from "./save-error.js";
 import { saveCronStoreChangesInDatabase, prepareCronStoreChanges } from "./save.kernel.js";
 import type { PreparedCronStoreChanges } from "./save.types.js";
+import { projectCronJobStateThroughStorageCodec } from "./state-codec.js";
 import type { CronAdmittedStoreTransactionHooks } from "./transaction-hooks.types.js";
 
 type MutationInput = CronRuntimeWorkerOperations["cron.mutateJobs"]["input"];
@@ -163,6 +164,14 @@ export function mutateCronJobsInWorker(
     input.snapshot,
     database.path,
   );
+  // Runtime postimages retain cleared fields as undefined; compare their persisted
+  // state without normalizing the observed definition or private authority.
+  const preconditionJob = input.preconditionJob
+    ? {
+        ...input.preconditionJob,
+        state: projectCronJobStateThroughStorageCodec(input.preconditionJob.state),
+      }
+    : undefined;
   let transactionRefusal: CronJobsStoreChangedError | undefined;
   try {
     return runOpenClawStateWriteTransaction(
@@ -184,15 +193,22 @@ export function mutateCronJobsInWorker(
           ) {
             throw new CronJobsStoreChangedError(input.storeKey);
           }
-          // Compare the transported representation without rerunning an effectful host precondition.
-          if (
-            input.preconditionJob &&
-            !isDeepStrictEqual(
-              structuredClone(previous.jobs.find((job) => job.id === input.preconditionJob?.id)),
-              input.preconditionJob,
-            )
-          ) {
-            throw new CronJobsStoreChangedError(input.storeKey);
+          // Compare both state encodings (including legacy lastStatus) without
+          // rerunning an effectful host precondition or normalizing authority.
+          if (preconditionJob) {
+            const current = previous.jobs.find((job) => job.id === preconditionJob.id);
+            if (
+              !current ||
+              !isDeepStrictEqual(
+                {
+                  ...structuredClone(current),
+                  state: projectCronJobStateThroughStorageCodec(current.state),
+                },
+                preconditionJob,
+              )
+            ) {
+              throw new CronJobsStoreChangedError(input.storeKey);
+            }
           }
           const plan = planCronJobMutation(previous, input.jobMutation, mutationSnapshot);
           const changes = prepareCronStoreChanges(previous, plan.next);

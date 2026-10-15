@@ -388,6 +388,7 @@ type GatewayTransportContext = {
   unsubscribeSessionMessageEvents: SessionMessageSubscriberRegistry["unsubscribe"];
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
+  getSessionMessageSubscriberConnIds?: (sessionKey: string) => ReadonlySet<string>;
   registerToolEventRecipient: (runId: string, connId: string) => void;
 };
 
@@ -493,7 +494,7 @@ export type GatewayRequestOptions = {
   /**
    * In-process Gateway lifetime guard composed into durable session mutations.
    * @deprecated For approval persistence use api.runtime.gateway.request with host-bound authority;
-   * opaque approval commit callbacks are removed in the next Plugin SDK major.
+   * opaque approval commit callbacks are removed after an announced ordinary stable release window.
    */
   sessionMutationCommitGuard?: () => void;
   /** In-process caller lifetime; never serialized into a Gateway request frame. */

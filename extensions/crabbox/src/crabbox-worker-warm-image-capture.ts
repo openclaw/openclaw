@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import {
   CRABBOX_NONBLOCKING_CAPTURE_VERSION,
   isCrabboxVersionAtLeast,
@@ -49,11 +50,15 @@ export function createCrabboxWarmImageCapture(dependencies: {
   verifyImage: (
     context: LeaseContext,
     checkpointId: string,
+    timeoutMs?: number,
   ) => Promise<ReturnType<typeof parseCheckpointAvailability>>;
   held: (record: WarmProfileRecord, checkpointId: string) => boolean;
   deleteImage: (context: LeaseContext, key: string, record: WarmProfileRecord) => Promise<void>;
   retireImage: (context: LeaseContext, key: string, record: WarmProfileRecord) => Promise<void>;
   checkpointCommand: ReturnType<typeof createCheckpointCommands>["checkpointCommand"];
+  prepareCapture: (
+    context: LeaseContext & { profile: CrabboxProfile; sourcePreparationTimeoutMs: number },
+  ) => Promise<void>;
 }) {
   const {
     openStore,
@@ -85,7 +90,10 @@ export function createCrabboxWarmImageCapture(dependencies: {
       onCaptureStart?: () => void;
       onCaptureEnd?: () => void;
     },
-    prepareAndScrubSource?: (scrubScript: string) => Promise<void>,
+    prepareSource?: () => Promise<{
+      timeoutMs: number;
+      run: (scrubScript: string) => Promise<void>;
+    }>,
   ): Promise<boolean | "source-running"> {
     assertCurrent(context);
     const captureId = randomUUID();
@@ -97,6 +105,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
     let claimed = false;
     let creating = false;
     let preparing = false;
+    let preparingLifetime = false;
     let captured: boolean | "source-running" = false;
     let captureError: string | undefined;
     const attemptCapture = async () => {
@@ -245,12 +254,33 @@ export function createCrabboxWarmImageCapture(dependencies: {
           return;
         }
         context.onCaptureStart?.();
+        preparing = true;
+        const source = await prepareSource?.();
+        preparing = false;
+        assertCurrent(context);
+        if (source) {
+          const current = await openStore().lookup(key);
+          if (current?.operation?.type !== "capture" || current.operation.id !== captureId) {
+            return;
+          }
+        }
+        preparingLifetime = true;
+        await dependencies.prepareCapture({
+          ...context,
+          sourcePreparationTimeoutMs: source?.timeoutMs ?? 0,
+        });
+        preparingLifetime = false;
+        assertCurrent(context);
+        const prepared = await openStore().lookup(key);
+        if (prepared?.operation?.type !== "capture" || prepared.operation.id !== captureId) {
+          return;
+        }
         // Runtime preparation belongs only to a claimed capture. Scrub its forwarded
         // credential artifacts afterward, before any native image can include them.
         assertCurrent(context);
-        if (prepareAndScrubSource) {
+        if (source) {
           preparing = true;
-          await prepareAndScrubSource(SCRUB_WORKER_STATE);
+          await source.run(SCRUB_WORKER_STATE);
           preparing = false;
         } else {
           await checkpointCommand(
@@ -280,7 +310,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
           await clearCrabboxWarmImageCapture(openStore(), key, captureId);
           return;
         }
-        const created = parseCreatedCheckpoint(
+        const { captureEstablished, ...created } = parseCreatedCheckpoint(
           await checkpointCommand(
             context,
             "create",
@@ -305,15 +335,30 @@ export function createCrabboxWarmImageCapture(dependencies: {
             resolveCrabboxCheckpointCaptureTimeoutMs(context.provider),
           ),
           context.id,
-          nonBlocking,
         );
-        if (!nonBlocking && created.state === "pending") {
-          if ((await verifyImage(context, created.checkpointId)) !== "available") {
-            throw new Error("Crabbox waited checkpoint is not available");
+        const sourceRunning = nonBlocking && captureEstablished;
+        if (!sourceRunning && created.state === "pending") {
+          // Without a capture-point attestation, keep enrollment credentials out of
+          // the source until this exact checkpoint is available, as for a waited create.
+          const deadline = Date.now() + WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS;
+          while (created.state === "pending") {
+            assertCurrent(context);
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) {
+              throw new Error("Crabbox waited checkpoint is not available");
+            }
+            const state = await verifyImage(context, created.checkpointId, remainingMs);
+            assertCurrent(context);
+            if (state === "available") {
+              created.state = "available";
+            } else if (!nonBlocking) {
+              throw new Error("Crabbox waited checkpoint is not available");
+            } else {
+              await sleepWithAbort(Math.min(5_000, deadline - Date.now()), context.signal);
+            }
           }
-          created.state = "available";
         }
-        captured = nonBlocking ? "source-running" : true;
+        captured = sourceRunning ? "source-running" : true;
         const published = await openStore().update(key, (current) => {
           if (current?.operation?.type !== "capture" || current.operation.id !== captureId) {
             return undefined;
@@ -358,7 +403,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
             ...next,
             image: {
               ...created,
-              state: nonBlocking ? "pending" : created.state,
+              state: sourceRunning ? "pending" : created.state,
               createdAtMs: now,
               preparationKey: owner.preparationKey,
               cacheKey: owner.cacheKey,
@@ -435,6 +480,15 @@ export function createCrabboxWarmImageCapture(dependencies: {
         }
         // Required project captures must fail before enrollment. Optional teardown
         // captures can warn and let source deletion complete.
+        if (preparingLifetime) {
+          if (context.projectCaptureRequired || (!context.teardown && owner?.projectKey)) {
+            throw new Error(`Crabbox project image preparation failed: ${captureError}`, {
+              cause: error,
+            });
+          }
+          warnOnce("capture skipped", error, false);
+          return;
+        }
         if (preparing || (notSubmitted && owner?.projectKey)) {
           throw error;
         }

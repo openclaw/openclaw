@@ -30,9 +30,7 @@ import {
   inspectCases,
   mappedCatalog,
 } from "./crabbox-worker-provider.test-support.js";
-import { runCrabboxSetupEgress } from "./crabbox-worker-setup-egress.js";
 import {
-  CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
   CRABBOX_WARMUP_TIMEOUT_MS,
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
   CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
@@ -567,6 +565,13 @@ describe("Crabbox worker provider", () => {
     });
     expect(setupCall?.options.input).toContain(`export ARTIFACT_TOKEN='${SETUP_SENTINEL}'`);
     expect(setupCall?.options.input).toContain(CA_BUNDLE);
+    expect(setupCall?.options.input).not.toMatch(/^export (?:HTTP_PROXY|http_proxy)=/mu);
+    expect(setupCall?.options.input).toContain("unset HTTP_PROXY http_proxy ALL_PROXY all_proxy");
+    expect(setupCall?.options.input).toContain("export HTTPS_PROXY='http://127.0.0.1:3128'");
+    expect(setupCall?.options.input).toContain("export https_proxy='http://127.0.0.1:3128'");
+    expect(setupCall?.options.input).toContain("export NO_PROXY='localhost,127.0.0.1,::1'");
+    expect(setupCall?.options.input).toContain("export no_proxy='localhost,127.0.0.1,::1'");
+    expect(setupCall?.options.input).toContain("export NODE_USE_ENV_PROXY='1'");
     expect(setupCall?.options.input).toContain("trap 'rm -rf --");
     expect(setupCall?.options.input).toContain(
       "export CURL_CA_BUNDLE='/tmp/openclaw-setup-egress.",
@@ -602,33 +607,6 @@ describe("Crabbox worker provider", () => {
     expect(revokeSetupGrant).toHaveBeenCalledOnce();
   });
 
-  it("leaves plain HTTP direct while protecting HTTPS setup requests", async () => {
-    const runCommand = vi.fn<CrabboxCommandRunner>(async () => commandResult());
-    const createScript = vi.fn<(env: Record<string, string>) => string>(
-      () => "curl http://packages.example.test/",
-    );
-    await runCrabboxSetupEgress({
-      binary: SIBLING_BINARY,
-      provider: "aws",
-      id: LEASE_ID,
-      secrets: SETUP_SECRETS,
-      createScript,
-      runCommand,
-      timeoutMs: 60_000,
-      assertCurrent: () => {},
-    });
-    const script = runCommand.mock.calls[0]?.[1].input;
-    expect(script).not.toMatch(/^export (?:HTTP_PROXY|http_proxy)=/mu);
-    expect(script).toContain("unset HTTP_PROXY http_proxy ALL_PROXY all_proxy");
-    expect(script).toContain("export HTTPS_PROXY='http://127.0.0.1:3128'");
-    expect(script).toContain("export https_proxy='http://127.0.0.1:3128'");
-    expect(script).toContain("export NO_PROXY='localhost,127.0.0.1,::1'");
-    expect(script).toContain("export no_proxy='localhost,127.0.0.1,::1'");
-    expect(script).toContain("export NODE_USE_ENV_PROXY='1'");
-    expect(createScript.mock.calls[0]?.[0]).not.toHaveProperty("HTTP_PROXY");
-    expect(createScript.mock.calls[0]?.[0]).not.toHaveProperty("http_proxy");
-  });
-
   it("stops the owned lease without launching setup when its protected secret is unavailable", async () => {
     vi.mocked(secretEgressRuntime.withSetupSecretEgress).mockRejectedValue(
       new Error(
@@ -650,20 +628,6 @@ describe("Crabbox worker provider", () => {
       message: expect.stringContaining("protected shared-store entry"),
     });
     expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect", "stop"]);
-  });
-
-  it("rejects retired setupEnv with a Doctor remedy before invoking Crabbox", async () => {
-    const runCommand = vi.fn<CrabboxCommandRunner>();
-    await expect(
-      providerWithRawRunner(runCommand).provision(
-        { ...PROFILE, setup: "install-node", setupEnv: ["ARTIFACT_TOKEN"] },
-        OPERATION_ID,
-      ),
-    ).rejects.toMatchObject({
-      code: "invalid_profile",
-      message: expect.stringContaining("openclaw doctor --fix"),
-    });
-    expect(runCommand).not.toHaveBeenCalled();
   });
 
   it("rejects a CLI without native public setup egress before allocation", async () => {
@@ -803,6 +767,10 @@ describe("Crabbox worker provider", () => {
     let inspections = 0;
     const provider = providerWithRunner(async (argv) => {
       calls.push(argv[1]!);
+      if (argv[1] === "inspect" && inspections === 1) {
+        // Keep the background lease timer independent of filesystem scheduling.
+        await vi.advanceTimersByTimeAsync(0);
+      }
       return commandResult({
         stdout:
           argv[1] === "inspect"
@@ -810,10 +778,19 @@ describe("Crabbox worker provider", () => {
             : "",
       });
     });
-    await expect(provider.provision(PROFILE, OPERATION_ID)).resolves.toMatchObject({
-      leaseId: LEASE_ID,
-    });
-    expect(calls).toEqual(["warmup", "inspect", "inspect", "run"]);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await expect(provider.provision(PROFILE, OPERATION_ID)).resolves.toMatchObject({
+        leaseId: LEASE_ID,
+      });
+      expect(calls).toEqual(["warmup", "inspect", "inspect", "heartbeat", "run"]);
+    } finally {
+      try {
+        await Promise.all([...providers].map((entry) => entry.dispose()));
+      } finally {
+        vi.useRealTimers();
+      }
+    }
   });
 
   it.each([
@@ -1044,7 +1021,7 @@ describe("Crabbox worker provider", () => {
         }
         if (argv[1] === "run" || argv[1] === "stop") {
           commandTimeouts.push(options.timeoutMs);
-          elapsedMs += options.timeoutMs + CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS;
+          elapsedMs += options.timeoutMs + 10_000;
         }
         return argv[1] === "stop"
           ? commandResult({ code: null, killed: true, termination: "timeout" })
@@ -1099,7 +1076,7 @@ describe("Crabbox worker provider", () => {
       let lost = false;
       const runCommand: CrabboxCommandRunner = async (argv) => {
         calls.push(argv);
-        if (!["warmup", "inspect", "run", "stop"].includes(argv[1]!)) {
+        if (!["warmup", "inspect", "heartbeat", "run", "stop"].includes(argv[1]!)) {
           throw new Error("unexpected Crabbox command");
         }
         const flag = argv.includes("--id") ? "--id" : "--lease-id";
@@ -1142,7 +1119,7 @@ describe("Crabbox worker provider", () => {
       }
       await restarted.destroy({ ...lease, profile });
       expect(live.size).toBe(0);
-      expect(calls.map((argv) => argv[1])).toEqual([
+      expect(calls.filter((argv) => argv[1] !== "heartbeat").map((argv) => argv[1])).toEqual([
         "warmup",
         ...(failure === "inspect" ? ["inspect"] : []),
         "warmup",
@@ -1461,9 +1438,7 @@ describe("Crabbox worker provider", () => {
       setupEnv: ["ARTIFACT_TOKEN"],
     };
     try {
-      expect(provider.resolveDestroyTimeoutMs?.(profile)).toBe(
-        CRABBOX_STOP_TIMEOUT_MS + 2 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
-      );
+      expect(provider.resolveDestroyTimeoutMs?.(profile)).toBe(CRABBOX_STOP_TIMEOUT_MS + 20_000);
       await expect(provider.inspect(lifecycleLease(LEASE_ID, profile))).resolves.toEqual(active);
       await provider.destroy(lifecycleLease(LEASE_ID, profile));
       expect(calls.map((argv) => argv[1])).toEqual(["inspect", "stop"]);
@@ -1471,16 +1446,6 @@ describe("Crabbox worker provider", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("rejects non-Crabbox lifecycle lease ids before invoking the CLI", async () => {
-    const runCommand = vi.fn<CrabboxCommandRunner>();
-    const provider = providerWithRunner(runCommand);
-    const lease = lifecycleLease("lease:not-crabbox");
-
-    await expect(provider.inspect(lease)).rejects.toThrow("lease id is invalid");
-    await expect(provider.destroy(lease)).rejects.toThrow("lease id is invalid");
-    expect(runCommand).not.toHaveBeenCalled();
   });
 
   it.each(inspectCases(["deleted"]).filter(({ state }) => state === "deleted"))(

@@ -29,6 +29,8 @@ const authSqlite = "src/agents/auth-profiles/sqlite.ts";
 const authStore = "src/agents/auth-profiles/store.ts";
 const authRuntime = "src/agents/auth-profiles/store-runtime.ts";
 const authUpdate = "src/agents/auth-profiles/store-update.ts";
+const authEnrollment = "src/agents/auth-profiles/authorization-enrollment.ts";
+const authEnrollmentRuntime = "src/agents/auth-profiles/authorization-enrollment-runtime.ts";
 const authKernel = "src/agents/auth-profiles/store-update.worker.ts";
 const authProfiles = "src/agents/auth-profiles/profiles.ts";
 const authStorage = "src/agents/sessions/auth-storage.ts";
@@ -155,9 +157,25 @@ const authCredentialCallers = new Map<string, readonly string[]>([
     [
       key(authSqlite, "mutateAuthProfileCell/write"),
       key(authKernel, "updateAuthProfileStoreInDatabase"),
+      key(authEnrollment, "enrollAuthProfileAuthorizationInDatabase"),
       key("src/agents/auth-profiles/inline-usage-kernel.ts", "recordInlineAuthFailureInDatabase"),
       key("src/agents/auth-profiles/usage-kernel.ts", "recordAuthProfileUsageInDatabase"),
     ],
+  ],
+  // Enrollment preserves credential bytes with a CAS in the existing admitted transaction.
+  // Doctor uses the native agent transaction only with exclusive maintenance, live admission
+  // and the same credential CAS/commit fence. Keep its exact host edge, not a file exemption.
+  [
+    key(authEnrollment, "enrollAuthProfileAuthorizationInDatabase"),
+    [
+      key(authWorker, "authProfiles.enrollAuthorization"),
+      key("src/agents/auth-profiles/inline-usage.worker.ts", "bindSqliteWorkerBackend/execute"),
+      key(authEnrollmentRuntime, "enrollOwnedAuthProfileAuthorization"),
+    ],
+  ],
+  [
+    key(authEnrollmentRuntime, "enrollOwnedAuthProfileAuthorization"),
+    [key("src/agents/auth-profiles/authorization.ts", "captureAuthProfileAuthorization")],
   ],
   [
     key(authCells, "deleteAuthProfileJsonCell"),
@@ -555,7 +573,11 @@ const callers = new Map<string, readonly string[]>([
   [key(accounts, "writeRecord"), [key(accounts, "writeProfile"), key(accounts, "writeLinks")]],
   [
     key(accounts, "writeProfile"),
-    [key(accounts, "updateUserModelAuthProfile"), key(accounts, "connectUserModelAccount")],
+    [
+      key(accounts, "updateUserModelAuthProfile"),
+      key(accounts, "connectUserModelAccount"),
+      key(accounts, "enrollPersonalAuthProfileAuthorizationInDatabase"),
+    ],
   ],
   [
     key(accounts, "writeLinks"),
@@ -576,6 +598,11 @@ const callers = new Map<string, readonly string[]>([
   [
     key(accounts, "connectUserModelAccount"),
     [key(profileWorker, "userProfiles.modelAccount.connect")],
+  ],
+  // Enrollment preserves credential bytes and requires the same admitted personal writer.
+  [
+    key(accounts, "enrollPersonalAuthProfileAuthorizationInDatabase"),
+    [key(profileWorker, "userProfiles.modelAccount.enrollAuthorization")],
   ],
   [key(accounts, "mergeUserModelAccounts"), [key(profileMerge, "mergeUserProfiles")]],
   [
@@ -809,6 +836,10 @@ const credentialCommandOwners = new Map([
     key("src/state/config-machine-state-async.ts", "writeConfigMachineStateAsync"),
   ],
   ["authProfiles.update", key(authUpdate, "runPreparedAuthProfileStoreUpdate")],
+  [
+    "authProfiles.enrollAuthorization",
+    key(authEnrollmentRuntime, "enrollOwnedAuthProfileAuthorization"),
+  ],
 ]);
 
 const repeatedEdges = new Map([

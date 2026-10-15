@@ -22,7 +22,8 @@ modules keep `render`. Keep page imports inside their route's `component` loader
 ## Session Roster Refresh
 
 - `src/lib/sessions/session-list-query.ts` owns held-window reconciliation. Lifecycle, participants, placement, patch/send/steer, run-start/settlement/capacity, title snapshots may skip list reads only with unchanged membership, lineage, pin/owner/archive facts + nondecreasing recency. Tree events: complete access-scoped `ancestorSessions` + any `ancestorSessionRefs`; references need held row's admitted content revision. Preserve each row's generation + field receipts. Certified nested rows own facts; only explicit null clearing receipts may fill omissions from envelope.
-- Authoritative refreshes required: unknown rows, incomplete ancestor coverage, broad/catalog changes, Gateway-owned filters, failed/overlapping reads, uncertain owner-prefix boundaries. Events never create filtered membership; only complete unfiltered active-only Current Work windows may admit certified full active rows below.
+- Authoritative refreshes required: unknown rows, incomplete ancestor coverage, broad/catalog changes, Gateway-owned filters, failed reads, uncertain owner-prefix boundaries. Overlapping reads recheck later row receipts against their accepted membership; covered facts merge without trailing reads. Events never create filtered membership; only complete unfiltered active-only Current Work windows may admit certified full active rows below.
+- Sidebar windows may exclude certified rows below a full recency window; owner-first overflow crossing into the shared page still needs authority. Involving-me members need current viewer ownership or participant receipts and explicit non-hidden state; bounded participants cannot prove non-membership or admit unseen members.
 - Compact rows + bounded source attribution. Enrichment flags/global-or-unknown inclusion preserve membership when kind unchanged; dashboard filters need matching `hasBoard`/`boardFace` receipts. Gallery pagination extends shared managed window; load full settings from descriptors on demand. Child membership: Gateway retention owner's `childOwnerSessionKeys`. Parent-only events must certify complete child window; unheld ancestors need explicit exclusion or admitted reference resolved through connection row provenance.
 - Cached lineage re-adoption changes presentation, not managed membership. Preserve fresh descriptor/event invalidation. Apply admitted descriptor rows immediately; incomplete ancestor coverage gets one paced coordinator refresh, never read per event.
 - Unfiltered History/Current Work: apply admitted rows without list refetches. History's shared row-provenance owner retains field clocks, recap updates, clearing receipts; returned lists alone own membership. `excludeSubagents` ignores key-proven child exclusions only with complete access-scoped ancestor coverage; held parents/certified references still update. Missing held parents/supplied unheld ancestors need authority; named unheld parents absent from certified coverage may be invisible. Merge live facts on refresh, never replay/coalesce History packets. Missing initial membership needs catch-up; query/connection changes reset provenance. History: forward activity clocks required; preserve omitted recap enrichment; person/search filters retain authoritative refreshes.
@@ -44,7 +45,7 @@ modules keep `render`. Keep page imports inside their route's `component` loader
 
 ## CSS / Template Linting
 
-- `pnpm lint`: Solid 2 oxlint rules on `ui/**/*.tsx`; split effects + [Solid skill](../.agents/skills/solid/SKILL.md#traps-that-compile-but-break). `tools/solid-lint` isolates plugin tooling dependencies; corpus: `test/scripts/oxlint-solid.test.ts`.
+- `pnpm lint`: Solid 2 oxlint rules on `ui/**/*.tsx` and TypeScript helpers in `src/lib/reactive/`, `src/components/solid/`, and `src/test-helpers/`; plain domain owners keep their own contracts. Follow the [Solid idioms](../.agents/skills/solid/references/idioms.md) for split effects, tracking, and lifecycle. `tools/solid-lint` isolates plugin tooling dependencies; corpus: `test/scripts/oxlint-solid.test.ts`.
 - `pnpm lint:ui:styles` (included in lint): `ui/src` stylesheets + Lit CSS templates via `config/stylelint.config.mjs`/postcss-lit. Stylelint owns error rules; oxfmt owns formatting.
 - Shared 24×24 Lucide icons: `strokeIcon()` in `src/components/icons-tools.ts` for inline stroke attributes inside shadow roots. Bodies must be `svg` template fragments, never `html` (wrong namespace).
 - `pnpm lint:ui:lit` = slow opt-in template diagnostic with existing findings, not CI gate.
@@ -59,6 +60,10 @@ modules keep `render`. Keep page imports inside their route's `component` loader
 - `node --import tsx scripts/audit-control-ui-dead-css.mts` advisory. Verify selectors before deleting; extend dynamic-stem detection, not allowlist.
 - Nest CSS only while rewriting section; no conversion sweeps.
 - No `@layer`: shared light-DOM CSS depends on import order/specificity + lazy page CSS. Reconsider only with computed-style parity across all routes on mocked dev server.
+
+## Modal Completion Actions
+
+- Place workflow completion actions last in `<openclaw-modal-actions>`, after content, status and validation errors. The native modal stylesheet owns right alignment, wrapping and label containment for Solid and retained Lit callers. Keep submit buttons inside their native form; no renderer or custom-element registration is needed. Caller styles own spacing, not competing alignment or mobile full-width rules. Header X/Expand and field-local controls are not completion actions. Scrollable panels respect `--openclaw-modal-height-limit` so the footer stays reachable. Set the intended width with `--openclaw-modal-width` on the native host and let child panels fill the shell instead of imposing a wider independent width.
 
 ## Gateway Coupling
 

@@ -28,7 +28,7 @@ describe("public session document", () => {
     const html = render([], { entryUrl });
     expect(html).toContain(`href="${entryUrl}"`);
     expect(html).toContain("Log in");
-    expect(html).not.toContain('http-equiv="refresh"');
+    expect(html).toContain('<noscript><meta http-equiv="refresh" content="15"></noscript>');
     expect(html).toContain('data-public-refresh="true"');
     expect(html).toContain('redirect:"error"');
     expect(html).not.toMatch(/new WebSocket|bootstrap|sessions.list/);
@@ -146,7 +146,7 @@ describe("public session document", () => {
     expect(html).toContain("Checking the files.");
     expect(html).toContain("The cause is clear.");
     expect(html).toContain("Fixed the issue.");
-    expect(html.match(/<details class="tools">/g)).toHaveLength(1);
+    expect(html.match(/<details class="tools" data-public-item=/g)).toHaveLength(1);
     expect(html).toContain("Ran 2 tools");
     expect(html).toContain("src/example.ts");
     expect(html).not.toMatch(/RESULT_BODY_MUST_STAY_PRIVATE|THOUGHT_MUST_STAY_PRIVATE|TAIL_MARKER/);
@@ -363,34 +363,6 @@ describe("public session document", () => {
     expect(html).not.toContain('rel="canonical"');
     expect(html).not.toContain('property="og:url"');
     expect(html).toContain('href="/share/session?token=v1.opaque">Refresh now</a>');
-  });
-
-  it("renders an accessible empty live view with disclosure and crawler metadata", () => {
-    const html = render([], { truncated: true });
-    expect(html).toContain("No public conversation text yet");
-    expect(html).toContain("Public · Read-only");
-    expect(html).toContain("Tool result text, reasoning, and interactive content are omitted");
-    expect(html).toContain('http-equiv="refresh" content="15"');
-    expect(html).toContain('property="og:title" content="A shared conversation"');
-    expect(html).toContain('aria-label="Conversation"');
-    expect(html).toContain('name="referrer" content="no-referrer"');
-    expect(html).toContain("Made with OpenClaw");
-    expect(html).toContain(
-      'href="https://docs.openclaw.ai/start/getting-started" rel="noreferrer noopener">Get started',
-    );
-  });
-
-  it("groups consecutive turns from one speaker under a single identity", () => {
-    const html = render([
-      { role: "user", content: "First question" },
-      { role: "assistant", content: "First answer" },
-      { role: "assistant", content: "Follow-up answer" },
-    ]);
-    expect(html).toContain('class="message user" aria-label="User message"');
-    expect(html).toContain('class="message assistant" aria-label="Assistant message"');
-    expect(html).toContain('class="message assistant continued" aria-label="Assistant message"');
-    expect(html).toContain("3 messages");
-    expect(html.match(/class="avatar"/g)).toHaveLength(1);
   });
 
   it("truncates titles and messages without splitting UTF-16 surrogate pairs", () => {

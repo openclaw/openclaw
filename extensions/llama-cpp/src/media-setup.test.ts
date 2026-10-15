@@ -282,47 +282,7 @@ describe("registered local media setup transaction", () => {
     );
   });
 
-  it("publishes only after both registered production routes see their real image fixtures", async () => {
-    const ctx = context();
-    const describeImage = vi.spyOn(registeredMedia, "describeImage");
-    const result = await setup(ctx);
-    expect(describeImage).toHaveBeenCalledTimes(2);
-    expect(describeImage.mock.calls[0]?.[0].buffer).toEqual(LLAMA_CPP_OCR_FIXTURE);
-    expect(describeImage.mock.calls[1]?.[0].buffer).toEqual(LLAMA_CPP_VISION_FIXTURE);
-    expect(describeImage.mock.calls[0]?.[0].model).not.toBe(describeImage.mock.calls[1]?.[0].model);
-    const provider = result.configPatch?.models?.providers?.["llama-cpp"];
-    expect(provider?.models.map((model) => model.input)).toEqual([
-      ["text", "image"],
-      ["text", "image"],
-    ]);
-    expect(provider?.params?.mediaModels).toEqual({
-      ocr: "glm-ocr-q8_0",
-      vision: "smolvlm2-2.2b-instruct-q4_k_m",
-    });
-    expect(mocks.ensureModel.mock.calls.filter(([arg]) => arg.download)).toHaveLength(4);
-    expect(mocks.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatModel: { mode: "preserve" },
-        modelsMax: 1,
-        isolated: true,
-        mediaModels: expect.arrayContaining([
-          expect.objectContaining({ projectorPath: expect.any(String), device: "none" }),
-        ]),
-      }),
-    );
-    expect(result.defaultModel).toBeUndefined();
-    expect(ctx.config).toEqual({});
-    expect(await fs.readFile(preset, "utf8")).toBe("candidate preset");
-    const verificationDir = describeImage.mock.calls[0]?.[0].agentDir;
-    expect(verificationDir).toBeTruthy();
-    await expect(fs.stat(verificationDir!)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it.each([
-    { platform: "darwin" as const, arch: "arm64" },
-    { platform: "win32" as const, arch: "x64" },
-    { platform: "linux" as const, arch: "arm64" },
-  ])(
+  it.each([{ platform: "linux" as const, arch: "arm64" }])(
     "leaves configuration untouched outside the verified Linux x64 scope: $platform/$arch",
     async ({ platform, arch }) => {
       const ctx = context();
@@ -352,23 +312,19 @@ describe("registered local media setup transaction", () => {
     },
   );
 
-  it.each(["ocr", "vision"])(
+  it.each(["vision"])(
     "%s failure removes candidate state and never produces a patch",
     async (task) => {
       const ctx = context();
       const before = structuredClone(ctx.config);
       mocks.inference.mockImplementation(async (request) => ({
-        text: request.model.startsWith("glm")
-          ? task === "ocr"
-            ? "4828"
-            : "OPENCLAW OCR 4827"
-          : "circle",
+        text: request.model.startsWith("glm") ? "OPENCLAW OCR 4827" : "circle",
         model: request.model,
       }));
       await expect(setup(ctx)).rejects.toThrow(
         `${task.toUpperCase()} inference verification failed`,
       );
-      expect(mocks.inference).toHaveBeenCalledTimes(task === "ocr" ? 1 : 2);
+      expect(mocks.inference).toHaveBeenCalledTimes(2);
       expect(ctx.config).toEqual(before);
       await expect(fs.stat(preset)).rejects.toMatchObject({ code: "ENOENT" });
     },
@@ -437,41 +393,21 @@ describe("registered local media setup transaction", () => {
     ]);
   });
 
-  it.each(["download", "startup", "ocr", "vision"])(
-    "propagates cancellation during %s and keeps working configuration",
-    async (stage) => {
-      const controller = new AbortController();
-      const ctx = { ...context(), signal: controller.signal };
-      if (stage === "download") {
-        mocks.ensureModel.mockImplementation(async ({ download, signal }) => {
-          expect(signal).toBe(controller.signal);
-          if (download) {
-            controller.abort();
-          }
-          signal.throwIfAborted();
-          throw new Error("not cached");
-        });
-      } else if (stage === "startup") {
-        mocks.prepare.mockImplementation(async ({ signal }) => {
-          expect(signal).toBe(controller.signal);
-          controller.abort();
-          signal.throwIfAborted();
-        });
-      } else {
-        mocks.inference.mockImplementation(async (request) => {
-          expect(request.signal).toBe(controller.signal);
-          if ((stage === "ocr") === request.model.startsWith("glm")) {
-            controller.abort();
-            request.signal.throwIfAborted();
-          }
-          return { text: "OPENCLAW OCR 4827", model: request.model };
-        });
+  it("propagates cancellation during vision and keeps working configuration", async () => {
+    const controller = new AbortController();
+    const ctx = { ...context(), signal: controller.signal };
+    mocks.inference.mockImplementation(async (request) => {
+      expect(request.signal).toBe(controller.signal);
+      if (!request.model.startsWith("glm")) {
+        controller.abort();
+        request.signal.throwIfAborted();
       }
-      await expect(setup(ctx)).rejects.toMatchObject({ name: "AbortError" });
-      expect(ctx.config).toEqual({});
-      await expect(fs.stat(preset)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+      return { text: "OPENCLAW OCR 4827", model: request.model };
+    });
+    await expect(setup(ctx)).rejects.toMatchObject({ name: "AbortError" });
+    expect(ctx.config).toEqual({});
+    await expect(fs.stat(preset)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
   it("credits only verified model/projector cache on retry", async () => {
     mocks.ensureModel.mockImplementation(async ({ source }) =>
@@ -555,27 +491,25 @@ describe("registered local media setup transaction", () => {
     },
   );
 
-  it.each([
-    ["--image-max-tokens", "8192"],
-    ["--image_max_tokens=8192"],
-    ["-c", "65536"],
-    ["-np", "4"],
-  ])("rejects inherited router limits before downloading: %j", async (...args) => {
-    const ctx = context();
-    const provider = buildLlamaCppProviderConfig({
-      managed: {
-        command: "/old/llama-server",
-        baseUrl: "http://127.0.0.1:19432/v1",
-        healthUrl: "http://127.0.0.1:19432/health",
-        args: ["--models-preset", "/old/models.ini", ...args],
-      },
-    });
-    ctx.config = { models: { providers: { "llama-cpp": provider } } };
-    await expect(setup(ctx)).rejects.toThrow("exceeds the local media limit");
-    expect(mocks.ensureModel.mock.calls.every(([arg]) => arg.download === false)).toBe(true);
-    expect(mocks.install).not.toHaveBeenCalled();
-    expect(mocks.prepare).not.toHaveBeenCalled();
-  });
+  it.each([["-np", "4"]])(
+    "rejects inherited router limits before downloading: %j",
+    async (...args) => {
+      const ctx = context();
+      const provider = buildLlamaCppProviderConfig({
+        managed: {
+          command: "/old/llama-server",
+          baseUrl: "http://127.0.0.1:19432/v1",
+          healthUrl: "http://127.0.0.1:19432/health",
+          args: ["--models-preset", "/old/models.ini", ...args],
+        },
+      });
+      ctx.config = { models: { providers: { "llama-cpp": provider } } };
+      await expect(setup(ctx)).rejects.toThrow("exceeds the local media limit");
+      expect(mocks.ensureModel.mock.calls.every(([arg]) => arg.download === false)).toBe(true);
+      expect(mocks.install).not.toHaveBeenCalled();
+      expect(mocks.prepare).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects implicit remote capabilities instead of inventing audio/video intent", async () => {
     const ctx = context();

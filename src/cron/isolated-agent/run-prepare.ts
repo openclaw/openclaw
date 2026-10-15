@@ -570,21 +570,28 @@ export async function prepareCronRunContext(params: {
         job: input.job,
         cronSession,
       });
-      const authSelection = await resolveCronAuthSelection({
-        agentId,
-        cfg: admittedConfig,
-        provider,
-        modelId: model,
-        ...(provider === resolvedModelSelection.provider &&
-        resolvedModelSelection.configuredProfileId
-          ? { configuredProfileId: resolvedModelSelection.configuredProfileId }
-          : {}),
-        harnessRuntime: effectiveAgentRuntime,
-        agentDir,
-        cronSession,
-        sessionKey: agentSessionKey,
-        isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
-      });
+      const authSelection = input.job.runtimeAuthority
+        ? undefined
+        : input.job.inferenceBinding
+          ? {
+              profileId: input.job.inferenceBinding.profileId,
+              source: input.job.inferenceBinding.source,
+            }
+          : await resolveCronAuthSelection({
+              agentId,
+              cfg: admittedConfig,
+              provider,
+              modelId: model,
+              ...(provider === resolvedModelSelection.provider &&
+              resolvedModelSelection.configuredProfileId
+                ? { configuredProfileId: resolvedModelSelection.configuredProfileId }
+                : {}),
+              harnessRuntime: effectiveAgentRuntime,
+              agentDir,
+              cronSession,
+              sessionKey: agentSessionKey,
+              isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
+            });
       const authProfileId = authSelection?.profileId;
       const liveSelection: LiveSessionModelSelection = {
         provider,

@@ -7,6 +7,7 @@ import {
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
+import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import * as maintenanceLease from "../state/openclaw-agent-db-maintenance-lease.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -159,8 +160,14 @@ describe("legacy media persistence doctor migration", () => {
       return statement;
     });
     let result: Awaited<ReturnType<typeof migrateLegacyMediaPersistence>>;
+    let preparedPaths: string[] = [];
     try {
-      result = await migrateLegacyMediaPersistence({ env });
+      result = await migrateLegacyMediaPersistence({
+        env,
+        onPreparedRepairTargets: (targets) => {
+          preparedPaths = targets.map((target) => target.path);
+        },
+      });
     } finally {
       prepareSpy.mockRestore();
     }
@@ -168,6 +175,7 @@ describe("legacy media persistence doctor migration", () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain(`Skipped agent database migration for ${first}:`);
     expect(result.warnings[0]).toContain("lease");
+    expect(preparedPaths).toEqual([second]);
     expect(readDatabaseSnapshot(first)).toEqual(before);
     expect(result.changes).toContainEqual(
       expect.stringContaining(`Migrated media persistence in ${second}:`),
@@ -439,12 +447,18 @@ describe("legacy media persistence doctor migration", () => {
     const before = readDatabaseSnapshot(databasePath);
     const sql = observeMainThreadSql();
     let result: Awaited<ReturnType<typeof migrateLegacyMediaPersistence>>;
+    let preparedPaths: string[] = [];
     try {
-      result = await migrateLegacyMediaPersistence({ env });
+      result = await migrateLegacyMediaPersistence({
+        env,
+        onPreparedRepairTargets: (targets) => {
+          preparedPaths = targets.map((target) => target.path);
+        },
+      });
+      expect(preparedPaths).toEqual([databasePath]);
       const statements = sql.calls.flatMap((call) =>
         call.mock.calls.map(([statement]) => statement),
       );
-      expect(statements).toContain("PRAGMA data_version");
       expect(
         statements.filter(
           (statement) =>
@@ -458,7 +472,7 @@ describe("legacy media persistence doctor migration", () => {
       sql.restore();
     }
     expect(result.warnings).toEqual([]);
-    expect(result.changes).toHaveLength(4);
+    expect(result.changes).toHaveLength(5);
     expect(result.changes).toEqual(
       expect.arrayContaining([
         `Upgraded agent database schema in ${databasePath}: v16 -> v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
@@ -467,6 +481,18 @@ describe("legacy media persistence doctor migration", () => {
         `Migrated archived transcript media in ${compressedArchive}.`,
       ]),
     );
+
+    const recoveryDirectories = () =>
+      fs
+        .readdirSync(path.dirname(databasePath))
+        .filter((name) => name.startsWith("openclaw-media-persistence-recovery-"));
+    const backups = recoveryDirectories();
+    expect(backups).toHaveLength(1);
+    const preserved = readDatabaseSnapshot(
+      path.join(path.dirname(databasePath), backups[0]!, "database.sqlite"),
+    );
+    expect(preserved.rows).toEqual(before.rows);
+    expect(preserved.trajectoryRows).toEqual(before.trajectoryRows);
 
     const after = readDatabaseSnapshot(databasePath);
     expect(after.version.user_version).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
@@ -543,15 +569,39 @@ describe("legacy media persistence doctor migration", () => {
     expect(readSessionArchiveContentSync(plainArchive)).toContain('"__openclaw"');
     expect(readSessionArchiveContentSync(compressedArchive)).toContain('"__openclaw"');
 
-    expect(openOpenClawAgentDatabase({ agentId: "main", env }).db.isOpen).toBe(true);
+    await appendTranscriptMessage(
+      { agentId: "main", env, sessionId: "session-a", sessionKey: "agent:main:session-a" },
+      {
+        eventId: "current-writer",
+        message: { role: "assistant", content: "after repair", MediaPath: "/media/new.png" },
+      },
+    );
     closeOpenClawAgentDatabasesForTest();
     const checks = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
+    const reads = vi.spyOn(DatabaseSync.prototype, "prepare");
     try {
       expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
       expect(checks.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(1);
+      expect(
+        reads.mock.calls.filter(
+          ([query]) =>
+            /from "(?:transcript_events|trajectory_runtime_events)"/u.test(query) &&
+            query.includes('as "event_json"'),
+        ),
+      ).toEqual([]);
     } finally {
       checks.mockRestore();
+      reads.mockRestore();
     }
+    const appended = readDatabaseSnapshot(databasePath).rows.find(
+      (row) => JSON.parse(row.event_json).id === "current-writer",
+    );
+    expect(recoveryDirectories()).toEqual(backups);
+    expect(JSON.parse(appended!.event_json).message).toMatchObject({
+      role: "assistant",
+      content: "after repair",
+      __openclaw: { media: [expect.objectContaining({ path: "/media/new.png" })] },
+    });
   });
 
   it.each([OPENCLAW_AGENT_SCHEMA_VERSION])(
@@ -582,13 +632,18 @@ describe("legacy media persistence doctor migration", () => {
 
       const beforeUpdate = readDatabaseSnapshot(databasePath);
       const checks = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
+      let preparedPaths: string[] = [];
       try {
         expect(
           await migrateLegacyMediaPersistence({
             env: { ...env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+            onPreparedRepairTargets: (targets) => {
+              preparedPaths = targets.map((target) => target.path);
+            },
           }),
         ).toEqual({ changes: [], warnings: [] });
         expect(readDatabaseSnapshot(databasePath)).toEqual(beforeUpdate);
+        expect(preparedPaths).toEqual([databasePath]);
         expect(checks.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(0);
       } finally {
         checks.mockRestore();
@@ -613,6 +668,7 @@ describe("legacy media persistence doctor migration", () => {
                 `Upgraded agent database schema in ${databasePath}: v${schemaVersion} -> v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
               ]
             : []),
+          expect.stringMatching(/^Saved pre-repair SQLite backup: /),
           `Migrated media persistence in ${databasePath}: 1 transcript session(s), 0 trajectory row(s), schema v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
         ],
         warnings: [],
@@ -699,10 +755,24 @@ describe("legacy media persistence doctor migration", () => {
       const before = readDatabaseSnapshot(databasePath);
       const result = await migrateLegacyMediaPersistence({ env });
       expect(result.warnings).toHaveLength(1);
-      expect(result.changes).toEqual([]);
+      expect(result.changes).toEqual([
+        expect.stringContaining(
+          `Saved pre-repair SQLite backup: ${path.join(path.dirname(databasePath), "openclaw-media-persistence-recovery-")}`,
+        ),
+      ]);
       expect(result.warnings[0]).toContain(`Skipped agent database migration for ${databasePath}:`);
       expect(result.warnings[0]).toContain(`invalid ${kind} JSON`);
       expect(readDatabaseSnapshot(databasePath)).toEqual(before);
+      const failed = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(
+          failed
+            .prepare("SELECT 1 FROM schema_meta WHERE meta_key = 'media-persistence-rows-v1'")
+            .get(),
+        ).toBeUndefined();
+      } finally {
+        failed.close();
+      }
       expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual(
         schemaVersion === PREVIOUS_VERSION
           ? []
@@ -717,90 +787,16 @@ describe("legacy media persistence doctor migration", () => {
     },
   );
 
-  it("aborts on active-row drift and archive source replacement without partial deletion", async () => {
+  it("preserves an archive replaced before its atomic media repair", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-drift-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const { DatabaseSync } = requireNodeSqlite();
     const event = createEvent({
       id: "event-1",
       parentId: null,
       timestamp: 1000,
       message: { role: "user", content: "before", MediaPath: "/media/a.png" },
     });
-    const databasePath = createLegacyDatabaseFixture({
-      env,
-      eventsBySession: { drift: [event] },
-    });
-    let afterForeignCommit: ReturnType<typeof readDatabaseSnapshot> | undefined;
-    const transcriptDrift = await migrateLegacyMediaPersistence({
-      env,
-      hooks: {
-        beforeDatabaseTransaction: (pathname) => {
-          if (pathname !== databasePath) {
-            return;
-          }
-          const writer = new DatabaseSync(databasePath);
-          writer
-            .prepare(
-              "UPDATE transcript_events SET created_at = created_at + 1 WHERE session_id = ?",
-            )
-            .run("drift");
-          writer.close();
-          afterForeignCommit = readDatabaseSnapshot(databasePath);
-        },
-      },
-    });
-    expect(transcriptDrift.warnings.join("\n")).toContain(
-      "source changed before migration transaction",
-    );
-    expect(transcriptDrift.changes).toEqual([]);
-    expect(readDatabaseSnapshot(databasePath)).toEqual(afterForeignCommit);
-    expect(readDatabaseSnapshot(databasePath).version.user_version).toBe(PREVIOUS_VERSION);
-
-    const trajectoryWriter = new DatabaseSync(databasePath);
-    trajectoryWriter
-      .prepare(
-        "INSERT INTO trajectory_runtime_events(session_id,seq,run_id,event_json,created_at) VALUES(?,?,?,?,?)",
-      )
-      .run(
-        "drift",
-        0,
-        "run-1",
-        JSON.stringify({ data: { messagesSnapshot: [{ role: "user", MediaPath: "/old.png" }] } }),
-        2000,
-      );
-    trajectoryWriter.close();
-    const trajectoryDrift = await migrateLegacyMediaPersistence({
-      env,
-      hooks: {
-        beforeDatabaseTransaction: (pathname) => {
-          if (pathname !== databasePath) {
-            return;
-          }
-          const writer = new DatabaseSync(databasePath);
-          writer
-            .prepare(
-              "UPDATE trajectory_runtime_events SET event_json = ? WHERE session_id = ? AND seq = 0",
-            )
-            .run(
-              JSON.stringify({
-                // A same-length replacement leaves the retired fingerprints unchanged.
-                data: { messagesSnapshot: [{ role: "user", MediaPath: "/new.png" }] },
-              }),
-              "drift",
-            );
-          writer.close();
-          afterForeignCommit = readDatabaseSnapshot(databasePath);
-        },
-      },
-    });
-    expect(trajectoryDrift.warnings.join("\n")).toContain(
-      "source changed before migration transaction",
-    );
-    expect(trajectoryDrift.changes).toEqual([]);
-    expect(readDatabaseSnapshot(databasePath)).toEqual(afterForeignCommit);
-    expect(readDatabaseSnapshot(databasePath).version.user_version).toBe(PREVIOUS_VERSION);
-
+    createLegacyDatabaseFixture({ env, eventsBySession: { drift: [event] } });
     const archivePath = path.join(
       stateDir,
       "agents",

@@ -81,6 +81,7 @@ const infraConfig = "test/vitest/vitest.infra.config.ts";
 const packageContract = "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts";
 const contractsConfig = "test/vitest/vitest.contracts-plugin.config.ts";
 const channelsConfig = "test/vitest/vitest.channels.config.ts";
+const gatewayMethodsConfig = "test/vitest/vitest.gateway-methods.config.ts";
 const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
 const agentsCoreConfig = agentVitestProjectOwners.core.config;
 const discordCapture = "test/e2e/gateway-transcripts-discord-capture.e2e.test.ts";
@@ -98,6 +99,20 @@ it.for([
     prepare: false,
   },
   { name: "empty channels", config: channelsConfig, args: [], include: [], prepare: false },
+  { name: "full gateway methods", config: gatewayMethodsConfig, args: [], prepare: true },
+  {
+    name: "focused gateway methods",
+    config: gatewayMethodsConfig,
+    args: ["src/gateway/server-methods/health.test.ts"],
+    prepare: false,
+  },
+  {
+    name: "empty gateway methods",
+    config: gatewayMethodsConfig,
+    args: [],
+    include: [],
+    prepare: false,
+  },
   {
     name: "code-mode all agents",
     config: agentVitestProjectOwners.all.config,
@@ -152,7 +167,9 @@ it.runIf(process.platform !== "win32").for([
           "metadata",
           "custom-root",
           "custom-project",
-          ...(route === "direct" ? ["include-worker", "include-excluded", "channels"] : []),
+          ...(route === "direct"
+            ? ["include-worker", "include-excluded", "channels", "gateway-methods"]
+            : []),
         ]
     ).map((mode) => ({
       route,
@@ -306,7 +323,11 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
                 "scripts/run-vitest.mjs",
                 "run",
                 "--config",
-                ...(mode === "channels" ? [channelsConfig] : [selectedConfig, selectedFile]),
+                ...(mode === "channels"
+                  ? [channelsConfig]
+                  : mode === "gateway-methods"
+                    ? [gatewayMethodsConfig]
+                    : [selectedConfig, selectedFile]),
                 ...controls,
               ]
             : [
@@ -333,6 +354,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
         ...(route === "batch"
           ? {
               OPENCLAW_VITEST_RUNTIME: "bun",
+              OPENCLAW_BUN_PATH: process.execPath,
               NODE_COMPILE_CACHE: nodeCompileCache,
               NODE_COMPILE_CACHE_PORTABLE: "1",
               NODE_DISABLE_COMPILE_CACHE: undefined,
@@ -346,6 +368,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
         mode === "ready" ||
         mode === "include-worker" ||
         mode === "channels" ||
+        mode === "gateway-methods" ||
         mode === "code-mode" ||
         mode === "capture";
       const prepared = ready || mode === "failure" || mode === "cancel";
@@ -357,7 +380,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           prepared: ready && route !== "batch",
           ...(route === "batch"
             ? {
-                command: "bun",
+                command: process.execPath,
                 orchestratorRuntime: "node",
                 orchestratorCache: expectedCache,
               }

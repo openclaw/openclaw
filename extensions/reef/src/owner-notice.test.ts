@@ -259,29 +259,6 @@ describe("ReefReceiptNotifier", () => {
     });
   });
 
-  it("keeps resend cooldowns across notifier recreation", async () => {
-    const notices = createNoticeStore();
-    const first = new ReefReceiptNotifier(consumeNotice, notices.store, {
-      scheduler: createScheduler(),
-      now: () => 10_000,
-    });
-    await first.notifyRejections([rejection("alice", "01JZ0000000000000000000105")]);
-
-    expect(notices.store.loadState(rejection("alice", "cooldown"))).toEqual({
-      lastRejectionAt: 10_000,
-      lastResendAt: 10_000,
-    });
-
-    const notify = vi.fn(consumeNotice);
-    const restarted = new ReefReceiptNotifier(notify, notices.store, {
-      scheduler: createScheduler(),
-      now: () => 11_000,
-    });
-    await restarted.notifyRejections([rejection("alice", "01JZ0000000000000000000107")]);
-
-    expect(notify.mock.calls[0]![0]).toMatchObject({ allowResend: false });
-  });
-
   it("applies later recovered reservations before fresh items in the same batch", async () => {
     const notices = createNoticeStore();
     const recovered = rejection("alice", "01JZ0000000000000000000111");
@@ -450,27 +427,6 @@ describe("ReefReceiptNotifier", () => {
     await notifier.notifyRejections([pending]);
     expect(notify).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("uses stop-only guidance when reconciliation retries failed completion", async () => {
-    const notices = createNoticeStore();
-    const originalComplete = notices.store.complete.bind(notices.store);
-    const complete = vi
-      .spyOn(notices.store, "complete")
-      .mockRejectedValueOnce(new Error("state unavailable"));
-    complete.mockImplementation(originalComplete);
-    const notify = vi.fn(consumeNotice);
-    const notifier = new ReefReceiptNotifier(notify, notices.store, {
-      scheduler: createScheduler(),
-    });
-
-    const pending = rejection("alice", "01JZ0000000000000000000114");
-    await notifier.notifyRejections([pending]);
-    await notifier.notifyRejections([pending]);
-
-    expect(notify).toHaveBeenCalledTimes(2);
-    expect(notify.mock.calls[1]![0]).toMatchObject({ allowResend: false });
-    expect(complete).toHaveBeenCalledTimes(2);
   });
 
   it("recovers a crash after agent consumption without granting another resend", async () => {

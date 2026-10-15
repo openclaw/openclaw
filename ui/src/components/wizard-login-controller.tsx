@@ -28,6 +28,7 @@ export class WizardLoginController {
       onClose: () => void;
       requestFailedMessage: () => string;
       sessionExpiredMessage: () => string;
+      finishingMessage?: () => string;
       onAnswer?: (value: unknown, includeValue?: boolean) => void;
       onBackgroundCompletion?: (completion: ModelSetupWizardCompletion) => Promise<void>;
     },
@@ -64,10 +65,12 @@ export class WizardLoginController {
 
   viewProps(
     options: {
-      mode?: "auth" | "activate";
+      mode?: "auth" | "prepare" | "activate";
       busy?: boolean;
       refreshWarning?: string | null;
       doneMessage?: string;
+      doneDescription?: string;
+      doneAction?: WizardViewProps["doneAction"];
     } = {},
   ): WizardViewProps {
     const state = this.runner.state;
@@ -77,6 +80,8 @@ export class WizardLoginController {
         state.phase === "step" ? { ...state, busy: state.busy || Boolean(options.busy) } : state,
       refreshWarning: options.refreshWarning ?? null,
       doneMessage: options.doneMessage,
+      doneDescription: options.doneDescription,
+      doneAction: options.doneAction,
       cancellationNotice: this.cancellationNotice,
       value: this.value,
       onValueChange: (value) => {
@@ -104,7 +109,8 @@ export class WizardLoginController {
         return;
       }
       if (result === "running") {
-        this.cancellationNotice = t("modelProviders.login.finishing");
+        this.cancellationNotice =
+          this.options.finishingMessage?.() ?? t("modelProviders.login.finishing");
       } else if (result === "cancelled") {
         this.options.onClose();
       }

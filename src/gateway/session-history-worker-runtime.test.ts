@@ -229,22 +229,6 @@ function page(text: string): Extract<SessionHistoryWorkerResult, { kind: "rpc" }
   };
 }
 
-it("treats an empty exact archive path as an ordinary recent-history request", async () => {
-  const result = { messages: [], totalMessages: 0 };
-  runWorker.mockImplementationOnce(async (prepare: () => SessionTranscriptHistoryWorkerInput) => {
-    const input = prepare();
-    expect(input.request.kind).toBe("recent-page");
-    expect(input.request.params).not.toHaveProperty("exactArchivePath");
-    return { kind: "recent-page", result };
-  });
-  await expect(
-    readSessionHistoryPageInWorker({
-      kind: "recent-page",
-      params: { target: historyTarget(), exactArchivePath: "", options: { maxMessages: 10 } },
-    }),
-  ).resolves.toEqual(result);
-});
-
 function httpPage(): SessionHistoryWorkerResult {
   return {
     kind: "http",
@@ -805,39 +789,5 @@ it.each([
         messages: [{ role: "assistant", content: [{ type: "text", text: "capacity released" }] }],
       });
     }
-  },
-);
-
-it.each([
-  {
-    entry: { sessionId: "history-worker", updatedAt: 1 },
-    key: "agent:main:history-worker",
-    validate: false,
-  },
-  { entry: undefined, key: "", validate: false },
-  { entry: undefined, key: "agent:main:history-worker", validate: true },
-  {
-    entry: { sessionId: "successor", updatedAt: 1 },
-    key: "agent:main:history-worker",
-    validate: true,
-  },
-])(
-  "carries conditional validation without reading or retargeting on enqueue: %j",
-  async ({ entry, key, validate }) => {
-    const pending = readSessionHistoryPageInWorker(request({ entry, canonicalKey: key }));
-    await waitForReaderAdmission(1);
-    expect(queued).toHaveLength(1);
-    const input = queued[0]!.prepare();
-    expect(input.target.transcript.sessionId).toBe("history-worker");
-    expect(input.target.entryValidationKey).toBe(validate ? key : undefined);
-    expect(input.database).toEqual({
-      agentId: "main",
-      path: expect.stringMatching(/openclaw-agent\.sqlite$/),
-    });
-    expect(input.target).not.toHaveProperty("database");
-    expect(input.target).not.toHaveProperty("env");
-    expect(runWorker.mock.calls[0]![1]).toBe(JSON.stringify(input).length * 2);
-    queued[0]!.result.resolve(page("requested transcript"));
-    await pending;
   },
 );

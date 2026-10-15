@@ -16,13 +16,20 @@ import {
 } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-const observedDirectories = vi.hoisted(
-  () => [] as Array<{ directory: string; notify: (filename?: string) => void; active: boolean }>,
-);
+const { observedDirectories, releasedDirectories } = vi.hoisted(() => ({
+  observedDirectories: [] as Array<{
+    directory: string;
+    notify: (filename?: string) => void;
+    active: boolean;
+  }>,
+  // The shared owner closes a native watch when a directory's last observation leaves.
+  releasedDirectories: [] as string[],
+}));
 // mock-isolation: Deliver directory changes deterministically without native watcher timing.
 vi.mock("../infra/owned-directory-observation.js", () => ({
   observeOwnedDirectory(directory: string, notify: (filename?: string) => void) {
@@ -31,6 +38,9 @@ vi.mock("../infra/owned-directory-observation.js", () => ({
     return {
       close: () => {
         observation.active = false;
+        if (!observedDirectories.some((entry) => entry.active && entry.directory === directory)) {
+          releasedDirectories.push(directory);
+        }
       },
     };
   },
@@ -391,6 +401,82 @@ it("retains source preparation until directory or registry ownership changes", a
       realpath.mockRestore();
       syncBuiltinESMExports();
     }
+  });
+});
+
+async function prepareMainSources(state: { env: NodeJS.ProcessEnv }) {
+  const main = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+  const registryPath = openOpenClawStateDatabase().path;
+  const params = {
+    cfg: { agents: { ownership: "explicit", entries: { main: {} } } } satisfies OpenClawConfig,
+    currentSource: { agentId: "main", path: main.path },
+    env: state.env,
+    registryPath,
+  };
+  const prepared = await prepareGatewaySessionStoreReadSourcesAsync(params);
+  releasedDirectories.length = 0;
+  return { main, params, prepared, registryPath };
+}
+
+it("retains source preparation when another state database closes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { main, prepared, registryPath } = await prepareMainSources(state);
+    const other = openOpenClawStateDatabase({ path: state.path("other-state", "state.sqlite") });
+    await closeOpenClawStateDatabaseByPathAsync(other.path);
+    expect(prepared.assertCurrent).not.toThrow();
+    expect(releasedDirectories).toEqual([]);
+
+    await closeOpenClawStateDatabaseByPathAsync(registryPath);
+    expect(prepared.assertCurrent).toThrow("Session store changed");
+    expect(
+      observedDirectories.some(
+        (entry) => entry.active && entry.directory === path.dirname(main.path),
+      ),
+    ).toBe(false);
+  });
+});
+
+it("keeps shared directories observed while a registry generation refreshes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { params, prepared } = await prepareMainSources(state);
+    const ops = openOpenClawAgentDatabase({ agentId: "ops", env: state.env });
+    expect(prepared.assertCurrent).toThrow("Session store changed");
+    const registered = await prepareGatewaySessionStoreReadSourcesAsync(params);
+    expect(registered.request?.registeredDatabases).toEqual(
+      expect.arrayContaining([expect.objectContaining({ agentId: "ops", path: ops.path })]),
+    );
+    expect(releasedDirectories).toEqual([]);
+  });
+});
+
+it("keeps shared directories observed after a source path changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const main = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const alias = state.path("source-alias");
+    const replacement = state.path("replacement");
+    const linkType = process.platform === "win32" ? "junction" : "dir";
+    fs.mkdirSync(replacement);
+    fs.writeFileSync(path.join(replacement, path.basename(main.path)), "synthetic replacement");
+    fs.symlinkSync(path.dirname(main.path), alias, linkType);
+    const params = {
+      cfg: { agents: { ownership: "explicit", entries: { main: {} } } } satisfies OpenClawConfig,
+      currentSource: { agentId: "main", path: path.join(alias, path.basename(main.path)) },
+      env: state.env,
+      registryPath: openOpenClawStateDatabase().path,
+    };
+    const first = await prepareGatewaySessionStoreReadSourcesAsync(params);
+    releasedDirectories.length = 0;
+    fs.unlinkSync(alias);
+    fs.symlinkSync(replacement, alias, linkType);
+    for (const entry of observedDirectories) {
+      if (entry.active && entry.directory === path.dirname(alias)) {
+        entry.notify(path.basename(alias));
+      }
+    }
+    expect(first.assertCurrent).toThrow("Session store changed");
+    const refreshed = await prepareGatewaySessionStoreReadSourcesAsync(params);
+    refreshed.assertCurrent();
+    expect(releasedDirectories).not.toContain(path.dirname(alias));
   });
 });
 

@@ -14,12 +14,11 @@ import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
 import type { BuildTelegramInboundContextPayloadParams } from "./bot-message-context.session.types.js";
 import type {
   TelegramMediaRef,
-  TelegramMessageContextSessionRuntimeOverrides,
+  TelegramMessageContextSessionRuntime,
 } from "./bot-message-context.types.js";
 import {
   buildGroupLabel,
@@ -62,38 +61,10 @@ type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
   ReplyToQuoteSourceEntities?: TelegramReplyTarget["quoteSourceEntities"];
 };
 
-type TelegramMessageContextSessionRuntime =
-  typeof import("./bot-message-context.session.runtime.js");
-
-const sessionRuntimeMethods = [
-  "buildChannelInboundEventContext",
-  "readAmbientTranscriptWatermarkAsync",
-  "readSessionUpdatedAtAsync",
-  "recordInboundSession",
-  "resolveAmbientTranscriptWatermarkKey",
-  "resolveInboundLastRouteSessionKey",
-  "resolvePinnedMainDmOwnerFromAllowlist",
-  "resolveStorePath",
-] as const satisfies readonly (keyof TelegramMessageContextSessionRuntime)[];
-
-function hasCompleteSessionRuntime(
-  runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
-): runtime is TelegramMessageContextSessionRuntime {
-  return Boolean(
-    runtime && sessionRuntimeMethods.every((method) => typeof runtime[method] === "function"),
-  );
-}
-
 export async function loadTelegramMessageContextSessionRuntime(
-  runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
+  runtime: TelegramMessageContextSessionRuntime | undefined,
 ): Promise<TelegramMessageContextSessionRuntime> {
-  if (hasCompleteSessionRuntime(runtime)) {
-    return runtime;
-  }
-  return {
-    ...(await import("./bot-message-context.session.runtime.js")),
-    ...runtime,
-  };
+  return runtime ?? import("./bot-message-context.session.runtime.js");
 }
 
 function replyTargetToChainEntry(
@@ -760,25 +731,11 @@ export async function buildTelegramInboundContextPayload(
         }
       : undefined;
 
-  if (visibleReplyTarget && shouldLogVerbose()) {
-    const preview = truncateUtf16Safe((visibleReplyTarget.body ?? "").replace(/\s+/g, " "), 120);
-    logVerbose(
-      `telegram reply-context: replyToId=${visibleReplyTarget.id} replyToSender=${visibleReplyTarget.sender} replyToBody="${preview}"`,
-    );
-  }
-
-  if (visibleForwardOrigin && shouldLogVerbose()) {
-    logVerbose(
-      `telegram forward-context: forwardedFrom="${visibleForwardOrigin.from}" type=${visibleForwardOrigin.fromType}`,
-    );
-  }
-
   if (shouldLogVerbose()) {
-    const preview = truncateUtf16Safe(body, 200).replace(/\n/g, "\\n");
     const mediaInfo = allMedia.length > 1 ? ` mediaCount=${allMedia.length}` : "";
     const topicInfo = resolvedThreadId != null ? ` topic=${resolvedThreadId}` : "";
     logVerbose(
-      `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length}${mediaInfo}${topicInfo} preview="${preview}"`,
+      `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length}${mediaInfo}${topicInfo}`,
     );
   }
 

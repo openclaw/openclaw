@@ -1,4 +1,3 @@
-import { threadId } from "node:worker_threads";
 import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import type {
   UsageCostWorkerInput,
@@ -339,21 +338,6 @@ serveOwnedWorkerTasks(
         const { readSessionRowDatabaseFacts } = await import("./session-entry-read.worker.js");
         return readSessionRowDatabaseFacts(request);
       }
-      if (request.kind === "session-maintenance-read") {
-        const { readSessionMaintenanceInWorker } =
-          await import("./session-accessor.sqlite-maintenance-transaction.js");
-        return {
-          kind: "session-maintenance-read" as const,
-          result: readSessionMaintenanceInWorker({
-            ...request.plan,
-            databaseOptions: {
-              ...request.database,
-              env: cloneEnvWithPlatformSemantics(request.env),
-            },
-          }),
-          workerThreadId: threadId,
-        };
-      }
       if (request.kind === "session-entry-current") {
         const { readSessionEntryCurrentFacts } =
           await import("./session-entry-current-admission.worker.js");
@@ -391,10 +375,6 @@ serveOwnedWorkerTasks(
                 : { status: "unknown", reason: result.reason },
             );
         return { kind: "session-identity-evidence" as const, evidence };
-      }
-      if (request.kind === "session-diagnostic-text") {
-        const { readSessionDiagnosticText } = await import("./session-entry-read.worker.js");
-        return readSessionDiagnosticText(request);
       }
       if (request.kind === "session-entry-read" || request.kind === "session-runtime-target") {
         const { readSessionEntryWorkerRequest } = await import("./session-entry-read.worker.js");

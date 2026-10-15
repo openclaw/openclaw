@@ -6,6 +6,17 @@ import type {
 
 export type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
 
+export function createWebCredentialEntry(
+  surface: "webSearch" | "webFetch",
+  apiKey: unknown,
+  options: { enabled?: boolean } = {},
+) {
+  return {
+    ...options,
+    config: { [surface]: { apiKey } },
+  };
+}
+
 export function providerPluginId(provider: ProviderUnderTest): string {
   switch (provider) {
     case "duckduckgo":

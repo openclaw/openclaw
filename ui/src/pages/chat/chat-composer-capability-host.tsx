@@ -1,5 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -7,10 +7,7 @@ import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import type { McpServerForm } from "../../components/mcp-server-form.ts";
 import "../../components/modal-dialog.ts";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
-import {
-  buildToolsEffectiveRequestKey,
-  loadToolsEffective,
-} from "../../lib/agents/tools-effective.ts";
+import { buildToolsEffectiveRequestKey } from "../../lib/agents/tools-effective.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
 import {
   buildAddMcpServerPatch,
@@ -30,13 +27,12 @@ import {
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { nextBooleanToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
-import { renderLibraryPinRead } from "../skills/library-detail.ts";
+import { LibraryPinRead } from "../skills/library-detail.tsx";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { ComposerAddServerDialog } from "./components/chat-composer-add-server-dialog.tsx";
-import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.tsx";
+import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.types.ts";
 import {
   ComposerSkillCatalog,
   composerWebSearchBaseEnabled,
@@ -83,7 +79,7 @@ export class ChatComposerCapabilityHost {
     context: ApplicationContext,
     state: ChatPageHost,
     agentId: string,
-  ): { cacheKey: string; requestKey: string } {
+  ): string {
     const requestKey = buildToolsEffectiveRequestKey(
       {
         chatModelCatalog: state.chatModelCatalog,
@@ -96,7 +92,7 @@ export class ChatComposerCapabilityHost {
       context.runtimeConfig.state.configSnapshot ?? null,
       currentDisplayRuntimeConfig(context.runtimeConfig.state),
     );
-    return { cacheKey: `${requestKey}\0config=${configFingerprint}`, requestKey };
+    return `${requestKey}\0config=${configFingerprint}`;
   }
 
   private loadEffectiveTools(
@@ -107,10 +103,12 @@ export class ChatComposerCapabilityHost {
   ): void {
     const client = state.client;
     const sessionKey = state.sessionKey;
-    const { cacheKey, requestKey } = this.effectiveToolsKeys(context, state, agentId);
+    const cacheKey = this.effectiveToolsKeys(context, state, agentId);
     if (
       !state.connected ||
       !client ||
+      !agentId.trim() ||
+      !sessionKey.trim() ||
       this.effectiveTools?.key === cacheKey ||
       this.effectiveToolsRequest?.key === cacheKey ||
       (!retryError && this.effectiveToolsErrorKey === cacheKey)
@@ -120,18 +118,6 @@ export class ChatComposerCapabilityHost {
     const request = { key: cacheKey };
     const connectionEpoch = state.connectionEpoch;
     this.effectiveToolsRequest = request;
-    const loader: Parameters<typeof loadToolsEffective>[0] = {
-      chatModelCatalog: state.chatModelCatalog,
-      client,
-      connected: true,
-      sessions: context.sessions,
-      sessionsResult: state.sessionsResult,
-      toolsEffectiveError: null,
-      toolsEffectiveLoading: false,
-      toolsEffectiveLoadingKey: null,
-      toolsEffectiveResult: null,
-      toolsEffectiveResultKey: null,
-    };
     const isCurrent = () =>
       this.effectiveToolsRequest === request &&
       this.client === client &&
@@ -140,18 +126,17 @@ export class ChatComposerCapabilityHost {
       this.connectionEpoch === connectionEpoch &&
       state.connectionEpoch === connectionEpoch &&
       state.sessionKey === sessionKey &&
-      this.effectiveToolsKeys(context, state, agentId).cacheKey === cacheKey;
+      this.effectiveToolsKeys(context, state, agentId) === cacheKey;
     this.effectiveToolsErrorKey = null;
     this.notify();
-    void loadToolsEffective(loader, { agentId, sessionKey })
-      .then(() => {
-        if (!isCurrent()) {
-          return;
-        }
-        if (loader.toolsEffectiveResult && loader.toolsEffectiveResultKey === requestKey) {
-          this.effectiveTools = { key: cacheKey, result: loader.toolsEffectiveResult };
-        } else if (loader.toolsEffectiveError) {
-          this.effectiveToolsErrorKey = cacheKey;
+    void client
+      .request<ToolsEffectiveResult>("tools.effective", {
+        agentId: agentId.trim(),
+        sessionKey: sessionKey.trim(),
+      })
+      .then((result) => {
+        if (isCurrent()) {
+          this.effectiveTools = { key: cacheKey, result };
         }
       })
       .catch(() => {
@@ -401,11 +386,11 @@ export class ChatComposerCapabilityHost {
       onSubmit: (form: McpServerForm) => {
         void this.submitAddServer(context, state, session, form);
       },
-      libraryContent: this.library.read
-        ? renderLibraryPinRead({
+      library: this.library.read
+        ? {
             read: this.library.read,
             file: this.library.selectedFile,
-            onFile: (file) => {
+            onFile: (file: string) => {
               this.library.selectedFile = file;
               this.notify();
             },
@@ -413,7 +398,7 @@ export class ChatComposerCapabilityHost {
               this.library.closeRead();
               this.notify();
             },
-          })
+          }
         : null,
     };
   }
@@ -470,7 +455,7 @@ export class ChatComposerCapabilityHost {
       this.loadEffectiveTools(context, state, agentId);
     }
     const effectiveToolsKey = effectiveToolsAvailable
-      ? this.effectiveToolsKeys(context, state, agentId).cacheKey
+      ? this.effectiveToolsKeys(context, state, agentId)
       : null;
     const toolsEffectiveResult =
       effectiveToolsKey !== null && this.effectiveTools?.key === effectiveToolsKey
@@ -595,7 +580,7 @@ export function ChatComposerCapabilityDialogs(props: ChatComposerCapabilityDialo
   return (
     <>
       <ComposerAddServerDialog {...view()} />
-      <LitContent value={view().libraryContent} />
+      <Show when={view().library}>{(library) => <LibraryPinRead {...library()} />}</Show>
     </>
   );
 }

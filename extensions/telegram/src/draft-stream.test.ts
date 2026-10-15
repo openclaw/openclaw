@@ -479,52 +479,6 @@ describe("createTelegramDraftStream", () => {
     expect(warn).toHaveBeenCalledWith("telegram stream preview failed: read ECONNRESET");
   });
 
-  it("falls back to plain preview text when HTML parsing fails", async () => {
-    const api = createMockDraftApi();
-    api.sendMessage
-      .mockRejectedValueOnce(new Error("can't parse entities: unsupported tag"))
-      .mockResolvedValueOnce({ message_id: 17 });
-    const stream = createDraftStream(api);
-
-    stream.updatePreview({
-      text: "<b>Shelling &lt;&amp;&gt;</b>\n<b>Exec</b>",
-      parseMode: "HTML",
-    });
-    await stream.flush();
-
-    expect(api.sendMessage).toHaveBeenNthCalledWith(
-      1,
-      123,
-      "<b>Shelling &lt;&amp;&gt;</b>\n<b>Exec</b>",
-      { parse_mode: "HTML" },
-    );
-    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Shelling <&>\nExec", {});
-    expect(stream.currentMessageSnapshot?.()).toEqual({
-      text: "Shelling <&>\nExec",
-      sourceText: "Shelling &lt;&amp;&gt;\nExec",
-      sourceTextMode: "html",
-    });
-
-    api.editMessageText
-      .mockRejectedValueOnce(new Error("can't parse entities: unsupported tag"))
-      .mockResolvedValueOnce(true);
-    stream.updatePreview({
-      text: "<b>Done &lt;&amp;&gt;</b>",
-      parseMode: "HTML",
-    });
-    await stream.flush();
-
-    expect(api.editMessageText).toHaveBeenNthCalledWith(1, 123, 17, "<b>Done &lt;&amp;&gt;</b>", {
-      parse_mode: "HTML",
-    });
-    expect(api.editMessageText).toHaveBeenNthCalledWith(2, 123, 17, "Done <&>");
-    expect(stream.currentMessageSnapshot?.()).toEqual({
-      text: "Done <&>",
-      sourceText: "Done &lt;&amp;&gt;",
-      sourceTextMode: "html",
-    });
-  });
-
   it("falls back to plain preview text when an HTML edit renders empty", async () => {
     const api = createMockDraftApi();
     const warn = vi.fn();
@@ -578,26 +532,6 @@ describe("createTelegramDraftStream", () => {
     };
     expect(edit?.rich_message?.blocks?.some((block) => block.type === "heading")).toBe(true);
     expect(api.editMessageText).not.toHaveBeenCalled();
-  });
-
-  it("clamps rich previews to the block limit", async () => {
-    const api = createMockDraftApi();
-    const text = Array.from({ length: 501 }, (_, index) => `paragraph ${index}`).join("\n\n");
-    const stream = createDraftStream(api, { richMessages: true });
-
-    stream.update(text);
-    await stream.flush();
-
-    const calls = api.raw.sendRichMessage.mock.calls as unknown[][];
-    const params = calls[0]?.[0] as { rich_message?: TelegramInputRichMessage } | undefined;
-    const richMessage = params?.rich_message;
-    const plain = (richMessage?.blocks ?? [])
-      .map((block) =>
-        block.type === "paragraph" && typeof block.text === "string" ? block.text : "",
-      )
-      .join("\n");
-    expect(plain).toContain("paragraph 499");
-    expect(plain).not.toContain("paragraph 500");
   });
 
   it("paginates rendered fenced code without losing code context", async () => {

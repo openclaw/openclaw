@@ -81,6 +81,25 @@ describe("resolvePluginUpdateSelection", () => {
       error: "ambiguous pack",
     });
   });
+
+  it("skips operator-managed ids for targeted and update-all selection", () => {
+    const installs = {
+      local: createNpmInstall({ spec: "@acme/local" }),
+      stable: createNpmInstall({ spec: "@acme/stable" }),
+    };
+    const skippedPluginIds = new Set(["local"]);
+
+    expect(
+      resolvePluginUpdateSelection({ installs, skippedPluginIds, rawIds: [], all: true }),
+    ).toEqual({ pluginIds: ["stable"], skippedIds: ["local"] });
+    expect(
+      resolvePluginUpdateSelection({
+        installs,
+        skippedPluginIds,
+        rawIds: ["@acme/local", "stable"],
+      }),
+    ).toEqual({ pluginIds: ["stable"], skippedIds: ["local"] });
+  });
 });
 
 describe("resolveHookPackUpdateSelection", () => {

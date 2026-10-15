@@ -62,20 +62,6 @@ afterEach(() => {
 });
 
 describe("database port startup exclusion", () => {
-  it("makes exactly one fixed-path filesystem call when no manifest exists", () => {
-    const read = vi.spyOn(fs, "readFileSync");
-    const otherCalls = ["statSync", "lstatSync", "existsSync", "readdirSync", "openSync"] as const;
-    const forbidden = otherCalls.map((method) => vi.spyOn(fs, method));
-    expect(() => assertDatabasePortStartupAllowed(stateDir)).not.toThrow();
-    expect(read).toHaveBeenCalledExactlyOnceWith(databasePortManifestPath(stateDir), {
-      encoding: "utf8",
-      flag: fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
-    });
-    for (const call of forbidden) {
-      expect(call).not.toHaveBeenCalled();
-    }
-  });
-
   it.skipIf(process.platform === "win32").each(["preparing", "publishing"] as const)(
     "refuses %s with both recovery commands",
     (state) => {

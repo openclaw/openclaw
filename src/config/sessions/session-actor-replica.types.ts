@@ -21,10 +21,9 @@ export type ReplicaCell = {
   snapshot?: SessionActorHotState;
   entry?: SessionActorEntryFacts;
   transcript?: SessionActorTranscriptReplica;
+  transcriptBytes: number;
   generation?: string;
-  reservation: number;
   handles: number;
-  pending: number;
   bytes: number;
 };
 export type ReplicaPool = {

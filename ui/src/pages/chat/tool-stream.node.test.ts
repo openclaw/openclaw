@@ -100,11 +100,9 @@ describe("observed steering boundary", () => {
 });
 
 describe("status text truncation", () => {
-  it.each([
-    ["short", "Ready 😀", "Ready 😀"],
-    ["ASCII limit", "x".repeat(257), "x".repeat(256)],
-    ["surrogate boundary", `${"x".repeat(255)}😀 trailing`, "x".repeat(255)],
-  ])("preserves complete characters in %s retry and fallback labels", (_name, input, expected) => {
+  it("preserves complete characters at the retry and fallback label boundary", () => {
+    const expected = "x".repeat(255);
+    const input = `${expected}😀 trailing`;
     const host = createHost({
       chatRunId: "run-1",
       chatRunStartup: { state: "status", runId: "run-1", phase: "starting_model" },

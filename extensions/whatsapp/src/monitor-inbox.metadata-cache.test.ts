@@ -101,39 +101,6 @@ describe("web monitor inbox metadata cache", () => {
     await second.listener.close();
   });
 
-  it("group metadata cache reuses hydrated participant identities without querying WhatsApp again", async () => {
-    const participantLid = "277038292303944@lid";
-    const participantPhone = "15551234567@s.whatsapp.net";
-    const sock = getSock();
-    sock.groupFetchAllParticipating.mockResolvedValueOnce({
-      "123@g.us": {
-        id: "123@g.us",
-        subject: "Hydrated Group",
-        owner: undefined,
-        participants: [{ id: participantLid, phoneNumber: participantPhone }],
-      },
-    });
-    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValue(participantPhone);
-
-    const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
-    try {
-      await vi.waitFor(() => {
-        expect(baileysCache.baileysGroupMetaCache.has("123@g.us")).toBe(true);
-      });
-      sock.groupMetadata.mockRejectedValue(new Error("408 timed out"));
-
-      await listener.sendMessage("123@g.us", "ping @+15551234567");
-
-      expect(sock.groupMetadata).not.toHaveBeenCalled();
-      expect(sock.sendMessage).toHaveBeenCalledWith("123@g.us", {
-        text: "ping @277038292303944",
-        mentions: [participantLid],
-      });
-    } finally {
-      await listener.close();
-    }
-  });
-
   it("group metadata cache refreshes provider snapshots that omit participant identities", async () => {
     const sock = getSock();
     sock.groupFetchAllParticipating.mockResolvedValueOnce({
@@ -168,7 +135,6 @@ describe("web monitor inbox metadata cache", () => {
       await listener.close();
     }
   });
-
   it("group metadata cache never extends hydrated participant identities beyond their provider expiry", async () => {
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const sock = getSock();

@@ -232,36 +232,37 @@ export function renderChatTranscriptFeed(messages: unknown[]): TemplateResult {
     ${repeat(
       entries(messages),
       (entry) => entry.key,
-      (entry) => html` <div class="chat-task-feed__entry" data-task-feed-entry=${entry.key}>
-        <span class="chat-task-feed__icon" aria-hidden="true"
-          >${entry.kind === "tools" ? toolIcon(entry.calls[0]!.card) : entry.kind === "user" ? icons.users : entry.kind === "block" ? icons.paperclip : icons.messageSquare}</span
-        >
-        <div class="chat-task-feed__body">
-          ${
-            entry.kind === "assistant" && entry.senderSession
-              ? renderForwardedAttribution(entry, { linkSource: false })
-              : entry.kind === "user" || entry.kind === "assistant"
-                ? html`<span class="sr-only">${t(`sessionsView.${entry.kind}`)}: </span>`
-                : nothing
-          }
-          ${
-            entry.kind === "tools"
-              ? renderToolGroup(entry)
-              : entry.kind === "assistant"
-                ? renderMessageMarkdown(
-                    entry.text,
-                    entry.key,
-                    {
-                      role: "assistant",
-                      isStreaming: false,
-                    },
-                    {},
-                  )
-                : html`<div class="chat-task-feed__${entry.kind}">${entry.text}</div>`
-          }
-        </div>
-        ${entry.timestamp !== null ? html`<time class="chat-task-feed__time" datetime=${new Date(entry.timestamp).toISOString()}>${new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}</time>` : nothing}
-      </div>`,
+      (entry) =>
+        html` <div class="chat-task-feed__entry" data-task-feed-entry=${entry.key}>
+          <span class="chat-task-feed__icon" aria-hidden="true"
+            >${entry.kind === "tools" ? toolIcon(entry.calls[0]!.card) : entry.kind === "user" ? icons.users : entry.kind === "block" ? icons.paperclip : icons.messageSquare}</span
+          >
+          <div class="chat-task-feed__body">
+            ${
+              entry.kind === "assistant" && entry.senderSession
+                ? renderForwardedAttribution(entry, { linkSource: false })
+                : entry.kind === "user" || entry.kind === "assistant"
+                  ? html`<span class="sr-only">${t(`sessionsView.${entry.kind}`)}: </span>`
+                  : nothing
+            }
+            ${
+              entry.kind === "tools"
+                ? renderToolGroup(entry)
+                : entry.kind === "assistant"
+                  ? renderMessageMarkdown(
+                      entry.text,
+                      entry.key,
+                      {
+                        role: "assistant",
+                        isStreaming: false,
+                      },
+                      {},
+                    )
+                  : html`<div class="chat-task-feed__${entry.kind}">${entry.text}</div>`
+            }
+          </div>
+          ${entry.timestamp !== null ? html`<time class="chat-task-feed__time" datetime=${new Date(entry.timestamp).toISOString()}>${new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}</time>` : nothing}
+        </div>`,
     )}
   </div>`;
 }

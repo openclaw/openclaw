@@ -214,9 +214,11 @@ suite.define(() => {
 
       await cue("Read-only shared session: Rename stays unavailable");
       await foreignRow.click({ button: "right" });
-      const foreignRename = page.locator('openclaw-session-menu wa-dropdown-item[value="rename"]');
+      const foreignRename = page
+        .locator("openclaw-session-menu")
+        .getByRole("menuitem", { name: "Rename…", exact: true });
       await foreignRename.waitFor();
-      expect(await foreignRename.getAttribute("disabled")).not.toBeNull();
+      expect(await foreignRename.isDisabled()).toBe(true);
       await page.keyboard.press("Escape");
       expect(await foreignRow.textContent()).toContain("Shared reference");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);

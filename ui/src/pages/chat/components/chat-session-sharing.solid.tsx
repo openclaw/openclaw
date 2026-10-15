@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, Show } from "solid-js";
 import { SESSION_VISIBILITY_VALUES } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing-constants.js";
 import type {
   GatewaySessionRow,
@@ -6,19 +6,19 @@ import type {
   SessionVisibility,
 } from "../../../api/types.ts";
 import {
+  PersonAvatarLink,
+  PersonName,
+  StandalonePersonLink,
+} from "../../../components/person-activity-link-solid.tsx";
+import {
   personActivityLink,
-  renderPersonAvatarLink,
-  renderPersonName,
-  renderStandalonePersonLink,
   type PersonActivityRouting,
 } from "../../../components/person-activity-link.ts";
-import { handlePeopleMenuKeydown } from "../../../components/searchable-people-menu.ts";
-import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
+import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
+import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
 import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 
 registerEnglishCatalog(registerSessionPeopleEnglish);
 
@@ -135,7 +135,9 @@ export function ChatSessionPublicIndicator(props: ChatSessionSharingProps) {
   );
 }
 
-function SharingContent(props: ChatSessionSharingProps) {
+export function useChatSessionSharingMenu(props: ChatSessionSharingProps): {
+  items: () => readonly MenuEntry[];
+} {
   const result = () => props.state?.result;
   const visibility = () => props.session?.visibility ?? "shared";
   const owner = () => result()?.owner ?? props.session?.owner?.actor;
@@ -166,124 +168,163 @@ function SharingContent(props: ChatSessionSharingProps) {
       ),
     );
   };
-  return (
-    <>
-      <Show when={canPublish()}>
-        <wa-dropdown-item
-          value="visibility:shared"
-          class="session-menu__item chat-pane__publish-draft"
-          disabled={Boolean(props.visibilityDisabledReason)}
-          title={props.visibilityDisabledReason}
-        >
-          <span class="session-menu__text">{t("chat.sessionSharing.publishDraft")}</span>
-          <span slot="details" aria-hidden="true">
-            <Icon name="users" />
-          </span>
-        </wa-dropdown-item>
-        <div class="session-menu__separator" role="separator" />
-      </Show>
-      <div class="chat-pane__sharing-title chat-pane__sharing-visibility-title">
-        {t("chat.sessionSharing.visibility")}
-      </div>
-      <For each={allowed().filter((option) => !canPublish() || option !== "shared")}>
-        {(option) => {
-          const checked = () => option === visibility();
-          let item: HTMLElement | undefined;
-          createEffect(checked, (value) => syncDropdownItemRadio(item, value));
-          return (
-            <wa-dropdown-item
-              class="session-menu__item chat-pane__sharing-visibility-item"
-              value={`visibility:${option}`}
-              role="menuitemradio"
-              aria-checked={checked() ? "true" : "false"}
-              ref={(element) => {
-                item = element;
-              }}
-              disabled={Boolean(props.visibilityDisabledReason)}
-              title={props.visibilityDisabledReason}
-            >
-              <span slot="icon" class="session-menu__icon" aria-hidden="true">
-                <SharingIcon visibility={option} />
-              </span>
-              <span class="session-menu__text">{t(VISIBILITY_LABEL_KEYS[option])}</span>
-              <Show when={checked()}>
-                <span slot="details" class="session-menu__check" aria-hidden="true">
-                  <Icon name="check" />
-                </span>
-              </Show>
-            </wa-dropdown-item>
-          );
-        }}
-      </For>
-      <Show when={props.onPublicShareChange}>
-        <div class="session-menu__separator" role="separator" />
-        <div class="chat-pane__sharing-title">{t("chat.sessionSharing.publicAccess")}</div>
-        <div class="chat-pane__sharing-status">
-          {t(
-            props.state?.loading || !result()
-              ? "common.loading"
-              : result()?.publicShare
-                ? "chat.sessionSharing.worldReadable"
-                : "chat.sessionSharing.notPublic",
-          )}
+  const search = (
+    <div class="people-menu__search" onClick={(event) => event.stopPropagation()}>
+      <input
+        type="search"
+        data-search=""
+        data-form-control=""
+        autocomplete="off"
+        aria-label={t("sessionsView.searchPeople")}
+        placeholder={t("sessionsView.searchPeople")}
+        value={query()}
+        onInput={(event) => setQuery(event.currentTarget.value)}
+      />
+    </div>
+  );
+  const searchEntry: MenuEntry = { kind: "content", id: "members-search", content: search };
+  const baseItems = createMemo((): readonly MenuEntry[] => {
+    const entries: MenuEntry[] = [];
+    if (canPublish()) {
+      entries.push(
+        {
+          id: "visibility:shared",
+          label: t("chat.sessionSharing.publishDraft"),
+          class: "session-menu__item chat-pane__publish-draft",
+          disabled: Boolean(props.visibilityDisabledReason),
+          attributes: { title: props.visibilityDisabledReason },
+          content: <span class="session-menu__text">{t("chat.sessionSharing.publishDraft")}</span>,
+          details: (
+            <span aria-hidden="true">
+              <Icon name="users" />
+            </span>
+          ),
+        },
+        {
+          kind: "content",
+          id: "publish-separator",
+          content: <div class="session-menu__separator" role="separator" />,
+        },
+      );
+    }
+    entries.push({
+      kind: "content",
+      id: "visibility-title",
+      content: (
+        <div class="chat-pane__sharing-title chat-pane__sharing-visibility-title">
+          {t("chat.sessionSharing.visibility")}
         </div>
-        <Show when={result()?.publicShare}>
-          <wa-dropdown-item
-            class="session-menu__item"
-            value="public:copy"
-            disabled={Boolean(props.state?.loading)}
-          >
-            {t("chat.sessionSharing.copyPublicLink")}
-          </wa-dropdown-item>
-        </Show>
-        <wa-dropdown-item
-          class="session-menu__item"
-          value={result()?.publicShare ? "public:disable" : "public:enable"}
-          disabled={Boolean(props.publicShareDisabledReason || props.state?.loading || !result())}
-          title={props.publicShareDisabledReason}
-        >
-          {t(
-            result()?.publicShare
-              ? "chat.sessionSharing.disablePublicAccess"
-              : "chat.sessionSharing.enablePublicAccess",
-          )}
-        </wa-dropdown-item>
-      </Show>
-      <Show when={owner()}>
-        {(person) => (
+      ),
+    });
+    for (const option of allowed().filter((candidate) => !canPublish() || candidate !== "shared")) {
+      const checked = option === visibility();
+      entries.push({
+        id: `visibility:${option}`,
+        label: t(VISIBILITY_LABEL_KEYS[option]),
+        class: "session-menu__item chat-pane__sharing-visibility-item",
+        type: "radio",
+        checked,
+        disabled: Boolean(props.visibilityDisabledReason),
+        attributes: { title: props.visibilityDisabledReason },
+        icon: (
+          <span class="session-menu__icon" aria-hidden="true">
+            <SharingIcon visibility={option} />
+          </span>
+        ),
+        content: <span class="session-menu__text">{t(VISIBILITY_LABEL_KEYS[option])}</span>,
+        details: checked ? (
+          <span class="session-menu__check" aria-hidden="true">
+            <Icon name="check" />
+          </span>
+        ) : undefined,
+      });
+    }
+    if (props.onPublicShareChange) {
+      entries.push({
+        kind: "content",
+        id: "public-title",
+        content: (
           <>
-            <div class="chat-pane__sharing-title chat-pane__sharing-owner-title">
-              {t("chat.sessionSharing.owner")}
-            </div>
-            <div class="chat-pane__sharing-owner">
-              <span class="chat-pane__sharing-member-icon" aria-hidden="true">
-                <Show when={person().type === "human"} fallback={<Icon name="bot" />}>
-                  <LitContent
-                    value={renderPersonAvatarLink(
-                      renderSessionOwnerChip(person(), "header", "owned", props.ownerViewing),
-                      ownerActivity(),
-                    )}
-                  />
-                </Show>
-              </span>
-              <LitContent
-                value={renderPersonName(
-                  person().label ?? person().id ?? t("chat.sessionSharing.owner"),
-                  ownerActivity(),
-                  "session-menu__text",
-                )}
-              />
+            <div class="session-menu__separator" role="separator" />
+            <div class="chat-pane__sharing-title">{t("chat.sessionSharing.publicAccess")}</div>
+            <div class="chat-pane__sharing-status">
+              {t(
+                props.state?.loading || !result()
+                  ? "common.loading"
+                  : result()?.publicShare
+                    ? "chat.sessionSharing.worldReadable"
+                    : "chat.sessionSharing.notPublic",
+              )}
             </div>
           </>
-        )}
-      </Show>
-      <Show when={props.membersAvailable !== false}>
-        <div class="chat-pane__sharing-title chat-pane__sharing-members-title">
-          {t("chat.sessionSharing.members")}
-        </div>
-        <Show
-          when={!props.state?.loading}
-          fallback={
+        ),
+      });
+      if (result()?.publicShare) {
+        entries.push({
+          id: "public:copy",
+          label: t("chat.sessionSharing.copyPublicLink"),
+          class: "session-menu__item",
+          disabled: Boolean(props.state?.loading),
+        });
+      }
+      entries.push({
+        id: result()?.publicShare ? "public:disable" : "public:enable",
+        label: t(
+          result()?.publicShare
+            ? "chat.sessionSharing.disablePublicAccess"
+            : "chat.sessionSharing.enablePublicAccess",
+        ),
+        class: "session-menu__item",
+        disabled: Boolean(props.publicShareDisabledReason || props.state?.loading || !result()),
+        attributes: { title: props.publicShareDisabledReason },
+      });
+    }
+    if (owner()) {
+      entries.push({
+        kind: "content",
+        id: "owner",
+        content: (
+          <Show when={owner()}>
+            {(person) => (
+              <>
+                <div class="chat-pane__sharing-title chat-pane__sharing-owner-title">
+                  {t("chat.sessionSharing.owner")}
+                </div>
+                <div class="chat-pane__sharing-owner">
+                  <span class="chat-pane__sharing-member-icon" aria-hidden="true">
+                    <Show when={person().type === "human"} fallback={<Icon name="bot" />}>
+                      <PersonAvatarLink link={ownerActivity()}>
+                        {renderSessionOwnerChip(person(), "header", "owned", props.ownerViewing)}
+                      </PersonAvatarLink>
+                    </Show>
+                  </span>
+                  <PersonName
+                    label={person().label ?? person().id ?? t("chat.sessionSharing.owner")}
+                    link={ownerActivity()}
+                    class="session-menu__text"
+                  />
+                </div>
+              </>
+            )}
+          </Show>
+        ),
+      });
+    }
+    if (props.membersAvailable !== false) {
+      entries.push({
+        kind: "content",
+        id: "members-title",
+        content: (
+          <div class="chat-pane__sharing-title chat-pane__sharing-members-title">
+            {t("chat.sessionSharing.members")}
+          </div>
+        ),
+      });
+      if (props.state?.loading) {
+        entries.push({
+          kind: "content",
+          id: "members-loading",
+          content: (
             <div
               class="chat-pane__sharing-members-loading"
               role="status"
@@ -299,102 +340,91 @@ function SharingContent(props: ChatSessionSharingProps) {
                 )}
               </For>
             </div>
-          }
-        >
-          <Show
-            when={identities().length > 0}
-            fallback={
-              <div class="chat-pane__sharing-status">{t("chat.sessionSharing.noPeople")}</div>
-            }
-          >
-            <div class="people-menu__search" onClick={(event) => event.stopPropagation()}>
-              <input
-                type="search"
-                autocomplete="off"
-                aria-label={t("sessionsView.searchPeople")}
-                placeholder={t("sessionsView.searchPeople")}
-                value={query()}
-                onInput={(event) => setQuery(event.currentTarget.value)}
-                onKeyDown={(event) => {
-                  if (handlePeopleMenuKeydown(event) || event.key === "Escape") {
-                    return;
-                  }
-                  event.stopPropagation();
-                  if (
-                    event.isComposing ||
-                    event.keyCode === 229 ||
-                    !["ArrowDown", "Enter"].includes(event.key)
-                  ) {
-                    return;
-                  }
-                  event.preventDefault();
-                  let item = event.currentTarget.parentElement?.nextElementSibling;
-                  while (item?.localName === "wa-dropdown-item") {
-                    if (item instanceof HTMLElement && !item.hasAttribute("disabled")) {
-                      item.focus();
-                      return;
-                    }
-                    item = item.nextElementSibling;
-                  }
-                }}
-              />
-            </div>
-            <For each={matches()} keyed={(identity) => identity.id}>
-              {(identity) => {
-                const disabledReason = () =>
-                  members().has(identity().id)
-                    ? props.memberRemoveDisabledReason
-                    : props.memberAddDisabledReason;
-                return (
-                  <wa-dropdown-item
-                    class="session-menu__item chat-pane__sharing-member"
-                    value={`member:${identity().id}`}
-                    disabled={Boolean(disabledReason())}
-                    title={disabledReason()}
-                  >
-                    <span slot="icon" class="chat-pane__sharing-member-icon" aria-hidden="true">
-                      <Show when={identity().type === "human"} fallback={<Icon name="bot" />}>
-                        <LitContent value={renderSessionOwnerChip(identity(), "header")} />
-                      </Show>
-                    </span>
-                    <span
-                      class="session-menu__text chat-pane__sharing-member-label"
-                      title={disabledReason() ? undefined : (identity().label ?? identity().id)}
-                    >
-                      {identity().label ?? identity().id}
-                    </span>
-                    <Show when={members().has(identity().id)}>
-                      <span
-                        slot="details"
-                        class="session-menu__check"
-                        aria-label={t("chat.sessionSharing.selected")}
-                      >
-                        <Icon name="check" />
-                      </span>
-                    </Show>
-                  </wa-dropdown-item>
-                );
-              }}
-            </For>
-            <Show when={matches().length === 0}>
-              <div class="people-menu__status" role="status">
-                {t("sessionsView.noPeopleMatch")}
-              </div>
+          ),
+        });
+      } else if (identities().length === 0) {
+        entries.push({
+          kind: "content",
+          id: "members-empty",
+          content: <div class="chat-pane__sharing-status">{t("chat.sessionSharing.noPeople")}</div>,
+        });
+      } else {
+        entries.push(searchEntry);
+      }
+    }
+    return entries;
+  });
+  const memberItems = createMemo((): readonly MenuEntry[] => {
+    if (props.membersAvailable === false || props.state?.loading || identities().length === 0) {
+      return [];
+    }
+    const entries: MenuEntry[] = [];
+    for (const identity of matches()) {
+      const member = members().has(identity.id);
+      const disabledReason = member
+        ? props.memberRemoveDisabledReason
+        : props.memberAddDisabledReason;
+      entries.push({
+        id: `member:${identity.id}`,
+        label: identity.label ?? identity.id,
+        class: "session-menu__item chat-pane__sharing-member",
+        disabled: Boolean(disabledReason),
+        attributes: { title: disabledReason },
+        icon: (
+          <span class="chat-pane__sharing-member-icon" aria-hidden="true">
+            <Show when={identity.type === "human"} fallback={<Icon name="bot" />}>
+              {renderSessionOwnerChip(identity, "header")}
             </Show>
-          </Show>
-        </Show>
-      </Show>
-      <Show when={props.state?.error}>
-        <div class="chat-pane__sharing-status chat-pane__sharing-status--error" role="alert">
-          {props.state?.error}
-        </div>
-      </Show>
-    </>
-  );
+          </span>
+        ),
+        content: (
+          <span
+            class="session-menu__text chat-pane__sharing-member-label"
+            title={disabledReason ? undefined : (identity.label ?? identity.id)}
+          >
+            {identity.label ?? identity.id}
+          </span>
+        ),
+        details: member ? (
+          <span class="session-menu__check" aria-label={t("chat.sessionSharing.selected")}>
+            <Icon name="check" />
+          </span>
+        ) : undefined,
+      });
+    }
+    if (matches().length === 0) {
+      entries.push({
+        kind: "content",
+        id: "members-no-match",
+        content: (
+          <div class="people-menu__status" role="status">
+            {t("sessionsView.noPeopleMatch")}
+          </div>
+        ),
+      });
+    }
+    return entries;
+  });
+  const errorEntry: MenuEntry = {
+    kind: "content",
+    id: "error",
+    content: (
+      <div class="chat-pane__sharing-status chat-pane__sharing-status--error" role="alert">
+        {props.state?.error}
+      </div>
+    ),
+  };
+  const items = createMemo(() => [
+    ...baseItems(),
+    ...memberItems(),
+    ...(props.state?.error ? [errorEntry] : []),
+  ]);
+  return { items };
 }
 
-export function ChatSessionSharing(props: ChatSessionSharingProps & { inline?: boolean }) {
-  const [opened, setOpened] = createSignal(false);
+export function ChatSessionSharing(props: ChatSessionSharingProps) {
+  const id = createUniqueId();
+  const sharing = useChatSessionSharingMenu(props);
   const visibility = () => props.session?.visibility ?? "shared";
   const owner = () => props.state?.result?.owner ?? props.session?.owner?.actor;
   const canManage = () => props.session && canManageChatSessionSharing(props.session);
@@ -417,16 +447,15 @@ export function ChatSessionSharing(props: ChatSessionSharingProps & { inline?: b
           <Show when={visibility() === "draft"}>
             <Show when={props.showOwner && owner()}>
               {(person) => (
-                <LitContent
-                  value={renderStandalonePersonLink(
-                    renderSessionOwnerChip(person(), "header", "owned", props.ownerViewing),
-                    personActivityLink(
-                      person().identity?.type === "profile" ? person().identity?.id : undefined,
-                      props.personActivity,
-                      person().label,
-                    ),
+                <StandalonePersonLink
+                  link={personActivityLink(
+                    person().identity?.type === "profile" ? person().identity?.id : undefined,
+                    props.personActivity,
+                    person().label,
                   )}
-                />
+                >
+                  {renderSessionOwnerChip(person(), "header", "owned", props.ownerViewing)}
+                </StandalonePersonLink>
               )}
             </Show>
             <span class="chat-pane__draft-indicator" title={t("chat.sessionSharing.draft")}>
@@ -435,43 +464,41 @@ export function ChatSessionSharing(props: ChatSessionSharingProps & { inline?: b
           </Show>
         }
       >
-        <Show when={!props.inline} fallback={<SharingContent {...props} />}>
-          <ChatSessionPublicIndicator {...props} />
-          <wa-dropdown
-            class={["chat-pane__sharing-menu", { "chat-pane__sharing-menu--capped": capped() }]}
-            placement="bottom-end"
-            onKeyDown={handlePeopleMenuKeydown}
-            onWa-show={() => {
-              setOpened(true);
-              if (!props.openDisabledReason) {
-                props.onOpen();
-              }
-            }}
-            onWa-select={(event: CustomEvent<{ item: { value?: string } }>) =>
-              selectChatSessionSharingItem(props, event.detail.item.value)
-            }
-          >
-            <button
-              slot="trigger"
-              class="btn btn--ghost chat-pane__sharing-trigger"
-              type="button"
-              aria-label={t("chat.sessionSharing.menu")}
-              disabled={Boolean(props.openDisabledReason)}
-              title={
-                props.openDisabledReason ??
-                t("chat.sessionSharing.current", {
-                  visibility: t(VISIBILITY_LABEL_KEYS[visibility()]),
-                })
-              }
-            >
+        <ChatSessionPublicIndicator {...props} />
+        <Menu
+          lazy
+          id={id}
+          class={
+            capped()
+              ? "chat-pane__sharing-menu chat-pane__sharing-menu--capped"
+              : "chat-pane__sharing-menu"
+          }
+          panelClass="session-menu chat-pane__sharing-panel"
+          label={t("chat.sessionSharing.menu")}
+          placement="bottom-end"
+          disabled={Boolean(props.openDisabledReason)}
+          triggerClass="btn btn--ghost chat-pane__sharing-trigger"
+          triggerAttributes={{
+            title:
+              props.openDisabledReason ??
+              t("chat.sessionSharing.current", {
+                visibility: t(VISIBILITY_LABEL_KEYS[visibility()]),
+              }),
+          }}
+          trigger={
+            <>
               <SharingIcon visibility={visibility()} />
               <span>{t("chat.sessionSharing.share")}</span>
-            </button>
-            <Show when={opened()}>
-              <SharingContent {...props} />
-            </Show>
-          </wa-dropdown>
-        </Show>
+            </>
+          }
+          items={sharing.items()}
+          onBeforeShow={() => {
+            if (!props.openDisabledReason) {
+              props.onOpen();
+            }
+          }}
+          onSelect={(item) => selectChatSessionSharingItem(props, item.id)}
+        />
       </Show>
     </Show>
   );
