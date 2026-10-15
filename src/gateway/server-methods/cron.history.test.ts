@@ -436,7 +436,8 @@ it("does not disclose hidden session keys in cron.history errors", async () => {
       cronStorePath: storePath,
       getRuntimeConfig: () => cfg,
     });
-    const client = sharingPolicyClient({ scopes: ["operator.read"], user: "other-reader" });
+    const otherProfile = ensureProfileForEmail("cron-other-reader@example.test");
+    const client = sharingPolicyClient({ scopes: ["operator.read"], user: otherProfile.id });
     prepareGatewayRecipientProfile(client);
     expect(operatorSessionCap(client, cfg)).toBe("none");
     for (const selector of [
