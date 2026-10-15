@@ -90,6 +90,17 @@ it("recovers a failed reconnect lookup without losing the typed answer", async (
     .mockResolvedValueOnce({
       status: "answered",
       answers: { answers: { audience: ["The design team"] } },
+    })
+    .mockResolvedValueOnce({
+      questions: [],
+      continuations: [
+        {
+          questionId: "question-one",
+          status: "blocked",
+          reason: "Original caller is unavailable.",
+          nextAction: "Start a new user turn.",
+        },
+      ],
     });
   const { page, update } = mount(request);
   await settle(page);
@@ -109,7 +120,7 @@ it("recovers a failed reconnect lookup without losing the typed answer", async (
   expect(page.querySelector("textarea")?.value).toBe("The design team");
   page.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
   await settle(page);
-  expect(request).toHaveBeenLastCalledWith(
+  expect(request).toHaveBeenCalledWith(
     "question.resolve",
     {
       id: "question-one",
@@ -118,6 +129,9 @@ it("recovers a failed reconnect lookup without losing the typed answer", async (
     expect.any(Object),
   );
   await waitForSolid(() => expect(page.textContent).toContain("Answered"));
+  await waitForSolid(() =>
+    expect(page.textContent).toContain("Original caller is unavailable. Start a new user turn."),
+  );
 });
 
 it.each(["id", "client"] as const)(
@@ -163,4 +177,45 @@ it("keeps confirmed missing questions unavailable without a retry", async () => 
   await settle(page);
   expect(page.textContent).toContain("Unavailable");
   expect(retry(page)).toBeUndefined();
+});
+
+it("restores an authoritative answer when the retained prompt expires during reconnect", async () => {
+  vi.useFakeTimers();
+  const retained = { ...question(), expiresAtMs: Date.now() + 5_000 };
+  const response = createDeferred<unknown>();
+  let reads = 0;
+  const request = vi.fn((method: string) =>
+    method === "question.get"
+      ? ++reads === 1
+        ? Promise.resolve({ question: retained })
+        : response.promise
+      : Promise.resolve({ questions: [] }),
+  );
+  try {
+    const { page, update } = mount(request);
+    await settle(page);
+    update({ phase: "reconnecting" });
+    update({ phase: "connected" });
+    await settle(page);
+    vi.advanceTimersByTime(5_000);
+    response.resolve({
+      question: {
+        ...retained,
+        status: "answered",
+        answers: { answers: { audience: ["The design team"] } },
+      },
+      continuation: {
+        questionId: retained.id,
+        status: "blocked",
+        reason: "Original caller is unavailable.",
+        nextAction: "Start a new user turn.",
+      },
+    });
+    await settle(page);
+    expect(page.textContent).toContain("Answered");
+    expect(page.textContent).toContain("The design team");
+    expect(page.textContent).toContain("Start a new user turn.");
+  } finally {
+    vi.useRealTimers();
+  }
 });

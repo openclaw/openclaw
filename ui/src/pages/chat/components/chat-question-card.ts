@@ -102,6 +102,7 @@ export function renderChatQuestionSummary(prompt: QuestionPrompt) {
           </div>
         `,
       )}
+      <p role="status" ?hidden=${!prompt.continuationMessage}>${prompt.continuationMessage}</p>
     </div>
   `;
 }

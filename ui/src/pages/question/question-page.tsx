@@ -173,15 +173,29 @@ class QuestionPageController {
     }
     const id = this.questionId;
     const generation = ++this.operationGeneration;
+    const initialPrompt = this.prompt;
+    const initialRevision = initialPrompt?.revision;
     this.loading = true;
     this.requestError = null;
     this.notify();
     try {
-      const result = await requestQuestionGateway(client, "question.get", { id });
+      const result = await requestQuestionGateway(client, "question.get", {
+        id,
+        includeContinuation: true,
+      });
       if (
         this.client !== client ||
         this.operationGeneration !== generation ||
         this.questionId !== id
+      ) {
+        return;
+      }
+      const currentPrompt = this.prompt;
+      // Live events own newer answers and receipts while the snapshot is in flight.
+      if (
+        currentPrompt &&
+        !currentPrompt.locallyExpired &&
+        (currentPrompt !== initialPrompt || currentPrompt.revision !== initialRevision)
       ) {
         return;
       }
@@ -202,6 +216,16 @@ class QuestionPageController {
       ) {
         this.requestError = "unavailable";
         return;
+      }
+      const receipt = result.continuation;
+      const prompt = this.prompt;
+      if (prompt) {
+        prompt.continuationMessage =
+          isRecord(receipt) && (receipt.status === "blocked" || receipt.status === "interrupted")
+            ? [receipt.reason, receipt.nextAction]
+                .filter((value): value is string => typeof value === "string")
+                .join(" ")
+            : undefined;
       }
       if (record.status === "answered") {
         const accepted = handleQuestionPromptEvent(this.questionState, {
@@ -266,7 +290,7 @@ class QuestionPageController {
   }
 }
 
-function QuestionSummary(props: { prompt: QuestionPrompt }) {
+function QuestionSummary(props: { prompt: QuestionPrompt; continuationMessage?: string }) {
   const answer = (question: QuestionPrompt["questions"][number]) => {
     const prompt = props.prompt;
     if (prompt.status === "cancelled") {
@@ -299,6 +323,7 @@ function QuestionSummary(props: { prompt: QuestionPrompt }) {
           </div>
         )}
       </For>
+      <Show when={props.continuationMessage}>{(message) => <p role="status">{message()}</p>}</Show>
     </div>
   );
 }
@@ -386,7 +411,10 @@ function QuestionPageContent(props: QuestionPageProps & { host: HTMLElement }) {
                       <h1 id="question-page-title" tabindex="-1">
                         {read().questionStatusLabel(prompt())}
                       </h1>
-                      <QuestionSummary prompt={prompt()} />
+                      <QuestionSummary
+                        prompt={prompt()}
+                        continuationMessage={read().prompt?.continuationMessage}
+                      />
                     </div>
                   }
                 >
