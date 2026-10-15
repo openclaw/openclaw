@@ -1263,6 +1263,7 @@ describe("prepareCliRunContext", () => {
                 profileId: fallbackProfileId,
                 profileType: fallbackCredential.type,
                 credential: fallbackCredential,
+                readCurrentCredential: null,
               },
         ),
       });
