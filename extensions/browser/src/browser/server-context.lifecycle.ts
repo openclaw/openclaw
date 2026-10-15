@@ -6,6 +6,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { RunningChrome } from "./chrome.js";
 import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
@@ -160,17 +161,10 @@ function combineSignals(lifecycleSignal: AbortSignal, callerSignal?: AbortSignal
 
 /** Observe shared lifecycle work without transferring cancellation ownership. */
 export function waitForProfileOperation<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return promise;
-  }
-  signal.throwIfAborted();
-  let onAbort!: () => void;
-  const waiting = new Promise<T>((resolve, reject) => {
-    onAbort = () => reject(toLifecycleError(signal.reason, "Browser operation aborted."));
-    signal.addEventListener("abort", onAbort, { once: true });
-    void promise.then(resolve, reject);
-  });
-  return waiting.finally(() => signal.removeEventListener("abort", onAbort));
+  signal?.throwIfAborted();
+  return racePromiseWithAbortSignal(promise, signal, (aborted) =>
+    toLifecycleError(aborted.reason, "Browser operation aborted."),
+  );
 }
 
 function createLease(actor: ProfileLifecycleActor): () => void {
