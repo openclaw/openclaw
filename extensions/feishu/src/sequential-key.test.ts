@@ -83,6 +83,45 @@ describe("getFeishuSequentialKey", () => {
     ).toBe("feishu:default:oc_dm_chat:btw");
   });
 
+  it("keeps ordinary group messages on the chat lane", () => {
+    const root = createTextEvent({ text: "hello", messageId: "om_root" });
+    root.message.chat_type = "group";
+    const reply = createTextEvent({ text: "reply", messageId: "om_reply" });
+    reply.message.chat_type = "group";
+    reply.message.root_id = "om_root";
+
+    expect(getFeishuSequentialKey({ accountId: "default", event: root })).toBe(
+      "feishu:default:oc_dm_chat",
+    );
+    expect(getFeishuSequentialKey({ accountId: "default", event: reply })).toBe(
+      "feishu:default:oc_dm_chat",
+    );
+  });
+
+  it("keeps native topic starters and replies in the topic lane", () => {
+    const root = createTextEvent({ text: "topic starter", messageId: "om_starter" });
+    root.message.chat_type = "topic_group";
+    root.message.root_id = "omt_topic";
+    const reply = createTextEvent({ text: "topic reply", messageId: "om_reply" });
+    reply.message.chat_type = "topic_group";
+    reply.message.root_id = "om_starter";
+    reply.message.thread_id = "omt_topic";
+
+    const other = createTextEvent({ text: "other topic", messageId: "om_other" });
+    other.message.chat_type = "topic_group";
+    other.message.root_id = "omt_other";
+
+    expect(getFeishuSequentialKey({ accountId: "default", event: root })).toBe(
+      "feishu:default:oc_dm_chat:topic:omt_topic",
+    );
+    expect(getFeishuSequentialKey({ accountId: "default", event: reply })).toBe(
+      "feishu:default:oc_dm_chat:topic:omt_topic",
+    );
+    expect(getFeishuSequentialKey({ accountId: "default", event: other })).toBe(
+      "feishu:default:oc_dm_chat:topic:omt_other",
+    );
+  });
+
   it("keeps an empty group message with bot mentions on its normal chat lane", () => {
     const event = createTextEvent({ text: "" });
     event.message.chat_type = "group";
