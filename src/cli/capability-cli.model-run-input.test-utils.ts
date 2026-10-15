@@ -208,6 +208,8 @@ export function registerModelRunInputTests({
       error: "Model overrides must use the form <provider/model>.",
     },
     { args: ["--thinking", "turbo-mode"], error: "Invalid thinking level." },
+    { args: ["--temperature", ""], error: "--temperature must be a number from 0 to 2." },
+    { args: ["--temperature", "   "], error: "--temperature must be a number from 0 to 2." },
   ])("rejects invalid model run options $args before dispatch", async ({ args, error }) => {
     await expect(runModelProbe(...args)).rejects.toThrow("exit 1");
     expectRuntimeErrorContains(error);

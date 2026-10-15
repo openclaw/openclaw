@@ -1,6 +1,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const MAX_MODEL_RUN_PROMPT_BYTES = 1024 * 1024;
@@ -100,8 +101,8 @@ export function normalizeModelRunTemperature(value: unknown): number | undefined
   if (value === undefined) {
     return undefined;
   }
-  const parsed = typeof value === "string" ? Number(value) : Number.NaN;
-  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 2) {
+  const parsed = typeof value === "string" ? parseStrictFiniteNumber(value) : undefined;
+  if (parsed === undefined || parsed < 0 || parsed > 2) {
     throw new Error("--temperature must be a number from 0 to 2.");
   }
   return parsed;
