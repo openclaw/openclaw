@@ -579,7 +579,7 @@ export async function buildDiscordMessageProcessContext(params: {
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
   if (ctx.inboundEventKind === "room_event" && shouldIncludeChannelHistory) {
     const nativeMediaText = formatDiscordMediaText({
-      attachments: message.attachments ?? undefined,
+      attachments: message.attachments,
       stickers: resolveDiscordMessageStickers(message),
     });
     const historyText = [text, nativeMediaText].filter(Boolean).join("\n");

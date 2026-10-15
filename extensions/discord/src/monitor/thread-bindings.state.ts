@@ -134,10 +134,7 @@ export function resolveBindingRecordKey(params: {
   return toBindingRecordKey({ accountId: params.accountId, threadId });
 }
 
-export function normalizePersistedBinding(
-  threadIdKey: string,
-  raw: unknown,
-): ThreadBindingRecord | null {
+function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBindingRecord | null {
   if (!raw || typeof raw !== "object") {
     return null;
   }

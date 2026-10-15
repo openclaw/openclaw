@@ -370,7 +370,7 @@ describe("composer overflow presentation", () => {
         { profileId: "morgan", start: 15, end: 31 },
       ],
     });
-    const part = drawComposer(props);
+    drawComposer(props);
     let strip = container.querySelector<HTMLElement>('[role="status"]')!;
     const visibleNames = () =>
       [...strip.querySelectorAll<HTMLElement>(".composer-context-strip__person")]
@@ -407,9 +407,11 @@ describe("composer overflow presentation", () => {
     expect(more.textContent).toBe("+1");
     expect(more.title).toBe("@Morgan Williams");
     expect(strip.getBoundingClientRect().height).toBeCloseTo(41, 0);
-    part.setConnected(false);
+    container.remove();
     container.style.width = "760px";
-    part.setConnected(true);
+    await afterLayout();
+    expect(visibleNames()).toEqual(["@Jordan Rivera"]);
+    document.body.append(container);
     strip = container.querySelector<HTMLElement>('[role="status"]')!;
     more = strip.querySelector<HTMLElement>(".composer-context-strip__more")!;
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@Morgan Williams"]);

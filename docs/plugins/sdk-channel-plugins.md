@@ -220,6 +220,15 @@ when initialization must finish before the child runs.
     config-only bootstrap activation remain separate; persisted credentials alone
     do not enable a channel.
 
+    `gateway.loginWithQrStart` receives an optional
+    `assertCredentialPersistenceCurrent()` callback. Retain it with the QR login
+    and invoke it immediately before credential writes, including deferred writes
+    after the RPC returns. It throws when the Gateway's account configuration or
+    plugin lifetime changes. Compose it with the plugin's own active-login guard;
+    do not replace that guard or tie QR lifetime to the initiating RPC. Omitted
+    account IDs retain plugin-specific single-account profile selection; the
+    Gateway rejects omission when multiple accounts are configured.
+
     Create `src/channel.ts`:
 
     ```typescript src/channel.ts

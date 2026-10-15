@@ -1,7 +1,7 @@
-import { html, render, type LitElement } from "lit";
 import { onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../api/types.ts";
+import { LitContent, solidContent } from "../lit/solid-content.tsx";
 import { sidebarPanelDefinitions } from "../pages/chat/chat-pane-embedded-panels.ts";
 import { createChatPaneRails } from "../pages/chat/chat-pane-rails.ts";
 import { renderSidebarRegion } from "../pages/chat/chat-pane-sidebar-layout.ts";
@@ -21,6 +21,31 @@ import {
 import "../pages/chat/components/chat-sidebar-region.runtime.tsx";
 import { threadProps } from "../pages/chat/components/chat-transcript.test-support.ts";
 import type { SidebarLayout, SidebarSlotId } from "../pages/chat/sidebar-layout.ts";
+import { mountSolid } from "./solid-render.tsx";
+
+const legacyContainers = new WeakMap<
+  HTMLElement,
+  { update: (props: { value: unknown }) => void }
+>();
+
+// Pane adapters still return mixed legacy content; its retained range owns nested Solid roots.
+export function renderPaneLegacyContent(content: unknown, container: HTMLElement): void {
+  const existing = legacyContainers.get(container);
+  if (existing) {
+    existing.update({ value: content });
+    return;
+  }
+  legacyContainers.set(container, mountSolid(LitContent, { value: content }, container));
+  onTestFinished(() => {
+    legacyContainers.delete(container);
+  });
+}
+
+function ChatPanelPrimary() {
+  const primary = document.createElement("main");
+  primary.textContent = "Chat";
+  return primary;
+}
 
 export async function renderPanelFixture(
   mount: HTMLElement,
@@ -28,7 +53,7 @@ export async function renderPanelFixture(
   definitions: ReturnType<typeof sidebarPanelDefinitions>,
   closePanelSlot: (slot: SidebarSlotId) => void = vi.fn(),
 ) {
-  render(
+  renderPaneLegacyContent(
     renderSidebarRegion({
       presentationId: "sidebar-layout-fixture",
       availableWidth: 1400,
@@ -44,17 +69,15 @@ export async function renderPanelFixture(
       layout,
       narrow: false,
       panelDefinitions: definitions,
-      primary: html`<main>Chat</main>`,
+      primary: solidContent(ChatPanelPrimary, {}),
       requestUpdate: vi.fn(),
     }),
     mount,
   );
   await mount.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
-  await mount.querySelector<LitElement>("openclaw-chat-files-panel")?.updateComplete;
+  await mount.querySelector("openclaw-chat-files-panel")?.updateComplete;
   await Promise.all(
-    [...mount.querySelectorAll<LitElement>("openclaw-chat-detail-panel")].map(
-      (panel) => panel.updateComplete,
-    ),
+    [...mount.querySelectorAll("openclaw-chat-detail-panel")].map((panel) => panel.updateComplete),
   );
   await mount.querySelector("openclaw-panel-loading-skeleton")?.updateComplete;
 }

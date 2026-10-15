@@ -819,11 +819,10 @@ describe("renderAgents toolbar", () => {
     expect(onCreateAgent).toHaveBeenCalledOnce();
   });
 
-  it("preserves creation permission gating with multiple agents", () => {
+  it("keeps unavailable creation visible and disabled with a recovery reason", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const onCreateAgent = vi.fn();
-    const defaults = createProps();
     try {
       renderView(
         {
@@ -833,13 +832,26 @@ describe("renderAgents toolbar", () => {
             scope: "per-sender",
             agents: [{ id: "alpha" }, { id: "beta" }],
           },
-          access: { ...defaults.access, canCreateAgent: false },
+          access: {
+            canCreateAgent: false,
+            canPatchConfig: false,
+            canUpdateConfig: false,
+            canUpdateIdentity: false,
+            canWriteFiles: false,
+            canRunCron: false,
+          },
           onCreateAgent,
         },
         container,
       );
       expect(container.querySelector("openclaw-agent-select")).toBeNull();
-      expect(container.querySelector(".agents-create-btn")).toBeNull();
+      const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
+      expect(createButton).not.toBeNull();
+      expect(createButton?.disabled).toBe(true);
+      expect(createButton?.title).toContain("openclaw.chat");
+      expect(createButton?.title).toContain("operator.admin");
+      expect(createButton?.title).toContain("reconnect");
+      createButton?.click();
       expect(onCreateAgent).not.toHaveBeenCalled();
     } finally {
       container.remove();

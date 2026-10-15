@@ -1,4 +1,8 @@
-import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../../auto-reply/reply-payload.js";
 import { applyPreparedReplyMedia } from "../../../auto-reply/reply/reply-media-paths.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
@@ -242,6 +246,22 @@ export function prepareEmbeddedRunTerminal(input: {
     deferAssistantTimeoutError:
       timedOutDuringPrompt && (!hasMessagingToolDeliveryEvidence(attempt) || timeoutFinal),
   }).map((payload) => applyPreparedReplyMedia(payload, attempt.preparedReplyMedia ?? []));
+  // Keep the local transcript fact before aggregate delivery also includes message tools.
+  if (input.sourceReplyDeliveryState === "missing" && input.replyDeliveryState === "delivered") {
+    for (const payload of payloads) {
+      const metadata = getReplyPayloadMetadata(payload);
+      if (
+        !payload.isError &&
+        !payload.isReasoning &&
+        !metadata?.hostNotice &&
+        !metadata?.sourceReplyTranscriptMirror &&
+        (metadata?.assistantTranscriptOwned === true ||
+          metadata?.assistantMessageIndex !== undefined)
+      ) {
+        setReplyPayloadMetadata(payload, { localTranscriptDeliveryConfirmed: true });
+      }
+    }
+  }
   const mergeToolMedia = input.mergeToolMedia ?? mergeAttemptToolMediaPayloads;
   // Pending source custody also holds terminal media; committed mirrors and earlier inputs stay.
   const payloadsWithToolMedia =
@@ -356,9 +376,13 @@ function replacePartialAssistantPayload(input: {
   if (!partialPayload) {
     return [...payloads, { text: input.recoveredText }];
   }
-  payloads[partialPayloadIndex] = copyReplyPayloadMetadata(partialPayload, {
-    ...partialPayload,
-    text: input.recoveredText,
-  });
+  // Replacement text has not passed the local transcript observation.
+  payloads[partialPayloadIndex] = setReplyPayloadMetadata(
+    copyReplyPayloadMetadata(partialPayload, {
+      ...partialPayload,
+      text: input.recoveredText,
+    }),
+    { localTranscriptDeliveryConfirmed: undefined },
+  );
   return payloads;
 }

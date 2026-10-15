@@ -1,9 +1,12 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_RESTART_UNAVAILABLE_REASON } from "../../../packages/gateway-protocol/src/restart-unavailable.js";
 import { isMainSessionRecoveryReconciliationCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
+import { isGatewayRestartDrainError } from "../../process/gateway-work-admission.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
@@ -66,9 +69,19 @@ export function respondChatSendAdmissionError(
   error: unknown,
   respond: GatewayRequestHandlerOptions["respond"],
 ): void {
+  if (isAgentRunRestartAbortReason(error) || isGatewayRestartDrainError(error)) {
+    return respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "Gateway is restarting; retry after reconnecting", {
+        retryable: true,
+        details: { reason: GATEWAY_RESTART_UNAVAILABLE_REASON },
+      }),
+    );
+  }
   const reason = error instanceof Error ? error.message : undefined;
   if (reason === "goal-session-busy") {
-    respond(
+    return respond(
       false,
       undefined,
       errorShape(
@@ -77,17 +90,15 @@ export function respondChatSendAdmissionError(
         { retryable: true, details: { reason: "goal-session-busy" } },
       ),
     );
-    return;
   }
   if (reason === SESSION_ROUTING_CHANGED_ERROR_REASON) {
-    respondChatSessionRoutingChanged(respond);
-    return;
+    return respondChatSessionRoutingChanged(respond);
   }
   if (
     reason === ACTIVE_LEAF_CHANGED_ERROR_REASON ||
     reason === SESSION_SETTINGS_CHANGED_ERROR_REASON
   ) {
-    respond(
+    return respond(
       false,
       undefined,
       errorShape(
@@ -98,10 +109,9 @@ export function respondChatSendAdmissionError(
         { details: { reason } },
       ),
     );
-    return;
   }
   if (isSessionTranscriptProjectionUnavailableError(error)) {
-    respond(
+    return respond(
       false,
       undefined,
       errorShape(ErrorCodes.UNAVAILABLE, "session transcript is rebuilding; retry shortly", {
@@ -110,7 +120,6 @@ export function respondChatSendAdmissionError(
         retryAfterMs: 250,
       }),
     );
-    return;
   }
   respond(
     false,

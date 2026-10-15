@@ -157,6 +157,15 @@ Current upstream core lint stripes use the 16-class on automatic first attempts 
 
 RunsOn retains its hosted placement for standalone ratchets and check planning, including qualification dispatches.
 
+Same-repository hybrid PR first attempts run `check-plan` on hosted
+`ubuntu-24.04` using the existing serial compiler discovery mode. The complete
+snapshot remains too large for that runner. This trades compiler execution time
+for avoiding a second Blacksmith assignment before type/lint rows can start;
+the hosted planner counts in the existing admission budget. Forks, other
+backends, retries, push/schedule and manual/release routing keep their existing
+placement and discovery setting. Graph validation, selected rows and all check
+commands are unchanged. See the [measurement and qualification](/ci/routing-costs#compiler-planning-queue).
+
 Healthy eligible main pushes and Windows-selected PRs can additionally offload seven check rows under the [assignment guard](#hybrid-hosted-assignment-guard). Main alone can then offload lint and central test types. Each decision consumes remaining capacity within the same 45-row limit; the original runner remains the fallback. Artifact builds retain the 16-class: their hosted maximum reached 898 seconds before preflight and gate overhead. See the [routing measurements and qualification gaps](/ci/routing-costs).
 
 Native Swift builds/tests, ordinary CI iOS build phases and Periphery scans use Xcode 27 on GitHub-hosted `xcode-27`, the preview macOS 27 image. This toolchain change preserves hosted placement, job counts, worker caps, coverage, and deadlines; it adds no Blacksmith registrations. The Swift source-language minimum remains 6.3. Native compatibility and complete job timings require proof on the new image.
@@ -345,6 +354,20 @@ and logs but disables verbose system-diagnostic collection: Xcode 27 can spend
 600 seconds collecting it after passing tests. Full manual validation retains
 universal simulator compilation, verbose diagnostics, the Release device build,
 and lifecycle/UI/Watch tests. Frozen targets keep their original build settings.
+
+Current main-tier iOS tests also build the app and both test bundles once, then
+execute the existing voice, lifecycle, and two-process Access restart proof
+without rebuilding. They restore Xcode build products and SDK modules by runner
+architecture, Xcode and
+dependency graph, with incremental fallback across source changes. The shared
+Swift cache owner restores timestamps only for byte-identical current inputs;
+generated version metadata stays fresh. Successful scheduled main runs alone
+publish these archives, with a four-minute bounded optional save tail. Signing,
+test selectors, serial simulator execution, and full manual/frozen builds are unchanged.
+The standalone restart helper still builds its own products.
+The October 15 baseline took 35m51s, including 13m36s in the cold Xcode app build;
+the first natural run populates the new cache, and subsequent natural hits must
+establish the complete-job saving, including archive transfer.
 
 Scheduled main CI uses the same automatic runner and dependency-cache policy as
 main pushes. A `runson` configuration keeps the existing hybrid baseline for

@@ -125,6 +125,8 @@ export interface StreamOptions {
    * its body stream is consumed.
    */
   onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
+  /** Local-provider wait observation. Slot waits require request-correlated backend evidence. */
+  onProviderWait?: (reason: "response" | "slot" | null) => void;
   /**
    * Observe a live response that accepts user input before generation finishes.
    * `steer` resolves false only when the input was definitely not admitted;

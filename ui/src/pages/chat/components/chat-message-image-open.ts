@@ -53,7 +53,7 @@ export function imageTitle(image: ImageBlock): string {
   return image.alt?.trim() || image.fileName?.trim() || t("chat.imageLightbox.untitled");
 }
 
-export async function loadGalleryImage(
+async function loadGalleryImage(
   image: ImageBlock,
   opts: ImageRenderOptions | undefined,
   retryFailed: boolean,
