@@ -72,13 +72,15 @@ match, and current app permissions and approval policy still apply. Explicit fin
 lists retain their captured app limits.
 
 When authoring from a native Codex conversation, ordinary agent-turn jobs inherit
-tools. The `automations` tool rejects finite per-job lists for these turns because
-they disable the native shell, filesystem, and app surface. Updating instructions
+tools. The `automations` tool rejects newly authored finite per-job lists for these
+turns. This preserves inherited selection when creating or editing ordinary work;
+it does not mean every finite-list job is unexecutable. Updating instructions
 or a schedule should leave `toolsAllow` omitted. From the owning conversation,
 `toolsAllow: null` explicitly restores inherited selection under current owner and
 app authorization. Script payloads and condition triggers still use explicit lists;
 operators can configure deliberate restrictions through the CLI or Gateway API.
-Existing saved restrictions are not cleared by a content-only edit.
+Existing saved restrictions are not cleared by a content-only edit, and restricted
+jobs retain their policy-filtered OpenClaw execution path.
 
 Earlier releases saved a copy of the creating turn's tool list on agent-created agent turns.
 That copy could miss tools the creator had, such as the native shell. Those jobs now run with

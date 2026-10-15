@@ -19,7 +19,7 @@ import type {
 } from "./cron-tool.types.js";
 import type { GatewayCallOptions } from "./gateway.js";
 
-/** Refuse a selection the native harness cannot execute instead of saving a broken job. */
+/** Preserve inherited-tool authoring for ordinary native scheduled turns. */
 export function assertCronNativeToolSelection(
   job: Record<string, unknown>,
   captureRef?: CronToolsAllowCaptureRef,
@@ -42,7 +42,7 @@ export function assertCronNativeToolSelection(
     return;
   }
   throw new Error(
-    "Native scheduled agent turns require inherited tool selection; a finite toolsAllow list disables native shell, files, and apps. No changes were saved. For task-content edits, omit toolsAllow to preserve the existing policy. To restore inherited tools, set toolsAllow:null from the owning conversation. Deliberate per-job restrictions must be configured through the CLI or Gateway API.",
+    "Native scheduled agent turns require inherited tool selection in this release. Per-job tool restrictions cannot be authored from this native conversation. No changes were saved. For task-content edits, omit toolsAllow to preserve the existing policy. To restore inherited tools, set toolsAllow:null from the owning conversation. Deliberate per-job restrictions must be configured through the CLI or Gateway API.",
   );
 }
 
