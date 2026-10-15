@@ -47,6 +47,7 @@ import { registerPreparedModelRuntimePublicationListener } from "./prepared-mode
 const fixture = usePreparedModelRuntimeHarness(
   { label: "catalog-publication-rows", scenario: "minimal" },
   () => {
+    vi.useRealTimers();
     projection?.dispose();
     projection = undefined;
     vi.restoreAllMocks();
@@ -184,12 +185,14 @@ beforeEach(() => {
 
 describe("catalog publication session rows", () => {
   it.each([
-    { selection: "explicit", superseded: false },
-    { selection: "configured", superseded: false },
-    { selection: "explicit", superseded: true },
+    { selection: "explicit", superseded: false, stop: undefined },
+    { selection: "configured", superseded: false, stop: undefined },
+    { selection: "explicit", superseded: true, stop: undefined },
+    { selection: "explicit", superseded: false, stop: "deadline" },
+    { selection: "explicit", superseded: false, stop: "connection" },
   ])(
-    "creates only with current native activation ($selection, superseded=$superseded)",
-    async ({ selection, superseded }) => {
+    "creates only with current native activation ($selection, superseded=$superseded, stop=$stop)",
+    async ({ selection, superseded, stop }) => {
       const initial: OpenClawConfig = {
         agents: {
           entries: { default: {} },
@@ -232,7 +235,13 @@ describe("catalog publication session rows", () => {
         },
       };
       let ready = false;
+      const nativeEntered = createDeferred();
+      const nativeRelease = createDeferred();
       const loadNative = vi.fn(async () => {
+        nativeEntered.resolve();
+        if (stop) {
+          await nativeRelease.promise;
+        }
         ready = true;
         if (superseded) {
           markPreparedModelRuntimeSnapshotsStale();
@@ -270,7 +279,9 @@ describe("catalog publication session rows", () => {
       const context = createDirectChatContext({ getRuntimeConfig: () => config });
       context.readPreparedGatewayModelCatalog = () =>
         readPreparedGatewayModelCatalog({ agentId: "default", getConfig: () => config });
+      const connection = new AbortController();
       const client: GatewayClient = {
+        connectionSignal: connection.signal,
         connect: {
           minProtocol: 1,
           maxProtocol: 1,
@@ -288,9 +299,12 @@ describe("catalog publication session rows", () => {
         ],
       });
       const create = sessionCreateHandlers["sessions.create"]!;
-      for (let index = 0; index < (superseded ? 1 : 2); index++) {
+      for (let index = 0; index < (superseded || stop ? 1 : 2); index++) {
         const key = `agent:default:dashboard:native-activation-${selection}-${index}`;
         const respond = vi.fn<RespondFn>();
+        if (stop) {
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+        }
         const creation = withPluginRuntimeGenerationScope(
           { pluginRegistry: registry, metadataSnapshot },
           () =>
@@ -308,7 +322,26 @@ describe("catalog publication session rows", () => {
               isWebchatConnect: () => true,
             }),
         );
-        if (superseded) {
+        if (stop) {
+          try {
+            await nativeEntered.promise;
+            if (stop === "deadline") {
+              await vi.advanceTimersByTimeAsync(20_000);
+            } else {
+              connection.abort();
+            }
+            await creation;
+            expect(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+            );
+          } finally {
+            nativeRelease.resolve();
+            vi.useRealTimers();
+          }
+          await loadNative.mock.results[0]?.value;
+        } else if (superseded) {
           await expect(creation).rejects.toThrow(
             "prepared model runtime publication was superseded",
           );
@@ -317,7 +350,7 @@ describe("catalog publication session rows", () => {
           expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
         }
         const entry = loadSessionEntry({ agentId: "default", sessionKey: key });
-        if (superseded) {
+        if (superseded || stop) {
           expect(entry).toBeUndefined();
         } else {
           expect(entry).toMatchObject({ agentRuntimeOverride: "synthetic-native" });

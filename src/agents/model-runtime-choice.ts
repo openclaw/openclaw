@@ -310,8 +310,8 @@ export async function preparePublishedModelRuntimeChoice(params: {
   model: string;
   runtimeId?: string;
   preferredRuntimeId?: string;
-  /** Session creation may acquire native facts; config mutations must remain passive. */
-  prepareNativeCatalog?: boolean;
+  /** Session creation supplies its bounded wait; config mutations remain passive. */
+  prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   sessionEntry?: Pick<
     SessionEntry,
     "authProfileOverride" | "authProfileOverrideSource" | "providerOverride" | "modelProvider"
@@ -336,7 +336,9 @@ export async function preparePublishedModelRuntimeChoice(params: {
     workspaceDir: params.workspaceDir,
   };
   const published = params.prepareNativeCatalog
-    ? await catalog.loadPublishedPreparedModelCatalogOwnerSnapshot(catalogParams)
+    ? await params.prepareNativeCatalog(() =>
+        catalog.loadPublishedPreparedModelCatalogOwnerSnapshot(catalogParams),
+      )
     : getPublishedPreparedModelCatalogOwnerSnapshot(catalogParams);
   const unavailable = `${params.runtimeId ? `Runtime "${params.runtimeId}"` : "A runtime"} is not available for ${params.provider}/${params.model}. Refresh the model catalog and choose again.`;
   if (!published) {
@@ -368,11 +370,13 @@ export async function preparePublishedModelRuntimeChoice(params: {
     // The native owner caches current observations and reacquires retired ones.
     // Creation cannot depend on a prior model-picker request to populate its catalog.
     if (nativeRuntime) {
-      nativeCatalog = await published.loadNativeModelCatalog?.({
-        provider: params.provider,
-        modelId: params.model,
-        runtime: selectedRuntimeId,
-      });
+      nativeCatalog = await params.prepareNativeCatalog(async () =>
+        published.loadNativeModelCatalog?.({
+          provider: params.provider,
+          modelId: params.model,
+          runtime: selectedRuntimeId,
+        }),
+      );
     }
   }
   const owner = materializePreparedModelCatalogOwner(published, nativeCatalog);

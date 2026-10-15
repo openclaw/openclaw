@@ -42,7 +42,10 @@ OpenAI API-key and ChatGPT/Codex subscription credentials remain distinct. See
 Creating a session with a native runtime acquires that runtime's current model
 and account observation when needed, including when the runtime comes from model
 policy. You do not need to open the model picker first. Cached observations are
-reused only while their runtime owner and account remain current.
+reused only while their runtime owner and account remain current. Native reads
+share session creation's catalog deadline and stop waiting if the caller disconnects
+or loses authority; an unfinished catalog returns a retryable error without creating
+the session.
 
 ## Selection order
 
