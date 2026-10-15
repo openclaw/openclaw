@@ -429,6 +429,9 @@ Agent requests waiting to start pause while plugin hot reload drains the old
 runtime. They continue with the replacement when it is ready, or with the
 previous runtime after a successful rollback. You do not need to resend these
 requests. Failed restoration or Gateway shutdown still reports a failure.
+Already-admitted turns retain their runtime generation through nested model work.
+Unrelated plugin settings do not invalidate a prepared `chat.send`; session,
+model, and tool-policy changes still recheck the facts used for admission.
 If a replacement fails before activation, rollback restores the previous configured
 model context limits without waiting for model discovery.
 

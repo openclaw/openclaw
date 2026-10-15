@@ -160,3 +160,76 @@ it.each([
     }
   });
 });
+
+it.each(["unrelated plugin", "selected model", "tool policy"] as const)(
+  "rechecks prepared chat facts across a reload of %s",
+  async (change) => {
+    await withOpenClawTestState({ label: "chat-reload-preparation" }, async () => {
+      await loadOrCreateProcessDeviceIdentityAsync();
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {} } },
+        plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
+      };
+      let currentConfig = cfg;
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const sessionKey = "agent:main:dashboard:reload-preparation";
+      const runId = "chat-reload-preparation";
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId: "reload-preparation-session", updatedAt: 1 },
+      );
+      const request = await normalizeChatSendRequest({
+        client: null,
+        params: { sessionKey, message: "Keep this turn", idempotencyKey: runId },
+      });
+      if (!request.ok) {
+        throw new Error(request.error);
+      }
+      const context = createDirectChatContext({ getRuntimeConfig: () => currentConfig });
+      const prepared = await prepareChatSendSession({
+        request: request.value,
+        client: null,
+        context,
+      });
+      if (!prepared.ok) {
+        throw new Error("Session preparation failed");
+      }
+      const session = await qualifyChatSendSession(prepared.value);
+      currentConfig = {
+        ...cfg,
+        ...(change === "unrelated plugin"
+          ? { plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } } }
+          : change === "selected model"
+            ? { agents: { ...cfg.agents, defaults: { model: { primary: "openai/changed" } } } }
+            : { tools: { deny: ["exec"] } }),
+      };
+      setRuntimeConfigSnapshot(currentConfig, currentConfig);
+      const respond = vi.fn();
+      let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
+      try {
+        admitted = await admitChatSend({
+          request: request.value,
+          session,
+          client: null,
+          context,
+          respond,
+        });
+        expect(admitted.ok).toBe(change === "unrelated plugin");
+        if (change !== "unrelated plugin") {
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              message: expect.stringContaining("Session preparation changed"),
+            }),
+          );
+        }
+      } finally {
+        if (admitted?.ok) {
+          admitted.value.cleanupAdmittedRun();
+        }
+        clearAgentRunContext(runId);
+      }
+    });
+  },
+);

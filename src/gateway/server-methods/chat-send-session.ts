@@ -73,6 +73,8 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 // These inputs prepare model/runtime selection, native restrictions, command/retry
 // semantics, and creator defaults. Sharing authorization rechecks live policy;
 // unrelated logging and UI publications do not invalidate a prepared send.
+// Plugin configuration belongs to the admitted runtime generation, not this
+// session preparation; its owner retains execution authority through reload.
 function chatSendPreparationConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -137,7 +139,6 @@ function chatSendPreparationConfig(
     runtime: agent?.runtime,
     models: { mode: cfg.models?.mode, providers },
     auth: cfg.auth,
-    plugins: cfg.plugins,
     workspace: agent?.workspace ?? defaults?.workspace,
     agentDir: agent?.agentDir,
     timeoutSeconds: defaults?.timeoutSeconds,
