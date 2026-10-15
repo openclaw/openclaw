@@ -63,12 +63,18 @@ export function resolveCommandReplyExpectation(params: {
   if (
     params.opts.privateCompletion ||
     params.opts.lane === AGENT_LANE_SUBAGENT ||
-    isSubagentSessionKey(params.sessionKey) ||
-    !isDeliverableMessageChannel(params.messageChannel ?? "")
+    isSubagentSessionKey(params.sessionKey)
   ) {
     return "required";
   }
-  if (params.opts.inputProvenance?.kind !== "inter_session") {
+  const provenance = params.opts.inputProvenance;
+  if (provenance?.kind === "internal_system" && provenance.sourceTool === "cron_failure_repair") {
+    return "optional";
+  }
+  if (!isDeliverableMessageChannel(params.messageChannel ?? "")) {
+    return "required";
+  }
+  if (provenance?.kind !== "inter_session") {
     return undefined;
   }
   const chatType = normalizeChatType(params.sessionEntry?.chatType);
