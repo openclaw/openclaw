@@ -6,6 +6,7 @@ import type {
   SecretEgressWorkerData,
   SecretEgressWorkerMessage,
 } from "./proxy-worker.types.js";
+import { SecretEgressUpstreamCaError } from "./upstream-ca.js";
 
 const port = parentPort!;
 // SAFETY: The sole launcher in proxy-worker.ts supplies typed, process-owned Worker data.
@@ -15,6 +16,7 @@ const send = (message: SecretEgressWorkerMessage) => port.postMessage(message);
 try {
   const proxy = await startSecretEgressProxyServer({
     caDir: data.caDir,
+    upstreamCaFiles: data.upstreamCaFiles,
     allowedHosts: data.allowedHosts,
     bypassHosts: data.bypassHosts,
     resolveSentinel: (sentinel) => resolveSecretSentinel(sentinel, data.decryptionKey),
@@ -51,8 +53,13 @@ try {
     })().catch(() => send({ kind: "failed", id: command.id }));
   });
   send({ kind: "ready", caCertPath: proxy.caCertPath, proxyOrigin: proxy.proxyOrigin });
-} catch {
+} catch (error) {
   // Never serialize provider errors, request URLs, OpenSSL output, or key material.
-  send({ kind: "fatal" });
+  send({
+    kind: "fatal",
+    ...(error instanceof SecretEgressUpstreamCaError
+      ? { upstreamCaFileIndex: error.fileIndex }
+      : {}),
+  });
   port.close();
 }

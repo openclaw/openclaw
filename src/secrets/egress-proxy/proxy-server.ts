@@ -37,6 +37,7 @@ import {
   SecretEgressSubstitutionError,
   type SecretEgressRefusalReason,
 } from "./stream-substitution.js";
+import { loadUpstreamCaFiles } from "./upstream-ca.js";
 
 const PROXY_AUTH_USERNAME = "openclaw";
 const PROXY_AUTH_REALM = "OpenClaw secret egress";
@@ -230,9 +231,11 @@ export async function startSecretEgressProxyServer(params: {
   caDir: string;
   allowedHosts?: readonly string[];
   bypassHosts?: readonly string[];
+  upstreamCaFiles?: readonly string[];
   onAudit: (event: SecretEgressProxyAuditEvent) => void;
   resolveSentinel?: (sentinel: string) => string | undefined;
 }): Promise<SecretEgressProxyHandle> {
+  const upstreamCaPems = loadUpstreamCaFiles(params.upstreamCaFiles);
   const certificates = await createSecretEgressCertificates(params.caDir);
   const { caPem } = certificates;
   const trustBundlePath = path.join(params.caDir, "trust-bundle.pem");
@@ -240,7 +243,7 @@ export async function startSecretEgressProxyServer(params: {
   // The CA set is immutable for this proxy lifetime. A new proxy owns new trust;
   // leaf renewal does not change it. Share only parsed CAs across process grants.
   const upstreamSecureContext = createSecureContext({
-    ca: [...rootCertificates, caPem],
+    ca: [...rootCertificates, caPem, ...upstreamCaPems],
   });
   const bypassHosts = new Set((params.bypassHosts ?? []).map(normalizeHostname));
   const allowedHosts =

@@ -341,3 +341,22 @@ Use a file SecretRef on a supported credential field instead:
 For `mode: "singleValue"`, the SecretRef `id` is `"value"`. For `mode: "json"`, use an absolute JSON pointer such as `"/providers/xai/apiKey"`.
 
 See [SecretRef Credential Surface](/reference/secretref-credential-surface) for the fields that accept SecretRefs.
+
+### Additional upstream CA certificates
+
+`secrets.egressProxy.upstreamCaFiles` accepts up to 16 absolute paths to PEM files
+containing private CA certificates, for example `/etc/openclaw/certs/internal-ca.pem`.
+Each file must contain only CA certificates and whitespace (maximum 1 MiB).
+Unreadable, empty, malformed, or non-CA files prevent proxy startup; no listener
+is published with a partially loaded trust set. Do not provide private keys.
+
+These certificates extend, rather than replace, the Gateway proxy's upstream
+trust. TLS chain and hostname verification, destination bindings, traffic
+allowlists, and revocation remain enabled. Trust applies to all intercepted
+upstream destinations, so add only operator-controlled CAs. It is not added to
+subprocess trust bundles and does not affect blind bypass tunnels or standalone
+model-egress jobs. `NODE_EXTRA_CA_CERTS` on the caller is not a substitute.
+Restart the Gateway after changing the paths or certificate contents.
+
+This setting does not change the documented compatibility limits for non-443
+HTTPS destinations.

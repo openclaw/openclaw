@@ -5,6 +5,7 @@ export type SecretEgressWorkerData = {
   caDir: string;
   allowedHosts?: readonly string[];
   bypassHosts?: readonly string[];
+  upstreamCaFiles?: readonly string[];
   decryptionKey: Uint8Array;
   authority: Int32Array;
 };
@@ -33,4 +34,4 @@ export type SecretEgressWorkerMessage =
   | SecretEgressWorkerReady
   | SecretEgressWorkerReply
   | { kind: "audit"; event: SecretEgressProxyAuditEvent }
-  | { kind: "fatal" };
+  | { kind: "fatal"; upstreamCaFileIndex?: number };

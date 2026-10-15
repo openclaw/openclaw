@@ -24,6 +24,7 @@ describe("config secret refs schema", () => {
           enabled: true,
           allowedHosts: ["api.example.com"],
           bypassHosts: ["pinned.example.com"],
+          upstreamCaFiles: ["/etc/openclaw/certs/internal-ca.pem"],
         },
         providers: {
           default: { source: "env" },
@@ -64,6 +65,7 @@ describe("config secret refs schema", () => {
         enabled: true,
         allowedHosts: ["api.example.com"],
         bypassHosts: ["pinned.example.com"],
+        upstreamCaFiles: ["/etc/openclaw/certs/internal-ca.pem"],
       });
     }
   });

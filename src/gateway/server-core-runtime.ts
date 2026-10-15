@@ -125,6 +125,7 @@ export async function startGatewayCoreRuntime(input: {
     cfgAtStart.secrets?.egressProxy?.enabled === true
       ? await import("../secrets/egress-proxy/runtime.js").then((egressRuntime) =>
           egressRuntime.startGatewaySecretEgressProxy({
+            upstreamCaFiles: cfgAtStart.secrets?.egressProxy?.upstreamCaFiles,
             ...(cfgAtStart.secrets?.egressProxy?.allowedHosts !== undefined
               ? { allowedHosts: cfgAtStart.secrets.egressProxy.allowedHosts }
               : {}),

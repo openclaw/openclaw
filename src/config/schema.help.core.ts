@@ -31,6 +31,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Enables secret egress substitution for Gateway-hosted agent subprocesses. Default: false.",
   "secrets.egressProxy.allowedHosts":
     "Opt-in traffic allowlist for requests and CONNECT tunnels. When present, destinations must appear in this list, a per-secret host binding, or bypassHosts. An empty list permits only bound or bypassed hosts. Restart the Gateway after changing it.",
+  "secrets.egressProxy.upstreamCaFiles":
+    "Absolute paths to PEM files containing additional trusted upstream CA certificates. Applies only to the Gateway proxy, not client trust or bypass tunnels. Invalid or unreadable files prevent proxy startup. Restart the Gateway after changing files or paths.",
   "secrets.egressProxy.bypassHosts":
     "Exact hostnames that use authenticated blind CONNECT tunnels for certificate-pinned clients. Sentinels remain ciphertext and will fail vendor authentication instead of exposing plaintext.",
   wizard:
