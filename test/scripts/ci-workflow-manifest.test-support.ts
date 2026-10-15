@@ -541,7 +541,7 @@ export function runCiManifestFixture(options: {
     if (options.releaseFastLaneSelection) {
       appendFileSync(
         path.join(scriptsDir, "ci-changed-node-test-plan.mts"),
-        `\nexport { resolveReleaseFastLaneScope } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href)};\n`,
+        `\nexport { resolveReleaseFastLaneScope } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/ci-changed-scope.mjs")).href)};\n`,
       );
     }
     if (options.bundledPlanner) {

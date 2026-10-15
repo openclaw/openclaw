@@ -33,7 +33,6 @@ import {
   lookupCronStandingGrantInDatabase,
 } from "../gateway/operator-approval-standing-grants.worker.js";
 import {
-  hasDueOperatorApprovalsInDatabase,
   readOperatorApprovalReplayInDatabase,
   readPendingOperatorApprovalsInDatabase,
   listTerminalOperatorApprovalsInDatabase,
@@ -327,9 +326,6 @@ export function readOpenClawStateDatabaseCommand(
       type: command.type,
       pending: readPendingOperatorApprovalsInDatabase(command.input, db),
     };
-  }
-  if (command.type === "operatorApprovals.hasDue") {
-    return { type: command.type, hasDue: hasDueOperatorApprovalsInDatabase(command.nowMs, db) };
   }
   if (command.type === "operatorApprovals.prepareReplay") {
     return { type: command.type, replay: readOperatorApprovalReplayInDatabase(command.input, db) };

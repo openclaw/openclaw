@@ -143,6 +143,9 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
   const guardedTransport = await vi.importActual<typeof import("../../infra/net/fetch-guard.js")>(
     "../../infra/net/fetch-guard.js",
   );
+  const postTransport = await vi.importActual<typeof import("../../media-understanding/shared.js")>(
+    "../../media-understanding/shared.js",
+  );
   const { resolveTransientProviderRetryOptions } =
     await import("../../provider-runtime/operation-retry.js");
   // Earlier SDK imports can retain the actual transport namespace; bind it at each call
@@ -204,6 +207,12 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
     fetchWithTimeoutGuarded: providerHttpMocks.fetchWithTimeoutGuardedMock,
     pollProviderOperationJson: providerHttpMocks.pollProviderOperationJsonMock,
     postJsonRequest: providerHttpMocks.postJsonRequestMock,
+    postJsonResponse: (params: Parameters<typeof actual.postJsonResponse>[0]) => {
+      vi.spyOn(postTransport, "postJsonRequest").mockImplementation((request) =>
+        providerHttpMocks.postJsonRequestMock(request),
+      );
+      return actual.postJsonResponse(params);
+    },
     postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
     readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
     resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,

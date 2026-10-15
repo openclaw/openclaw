@@ -1131,6 +1131,19 @@ capturing raw prompt or response content:
 These fields are available to diagnostic snapshots, model-call plugin hooks, and
 OTEL model-call spans/metrics when diagnostics export is enabled.
 
+Local llama.cpp and native Ollama requests show “Waiting for the local model to
+respond” after one second without a response event. Control UI, TUI, and channels
+with progress drafts show this transient status, including later model calls in
+the same turn. It clears on the first stream event, cancellation, failure, or
+completion. Fast requests do not flash a waiting status, and no server polling
+or user configuration is required.
+
+“Waiting for a free model slot” is reserved for request-correlated backend
+evidence. The pinned llama.cpp server and Ollama do not expose that evidence for
+queued requests: occupied slots, model residency, and silence alone cannot
+distinguish queueing from loading or prompt processing. They use the generic
+response-wait wording.
+
 Completed llama.cpp and Ollama calls also report `providerProcessingMs` and
 `providerWaitEstimateMs` in model-call diagnostics, provider request timeline
 events, and Gateway stability snapshots and bundles. `openclaw gateway stability`

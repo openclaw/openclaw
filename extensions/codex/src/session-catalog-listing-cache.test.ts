@@ -251,7 +251,7 @@ describe("Codex catalog resident home sharing", () => {
     });
 
     await expect(control.initialize()).rejects.toThrow(
-      `invalid Codex session catalog ${cursorField === "nextCursor" ? "next" : "backwards"} response cursor`,
+      "Codex catalog response contains an invalid cursor",
     );
   });
 });

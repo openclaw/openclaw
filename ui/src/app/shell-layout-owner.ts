@@ -2,7 +2,6 @@ const TRAITS = [
   ["pluginEmbed", "content--plugin-embed"],
   ["hubHeader", "content--hub-header"],
   ["toolbarHeader", "content--toolbar-header"],
-  ["workbench", "content--workbench"],
   ["settingsPage", "content--settings-page"],
   ["settingsWide", "content--settings-wide"],
   ["settingsWorkspace", "content--settings-workspace"],

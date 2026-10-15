@@ -100,6 +100,33 @@ describe("observed steering boundary", () => {
 });
 
 describe("status text truncation", () => {
+  it("restores model waits after prior activity and rejects stale wait replay", () => {
+    const host = createHost({ chatRunId: "run-1" });
+    handleAgentEvent(host, agentEvent("run-1", 1, "assistant", { text: "First result" }));
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "run_status", {
+        phase: "waiting_for_model",
+        reason: "slot",
+      }),
+    );
+    expect(chatStartupStatusLabel(activeChatRunStartupStatus(host.chatRunStartup), null)).toBe(
+      "Waiting for a free model slot",
+    );
+    handleAgentEvent(host, agentEvent("run-1", 3, "run_status", { phase: "starting_model" }));
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "run_status", {
+        phase: "waiting_for_model",
+        reason: "slot",
+      }),
+      "history",
+    );
+    expect(chatStartupStatusLabel(activeChatRunStartupStatus(host.chatRunStartup), null)).toBe(
+      "Waiting for a response",
+    );
+  });
+
   it("preserves complete characters at the retry and fallback label boundary", () => {
     const expected = "x".repeat(255);
     const input = `${expected}😀 trailing`;

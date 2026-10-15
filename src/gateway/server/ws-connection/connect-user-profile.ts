@@ -186,7 +186,10 @@ async function resolveAuthenticatedProfile(
 
 /** Role and access policies need verified identity before admission; attribution alone may defer it. */
 export async function resolveGatewayConnectProfileAdmission(params: {
-  context: Pick<GatewayConnectPhaseContext, "configSnapshot" | "recordAttachTiming"> &
+  context: Pick<
+    GatewayConnectPhaseContext,
+    "configSnapshot" | "recordAttachTiming" | "setConnectPhase"
+  > &
     Parameters<typeof rejectUnavailableProfileConnect>[0] & {
       handler: Pick<GatewayConnectPhaseContext["handler"], "connId" | "logWsControl">;
     };
@@ -210,6 +213,7 @@ export async function resolveGatewayConnectProfileAdmission(params: {
     params.assertCurrent?.();
     const options = { assertCurrent: params.assertCurrent };
     const ensureStartedAt = performance.now();
+    context.setConnectPhase?.("profile-ensure");
     const profile = ownerProfileExpected
       ? await ensureCanonicalGatewayOwnerProfile(resolveHostAccountName, options)
       : params.resolveAuthenticatedGitHubIdentity
@@ -223,6 +227,7 @@ export async function resolveGatewayConnectProfileAdmission(params: {
     params.assertCurrent?.();
     params.context.recordAttachTiming?.("profileEnsureMs", ensureStartedAt);
     const authorityStartedAt = performance.now();
+    context.setConnectPhase?.("profile-authority");
     const prepared = await resolveAuthenticatedProfile(
       "profileId" in profile ? profile.profileId : profile.id,
       profile.updatedAt,

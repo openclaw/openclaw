@@ -963,7 +963,7 @@ async function resolveOAuthCredentialForCodexAppServer(
     ? resolveOpenAICodexAuthIdentity(currentCredential).accountId?.trim()
     : undefined;
   const callbackAccountId =
-    params.authHandoff?.chatgptAccountId.trim() ?? params.previousAccountId?.trim() ?? undefined;
+    params.authHandoff?.chatgptAccountId.trim() ?? params.previousAccountId?.trim();
   if (callbackAccountId && selectedAccountId && callbackAccountId !== selectedAccountId) {
     throw codexWorkspaceChangedError("before");
   }

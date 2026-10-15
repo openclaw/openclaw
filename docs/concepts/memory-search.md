@@ -97,6 +97,8 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 | OpenAI-compatible | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint |
 | Voyage            | `voyage`            | Yes           | Default model `voyage-4-large`    |
 
+To move off Ollama, [llmman](/providers/llmman#advanced-configuration) serves the same `/api/embed`, so `provider: "ollama"` only needs a new `remote.baseUrl`.
+
 ## How search works
 
 OpenClaw runs two retrieval paths in parallel and merges the results:
