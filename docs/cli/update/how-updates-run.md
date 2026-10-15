@@ -1175,9 +1175,11 @@ The same wait covers another OpenClaw process that has an agent database open
 without holding state ownership, such as a plugin command run while the Gateway is
 stopped. Doctor releases state ownership while it waits, because that process must
 write shared state to close its database. It prints the holder's PID and progress
-every 30 seconds, then rechecks under maintenance ownership before repairing. A
-lease held by Doctor's own process, or a check where the Gateway may still be
-running under an external supervisor, still refuses immediately. If the database
+every 30 seconds, then rechecks under maintenance ownership before repairing.
+This includes activation Doctor run by published updaters, which select the
+external service policy after stopping the Gateway themselves. A lease held by
+Doctor's own process, or any lease while a Gateway still owns the state, still
+refuses immediately. If the database
 is still open after 11 minutes, maintenance stops with the holder's PID and the
 usual deferred-maintenance warning (`agent-database-lease-active`).
 

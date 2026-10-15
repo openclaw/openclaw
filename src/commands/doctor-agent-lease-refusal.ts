@@ -29,7 +29,10 @@ function createDoctorAgentLeaseRefusal(
   );
 }
 
-export async function preflightExternalDoctorAgentLease(env: NodeJS.ProcessEnv): Promise<void> {
+export async function preflightExternalDoctorAgentLease(
+  env: NodeJS.ProcessEnv,
+  updateRepair: boolean,
+): Promise<void> {
   // An external parent may leave the serving Gateway running. Diagnose an
   // active agent lease before that Gateway's lifecycle lock masks it.
   // This negative-only observation grants no maintenance authority: both
@@ -48,9 +51,27 @@ export async function preflightExternalDoctorAgentLease(env: NodeJS.ProcessEnv):
     // Diagnostic failure is not admission. The mandatory held-owner
     // check below still classifies unreadable state and unknown errors.
   }
-  if (activeAgentLease) {
-    throw createDoctorAgentLeaseRefusal(env);
+  if (!activeAgentLease) {
+    return;
   }
+  if (updateRepair) {
+    // Published updaters select this external policy after stopping the Gateway
+    // themselves. With no live Gateway, the lease belongs to a transient process
+    // that admission waits for without holding state.
+    const { readActiveGatewayLockIdentity } = await import("../infra/gateway-lock.js");
+    const gateway = await readActiveGatewayLockIdentity({ env, requireInspection: true }).catch(
+      (error: unknown) => {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
+        return "unknown" as const;
+      },
+    );
+    if (gateway === undefined) {
+      return;
+    }
+  }
+  throw createDoctorAgentLeaseRefusal(env);
 }
 
 /** The caller holds both lifecycle coordinators; this check never opens a state writer. */

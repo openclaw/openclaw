@@ -443,7 +443,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     await settle(async () => {
       const externallyManaged = isServiceRepairExternallyManaged();
       if (externallyManaged) {
-        await preflightExternalDoctorAgentLease(env);
+        await preflightExternalDoctorAgentLease(env, updateRepair);
       }
       if (
         params.root &&
