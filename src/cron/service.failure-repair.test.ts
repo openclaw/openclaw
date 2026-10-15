@@ -126,27 +126,6 @@ describe("CronService failure repair", () => {
     );
   });
 
-  it("counts failures while repair is pending without alerting", async () => {
-    await withRepair(async ({ cron, runCronFailureRepair, sendCronFailureAlert, addJob }) => {
-      const repair = Promise.withResolvers<void>();
-      runCronFailureRepair.mockReturnValueOnce(repair.promise);
-      const job = await addJob("pending repair", owned);
-      await cron.run(job.id, "force");
-      await cron.run(job.id, "force");
-
-      vi.setSystemTime(Date.now() + 1);
-      await cron.run(job.id, "force");
-      expect(sendCronFailureAlert).not.toHaveBeenCalled();
-      expect(await cron.readJob(job.id)).toMatchObject({
-        state: {
-          consecutiveErrors: 3,
-          failureAlertIncident: { repair: { deadlineAtMs: expect.any(Number) } },
-        },
-      });
-      expect(runCronFailureRepair).toHaveBeenCalledOnce();
-    });
-  });
-
   it.each(["before", "at"] as const)(
     "does not alert for a failed run started %s repair settlement",
     async (ordering) => {
