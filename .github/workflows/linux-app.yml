@@ -26,7 +26,8 @@ jobs:
     name: Build Linux companion
     # Match the release build base for native tests and manually built bundles.
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    # Leave room for cold source packaging and the native desktop proof afterward.
+    timeout-minutes: 105
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -134,6 +135,9 @@ jobs:
 
       - name: Build native inline browser candidate
         working-directory: apps/linux/src-tauri
+        env:
+          # Cold Linux declarations also exceed the package builder's 45-minute default.
+          OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "3600000"
         run: |
           node ../scripts/stage-runtime.mjs
           cargo +stable build --locked

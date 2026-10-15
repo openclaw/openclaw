@@ -14,6 +14,16 @@ for runs already deferred by older workflow revisions.
 
 Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
 
+The `Linux App` Linux companion and Windows installer jobs allow 105 minutes for
+source staging, packaging, and native proof. Their canonical core builds use the existing
+`OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS` override with a 60-minute allowance:
+cold declarations exceeded the default 45-minute package deadline. A Linux run
+completed its package declarations in 38 minutes before the deadline interrupted
+the following declaration phase; a complete Windows installer job previously took
+78 minutes. The remaining job budget covers dependency installation, Rust
+compilation, desktop tests, and installer packaging. The override stays on each
+source-build step; release-workflow budgets and package-integrity checks are unchanged.
+
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 
