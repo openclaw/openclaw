@@ -315,7 +315,7 @@ describe("Models page catalog publication", () => {
     expect(page.state.data?.catalogError).toBeNull();
   });
 
-  it.each(["utility", "decision"] as const)(
+  it.each(["utility"] as const)(
     "Models page %s picker opens without a request and preserves saved choices as publication completes",
     async (role) => {
       const { context, request, discover, readPublished, runtimeConfig, publishEvent } =

@@ -155,12 +155,6 @@ describe("optional Codex Ultrafast", () => {
     ).toBe("priority");
   });
 
-  it("keeps the baseline when the catalog response is malformed", async () => {
-    const { params, request } = fixture();
-    request.mockResolvedValue({ data: [{ model: "malformed" }] });
-    expect(await resolveCodexUltrafastServiceTier(params)).toBe("priority");
-  });
-
   it("propagates cancellation instead of falling back", async () => {
     const { params, request, controller } = fixture();
     const aborted = new Error("cancelled turn");

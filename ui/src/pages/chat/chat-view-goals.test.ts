@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { renderChat } from "./chat-view-render.test-support.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
+import { ChatView, type ChatProps } from "./chat-view.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -16,18 +17,24 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanupSolid();
   resetChatViewState();
   resetTranscriptTestDom();
 });
 
-function renderChatInto(
-  container: HTMLElement,
-  overrides: Partial<Parameters<typeof renderChat>[0]> = {},
-) {
-  render(
-    renderChat(createChatProps({ currentSessionId: "goal-session", ...overrides })),
-    container,
-  );
+const views = new WeakMap<
+  HTMLElement,
+  ReturnType<typeof mountSolid<Parameters<typeof ChatView>[0]>>
+>();
+
+function renderChatInto(container: HTMLElement, overrides: Partial<ChatProps> = {}) {
+  const props = { props: createChatProps({ currentSessionId: "goal-session", ...overrides }) };
+  const previous = views.get(container);
+  if (previous) {
+    previous.update(props);
+  } else {
+    views.set(container, mountSolid(ChatView, props, container));
+  }
 }
 
 describe("chat goal status", () => {
@@ -163,7 +170,7 @@ describe("chat goal status", () => {
   it("restores goal actions and expansion after a transient missing session goal", () => {
     const container = document.createElement("div");
     onTestFinished(() => {
-      render(null, container);
+      views.get(container)?.dispose();
     });
     const onGoalAction = vi.fn();
     const selectedSession = goalSession({ status: "paused", pausedAt: Date.now() });

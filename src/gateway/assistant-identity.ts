@@ -41,6 +41,11 @@ type ResolvedAssistantIdentity = AssistantIdentity & {
   agentId: string;
   nameSource: AssistantIdentityNameSource;
 };
+type AssistantIdentityParams = {
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+  workspaceDir?: string | null;
+};
 
 const preparedIdentities = new WeakMap<
   OpenClawConfig,
@@ -116,12 +121,38 @@ export function resolveAssistantAgentId(cfg: OpenClawConfig, agentId?: string | 
   );
 }
 
+/** Name-only reads need workspace fallback only when the configured name is absent. */
+export async function resolveAssistantIdentityName(
+  params: AssistantIdentityParams,
+): Promise<Pick<ResolvedAssistantIdentity, "agentId" | "name">> {
+  const agentId = resolveAssistantAgentId(params.cfg, params.agentId);
+  const name = normalizeIdentityValue("name", resolveAgentIdentity(params.cfg, agentId)?.name);
+  if (name) {
+    return { agentId, name };
+  }
+  const identity = await resolveAssistantIdentity({ ...params, agentId });
+  return { agentId, name: identity.name };
+}
+
+/** Avatar requests need workspace fallback only when no configured source is usable. */
+export async function resolveAssistantIdentityAvatar(
+  params: AssistantIdentityParams,
+): Promise<Pick<ResolvedAssistantIdentity, "agentId" | "avatar">> {
+  const agentId = resolveAssistantAgentId(params.cfg, params.agentId);
+  const configured = resolveAgentIdentity(params.cfg, agentId);
+  const avatar =
+    normalizeAvatarValue(configured?.avatar) ?? normalizeAvatarValue(configured?.emoji);
+  if (avatar) {
+    return { agentId, avatar };
+  }
+  const identity = await resolveAssistantIdentity({ ...params, agentId });
+  return { agentId, avatar: identity.avatar };
+}
+
 /** Resolve the display name/avatar/emoji for an agent-facing assistant identity. */
-export async function resolveAssistantIdentity(params: {
-  cfg: OpenClawConfig;
-  agentId?: string | null;
-  workspaceDir?: string | null;
-}): Promise<ResolvedAssistantIdentity> {
+export async function resolveAssistantIdentity(
+  params: AssistantIdentityParams,
+): Promise<ResolvedAssistantIdentity> {
   const agentId = resolveAssistantAgentId(params.cfg, params.agentId);
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
   const {

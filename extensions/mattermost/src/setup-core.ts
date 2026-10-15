@@ -1,4 +1,4 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   defineChannelSetupContract,
   type ChannelSetupAdapter,
@@ -9,7 +9,7 @@ import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
-  migrateBaseNameToDefaultAccount,
+  prepareScopedSetupConfig,
 } from "openclaw/plugin-sdk/setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
 import type { ResolvedMattermostAccount } from "./mattermost/accounts.js";
@@ -34,21 +34,14 @@ export function applyMattermostSetupConfigPatch(params: {
   name?: string;
   patch: Record<string, unknown>;
 }): OpenClawConfig {
-  const namedConfig = applyAccountNameToChannelSection({
-    cfg: params.cfg,
-    channelKey: channel,
-    accountId: params.accountId,
-    name: params.name,
-  });
-  const next =
-    params.accountId !== DEFAULT_ACCOUNT_ID
-      ? migrateBaseNameToDefaultAccount({
-          cfg: namedConfig,
-          channelKey: channel,
-        })
-      : namedConfig;
   return applySetupAccountConfigPatch({
-    cfg: next,
+    cfg: prepareScopedSetupConfig({
+      cfg: params.cfg,
+      channelKey: channel,
+      accountId: params.accountId,
+      name: params.name,
+      migrateBaseName: true,
+    }),
     channelKey: channel,
     accountId: params.accountId,
     patch: params.patch,

@@ -311,6 +311,16 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       () => {
         const callbacks = this.headerPanelCallbacks;
         const actions: HeaderPanelAction[] = [];
+        const represented = new Set<SidebarSlotId>();
+        const addPanelAction = (slot: SidebarSlotId | null, action: HeaderPanelAction) => {
+          actions.push({
+            ...action,
+            shortcut: panelDefinitions.find((definition) => definition.slot === slot)?.shortcut,
+          });
+          if (slot) {
+            represented.add(slot);
+          }
+        };
         for (const [id, label, icon, onActivate] of [
           [
             "terminal",
@@ -344,7 +354,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           ],
         ] as const) {
           if (onActivate) {
-            actions.push({
+            addPanelAction(id === "changes" ? null : id, {
               id,
               label,
               icon,
@@ -353,7 +363,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             });
           }
         }
-        actions.push({
+        addPanelAction("workspace", {
           id: "session-files",
           label: t(
             sessionWorkspace.collapsed
@@ -364,7 +374,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           active: !sessionWorkspace.collapsed,
           onActivate: callbacks.files,
         });
-        actions.push({
+        addPanelAction("companion", {
           id: "session-companion",
           label: t(sessionRailVisible ? "chat.rail.collapse" : "chat.rail.show"),
           icon: icons.spark,
@@ -374,7 +384,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         if (!catalog) {
           for (const slot of ["subagents", "processes"] as const) {
             const subagents = slot === "subagents";
-            actions.push({
+            addPanelAction(slot, {
               id: `session-${slot}`,
               label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
               icon: subagents ? icons.bot : icons.terminal,
@@ -387,22 +397,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             });
           }
         }
-        const actionSlots = new Map<string, SidebarSlotId>([
-          ["terminal", "terminal"],
-          ["browser", "browser"],
-          ["desktop", "desktop"],
-          ["discussion", "discussion"],
-          ["session-files", "workspace"],
-          ["session-companion", "companion"],
-          ["session-subagents", "subagents"],
-          ["session-processes", "processes"],
-        ]);
-        const represented = new Set(
-          actions.flatMap((action) => {
-            const slot = actionSlots.get(action.id);
-            return slot ? [slot] : [];
-          }),
-        );
         for (const definition of panelDefinitions) {
           if (
             !panelControls ||
@@ -413,7 +407,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             continue;
           }
           const slot = definition.slot;
-          actions.push({
+          addPanelAction(slot, {
             id: `panel-${slot}`,
             label: definition.label,
             icon: definition.icon,
@@ -426,11 +420,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               }
             },
           });
-          actionSlots.set(`panel-${slot}`, slot);
-        }
-        for (const action of actions) {
-          const slot = actionSlots.get(action.id);
-          action.shortcut = panelDefinitions.find((candidate) => candidate.slot === slot)?.shortcut;
         }
         return actions;
       },

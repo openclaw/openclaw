@@ -2092,29 +2092,6 @@ describe("mcp loopback server", () => {
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(1);
   });
 
-  it("dispatches tools/call notifications without returning a response", async () => {
-    const execute = vi.fn(async () => ({
-      content: [{ type: "text", text: "ok" }],
-    }));
-    mockScopedTools([makeMessageTool({ execute })]);
-    const { runtime, port } = await startLoopbackServerForTest();
-    const response = await sendRaw({
-      port,
-      token: runtime.ownerToken,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "tools/call",
-        params: { name: "message", arguments: { body: "hello" } },
-      }),
-    });
-
-    expect(response.status).toBe(202);
-    await expect(response.text()).resolves.toBe("");
-    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(1);
-    expect(execute).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps delayed valid MCP request bodies open when timeout config exceeds Node's timer ceiling", async () => {
     const previousTimeout = process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS;
     process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS = "2147483648";

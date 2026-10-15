@@ -94,7 +94,7 @@ it("propagates retirement failure without admitting a replacement", async () => 
   expect(f.reservations.has(f.client)).toBe(true);
 });
 
-it("bounds tiny pending opens and releases their reservations after settlement", async () => {
+it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", async (kind) => {
   const admission = new SqliteWorkerInputAdmission({
     queuedBytes: () => 0,
     isClosing: () => false,
@@ -104,13 +104,27 @@ it("bounds tiny pending opens and releases their reservations after settlement",
     maxPendingOpens: 2,
   });
   const finish = createDeferredCore();
-  const pending = [admission.open(0, () => finish.promise), admission.open(0, async () => {})];
+  let finished = false;
+  const open = async () => {
+    await finish.promise;
+    finished = true;
+    return "opened";
+  };
+  const pending = [
+    admission.open(0, open, undefined, kind === "reused" ? open : undefined),
+    admission.open(0, async () => {}),
+  ];
+  const joined = admission.joinOpens().then(() => finished);
   try {
     await expect(admission.open(0, async () => {})).rejects.toMatchObject({ code: "overloaded" });
+    if (kind === "reused") {
+      await pending[1];
+    }
   } finally {
     finish.resolve();
     await Promise.all(pending);
   }
+  expect(await joined).toBe(true);
   await expect(admission.open(0, async () => "admitted")).resolves.toBe("admitted");
   expect(admission.retainedBytes).toBe(0);
 });

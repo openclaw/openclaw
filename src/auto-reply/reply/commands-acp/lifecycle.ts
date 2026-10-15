@@ -19,7 +19,6 @@ import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/subagents/spa
 import { resolveRuntimeCwdForAcpSpawn } from "../../../agents/subagents/spawn/acp-spawn-runtime.js";
 import { readChannelContextAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
 import { updateSessionEntry } from "../../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getGatewayLocalUserIngress } from "../../../gateway/local-user-ingress.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
@@ -241,27 +240,6 @@ export async function handleAcpSpawnAction(
   return commandReply(parts.join(" "));
 }
 
-async function resolveAcpSessionForCommandOrStop(params: {
-  acpManager: ReturnType<typeof getAcpSessionManager>;
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId: string;
-  assertCurrent?: () => void;
-}): Promise<CommandHandlerResult | null> {
-  const resolved = await params.acpManager.resolveSessionAsync({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    assertCurrent: params.assertCurrent,
-  });
-  params.assertCurrent?.();
-  const error = resolveAcpSessionResolutionError(resolved);
-  if (error) {
-    return acpCommandErrorReply(error, error.message, "ACP_SESSION_INIT_FAILED");
-  }
-  return null;
-}
-
 async function withResolvedAcpSessionTarget(params: {
   commandParams: HandleCommandsParams;
   token?: string;
@@ -279,15 +257,15 @@ async function withResolvedAcpSessionTarget(params: {
   if (!target.ok) {
     return commandReply(`⚠️ ${target.error}`);
   }
-  const guardFailure = await resolveAcpSessionForCommandOrStop({
-    acpManager,
+  const resolved = await acpManager.resolveSessionAsync({
     cfg: params.commandParams.cfg,
     ...target,
     assertCurrent: params.commandParams.command.assertOwnerCurrent,
   });
   params.commandParams.command.assertOwnerCurrent?.();
-  if (guardFailure) {
-    return guardFailure;
+  const error = resolveAcpSessionResolutionError(resolved);
+  if (error) {
+    return acpCommandErrorReply(error, error.message, "ACP_SESSION_INIT_FAILED");
   }
   return await params.run({
     acpManager,

@@ -166,12 +166,23 @@ it("checks integrity once before index repair and once after rebuilding the inde
     expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
       2,
     );
+    closeOpenClawStateDatabaseForTest();
+    unlinkSync(`${pathname}.seal`);
+    observation.queries.length = 0;
+    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
+      1,
+    );
+    observation.queries.length = 0;
+    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
+    expect(validationStatements(observation.queries)).toEqual([]);
   } finally {
     observation.restore();
   }
 });
 
-it("reuses admission after the final handles close without a seal", () => {
+it("reuses live admission and revalidates after the final handles close without a seal", () => {
   const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-") };
   const first = openOpenClawStateDatabase({ env });
   const pathname = first.path;
@@ -190,7 +201,10 @@ it("reuses admission after the final handles close without a seal", () => {
     closeOpenClawStateDatabaseForTest();
     unlinkSync(`${pathname}.seal`);
     const reopened = openOpenClawStateDatabase({ env });
-    expect(validationStatements(observation.queries)).toEqual([]);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
+      1,
+    );
     observation.queries.length = 0;
     const reader = openOpenClawStateReadOnlyLocation(pathname, pathname);
     reader.close();

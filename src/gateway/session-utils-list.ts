@@ -14,7 +14,7 @@ import {
   SESSIONS_LIST_TRANSCRIPT_LIMIT,
 } from "../shared/session-list-limits.js";
 import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
-import { resolveAssistantIdentity } from "./assistant-identity.js";
+import { resolveAssistantIdentityName } from "./assistant-identity.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
@@ -331,7 +331,7 @@ export async function prepareSessionSearchIdentityNames(
   }
   const identities = await pMap(
     [...agentIds],
-    (agentId) => resolveAssistantIdentity({ cfg: prepared.cfg, agentId }),
+    (agentId) => resolveAssistantIdentityName({ cfg: prepared.cfg, agentId }),
     { concurrency: 4 },
   );
   return {

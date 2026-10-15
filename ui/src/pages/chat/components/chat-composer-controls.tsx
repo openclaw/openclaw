@@ -1,10 +1,12 @@
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { Kbd } from "../../../components/solid/kbd.tsx";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerTalkCapabilityStatus } from "../composer-microphone-picker.ts";
 import {
@@ -14,7 +16,6 @@ import {
 } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
-import { solidTemplate, renderComposerSendTooltip } from "./chat-composer-controls.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
 import { ChatVoiceStatus, MicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.tsx";
 
@@ -510,14 +511,6 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
     t(props.alternateFollowUpMode === "queue" ? "chat.runControls.queue" : "chat.queue.steer");
   const alternateAvailable = () =>
     props.alternateFollowUpMode && props.canSend && hasComposedContent();
-  const tooltip = () =>
-    alternateAvailable()
-      ? `${label()} ⏎ · ${alternateLabel()} ${t("chat.sendShortcutModifierEnter")}`
-      : label();
-  const tooltipTemplate = () =>
-    alternateAvailable()
-      ? renderComposerSendTooltip(label(), alternateLabel(), t("chat.sendShortcutModifierEnter"))
-      : undefined;
   const voiceErrored = () => props.voiceStatus === "error";
   const cameraLabel = () =>
     t(props.voiceVideoEnabled ? "chat.composer.turnCameraOff" : "chat.composer.turnCameraOn");
@@ -534,17 +527,25 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
   const hasSendableContent = createMemo(
     () => hasComposedContent() && props.canSend && !props.sending && !sendDisabledReason(),
   );
+  const showShortcutTooltip = () =>
+    !props.preparingAttachments && sendStatus() == null && alternateAvailable();
   const SendAction = () => (
     <openclaw-tooltip
       prop:content={
         props.preparingAttachments
           ? t("chat.composer.preparingAttachments")
-          : (sendStatus() ?? tooltip())
-      }
-      prop:contentTemplate={
-        !props.preparingAttachments && sendStatus() == null ? tooltipTemplate() : undefined
+          : showShortcutTooltip()
+            ? ""
+            : (sendStatus() ?? label())
       }
     >
+      <Show when={showShortcutTooltip()}>
+        <span slot="content">
+          {label()} <Kbd keys="⏎" inline />
+          {" · "}
+          {alternateLabel()} <Kbd keys={t("chat.sendShortcutModifierEnter")} inline />
+        </span>
+      </Show>
       <button
         class={`chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}`}
         ref={primaryPointerDownRef(() => props.onPrimaryActionPointerDown)}
@@ -706,5 +707,5 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
 }
 
 export function renderMicrophonePicker(props: MicrophonePickerProps) {
-  return solidTemplate(renderMicrophonePickerSolid, props);
+  return solidContent(renderMicrophonePickerSolid, props);
 }

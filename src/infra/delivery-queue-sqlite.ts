@@ -1,6 +1,10 @@
 // Stores durable delivery queue entries through their connection-bound owner.
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  failedDeliveryQueueHealthAdmission,
+  type FailedDeliveryQueueHealth,
+} from "./delivery-queue-cache.js";
 import type { DeliveryQueueReadMode } from "./delivery-queue-sqlite-bound.js";
 import {
   countPendingDeliveryQueueEntriesInDatabase,
@@ -17,6 +21,7 @@ import {
   type DeliveryQueueStateContext,
 } from "./delivery-queue-state-context.js";
 import { executeDeliveryQueueOperation } from "./delivery-queue-worker-store.js";
+import { getOrLoadSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 
 export type {
   DeliveryQueueCompletionRetention,
@@ -64,8 +69,17 @@ export function loadDeliveryQueueEntries(
 export async function countFailedDeliveryQueueEntries(
   stateDir?: string,
   context?: DeliveryQueueStateContext,
-): Promise<Array<{ queueName: string; count: number; oldestFailedAt?: number }>> {
-  return executeDeliveryQueueOperation(context, stateDir, {
+): Promise<FailedDeliveryQueueHealth> {
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const cached = getOrLoadSqliteDatabaseAdmissionForPath(
+    captured.workerContext.admission.databasePath,
+    failedDeliveryQueueHealthAdmission,
+    () => undefined,
+  );
+  if (cached !== undefined) {
+    return cached;
+  }
+  return executeDeliveryQueueOperation(captured, undefined, {
     type: "deliveryQueue.countFailed",
     input: undefined,
   });

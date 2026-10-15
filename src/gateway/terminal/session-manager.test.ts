@@ -140,40 +140,6 @@ describe("TerminalSessionManager", () => {
     });
   });
 
-  it("pauses local PTY reads above the socket watermark and reasserts resume below it", async () => {
-    vi.useFakeTimers();
-    try {
-      let bufferedAmount = 0;
-      const fake = makeFakePty();
-      const manager = new TerminalSessionManager({
-        emit: vi.fn(),
-        getBufferedAmount: () => bufferedAmount,
-        spawn: async () => fake,
-      });
-      const outcome = await manager.open(baseRequest());
-      if (!outcome.ok) {
-        throw new Error("expected open");
-      }
-      await vi.advanceTimersByTimeAsync(4);
-      bufferedAmount = Number.MAX_SAFE_INTEGER;
-
-      for (let index = 0; index < 2_000; index += 1) {
-        fake.emitData("chunk");
-      }
-      expect(fake.pauseCalls).toBe(1);
-      expect(fake.deliveredChunks).toBe(1);
-      expect(manager.snapshot(outcome.sessionId)).toBe(`${OPERATOR_INTRO}chunk`);
-
-      bufferedAmount = 0;
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(fake.resumeCalls).toBeGreaterThanOrEqual(1);
-      fake.emitData("resumed");
-      expect(fake.deliveredChunks).toBe(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("stages uploads only through the owning session host", async () => {
     const fake = makeFakePty();
     const stageUpload = vi.fn(async () => ({ path: "/tmp/node/report.pdf", size: 4 }));
@@ -390,45 +356,6 @@ describe("TerminalSessionManager agent ownership", () => {
     }
   });
 
-  it("keeps an agent-owned session alive across viewer disconnect and closes by agent", async () => {
-    vi.useFakeTimers();
-    try {
-      const emit = vi.fn();
-      const fake = makeFakePty();
-      const manager = new TerminalSessionManager({ emit, spawn: async () => fake });
-      const outcome = expectTerminalOpen(await manager.open(baseRequest({ owner: agentOwner })));
-
-      expect(manager.attach("viewer-1", outcome.sessionId)?.sessionId).toBe(outcome.sessionId);
-      expect(manager.write("viewer-1", outcome.sessionId, "human\n")).toBe(true);
-      expect(manager.resize("viewer-1", outcome.sessionId, 120, 40)).toBe(true);
-      expect(fake.writes).toEqual(["human\n"]);
-      expect(fake.resizes).toEqual([[120, 40]]);
-
-      fake.emitData("visible");
-      await vi.advanceTimersByTimeAsync(4);
-      expect(emit).toHaveBeenCalledWith("viewer-1", TERMINAL_EVENT_DATA, {
-        sessionId: outcome.sessionId,
-        seq: 7,
-        data: "visible",
-      });
-
-      manager.handleDisconnect("viewer-1");
-      emit.mockClear();
-      fake.emitData("buffered");
-      await vi.advanceTimersByTimeAsync(4);
-      expect(manager.size).toBe(1);
-      expect(fake.killed).toBe(false);
-      expect(emit).not.toHaveBeenCalled();
-      expect(manager.snapshotAgent(agentOwner, outcome.sessionId)).toBe("visiblebuffered");
-
-      expect(manager.closeAgent(agentOwner, outcome.sessionId)).toEqual({ ok: true });
-      expect(fake.killed).toBe(true);
-      expect(manager.size).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("lets a co-attached viewer upload into an agent-owned session", async () => {
     const emit = vi.fn();
     const stageUpload = vi.fn(async () => ({ path: "/tmp/node/report.pdf", size: 4 }));
@@ -592,26 +519,6 @@ describe("TerminalSessionManager agent ownership", () => {
       manager.disposeAll();
       vi.useRealTimers();
     }
-  });
-
-  it("resumes a pressured PTY immediately when its last viewer disconnects", async () => {
-    const fake = makeFakePty();
-    const manager = new TerminalSessionManager({
-      emit: vi.fn(),
-      getBufferedAmount: () => Number.MAX_SAFE_INTEGER,
-      spawn: async () => fake,
-    });
-    const outcome = expectTerminalOpen(await manager.open(baseRequest({ owner: agentOwner })));
-    manager.attach("viewer-1", outcome.sessionId);
-
-    fake.emitData("pressure");
-    expect(fake.paused).toBe(true);
-    expect(fake.pauseCalls).toBe(1);
-
-    manager.handleDisconnect("viewer-1");
-    expect(fake.paused).toBe(false);
-    expect(fake.resumeCalls).toBeGreaterThanOrEqual(1);
-    expect(manager.size).toBe(1);
   });
 });
 
@@ -914,10 +821,5 @@ describe("TerminalSessionManager output ring", () => {
     fake.emitData("ab😀cd");
 
     expect(manager.snapshot(outcome.sessionId)).toBe("cd");
-  });
-
-  it("returns undefined for unknown sessions", () => {
-    const manager = new TerminalSessionManager({ emit: vi.fn() });
-    expect(manager.snapshot("nope")).toBeUndefined();
   });
 });

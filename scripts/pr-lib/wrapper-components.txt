@@ -842,6 +842,7 @@ src/infra/agent-run-approval-leases.ts
 src/infra/agent-run-projection.ts
 src/infra/agent-run-registry-state.ts
 src/infra/agent-run-registry.ts
+src/infra/agent-run-terminal-writes.ts
 src/infra/agent-run-usage.ts
 src/infra/approval-resolution-ref.ts
 src/infra/backoff.ts

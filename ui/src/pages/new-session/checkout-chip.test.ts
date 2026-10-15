@@ -182,8 +182,6 @@ describe("Checkout chip state", () => {
         submitting: false,
         pendingPlacement: false,
         popoverOpen: true,
-        popoverHiding: false,
-        onGuardTransition: () => undefined,
         onPopoverShow: () => undefined,
         onPopoverHide: () => undefined,
         onPopoverAfterHide: () => undefined,
@@ -356,8 +354,6 @@ describe("Checkout chip state", () => {
       submitting: false,
       pendingPlacement: false,
       popoverOpen: true,
-      popoverHiding: false,
-      onGuardTransition: vi.fn((event: MouseEvent) => event.preventDefault()),
       onPopoverShow,
       onPopoverHide,
       onPopoverAfterHide,
@@ -380,9 +376,20 @@ describe("Checkout chip state", () => {
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     trigger.click();
     flush();
-    expect(params.onGuardTransition).toHaveBeenCalledOnce();
-    expect(onPopoverHide).not.toHaveBeenCalled();
+    expect(onPopoverHide).toHaveBeenCalledOnce();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    trigger.click();
+    flush();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector(".new-session-page__checkout-popover")?.getAttribute("data-phase"),
+      ).toBe("open"),
+    );
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(onPopoverShow).toHaveBeenCalledOnce();
+    expect(onPopoverAfterHide).not.toHaveBeenCalled();
+    onPopoverShow.mockClear();
+    onPopoverHide.mockClear();
 
     expect(container.textContent).toContain(
       "Creates branch openclaw/picker-fixes in a separate checkout.",

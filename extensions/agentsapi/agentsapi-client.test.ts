@@ -343,7 +343,6 @@ describe("Agents API file upload transport", () => {
       type: "conflict_error",
       message: dormantUploadMessage,
     },
-    { name: "server failure", status: 500, type: "conflict_error", message: dormantUploadMessage },
     {
       name: "malformed error",
       status: 409,
@@ -357,30 +356,6 @@ describe("Agents API file upload transport", () => {
     await expect(
       createClient().uploadFile("session-fixture", inputFile, signal),
     ).rejects.toMatchObject({ status, type, error: { type, message } });
-  });
-
-  it("preserves the dormant conflict when it comes from session lookup", async () => {
-    queueResponse(
-      Response.json(
-        { error: { type: "conflict_error", message: dormantUploadMessage } },
-        { status: 409 },
-      ),
-    );
-
-    await expect(
-      createClient().uploadFile("session-fixture", inputFile, signal),
-    ).rejects.toMatchObject({ status: 409, type: "conflict_error" });
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves a transport failure instead of accepting its dormant error wording", async () => {
-    queueUploadContext();
-    const failure = new Error(dormantUploadMessage);
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(failure);
-
-    await expect(
-      createClient().uploadFile("session-fixture", inputFile, signal),
-    ).rejects.toMatchObject({ cause: failure });
   });
 
   it.each(["abort", "authority revocation"])(

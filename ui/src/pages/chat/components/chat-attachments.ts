@@ -106,23 +106,33 @@ export function appendChatAttachmentFiles(
   if (unsupported.length) {
     showToast({ message: t("chat.attachments.imagesOnly") });
   }
+  const reads =
+    props.attachmentReads ?? new ChatAttachmentReadLifecycle(() => props.onRequestUpdate?.());
   const stagedBytes = stagedAttachmentBytes(props);
   const files = admitAttachmentFiles(
     candidates.filter((file) => !unsupported.includes(file)),
     props.attachmentLimits,
     stagedBytes,
-    { resizeImages: true },
+    {
+      resizeImages: true,
+      compressVideos: true,
+      onRejected: (file, message) => reads.reject(file, message),
+    },
   );
   if (files.length === 0) {
     return 0;
   }
-  const reads =
-    props.attachmentReads ?? new ChatAttachmentReadLifecycle(() => props.onRequestUpdate?.());
-  const entries = reads.begin(files, currentAttachments(props), {
-    getAttachments: () => currentAttachments(props),
-    onAttachmentsChange: props.onAttachmentsChange,
-    onPendingReadsChange: props.onPendingReadsChange,
-  });
+  const entries = reads.begin(
+    files,
+    currentAttachments(props),
+    {
+      getAttachments: () => currentAttachments(props),
+      onAttachmentsChange: props.onAttachmentsChange,
+      onPendingReadsChange: props.onPendingReadsChange,
+    },
+    props.attachmentLimits,
+    stagedBytes,
+  );
   entries.forEach((entry, index) => {
     const file = files[index];
     if (file) {

@@ -12,7 +12,7 @@ import { hasGatewayContextOwner } from "../../plugins/runtime/gateway-request-sc
 import { agentSessionKeysMatchByRequestKey } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { settlesWithin } from "../../shared/settle-within.js";
-import * as replyRunSettle from "./reply-run-finalization-lease.js";
+import type { ReplyOperationStaleReason } from "./reply-run-finalization-lease.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyMessageInjectionTargetOwner,
@@ -41,8 +41,6 @@ import {
   type ReplyRunAdmissionSource,
   type ReplyRunWaiter,
 } from "./reply-run-registry.state.js";
-
-type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
 
 type ReplyRunAdmissionSettlement = {
   settled: boolean;
@@ -506,33 +504,3 @@ function evictPriorLifecycleReplyRuns(): void {
 }
 
 registerAgentEventLifecycleRotationHandler("reply-runs", evictPriorLifecycleReplyRuns);
-
-const replyRunRegistryTestApi = {
-  resetReplyRunRegistry(): void {
-    for (const [sessionKey, operation] of replyRunState.activeRunsByKey) {
-      markDiagnosticRunProgress({
-        sessionKey,
-        sessionId: operation.sessionId,
-        reason: "reply_operation:registry_reset",
-      });
-    }
-    replyRunState.activeRunsByKey.clear();
-    replyRunState.activeKeysBySessionId.clear();
-    replyRunState.waitKeysBySessionId.clear();
-    replyRunState.sourceTurnByKey.clear();
-    replyRunSettle.resetReplyRunSettleTimersForTesting();
-    for (const waiters of replyRunState.waitersByKey.values()) {
-      for (const waiter of waiters) {
-        waiter(false);
-      }
-    }
-    replyRunState.waitersByKey.clear();
-    replyRunState.followupAdmissionBarriersByKey.clear();
-    replyRunState.successorAdmissionBarriersByKey.clear();
-  },
-};
-
-if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.replyRunRegistryTestApi")] =
-    replyRunRegistryTestApi;
-}

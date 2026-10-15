@@ -1150,6 +1150,7 @@ session's previous request), `responseId`, `sessionId`, and `promptTokens` when
 reported by the provider. The previous/current wire summaries include the
 requested `serviceTier` so tier switches can be distinguished from cache loss
 on an unchanged route.
+Drops classified as `unattributed` use `debug`; attributed drops remain warnings.
 `providerPrefix` compares final encoded request segments against the last request
 with usable cache-read usage: system instructions, tools, history messages, and
 other request parameters. It names the first differing segment or `prefix-match`
@@ -1168,9 +1169,9 @@ baselines. No prompt content or digest values appear in these warnings.
 OpenAI service-tier rejection and downgrade records include the requested model,
 account route, run/session IDs, original requested tier, and final wire-request
 tier. Terminal responses also include the served tier, response ID/model, total
-input tokens (including cached input), and cached tokens when reported. Each
-downgraded request is logged even when the account-catalog observation is
-unchanged. Join its response ID to a prompt-cache warning to inspect the same
+input tokens (including cached input), and cached tokens when reported. Changed
+account-catalog observations log at `info`; repeated observations use `debug`.
+Join the response ID to a prompt-cache diagnostic to inspect the same
 completion; a downgrade alone does not prove a cache miss. These are raw file-log
 fields and follow the usual redaction rules at egress.
 
@@ -1195,6 +1196,12 @@ OpenTelemetry. Direct file reads are raw: protect and review them before sharing
 Log messages should contain IDs, sizes, and outcomes, never message text, prompts,
 tool arguments, or tool results. Config snapshots, audit output, and
 credential-bearing URLs and command-line options retain their credential masking.
+
+Gateway agent ingress returns replies through results and session transcripts
+without echoing them to service logs. Nested-agent replies are not printed to
+logs. Interactive `openclaw agent` commands still print replies to stdout.
+Stalled and stuck session diagnostics retain session IDs, ages, tool names, cron
+metadata, and recovery outcomes without copying assistant replies from transcripts.
 
 `logging.redactPatterns` replaces the default regex string list for logs and
 diagnostics. Built-in structural protections for form bodies, structured

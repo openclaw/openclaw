@@ -310,6 +310,7 @@ async function run(
           ...prepareInput(input),
           progress: progress.buffer,
           inlineHost: Boolean(inlineHost),
+          gcAttribution: { workerId: pool.id, ...inlineHost?.gcAttribution },
           config: { ...input.config, timeoutMs: admittedTimeoutMs },
         };
       },

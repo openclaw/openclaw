@@ -20,7 +20,6 @@ import {
   type NativeReferenceProgress,
 } from "../plugins/plugin-native-reference.js";
 import { withPluginSourceCaptureDirectory } from "../plugins/plugin-package-metadata-capture.js";
-import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expiry.js";
 import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
@@ -414,14 +413,17 @@ async function runCatalogRequest(
       staticOwner.staticProviderIds = staticProviderIds;
     }
     catalogGeneration = staticOwner.pluginGeneration;
-    const { value: source, providerExpiries } = await captureProviderCatalogExpiries(
-      () =>
-        prepareAgentCatalogSource(exactAgentFacts, catalogGeneration, "live", false, {
-          authStore,
-          providerDiscoveryProviderIds: request.providerIds,
-          providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
-        }),
-      { refresh: request.refresh },
+    const source = await prepareAgentCatalogSource(
+      exactAgentFacts,
+      catalogGeneration,
+      "live",
+      false,
+      {
+        authStore,
+        refresh: request.refresh,
+        providerDiscoveryProviderIds: request.providerIds,
+        providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
+      },
     );
     const facts = await prepareFullCatalogFacts(
       exactAgentFacts,
@@ -476,7 +478,7 @@ async function runCatalogRequest(
       generationFingerprint,
       snapshot: facts.modelCatalog,
       runtimeModels,
-      providerExpiries,
+      providerExpiries: source.providerExpiries ?? new Map(),
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
       providerAuthLabels:

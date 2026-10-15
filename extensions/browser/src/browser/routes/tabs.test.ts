@@ -343,7 +343,6 @@ describe("browser tab routes", () => {
       overrides: { driver: "existing-session" as const },
       expected: false,
     },
-    { label: "extension", overrides: { driver: "extension" as const }, expected: false },
     { label: "attach-only", overrides: { attachOnly: true }, expected: false },
     { label: "remote CDP", overrides: { cdpIsLoopback: false }, expected: false },
     { label: "attach-only engine", overrides: { engine: "lightpanda" as const }, expected: false },

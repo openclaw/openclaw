@@ -666,6 +666,13 @@ reported by Node.js for the main isolate and instrumented workers. `kind` is
 `scavenge` (minor), `mark_sweep_compact` (major), `incremental`, or
 `weak_processing`, taken from the native entry's `detail.kind`. `thread` is `main`
 or an allowlisted worker script basename; unknown worker scripts use `other`.
+The `reason` label maps Node's `detail.flags` to `none`, `forced`,
+`synchronous_phantom_processing`, `all_available_garbage`, `all_external_memory`,
+`schedule_idle`, or `construct_retained`. Combined flags, unknown flags, and
+SDK producers without flags use `other`. These are Node GC callback flags,
+not V8's complete internal reason for starting a collection; `none` means no
+callback flags were set, not that no collection occurred.
+
 Code Mode Node workers also carry a reusable `slot` label from 1 through 64.
 The worker registry holds a slot until native worker exit, including pending
 retirement, then makes it available for reuse. Concurrent workers beyond 64
@@ -673,7 +680,7 @@ retain script-level attribution without a slot; other worker scripts also retain
 script-level attribution. Slots are not thread IDs or session identities.
 Counters accumulate across occupants of a slot, so a rate window can span more
 than one worker. Older SDK
-producers that omit attribution use `kind="unknown",thread="main"`. SDK-provided
+producers that omit attribution use `kind="unknown",reason="other",thread="main"`. SDK-provided
 unknown kinds and worker names fold into `unknown` and `other` at event emission.
 Each observation is one
 GC entry, not CPU time, allocated bytes, or a guaranteed stop-the-world pause.
@@ -702,7 +709,7 @@ that port, nested workers outside this registry, and runtimes without native GC
 entries are not covered. Worker exit can lose a final undelivered batch.
 
 The histogram's `_count` and `_sum` are the collection count and total elapsed
-seconds for each label pair. Existing queries that need a single total should
+seconds for each label set. Existing queries that need a single total should
 aggregate the new labels; select `thread="main"` to retain main-isolate scope:
 
 ```promql
@@ -714,7 +721,9 @@ To locate a busy Code Mode isolate and compare its latest used heap with its
 actual V8 limit:
 
 ```promql
-60 * rate(openclaw_gc_duration_seconds_count{thread="code-mode-node.worker.js",kind="mark_sweep_compact",slot!=""}[5m])
+60 * sum by (slot, reason) (
+  rate(openclaw_gc_duration_seconds_count{thread="code-mode-node.worker.js",kind="mark_sweep_compact",slot!=""}[5m])
+)
 openclaw_code_mode_worker_heap_bytes{kind="used"}
   / ignoring(kind) openclaw_code_mode_worker_heap_bytes{kind="limit"}
 ```

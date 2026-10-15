@@ -254,6 +254,22 @@ pending wizard or approval before opening the creation choices.
 If team creation stops partway through, the custodian reports the retained
 agents so you can inspect them before creating the missing members.
 
+## Download files
+
+In the **Files** panel, hover over a file or focus its row to reveal **Download file**
+next to Preview and Copy path. The same action is available in the file preview
+toolbar. It saves the original file through your browser without opening another
+page; unsaved editor changes are not included. Files stream directly to the browser's
+download manager, with no separate download-size cap. The inline-preview limit
+still applies, but files too large to preview retain their download action.
+Folders are not downloadable. Downloads require the Control UI and its Gateway
+connection to share an origin (including a same-origin Gateway proxy).
+
+Downloads use the session's existing file-read access, including managed repository
+workspaces. Provider-backed node workspaces whose bridge only supports whole-file
+reads do not yet support downloads. Authorization errors appear in the UI; transfer
+progress and failures appear in your browser's download manager.
+
 ## Take a photo in chat
 
 Choose **Add attachment → Take photo** in chat or New Session to open a camera

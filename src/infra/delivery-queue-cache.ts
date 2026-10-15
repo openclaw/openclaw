@@ -15,3 +15,17 @@ export const emptyOutboundDeliveryQueueAdmission: SqliteDatabaseAdmissionKey<tru
   name: "state.empty-outbound-delivery-queue",
   read: (value) => (value === true ? true : undefined),
 };
+
+export type FailedDeliveryQueueHealth = Array<{
+  queueName: string;
+  count: number;
+  oldestFailedAt?: number;
+}>;
+
+export const failedDeliveryQueueHealthAdmission: SqliteDatabaseAdmissionKey<
+  FailedDeliveryQueueHealth | undefined
+> = {
+  name: "state.failed-delivery-queue-health",
+  // SAFETY: Only the delivery queue owner publishes this typed diagnostic projection.
+  read: (value) => value as FailedDeliveryQueueHealth | undefined,
+};

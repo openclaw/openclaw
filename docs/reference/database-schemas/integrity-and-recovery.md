@@ -217,10 +217,9 @@ Cleanup that needs another connection uses ordinary admission and invalidates
 the seal before writing again. A forced exit during a write still requires the admission gate.
 This changes no schema, update, or rollback contract.
 
-Native execution workers borrow the physical store's process-lifetime admission
-proof, including after the final handle closes. A matching seal can restore proof
-after a process restart. The receiving opener checks the physical file identity
-and shared revocation cell; final close preserves in-memory proof.
+Native execution workers borrow host proof while another handle retains it, or
+reuse a matching seal after final close. The receiving opener rechecks the physical
+file identity and shared revocation cell; final close releases in-memory proof.
 When native execution establishes the first runtime proof, it returns that proof
 through its existing admission so later cleanup workers can reuse it without a
 host SQLite open. The host accepts it only for the admitted physical file and
@@ -245,8 +244,7 @@ above, or override explicit process-local revocation. Older readers can
 ignore the nullable column; backup and rollback retain its existing row lifetime.
 
 Database replacement, quarantine, and failed admission discard applicable
-verification. Ordinary native close preserves process-local proof and can also
-save it in the clean-close seal for the next process.
+verification. Ordinary native close can preserve it in the clean-close seal.
 Doctor maintenance discards remembered runtime verification after
 draining agent connections and before raw maintenance can run. Pending migrations
 still run full checks, and required-index

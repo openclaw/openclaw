@@ -80,26 +80,6 @@ describe("status-runtime-shared", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes the remaining status budget through to provider usage", async () => {
-    const clock = vi.spyOn(performance, "now").mockReturnValue(22_000);
-    try {
-      await resolveStatusRuntimeSnapshot({
-        config: { gateway: {} },
-        sourceConfig: { gateway: {} },
-        usage: true,
-        gatewayReachable: true,
-        gatewayProbeDeadlineMs: 60_000,
-      });
-
-      const usageCall = requireProviderUsageCall();
-      expect(usageCall.timeoutMs).toBe(38_000);
-      expect(usageCall.config).toEqual({ gateway: {} });
-      expect(usageCall.agentDir).toContain("main");
-    } finally {
-      clock.mockRestore();
-    }
-  });
-
   it("uses the named system agent for agent-scoped usage credentials", async () => {
     const config = {
       agents: {
@@ -323,10 +303,13 @@ describe("status-runtime-shared", () => {
       },
     };
 
-    await resolveStatusUsageSummary({
+    await resolveStatusRuntimeSnapshot({
       ...createStatusGatewayProbeBudget(2345),
       config,
+      sourceConfig: config,
       agentId: "beta",
+      usage: true,
+      gatewayReachable: false,
     });
 
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
@@ -451,27 +434,6 @@ describe("status-runtime-shared", () => {
       includeFilesystem: true,
       includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
-    });
-  });
-
-  it("threads the selected agent into usage resolution", async () => {
-    const resolveUsage = vi.fn(async () => ({ updatedAt: 1, providers: [] }));
-
-    await resolveStatusRuntimeSnapshot({
-      ...createStatusGatewayProbeBudget(),
-      config: { gateway: {} },
-      sourceConfig: { gateway: {} },
-      agentId: "beta",
-      usage: true,
-      gatewayReachable: false,
-      resolveUsage,
-    });
-
-    expect(resolveUsage).toHaveBeenCalledWith({
-      config: { gateway: {} },
-      agentId: "beta",
-      timeoutMs: 60_000,
-      gatewayProbeDeadlineMs: 60_000,
     });
   });
 

@@ -305,6 +305,23 @@ describe("sidebar people workload", () => {
     },
   );
 
+  it("adds and removes a running badge without remounting the person", async () => {
+    let running = 0;
+    const { sidebar } = await mountWorkload(async () =>
+      summary([{ profileId: "ada", open: 13, running }]),
+    );
+    const original = person(sidebar, "ada");
+    expect(counts(sidebar, "ada")).toEqual(["13"]);
+    for (const next of [12, 0]) {
+      running = next;
+      await sidebar.sessionData.ownerCounts.refresh();
+      await settle(sidebar);
+      expect(person(sidebar, "ada")).toBe(original);
+      expect(original.getAttribute("aria-description")).toContain(`${next} running`);
+      expect(counts(sidebar, "ada")).toEqual(next ? ["12", "13"] : ["13"]);
+    }
+  });
+
   it("keeps a single deduplicated self visible when returning to Online", async () => {
     const { sidebar, gateway } = await mountWorkload();
     const self = presence()[0]!;

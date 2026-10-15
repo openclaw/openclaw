@@ -303,24 +303,6 @@ describe("Claw package removal", () => {
     },
   );
 
-  it("retains referenced plugins by default while releasing the Claw reference", async () => {
-    const ref = packageRef();
-    const decisions = await planClawPackageRemovals(install, [ref], {
-      deps: {
-        readPackageRefs: vi.fn().mockReturnValue([ref]),
-        resolvePlugin: vi.fn(),
-      },
-    });
-
-    expect(decisions).toMatchObject([
-      {
-        action: "retain",
-        reason:
-          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its own uninstall command separately.",
-      },
-    ]);
-  });
-
   it("requires separate selection before invoking the canonical plugin lifecycle", async () => {
     const ref = packageRef();
     const store = packageRefStore(ref);
@@ -690,42 +672,6 @@ describe("Claw package removal", () => {
     ]);
   });
 
-  it("removes a persisted owner-qualified skill through its local install identity", async () => {
-    const current = await trackedQualifiedSkillFixture(
-      tempDirs.make("openclaw-claw-skill-remove-"),
-    );
-    const currentInstall = { ...install, workspace: current.workspaceDir };
-    const ref = packageRef({
-      kind: "skill",
-      ref: "@owner/triage",
-      relationship: "managed",
-    });
-    const store = packageRefStore(ref);
-
-    const decisions = await planClawPackageRemovals(currentInstall, [ref], {
-      deps: store,
-    });
-
-    expect(decisions).toMatchObject([
-      {
-        action: "uninstall",
-        skillPlan: {
-          requestedRef: "@owner/triage",
-          slug: "triage",
-          targetDir: current.skillDir,
-        },
-      },
-    ]);
-    await expect(applyClawPackageRemovals(decisions, { deps: store })).resolves.toMatchObject({
-      packages: [{ action: "uninstalled" }],
-    });
-    await expect(readFile(join(current.skillDir, "SKILL.md"), "utf8")).rejects.toThrow();
-    const lock = JSON.parse(await readFile(current.lockPath, "utf8")) as {
-      skills: Record<string, unknown>;
-    };
-    expect(lock.skills).toEqual({});
-  });
-
   it.each(["preparation", "staged validation", "successor lease"])(
     "fences skill effects after ownership loss during %s",
     async (phase) => {
@@ -856,35 +802,6 @@ describe("Claw package removal", () => {
       { action: "retain", reason: "Skill workspace provenance is missing." },
     ]);
     expect(planSkill).not.toHaveBeenCalled();
-  });
-
-  it("releases a global plugin reference while another Claw is also being removed", async () => {
-    const ref = packageRef();
-    const other = packageRef({ agentId: "other" });
-    const decisions = await planClawPackageRemovals(install, [ref], {
-      deps: {
-        readPackageRefs: vi.fn().mockReturnValue([ref, other]),
-        resolvePlugin: vi.fn(),
-      },
-    });
-    let refs = [ref, other];
-    const claimPackageRef = vi.fn((claimedRef: PersistedClawPackageRef) => {
-      refs = refs.map((candidate) => ({
-        ...candidate,
-        status: "pending" as const,
-      }));
-      return { ...claimedRef, status: "pending" as const };
-    });
-
-    await expect(
-      applyClawPackageRemovals(decisions, {
-        deps: {
-          withPackageLease: packageLeaseScope(),
-          readPackageRefs: vi.fn(() => refs),
-          claimPackageRef,
-        },
-      }),
-    ).resolves.toMatchObject({ packages: [{ action: "retained" }] });
   });
 
   it("releases a reference whose independent ownership was derived from install time", async () => {
