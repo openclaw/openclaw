@@ -49,6 +49,7 @@ vi.mock("../../src/gateway/call.js", () => ({ callGateway: nativeMocks.rpc }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -648,6 +649,13 @@ describe("native command adapter", () => {
     "native-build-only",
     "setup-code-timeout",
     "setup-code-rpc-timeout",
+    "setup-code-fast-success",
+    "setup-code-slow-success",
+    "setup-code-join-success",
+    "setup-code-join-observer-failure-success",
+    "setup-code-join-failure",
+    "setup-code-join-cancel",
+    "setup-code-auth-timeout",
     "test-unjoined",
     "test-exit",
     "reader-failure",
@@ -676,6 +684,17 @@ describe("native command adapter", () => {
     vi.stubEnv("OPENCLAW_CI_SIMSLIM_BINARY", "");
     const instances: { cleanup: ReturnType<typeof vi.fn> }[] = [];
     const lifecycle: string[] = [];
+    const clockedSetup =
+      scenario === "setup-code-rpc-timeout" ||
+      scenario === "setup-code-auth-timeout" ||
+      scenario === "setup-code-fast-success" ||
+      scenario === "setup-code-slow-success" ||
+      scenario.startsWith("setup-code-join-");
+    let setupBegan: () => void = () => {};
+    const setupStarted = new Promise<void>((resolve) => {
+      setupBegan = resolve;
+    });
+    let diagnosticCalls = 0;
     const gatewayIdentity = {
       version: "2026.9.29",
       integrity: "sha512-YQ==",
@@ -710,7 +729,9 @@ describe("native command adapter", () => {
     });
     const fixtureRpcCalls = () =>
       nativeMocks.rpc.mock.calls.filter(
-        ([options]) => options.configPath !== "/private/preflight/config.json",
+        ([options]) =>
+          options.configPath !== "/private/preflight/config.json" &&
+          options.method !== "diagnostics.lanes",
       );
     let simulatorReady = false;
     let sourceChanged = false;
@@ -730,6 +751,26 @@ describe("native command adapter", () => {
     let nativeCommandActive = false;
     let historyReadBeforeCommandExit = false;
     nativeMocks.rpc.mockImplementation(async (options) => {
+      if (options.method === "diagnostics.lanes") {
+        expect(lifecycle).not.toContain("gateway-cleanup");
+        diagnosticCalls++;
+        if (clockedSetup && diagnosticCalls === 1) {
+          lifecycle.push("setup-observer-start");
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 3_000);
+          });
+          lifecycle.push("setup-observer-settled");
+          if (scenario === "setup-code-join-failure") {
+            throw new Error("private diagnostic failure");
+          }
+        }
+        return {
+          workerCount: 3,
+          workerPoolCount: 1,
+          lanes: [{ lane: "private-session", activeCount: 1, queuedCount: 2, maxConcurrent: 1 }],
+          token: "private-credential",
+        };
+      }
       if (options.configPath === "/private/preflight/config.json") {
         expect(options).toMatchObject({
           method: "device.pair.setupStatus",
@@ -755,6 +796,67 @@ describe("native command adapter", () => {
             { role: "assistant", content: [{ type: "text", text: "OPENCLAW_E2E_FIRST" }] },
           ],
         };
+      }
+      if (clockedSetup && options.method === "device.pair.setupCode") {
+        lifecycle.push("setup-code");
+        return await new Promise((resolve, reject) => {
+          const timers: ReturnType<typeof setTimeout>[] = [];
+          const finish = (error?: Error) => {
+            timers.forEach(clearTimeout);
+            options.signal.removeEventListener("abort", cancel);
+            lifecycle.push("setup-rpc-settled");
+            if (error) {
+              reject(error);
+            } else {
+              resolve({ setupCode: `synthetic-code-${instances.length}` });
+            }
+          };
+          const cancel = () =>
+            finish(Object.assign(new Error("private cancellation"), { code: "ABORT_ERR" }));
+          options.signal.addEventListener("abort", cancel, { once: true });
+          if (scenario !== "setup-code-auth-timeout") {
+            timers.push(setTimeout(() => options.onHelloOk?.(), 25));
+            timers.push(setTimeout(() => options.assertDispatchCurrent?.(), 50));
+          }
+          timers.push(
+            setTimeout(
+              () =>
+                finish(
+                  new GatewayTransportError({
+                    kind: "timeout",
+                    message: "private RPC timeout",
+                    connectionDetails: {
+                      url: "ws://private",
+                      urlSource: "private",
+                      message: "private",
+                    },
+                    timeoutMs: options.timeoutMs,
+                  }),
+                ),
+              options.timeoutMs,
+            ),
+          );
+          if (scenario === "setup-code-fast-success" || scenario === "setup-code-slow-success") {
+            timers.push(
+              setTimeout(() => finish(), scenario === "setup-code-fast-success" ? 1_000 : 35_000),
+            );
+          } else if (scenario.startsWith("setup-code-join-")) {
+            timers.push(
+              setTimeout(() => {
+                if (scenario === "setup-code-join-cancel") {
+                  abort.abort();
+                } else {
+                  finish(
+                    scenario === "setup-code-join-failure"
+                      ? new Error("private setup failure")
+                      : undefined,
+                  );
+                }
+              }, 11_000),
+            );
+          }
+          setupBegan();
+        });
       }
       options.onHelloOk?.();
       options.assertDispatchCurrent?.();
@@ -790,14 +892,6 @@ describe("native command adapter", () => {
       if (scenario === "setup-code-timeout") {
         throw new Error("private fixture command failed", {
           cause: Object.assign(new Error("private setup code and path"), { code: "ETIMEDOUT" }),
-        });
-      }
-      if (scenario === "setup-code-rpc-timeout") {
-        throw new GatewayTransportError({
-          kind: "timeout",
-          message: "private RPC timeout",
-          connectionDetails: { url: "ws://private", urlSource: "private", message: "private" },
-          timeoutMs: 30_000,
         });
       }
       return { setupCode: `synthetic-code-${instances.length}` };
@@ -1185,6 +1279,7 @@ describe("native command adapter", () => {
     });
     const proof: Record<string, unknown> = {};
     const progressSnapshots: string[] = [];
+    let rejectedSlowProgress = false;
     const abort = new AbortController();
     const admission = createNativeDependencies({
       mode: "stock",
@@ -1196,6 +1291,17 @@ describe("native command adapter", () => {
       proof,
       onProgress: async () => {
         progressSnapshots.push(JSON.stringify(proof));
+        if (
+          scenario === "setup-code-join-observer-failure-success" &&
+          !rejectedSlowProgress &&
+          (proof.fixtures as { setupDiagnostics?: { stage: string }[] }[] | undefined)?.some(
+            (evidence) =>
+              evidence.setupDiagnostics?.some(({ stage }) => stage === "setup-code-slow"),
+          )
+        ) {
+          rejectedSlowProgress = true;
+          throw new Error("private diagnostic progress failure");
+        }
       },
     });
     if (scenario.startsWith("dirty-")) {
@@ -1331,10 +1437,127 @@ describe("native command adapter", () => {
         expect(proof.fixtures).toEqual([expect.objectContaining({ cleanupConfirmed: true })]);
         return;
       }
-      const report = await runTrials("stock", native.dependencies);
+      if (clockedSetup) {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      }
+      let diagnosticsBeforeThreshold = 0;
+      let diagnosticsAtThreshold = 0;
+      let settledAtThirtySeconds = false;
+      let joinedObserverBeforeContinuing = false;
+      const reportPending = runTrials("stock", native.dependencies);
+      if (clockedSetup) {
+        await setupStarted;
+        if (scenario === "setup-code-fast-success") {
+          await vi.advanceTimersByTimeAsync(1_000);
+        } else {
+          await vi.advanceTimersByTimeAsync(9_999);
+          diagnosticsBeforeThreshold = diagnosticCalls;
+          await vi.advanceTimersByTimeAsync(1);
+          diagnosticsAtThreshold = diagnosticCalls;
+          if (scenario.startsWith("setup-code-join-")) {
+            await vi.advanceTimersByTimeAsync(1_000);
+            joinedObserverBeforeContinuing =
+              lifecycle.includes("setup-rpc-settled") &&
+              !lifecycle.includes("setup-observer-settled") &&
+              !lifecycle.includes("gateway-cleanup") &&
+              !lifecycle.includes("live-test");
+            await vi.advanceTimersByTimeAsync(2_000);
+          } else {
+            await vi.advanceTimersByTimeAsync(20_000);
+            settledAtThirtySeconds = lifecycle.includes("setup-rpc-settled");
+            await vi.advanceTimersByTimeAsync(
+              scenario === "setup-code-slow-success" ? 5_000 : 30_000,
+            );
+          }
+        }
+      }
+      const report = await reportPending;
+      if (clockedSetup) {
+        if (scenario !== "setup-code-fast-success") {
+          expect(diagnosticsBeforeThreshold).toBe(0);
+          expect(diagnosticsAtThreshold).toBe(1);
+          if (scenario.startsWith("setup-code-join-")) {
+            expect(joinedObserverBeforeContinuing).toBe(true);
+          } else {
+            expect(settledAtThirtySeconds).toBe(false);
+          }
+        }
+        const success = scenario.endsWith("success");
+        const duration =
+          scenario === "setup-code-fast-success"
+            ? 1_000
+            : scenario === "setup-code-slow-success"
+              ? 35_000
+              : scenario.startsWith("setup-code-join-")
+                ? 11_000
+                : 60_000;
+        const authenticated = scenario !== "setup-code-auth-timeout";
+        expect(proof.fixtures).toEqual([
+          expect.objectContaining({
+            setupRpc: {
+              authenticated,
+              dispatchEntered: authenticated,
+              responseReceived: success,
+              timings: {
+                ...(authenticated ? { authenticatedMs: 25, dispatchEnteredMs: 50 } : {}),
+                ...(success ? { responseReceivedMs: duration } : {}),
+                elapsedMs: duration,
+              },
+            },
+          }),
+        ]);
+        const fixtureEvidence = (proof.fixtures as { setupDiagnostics: { stage: string }[] }[])[0];
+        if (!fixtureEvidence) {
+          throw new Error("Expected setup fixture evidence");
+        }
+        expect(
+          fixtureEvidence.setupDiagnostics.filter(({ stage }) => stage === "setup-code-slow"),
+        ).toHaveLength(scenario === "setup-code-fast-success" ? 0 : 1);
+        const observations = diagnosticCalls;
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(diagnosticCalls).toBe(observations);
+        expect(vi.getTimerCount()).toBe(0);
+        expect(
+          fixtureRpcCalls().filter(([options]) => options.method === "device.pair.setupCode"),
+        ).toHaveLength(1);
+        expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
+        if (scenario.startsWith("setup-code-join-")) {
+          expect(lifecycle.indexOf("setup-observer-settled")).toBeLessThan(
+            lifecycle.indexOf("gateway-cleanup"),
+          );
+        }
+        if (scenario === "setup-code-join-observer-failure-success") {
+          expect(rejectedSlowProgress).toBe(true);
+        }
+        if (!success) {
+          expect(report.trials).toMatchObject([
+            {
+              status: "failed",
+              tests: [],
+              errors: [
+                scenario === "setup-code-join-cancel"
+                  ? "cancelled"
+                  : scenario === "setup-code-join-failure"
+                    ? "preparation-failed"
+                    : "preparation-timeout",
+              ],
+            },
+          ]);
+          expect(fixtureEvidence.setupDiagnostics).toEqual(
+            expect.arrayContaining([expect.objectContaining({ stage: "setup-code" })]),
+          );
+        }
+      }
       expect(JSON.stringify(proof)).not.toMatch(/private|synthetic|OPENCLAW_E2E_|metadata/);
       expect(progressSnapshots.length).toBeGreaterThan(0);
       expect(progressSnapshots.join("\n")).not.toMatch(/private|synthetic|OPENCLAW_E2E_|metadata/);
+      if (
+        scenario === "setup-code-join-failure" ||
+        scenario === "setup-code-join-cancel" ||
+        scenario === "setup-code-auth-timeout"
+      ) {
+        return;
+      }
       if (scenario.startsWith("reply-failure-")) {
         expect(report.complete).toBe(true);
         expect(report.trials.map((trial) => trial.status)).toEqual(["failed"]);
@@ -1472,7 +1695,16 @@ describe("native command adapter", () => {
         expect(proof.fixtures).toEqual([
           expect.objectContaining({
             cleanupConfirmed: true,
-            setupStatusRpc: { authenticated: true, dispatchEntered: true, responseReceived: false },
+            setupStatusRpc: expect.objectContaining({
+              authenticated: true,
+              dispatchEntered: true,
+              responseReceived: false,
+              timings: expect.objectContaining({
+                authenticatedMs: expect.any(Number),
+                dispatchEnteredMs: expect.any(Number),
+                elapsedMs: expect.any(Number),
+              }),
+            }),
           }),
         ]);
         return;
@@ -1597,7 +1829,21 @@ describe("native command adapter", () => {
         expect(proof.fixtures).toEqual([
           expect.objectContaining({
             trial: 1,
-            setupRpc: { authenticated: true, dispatchEntered: true, responseReceived: false },
+            setupRpc: expect.objectContaining({
+              authenticated: true,
+              dispatchEntered: true,
+              responseReceived: false,
+              timings: expect.objectContaining({
+                authenticatedMs: expect.any(Number),
+                dispatchEnteredMs: expect.any(Number),
+                elapsedMs: expect.any(Number),
+              }),
+            }),
+            setupDiagnostics: expect.arrayContaining([
+              expect.objectContaining({ stage: "before-simulator" }),
+              expect.objectContaining({ stage: "after-simulator" }),
+              expect.objectContaining({ stage: "setup-code", gatewayExited: false }),
+            ]),
           }),
         ]);
         expect(
@@ -1614,6 +1860,13 @@ describe("native command adapter", () => {
         expect(report.trials).toHaveLength(1);
         expect(report.trials[0]?.errors).toContain("cleanup-failed");
         expect(proof.resourcesPreserved).toBe(true);
+        if (scenario === "cleanup-failure") {
+          expect(proof.fixtures).toEqual([
+            expect.objectContaining({
+              cleanupFailures: [expect.objectContaining({ source: "gateway", code: "failed" })],
+            }),
+          ]);
+        }
         return;
       }
       if (scenario === "test-exit") {
@@ -1687,7 +1940,7 @@ describe("native command adapter", () => {
           sharedStateMode: "read-only",
           method: "device.pair.setupCode",
           params: { publicUrl: `ws://127.0.0.1:${20001 + index}`, includeQr: false },
-          timeoutMs: 30_000,
+          timeoutMs: 60_000,
           signal: expect.any(AbortSignal),
           onHelloOk: expect.any(Function),
           assertDispatchCurrent: expect.any(Function),
@@ -1698,8 +1951,28 @@ describe("native command adapter", () => {
         expect.objectContaining({
           trial: 1,
           cleanupConfirmed: true,
-          setupStatusRpc: { authenticated: true, dispatchEntered: true, responseReceived: true },
-          setupRpc: { authenticated: true, dispatchEntered: true, responseReceived: true },
+          setupStatusRpc: expect.objectContaining({
+            authenticated: true,
+            dispatchEntered: true,
+            responseReceived: true,
+            timings: expect.objectContaining({
+              authenticatedMs: expect.any(Number),
+              dispatchEnteredMs: expect.any(Number),
+              responseReceivedMs: expect.any(Number),
+              elapsedMs: expect.any(Number),
+            }),
+          }),
+          setupRpc: expect.objectContaining({
+            authenticated: true,
+            dispatchEntered: true,
+            responseReceived: true,
+            timings: expect.objectContaining({
+              authenticatedMs: expect.any(Number),
+              dispatchEnteredMs: expect.any(Number),
+              responseReceivedMs: expect.any(Number),
+              elapsedMs: expect.any(Number),
+            }),
+          }),
           providerMessages: [
             { stage: "first", received: true },
             { stage: "second", received: true },

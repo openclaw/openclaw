@@ -527,12 +527,13 @@ setup, preparation, dependency waits, and the final gate in workflow projections
 
 Oversized CLI and Blacksmith agent-support families use the existing file
 splitter, preserving complete inventories and their serial resource policy.
-Precisely selected, source-only CLI and Gateway client jobs use the 16-class when
-every serial group belongs to either family, has at most two explicit files, and
-retains its two-worker fallback. Gateway client groups must pair the
-`agentic-gateway-core-2` owner with `vitest.gateway-client.config.ts`. Apply this
-capacity choice after packing; keep complete families, other owners, builds,
-memory floors, and explicit large-runner anchors at their planned capacity.
+Precisely selected, source-only CLI, Gateway client/server, and embedded-agent
+jobs use the 16-class when every serial group has one qualified config, one or
+two explicit files, and a two-worker pin or fallback. An explicit wider worker
+pin keeps the planned capacity. Apply this choice after packing; keep complete
+families, unqualified configs, builds, memory floors, and explicit large-runner
+anchors at their planned capacity. Resource-gated tooling tests remain outside
+this rule.
 RunsOn inherits the same hybrid choice for these retained Blacksmith jobs.
 Ordinary self-hosted groups can share the existing promoted 32-class capacity
 across logical classes, and the existing group exchange fills stranded capacity.

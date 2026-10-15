@@ -667,6 +667,12 @@ export function deferGatewayRestartUntilIdle(
     maxWaitMs?: number;
     reason?: string;
     timeoutIntent?: GatewayRestartIntent;
+    /**
+     * Caller preparation for each attempt. It can wait on locks whose holders
+     * need root admission, so it runs as its own root before the attempt takes
+     * the restart-signal fence, never under it.
+     */
+    prepareEmission?: () => Promise<void>;
   },
   scheduledRequest?: PendingGatewayRestart,
 ): RestartDeferralHandle {
@@ -685,6 +691,8 @@ export function deferGatewayRestartUntilIdle(
   };
   let cancelled = false;
   let activeAttempt: EmissionAttempt | null = null;
+  let preparation: { controller: AbortController; startedAt: number } | null = null;
+  let prepared = false;
   let poll: ReturnType<typeof setInterval> | null = null;
   const stopPoll = () => {
     if (poll) {
@@ -694,6 +702,9 @@ export function deferGatewayRestartUntilIdle(
     }
   };
   const cancelAttempt = () => {
+    preparation?.controller.abort();
+    preparation = null;
+    prepared = false;
     const attempt = activeAttempt;
     activeAttempt = null;
     // Retire admission waiters as well as a fence already acquired by preparation.
@@ -714,10 +725,57 @@ export function deferGatewayRestartUntilIdle(
       return undefined;
     }
   };
+  const isIdleOutsideCaller = () => {
+    const current = readPendingCount();
+    return (
+      current !== undefined &&
+      current <= 0 &&
+      getActiveGatewayRootWorkCount({ excludeCurrent: true }) === 0
+    );
+  };
   const attemptEmission = (timedOut: boolean) => {
-    if (cancelled || activeAttempt) {
+    if (cancelled || activeAttempt || preparation) {
       return;
     }
+    if (opts.prepareEmission && !prepared) {
+      const prepareEmission = opts.prepareEmission;
+      const controller = new AbortController();
+      const current = { controller, startedAt: monotonicNow() };
+      preparation = current;
+      // Same idle rule as the fenced attempt below, checked from this root.
+      void runWithGatewayIndependentRootWorkAdmission(
+        async () => {
+          if (!timedOut && !isIdleOutsideCaller()) {
+            return false;
+          }
+          await prepareEmission();
+          return true;
+        },
+        "restart:prepare",
+        controller.signal,
+      ).then(
+        (ready) => {
+          if (preparation !== current) {
+            return;
+          }
+          preparation = null;
+          prepared = ready;
+          if (ready) {
+            inspectPending();
+          }
+        },
+        (err: unknown) => {
+          if (preparation !== current) {
+            return;
+          }
+          preparation = null;
+          opts.hooks?.onCheckError?.(err);
+        },
+      );
+      return;
+    }
+    // Each prepared result serves one fenced attempt; retries prepare again.
+    prepared = false;
     const attempt: EmissionAttempt = {
       controller: new AbortController(),
       startedAt: monotonicNow(),
@@ -776,24 +834,29 @@ export function deferGatewayRestartUntilIdle(
     const current = readPendingCount();
     const now = monotonicNow();
     const elapsedMs = now - startedAt;
-    if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
+    const timedOut = maxWaitMs !== undefined && elapsedMs >= maxWaitMs;
+    if (timedOut) {
       if (!timeoutNotified) {
         timeoutNotified = true;
         opts.hooks?.onTimeout?.(lastKnownPending, elapsedMs);
       }
       // Preparation gets a full configured budget, not merely one poll interval.
       // A stuck forced retry is subject to the same bound as the initial attempt.
-      if (activeAttempt && now - activeAttempt.startedAt >= maxWaitMs) {
+      const startedWork = activeAttempt ?? preparation;
+      if (startedWork && now - startedWork.startedAt >= maxWaitMs) {
         cancelAttempt();
       }
       attemptEmission(true);
-      return;
-    }
-    if (current !== undefined && current <= 0) {
+    } else if (current !== undefined && current <= 0 && !preparation) {
       attemptEmission(false);
       return;
+    } else if (current !== undefined && current > 0) {
+      // New work can outlive a prepared result; prepare again once idle.
+      prepared = false;
     }
-    if (current !== undefined && current > 0 && now >= nextStillPendingAt) {
+    // Preparation can hold the deferral after idle or the deadline; keep reporting it.
+    const waiting = preparation !== null || (!timedOut && current !== undefined && current > 0);
+    if (waiting && current !== undefined && now >= nextStillPendingAt) {
       opts.hooks?.onStillPending?.(current, elapsedMs);
       nextStillPendingAt = now + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
     }

@@ -233,7 +233,7 @@ export async function handleControlUiAssistantMediaRequest(
     respondControlUiNotFound(res);
     return true;
   }
-  using mediaPolicy = { ...policy, [Symbol.dispose]: () => policy.placementRead?.release() };
+  using mediaPolicy = { ...policy, [Symbol.dispose]: () => policy.release() };
   if (relativeSource) {
     if (policy.remote || !policy.executionCwd || !path.isAbsolute(policy.executionCwd)) {
       respondControlUiNotFound(res);

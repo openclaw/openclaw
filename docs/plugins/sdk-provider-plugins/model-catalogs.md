@@ -17,6 +17,8 @@ For lightweight model-reference normalization, use
 `openclaw/plugin-sdk/model-ref-parse`. Its `normalizeGooglePreviewModelId`
 and `normalizeAntigravityPreviewModelId` exports share the catalog's alias
 rules without loading provider replay or transport helpers.
+`normalizeOpenRouterModelFamilyId` strips the optional `openrouter/` qualifier
+and leading `~` alias prefix for family detection, without changing the API model ID.
 Use `splitTrailingAuthProfile` to separate a trailing auth profile while preserving
 model-version and local quantization suffixes.
 

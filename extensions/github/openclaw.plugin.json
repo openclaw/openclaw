@@ -9,7 +9,12 @@
     "onStartup": true
   },
   "contracts": {
+    "tools": ["github_read", "github_search"],
     "gatewayMethodDispatch": ["authenticated-request"]
+  },
+  "toolMetadata": {
+    "github_read": { "profiles": ["coding"] },
+    "github_search": { "profiles": ["coding"] }
   },
   "configSchema": {
     "type": "object",
