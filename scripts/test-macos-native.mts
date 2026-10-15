@@ -324,6 +324,8 @@ await runWithFailedTrailer("macos-native", async () => {
                 "inherited",
                 "browser-sign-in-before",
                 "browser-sign-in-after",
+                "dashboard-reconnect-before",
+                "dashboard-reconnect-after",
                 "guest-model-permitted",
                 "guest-model-null",
                 "guest-model-open",

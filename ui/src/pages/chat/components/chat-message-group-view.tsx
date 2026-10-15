@@ -306,6 +306,7 @@ function FramedMessage(props: {
         : undefined,
   }));
   const showActions = () =>
+    prepared().ownsActions &&
     hasMessageActionButtons(prepared().actions, frame().options) &&
     props.index < frame().lastMessageIndex &&
     !frame().isTurnBlock;

@@ -185,8 +185,22 @@ suite.define(() => {
             await expect.poll(() => pane.locator(".chat-thinking").count()).toBe(visible ? 3 : 0);
           }
 
+          const rawDetails = pane.locator(".chat-activity-group__summary", {
+            hasText: "Raw details",
+          });
+          const expandRawDetails = async () => {
+            await rawDetails.waitFor();
+            if ((await rawDetails.getAttribute("aria-expanded")) === "false") {
+              await rawDetails.click();
+            }
+            await expect.poll(() => rawDetails.getAttribute("aria-expanded")).toBe("true");
+          };
           for (const index of [0, 1, 2]) {
             await persist(index);
+            // Saved tool rows share a collapsed activity group once both steps arrive.
+            if (reasoningLevel === "on" && index === 1) {
+              await expandRawDetails();
+            }
             await expect.poll(() => reasoning(index).count()).toBe(1);
             expect(await pane.locator(".chat-thinking").count()).toBe(3);
             await expectStepOrder();
@@ -201,11 +215,7 @@ suite.define(() => {
           await worked.waitFor();
           await worked.click();
           await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
-          const rawDetails = pane.locator(".chat-activity-group__summary", {
-            hasText: "Raw details",
-          });
-          await rawDetails.click();
-          await expect.poll(() => rawDetails.getAttribute("aria-expanded")).toBe("true");
+          await expandRawDetails();
           await expect
             .poll(() => pane.locator(".chat-thinking").count())
             .toBe(reasoningLevel === "on" ? 3 : 0);

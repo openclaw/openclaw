@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { resolveMatrixReplacementContent } from "../media-text.js";
 import { fetchMatrixPollMessageSummary, resolveMatrixPollRootEventId } from "../poll-summary.js";
 import { isPollEventType, isPollStartType } from "../poll-types.js";
-import { editMessageMatrix, sendMessageMatrix } from "../send.js";
+import { editMessageMatrix } from "../send.js";
 import { withResolvedRoomAction } from "./client.js";
 import { resolveMatrixActionLimit } from "./limits.js";
 import { fetchEventSummary, summarizeMatrixRawEvent } from "./summary.js";
@@ -60,33 +60,6 @@ function resolveLatestMatrixReplacements(events: readonly MatrixRawEvent[]) {
   }
 
   return { pageEventIds, replacements };
-}
-
-export async function sendMatrixMessage(
-  to: string,
-  content: string | undefined,
-  opts: MatrixActionClientOpts & {
-    mediaUrl?: string;
-    replyToId?: string;
-    threadId?: string;
-    audioAsVoice?: boolean;
-  } = {},
-) {
-  if (!opts.cfg) {
-    throw new Error("Matrix message actions require a resolved runtime config.");
-  }
-  return await sendMessageMatrix(to, content, {
-    cfg: opts.cfg,
-    mediaUrl: opts.mediaUrl,
-    ...(opts.mediaAccess ? { mediaAccess: opts.mediaAccess } : {}),
-    mediaLocalRoots: opts.mediaLocalRoots,
-    replyToId: opts.replyToId,
-    threadId: opts.threadId,
-    audioAsVoice: opts.audioAsVoice,
-    accountId: opts.accountId ?? undefined,
-    client: opts.client,
-    timeoutMs: opts.timeoutMs,
-  });
 }
 
 export async function editMatrixMessage(
