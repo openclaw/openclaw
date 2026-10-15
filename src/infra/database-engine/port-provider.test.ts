@@ -1,51 +1,104 @@
-import { fileURLToPath } from "node:url";
-import { getEnvironmentData } from "node:worker_threads";
-import { describe, expect } from "vitest";
-import { createCommandTest } from "../../../test/helpers/command-fixture.js";
+import { expect, it } from "vitest";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { admitDatabasePortDescriptor } from "./port-descriptor.js";
+import { admitDatabasePortDescriptor, type PortDescriptor } from "./port-descriptor.js";
 import { fixtureDescriptor } from "./port-provider-fixture.test-support.js";
+import { requireDatabasePortProvider, sqliteDatabasePortProvider } from "./port-provider.js";
+import { inspectDatabasePort } from "./port.worker.js";
 
-const configured = getEnvironmentData("openclaw.test.workboard.connection");
-const connection = typeof configured === "string" ? configured : undefined;
-const it = createCommandTest();
-
-it("composes standalone SQLite fragments after a canonical trigger", async () => {
-  const descriptor = fixtureDescriptor();
-  using source = openNodeSqliteDatabase(":memory:");
+function openFixture(descriptor: PortDescriptor, fragments: readonly string[] = []) {
+  const source = openNodeSqliteDatabase(":memory:");
   source.exec(descriptor.sqlite);
   for (const fragment of descriptor.fragments ?? []) {
-    source.exec(fragment.sqlite);
+    if (fragments.includes(fragment.id)) {
+      source.exec(fragment.sqlite);
+    }
   }
-  const admitted = await admitDatabasePortDescriptor({ engine: "sqlite", db: source }, descriptor);
-  using destination = openNodeSqliteDatabase(":memory:");
-  expect(() => destination.exec(admitted.sqlite)).not.toThrow();
+  return source;
+}
+
+it.each([{ fragments: [] }, { fragments: ["labels"] }, { fragments: ["labels", "notes"] }])(
+  "infers, orders and composes admitted fragments %j after a canonical trigger",
+  async ({ fragments }) => {
+    const descriptor = fixtureDescriptor();
+    descriptor.fragments = descriptor.fragments!.toReversed();
+    using source = openFixture(descriptor, fragments);
+    const admitted = await admitDatabasePortDescriptor(
+      { engine: "sqlite", db: source },
+      descriptor,
+    );
+    expect(admitted.activeFragments).toEqual(fragments);
+    using destination = openNodeSqliteDatabase(":memory:");
+    expect(() => destination.exec(admitted.sqlite)).not.toThrow();
+  },
+);
+
+it("refuses an active fragment whose dependency is absent", async () => {
+  const descriptor = fixtureDescriptor();
+  using source = openFixture(descriptor, ["notes"]);
+  await expect(
+    admitDatabasePortDescriptor({ engine: "sqlite", db: source }, descriptor),
+  ).rejects.toThrow("Port fragment notes requires missing fragment labels");
 });
 
-describe.skipIf(!connection)("generic database family provider", () => {
-  it("ports and restores a second family's fragments, triggers and rebuilt projections", async ({
-    command,
-  }) => {
-    const loader = new URL("./port-provider-loader.test-support.ts", import.meta.url).href;
-    const script = new URL("./port-provider-roundtrip.test-support.ts", import.meta.url);
-    command.enableDiagnostics("database family provider");
-    const result = await command.run(
-      process.execPath,
-      ["--import", import.meta.resolve("tsx"), fileURLToPath(script)],
-      {
-        env: {
-          ...process.env,
-          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${loader}`,
-        },
-        input: JSON.stringify({ connection, directory: command.createTempDir("port-provider-") }),
-      },
-    );
-    const output = `${result.stdout}\n${result.stderr}`.replaceAll(
-      connection!,
-      "[database connection]",
-    );
-    expect(result.error, output).toBeUndefined();
-    expect(result.status, output).toBe(0);
-    expect(output).toContain("synthetic family verified");
-  }, 60_000);
+it("refuses cyclic active fragment dependencies", async () => {
+  const base = fixtureDescriptor();
+  const descriptor = {
+    ...base,
+    fragments: base.fragments!.map((fragment) => ({
+      ...fragment,
+      dependencies: fragment.id === "labels" ? ["notes"] : ["labels"],
+    })),
+  };
+  using source = openFixture(descriptor, ["labels", "notes"]);
+  await expect(
+    admitDatabasePortDescriptor({ engine: "sqlite", db: source }, descriptor),
+  ).rejects.toThrow("Cyclic port fragment dependency: labels");
+});
+
+it.each([
+  ["trigger", "CREATE TRIGGER surprise AFTER INSERT ON port_items BEGIN SELECT 1; END"],
+  ["view", "CREATE VIEW surprise AS SELECT * FROM port_items"],
+])("refuses an undeclared SQLite %s", async (_kind, sql) => {
+  const descriptor = fixtureDescriptor();
+  using source = openFixture(descriptor);
+  source.exec(sql);
+  await expect(
+    admitDatabasePortDescriptor({ engine: "sqlite", db: source }, descriptor),
+  ).rejects.toThrow("Unknown SQLite table, trigger or view");
+});
+
+it("refuses source fragments that differ from the recorded backup", async () => {
+  const descriptor = fixtureDescriptor();
+  using source = openFixture(descriptor, ["labels", "notes"]);
+  await expect(
+    admitDatabasePortDescriptor({ engine: "sqlite", db: source }, descriptor, ["labels"]),
+  ).rejects.toThrow("Port source fragments differ from the recorded backup");
+});
+
+it("omits stale derived projection rows from copy verification", async () => {
+  const descriptor = fixtureDescriptor();
+  using source = openFixture(descriptor);
+  source.exec(
+    "INSERT INTO port_items VALUES ('first', 'retained', 6); INSERT INTO port_projection VALUES ('wrong', 'stale projection')",
+  );
+  const verification = await inspectDatabasePort({ engine: "sqlite", db: source }, descriptor);
+  expect(Object.keys(verification.tables)).toEqual(["port_items"]);
+  expect(verification.tables.port_items?.rows).toBe(1);
+});
+
+it("selects the registered family by id and admitted SQLite tables", () => {
+  using source = openNodeSqliteDatabase(":memory:");
+  source.exec("CREATE TABLE workboard_schema_migrations (id TEXT)");
+  expect(sqliteDatabasePortProvider(source)).toBe(requireDatabasePortProvider("workboard"));
+});
+
+it("names supported families when an id or SQLite store is unknown", () => {
+  expect(() => requireDatabasePortProvider("unknown")).toThrow(
+    "Unknown database family; supported families: workboard",
+  );
+  using source = openNodeSqliteDatabase(":memory:");
+  source.exec("CREATE TABLE unrelated (id TEXT)");
+  expect(() => sqliteDatabasePortProvider(source)).toThrow(
+    "Unclassified SQLite store; supported families: workboard",
+  );
 });

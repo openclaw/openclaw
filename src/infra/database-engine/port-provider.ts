@@ -3,7 +3,6 @@ import type { Client } from "pg";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAdmittedSqliteSchemaFacts, admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
-import { resolveDatabaseEngineInput } from "./config.js";
 import {
   DatabasePortDataError,
   type DatabasePortProvider,
@@ -40,6 +39,7 @@ export async function withDatabasePortConnection<T>(
   config: OpenClawConfig,
   run: (client: Client) => Promise<T>,
 ): Promise<T> {
+  const { resolveDatabaseEngineInput } = await import("./config.js");
   const input = await resolveDatabaseEngineInput(config);
   if (!input) {
     throw new Error("PostgreSQL requires database.engine=postgres and a resolvable connection.");

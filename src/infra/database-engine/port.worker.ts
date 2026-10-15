@@ -3,6 +3,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { Client } from "pg";
 import { encodeSqliteValue, escapedSqliteText } from "../../snapshot/sqlite-cell-codec.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { decodePostgresRows } from "../postgres-sync/protocol.js";
 import { assertSqliteIntegrity } from "../sqlite-integrity.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
@@ -38,6 +39,23 @@ export type PortVerification = {
   tables: Record<string, { rows: number; sha256: string }>;
   allocations: Record<string, { value: string; called: boolean }>;
 };
+
+/** The caller owns this private SQLite copy and retains custody through verification. */
+export async function migrateDatabasePortSource(
+  sourcePath: string,
+  descriptor: PortDescriptor,
+  sourceVersion: number,
+  assertCurrent: () => void,
+): Promise<PortVerification> {
+  assertCurrent();
+  await descriptor.migrateSqliteSource?.(sourcePath, sourceVersion);
+  using db = openNodeSqliteDatabase(sourcePath, { readOnly: true, readBigInts: true });
+  const { tables, allocations: retainedAllocations } = await inspectDatabasePort(
+    { engine: "sqlite", db },
+    descriptor,
+  );
+  return { tables, allocations: retainedAllocations };
+}
 type Endpoint = PortEndpoint;
 const copiedTables = (descriptor: PortDescriptor) =>
   descriptor.tables.filter(

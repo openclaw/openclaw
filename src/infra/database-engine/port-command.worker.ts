@@ -27,6 +27,7 @@ import {
   inspectDatabasePort,
   inspectSqlitePortSchema,
   materializeDatabasePort,
+  migrateDatabasePortSource,
   readPostgresPortCapabilities,
   type PortDescriptor,
   type PortVerification,
@@ -332,15 +333,16 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
         : source.facts!;
     return { ...engine, ...facts, descriptorHash, targetVersion: descriptor.version };
   }
-  if (task.operation === "migrate") {
-    assertCurrent();
-    await descriptor.migrateSqliteSource?.(task.sourcePath, source.facts!.version);
-  }
   if (task.operation === "migrate" || task.operation === "stage") {
     const verification =
       task.operation === "stage"
         ? await stage(task, descriptor, assertCurrent, source.facts!)
-        : (await inspectSqlite(task.sourcePath, descriptor)).verification!;
+        : await migrateDatabasePortSource(
+            task.sourcePath,
+            descriptor,
+            source.facts!.version,
+            assertCurrent,
+          );
     return { descriptorHash, verification };
   }
   return verify(task, descriptor, source);
