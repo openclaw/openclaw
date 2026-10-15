@@ -17,6 +17,8 @@ import {
 } from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
+import { extractAssistantVisibleText } from "./embedded-agent-utils.js";
+import { isRecoveryInstructionEcho } from "./recovery-nudge-text.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import {
@@ -153,6 +155,12 @@ export function installSessionToolResultGuard(
     maxToolResultChars?: number;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
+    /**
+     * The instruction this attempt injected into the model. A tool-free assistant
+     * reply that restates it is runner-authored prompt text rather than an answer,
+     * so it must not reach the transcript before the finalizer accepts it.
+     */
+    suppressEchoedAssistantPersistence?: string;
     assistantErrorTranscript?: AssistantErrorTranscript;
     onUserMessagePersisted?: UserMessagePersistedCallback;
     onUserMessagePersistenceSuppressed?: AsyncMessageCallback<UserAgentMessage>;
@@ -527,6 +535,20 @@ export function installSessionToolResultGuard(
       toolCalls.length === 0 &&
       opts?.suppressTranscriptOnlyAssistantPersistence === true
     ) {
+      return undefined;
+    }
+    if (
+      finalMessage.role === "assistant" &&
+      toolCalls.length === 0 &&
+      opts?.suppressEchoedAssistantPersistence !== undefined &&
+      opts.suppressEchoedAssistantPersistence.trim().length > 0 &&
+      isRecoveryInstructionEcho(
+        extractAssistantVisibleText(finalMessage).trim(),
+        opts.suppressEchoedAssistantPersistence,
+      )
+    ) {
+      // The finalizer still rejects this reply and re-asks; persisting it first
+      // would leave runner-authored narration in history and model context.
       return undefined;
     }
     if (

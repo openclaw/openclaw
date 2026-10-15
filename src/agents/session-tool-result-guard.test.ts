@@ -264,6 +264,25 @@ describe("installSessionToolResultGuard", () => {
     expect(messages(sm)).toMatchObject([{ role: "user", content: "second" }]);
   });
 
+  it("drops an injected-instruction echo instead of persisting it", () => {
+    const instruction =
+      "Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+    const { sm } = setup({ suppressEchoedAssistantPersistence: instruction });
+    sm.appendMessage(assistant(instruction));
+    sm.appendMessage(assistant("The disk has 12 GB free."));
+    expect(messages(sm)).toMatchObject([
+      { role: "assistant", content: [{ type: "text", text: "The disk has 12 GB free." }] },
+    ]);
+  });
+
+  it("keeps an echo when the attempt scopes no instruction to it", () => {
+    const instruction =
+      "Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+    const { sm } = setup();
+    sm.appendMessage(assistant(instruction));
+    expect(messages(sm)).toHaveLength(1);
+  });
+
   it("suppresses transcript-only assistants while retaining tool calls", () => {
     const { sm } = setup({ suppressTranscriptOnlyAssistantPersistence: true });
     sm.appendMessage(asAppendMessage({ role: "assistant", content: "private room-event note" }));
