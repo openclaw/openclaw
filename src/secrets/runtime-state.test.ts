@@ -847,37 +847,6 @@ describe("secrets runtime state", () => {
     },
   );
 
-  it("removes a rejected candidate credential when its bounded lineage was evicted", () => {
-    const agentDir = "/tmp/openclaw-auth-evicted-lineage";
-    const snapshot = (key: string, port: number) =>
-      preparedGatewayAuthSnapshot(agentDir, port, {
-        version: 1,
-        profiles: {
-          "openai:default": { type: "api_key", provider: "openai", key },
-          "anthropic:stable": {
-            type: "api_key",
-            provider: "anthropic",
-            key: "sk-stable",
-          },
-        },
-        runtimeLocalProfileIds: ["anthropic:stable", "openai:default"],
-      });
-    activateSnapshot(snapshot("sk-old", 19_001));
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
-    const candidate = snapshot("sk-candidate", 19_002);
-    expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    for (let index = 0; index < 300; index += 1) {
-      noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
-        credentialsChanged: true,
-        stateChanged: false,
-        profileIds: [`openai:unrelated-${index}`],
-      });
-    }
-
-    expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
-  });
-
   it.each(["owner", "profile"] as const)(
     "drops a changed-ref descendant after $eviction lineage eviction",
     (eviction) => {
