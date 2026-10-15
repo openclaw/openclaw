@@ -17,6 +17,7 @@ export const AGENT_MODEL_FIELD_LABELS: Record<string, string> = {
   "agents.defaults.models.*.codeMode": "Code Mode",
   "agents.defaults.model.primary": "Primary Model",
   "agents.defaults.model.fallbacks": "Model Fallbacks",
+  "agents.defaults.model.circuitBreaker.enabled": "Route Circuit Breaker",
   "agents.defaults.embeddedAgent.cyberFailover": "Cyber Policy Failover",
   "agents.defaults.embeddedAgent.cyberFailover.mode": "Cyber Policy Failover Mode",
   "agents.defaults.embeddedAgent.cyberFailover.model": "Cyber Policy Failover Model",

@@ -70,6 +70,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.model.circuitBreaker.enabled":
+    "Opt in to the route circuit breaker. When a route fails repeatedly with transient provider errors it is bypassed for a short backoff window, but only while another configured route can still reach transport. Off by default.",
   "agents.defaults.embeddedAgent.cyberFailover":
     "Automatic Daybreak escalation for replay-safe OpenAI cyber-policy refusals in the embedded runtime.",
   "agents.defaults.embeddedAgent.cyberFailover.mode":

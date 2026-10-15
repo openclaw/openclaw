@@ -3,6 +3,7 @@ import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import { AgentModelMapSchema, AgentModelPolicySchema } from "./zod-schema.agent-entry-base.js";
 import {
+  AgentDefaultModelSchema,
   AgentModelSchema,
   AgentToolModelSchema,
   DecisionModelSchema,
@@ -42,7 +43,7 @@ const AgentOwnerTargetSchema = z
 export const AgentDefaultsBaseSchema = z.strictObject({
   /** Global default provider params applied to all models before per-model and per-agent overrides. */
   params: z.record(z.string(), z.unknown()).optional(),
-  model: AgentModelSchema.optional(),
+  model: AgentDefaultModelSchema.optional(),
   modelSelectionScope: z.enum(["session", "agent", "global"]).optional(),
   utilityModel: z.string().optional(),
   decisionModel: DecisionModelSchema.optional(),

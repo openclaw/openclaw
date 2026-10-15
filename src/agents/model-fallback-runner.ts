@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -6,7 +5,6 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   assertAdmittedRunOperatorAuthority,
   assertOperatorModelAllowed,
-  type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
 import { externalCliDiscoveryScoped } from "./auth-profiles/external-cli-discovery.js";
 import { resolveSubscriptionAuthModeForProfiles } from "./auth-profiles/profile-list.js";
@@ -28,7 +26,6 @@ import { isLikelyContextOverflowError } from "./failover/classify.js";
 import type { FailoverReason } from "./failover/signal.js";
 import {
   getFallbackCandidateSkipReason,
-  isFallbackCandidateSkipped,
   markFallbackCandidateSkipped,
 } from "./fallback-skip-cache.js";
 import {
@@ -43,16 +40,11 @@ import {
   isTranscriptNotContinuableError,
   type ModelFallbackAuthRuntime,
   type ModelFallbackClassifiedResult,
-  type ModelFallbackErrorHandler,
   type ModelFallbackExhaustionResult,
-  type ModelFallbackResultClassifier,
-  type ModelFallbackRunFn,
   type ModelFallbackRunOptions,
   type ModelFallbackRunResult,
-  type ModelFallbackRuntimeContext,
   type ModelFallbackStepHandler,
   recordFailedCandidateAttempt,
-  resolveFallbackAuthScope,
   resolveFallbackSoonestCooldownExpiry,
   resolveLiveSessionModelSwitchRedirectIndex,
   resolveModelFallbackCandidateAgentRuntime,
@@ -63,9 +55,20 @@ import {
   throwFallbackFailureSummary,
 } from "./model-fallback-attempt.js";
 import {
+  isCandidateSessionSkipped,
+  resolveAttemptAuthFacts,
+} from "./model-fallback-candidate-facts.js";
+import {
   preferContextFitFallbackCandidates,
   resolveModelCandidateChain,
 } from "./model-fallback-candidates.js";
+import { isModelCircuitEnabled } from "./model-fallback-circuit-config.js";
+import {
+  type ModelCircuitAttempt,
+  recordCandidateCircuitFailure,
+  recordCandidateCircuitSuccess,
+  releaseModelCircuitAttempt,
+} from "./model-fallback-circuit.js";
 import {
   markProbeAttempt,
   resolveCooldownDecision,
@@ -76,63 +79,23 @@ import {
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
 } from "./model-fallback-observation.js";
+import { gateModelCircuitForCandidate } from "./model-fallback-route-eligibility.js";
+import {
+  type DeferredSessionSuspensionState,
+  flushDeferredSessionSuspension,
+  type RunWithModelFallbackParams,
+} from "./model-fallback-runner-support.js";
 import {
   MODEL_FALLBACK_SKIPPED_CODE,
   type FallbackAttempt,
   type ModelFallbackCandidate,
-  type ModelFallbackRouteResolution,
 } from "./model-fallback.types.js";
-import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
-import {
-  resolveSessionSuspensionReason,
-  suspendSession,
-  type SessionSuspensionParams,
-} from "./session-suspension.js";
+import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
 const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthRuntime>(
   () => import("./auth-profiles.runtime.js"),
 );
-
-type RunWithModelFallbackParams<T> = ModelFallbackRuntimeContext & {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  model: string;
-  runId?: string;
-  sessionId?: string;
-  userLockedAuthProfileId?: string;
-  prepareCandidateChain?: (candidates: readonly ModelFallbackCandidate[]) => Promise<void> | void;
-  lane?: string;
-  agentDir?: string;
-  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
-  fallbacksOverride?: string[];
-  requestedRouteResolution?: ModelFallbackRouteResolution;
-  run: ModelFallbackRunFn<T>;
-  onError?: ModelFallbackErrorHandler;
-  onFallbackStep?: ModelFallbackStepHandler;
-  classifyResult?: ModelFallbackResultClassifier<T>;
-  /** Return false when a thrown attempt committed work that must not be replayed. */
-  canFallbackAfterError?: (
-    attempt: Parameters<ModelFallbackErrorHandler>[0],
-  ) => boolean | Promise<boolean>;
-  mergeExhaustedResult?: (params: { latestResult: T; preferredResult: T }) => T;
-  skipAuthProfileRuntime?: boolean;
-  abortSignal?: AbortSignal;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-} & ModelManifestNormalizationContext;
-
-type DeferredSessionSuspensionState = {
-  pending?: SessionSuspensionParams;
-};
-
-function flushDeferredSessionSuspension(state: DeferredSessionSuspensionState): void {
-  const pending = state.pending;
-  if (!pending) {
-    return;
-  }
-  state.pending = undefined;
-  void suspendSession(pending);
-}
 
 export async function runWithModelFallback<T>(
   params: RunWithModelFallbackParams<T>,
@@ -254,6 +217,17 @@ async function runWithModelFallbackInternal<T>(
 
   const hasFallbackCandidates = candidates.length > 1;
   const requestedCandidate = candidates.find((candidate) => candidate.routeOrigin === "requested");
+  const modelCircuitEnabled = isModelCircuitEnabled(params.cfg);
+  const circuitGateContext = {
+    ...params,
+    userLockedAuthProfileId,
+    requestedCandidate,
+    hasFallbackCandidates,
+    tlsFailedProviders,
+    cooldownProbeUsedProviders,
+    authRuntime,
+    authStore,
+  };
   const runAttribution = { runId: params.runId, sessionId: params.sessionId, lane: params.lane };
   const runObs = {
     ...runAttribution,
@@ -321,54 +295,32 @@ async function runWithModelFallbackInternal<T>(
       await params.onError?.({ ...candidateRef, error, ...attemptContext });
     };
 
-    let candidateAuthProfileIds: string[] | undefined;
-    let quotaRequiresAuthPreparation = false;
-    let userLockedAuthProfileEligible = false;
-    if (authRuntime && authStore) {
-      userLockedAuthProfileEligible =
-        userLockedAuthProfileId !== undefined &&
-        authRuntime.resolveAuthProfileEligibility({
-          cfg: params.cfg,
-          store: authStore,
-          provider: candidate.provider,
-          profileId: userLockedAuthProfileId,
-          includePendingOAuthRefresh: true,
-        }).eligible;
-      let profileIds = authRuntime.resolveAuthProfileOrder({
-        cfg: params.cfg,
-        store: authStore,
-        provider: candidate.provider,
-        forModel: candidate.model,
-        includePendingOAuthRefresh: true,
-      });
-      if (userLockedAuthProfileEligible && userLockedAuthProfileId) {
-        profileIds = [...new Set([userLockedAuthProfileId, ...profileIds])];
-      }
-      const quota = await authRuntime.maybeReprobeWhamBlockedProfiles({
-        store: authStore,
-        profileIds,
-        agentDir: params.agentDir,
-        cfg: params.cfg,
-        forModel: candidate.model,
-      });
-      // Normal auth selection owns remaining profiles and declared direct credentials.
-      quotaRequiresAuthPreparation = quota?.requiresAuthPreparation === true;
-      if (!candidateHarnessAuth.skipsProviderAuthCooldown) {
-        candidateAuthProfileIds = profileIds;
-        profileIdsByCandidate.set(candidate, candidateAuthProfileIds);
-      }
-    }
-    const candidateAuthScope = resolveFallbackAuthScope({
-      userLockedAuthProfileId: userLockedAuthProfileEligible ? userLockedAuthProfileId : undefined,
+    // Shared with the circuit gate so both paths agree on profile order and
+    // skip-cache scope. See model-fallback-candidate-facts.ts.
+    const {
       profileIds: candidateAuthProfileIds,
+      authScope: candidateAuthScope,
+      quotaRequiresAuthPreparation,
+    } = await resolveAttemptAuthFacts({
+      cfg: params.cfg,
+      authRuntime,
+      authStore,
+      candidate,
+      userLockedAuthProfileId,
+      skipsProviderAuthCooldown: candidateHarnessAuth.skipsProviderAuthCooldown,
+      agentDir: params.agentDir,
     });
+    if (candidateAuthProfileIds) {
+      profileIdsByCandidate.set(candidate, candidateAuthProfileIds);
+    }
 
     // Suppress repeated auth failures for fallbacks; explicit primaries still report their error.
     if (!isPrimary && params.sessionId) {
-      const skipped = isFallbackCandidateSkipped({
+      const skipped = isCandidateSessionSkipped({
         sessionId: params.sessionId,
-        ...candidateRef,
+        candidate,
         authScope: candidateAuthScope,
+        isPrimary,
       });
       if (skipped) {
         const skipReason =
@@ -502,6 +454,33 @@ async function runWithModelFallbackInternal<T>(
     if (operatorAuthority?.modelPolicy?.allows(candidateRef) === false) {
       continue;
     }
+    let modelCircuitAttempt: ModelCircuitAttempt | undefined;
+    // Track any route in a chain that has fallbacks, even when this occurrence
+    // is last. A configured primary appended after a requested fallback would
+    // otherwise never accumulate failures. The gate cannot strand the turn:
+    // with no runnable later candidate it returns a last-route probe.
+    if (modelCircuitEnabled && (hasRemainingCandidate || hasFallbackCandidates)) {
+      const circuitGate = gateModelCircuitForCandidate({
+        ...circuitGateContext,
+        // Context-fit reordering replaces `candidates`, so pass the live list.
+        candidates,
+        currentIndex: i,
+        operatorModelPolicy: operatorAuthority?.modelPolicy,
+      });
+      if (circuitGate.type === "skip") {
+        // A local skip, not a new backend attempt; see MODEL_FALLBACK_SKIPPED_CODE.
+        pushSkippedAttempt(circuitGate.error, circuitGate.reason);
+        await observeCandidateDecision("skip_candidate", {
+          reason: circuitGate.reason,
+          error: circuitGate.error,
+        });
+        continue;
+      }
+      modelCircuitAttempt = circuitGate.attempt;
+    }
+
+    // Terminal attempt paths can reject before returning an outcome. Release a
+    // half-open lease so the next turn can perform the recovery probe.
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
@@ -527,8 +506,17 @@ async function runWithModelFallbackInternal<T>(
       ...attemptContext,
       attribution: runAttribution,
       abortSignal: params.abortSignal,
+    }).catch((err: unknown) => {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
+      throw err;
     });
     if ("success" in attemptRun) {
+      // A chain stop (terminal timeout, abort) is not evidence the route recovered.
+      if (attemptRun.stopped) {
+        releaseModelCircuitAttempt(modelCircuitAttempt);
+      } else {
+        recordCandidateCircuitSuccess({ attempt: modelCircuitAttempt, ...candidateRef });
+      }
       if (!attemptRun.stopped && (i > 0 || attempts.length > 0 || attemptedDuringCooldown)) {
         await observeCandidateDecision("candidate_succeeded", {
           previousAttempts: attempts,
@@ -538,6 +526,7 @@ async function runWithModelFallbackInternal<T>(
     }
     const err = attemptRun.error;
     if (isAgentHarnessPreflightError(err)) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       const failedHarnessId = resolveAgentHarnessPreflightOwner(err);
       if (!failedHarnessId) {
         // Pre-scope callers established that their preflight is global to the
@@ -583,6 +572,7 @@ async function runWithModelFallbackInternal<T>(
         ...attemptContext,
       }))
     ) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       throw err;
     }
     if (attemptRun.classifiedResult) {
@@ -596,6 +586,7 @@ async function runWithModelFallbackInternal<T>(
     }
     // Local coordination failures must not consume provider fallbacks (#83510).
     if (isNonProviderRuntimeCoordinationError(err) || isTranscriptNotContinuableError(err)) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       throw err;
     }
     if (transientProbeProviderForAttempt) {
@@ -605,6 +596,7 @@ async function runWithModelFallbackInternal<T>(
       }
     }
     if (isMissingAgentHarnessError(err)) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       throw err;
     }
     const failoverContext = { ...candidateRef, ...runAttribution };
@@ -620,6 +612,7 @@ async function runWithModelFallbackInternal<T>(
 
     // Jump to later live selections; stale targets remain classified failures.
     if (err instanceof LiveSessionModelSwitchError) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       selectionChanged = true;
       // The outer owner must apply runtime changes before selecting another model.
       if (
@@ -657,7 +650,17 @@ async function runWithModelFallbackInternal<T>(
 
     const isKnownFailover = isFailoverError(normalized);
     if (!isKnownFailover && !hasRemainingCandidate) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       throw err;
+    }
+    if (isKnownFailover) {
+      recordCandidateCircuitFailure({
+        attempt: modelCircuitAttempt,
+        ...candidateRef,
+        error: normalized,
+      });
+    } else {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
     }
 
     // Cache non-primary auth failures for the next turn.

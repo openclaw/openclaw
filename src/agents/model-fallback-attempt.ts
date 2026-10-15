@@ -419,30 +419,77 @@ export function resolveNextFallbackCandidateIndex(params: {
   return params.candidates.length;
 }
 
-export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
+function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | undefined): boolean {
+  const normalized = normalizeOptionalString(runtime);
+  if (!normalized) {
+    return false;
+  }
+  return isCliRuntimeAlias(normalized) || isCliProvider(normalized, cfg);
+}
+
+export type CandidatePreTransportReadiness = {
+  /** The route reaches provider transport without preparing an agent harness. */
+  reachesTransportWithoutPreflight: boolean;
+  /** The route owns its transport/auth, so provider auth cooldown does not apply. */
+  skipsProviderAuthCooldown: boolean;
+};
+
+/**
+ * Non-mutating prefix of the harness auth precheck below.
+ *
+ * The precheck may call `prepareAgentHarnessRuntime`, which mutates runtime
+ * state and can throw. The route circuit gate only inspects later candidates,
+ * so it shares this read-only prefix instead; keeping one prefix means the two
+ * cannot drift (a direct CLI provider stays eligible during profile cooldown).
+ */
+export function resolveCandidatePreTransportReadiness(
   params: ModelFallbackRuntimeContext & ModelCandidate,
-): Promise<{ skipsProviderAuthCooldown: boolean; agentHarnessRuntimeOverride?: string }> {
-  const { agentHarnessRuntimeOverride, explicitAgentRuntime, runtime, runtimeSource } =
+): CandidatePreTransportReadiness {
+  const { explicitAgentRuntime, runtime, runtimeSource } =
     resolveModelFallbackCandidateAgentRuntime(params);
-  const result = (skipsProviderAuthCooldown: boolean) => ({
+  const reaches = (skipsProviderAuthCooldown: boolean): CandidatePreTransportReadiness => ({
+    reachesTransportWithoutPreflight: true,
     skipsProviderAuthCooldown,
-    agentHarnessRuntimeOverride,
   });
   if (!params.cfg) {
-    return result(false);
+    return reaches(false);
   }
   if (!explicitAgentRuntime && isCliProvider(params.provider, params.cfg)) {
-    return result(true);
+    return reaches(true);
   }
   if (!runtime) {
-    return result(false);
+    return reaches(false);
   }
   if (
     runtime === "openclaw" ||
     runtime === "auto" ||
     (runtime === "codex" && runtimeSource === "implicit")
   ) {
-    return result(false);
+    return reaches(false);
+  }
+  // A model-configured CLI runtime owns its transport and auth. It only needs
+  // the harness prepared when one is registered for that id; both lookups are
+  // read-only.
+  if (!getRegisteredAgentHarness(runtime) && isCliAgentRuntime(runtime, params.cfg)) {
+    return reaches(true);
+  }
+  return { reachesTransportWithoutPreflight: false, skipsProviderAuthCooldown: false };
+}
+
+export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
+  params: ModelFallbackRuntimeContext & ModelCandidate,
+): Promise<{ skipsProviderAuthCooldown: boolean; agentHarnessRuntimeOverride?: string }> {
+  const { agentHarnessRuntimeOverride, runtime } =
+    resolveModelFallbackCandidateAgentRuntime(params);
+  const result = (skipsProviderAuthCooldown: boolean) => ({
+    skipsProviderAuthCooldown,
+    agentHarnessRuntimeOverride,
+  });
+  const readiness = resolveCandidatePreTransportReadiness(params);
+  // Every path that leaves `runtime` unset is already decided by the shared
+  // prefix; the check keeps that guarantee visible to the type system.
+  if (readiness.reachesTransportWithoutPreflight || !runtime) {
+    return result(readiness.skipsProviderAuthCooldown);
   }
   await params.prepareAgentHarnessRuntime?.({
     provider: params.provider,
@@ -453,8 +500,7 @@ export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
     // A prepared harness owns auth even when a CLI backend reuses its id.
     return result(true);
   }
-  const cliRuntime = normalizeOptionalString(runtime);
-  if (cliRuntime && (isCliRuntimeAlias(cliRuntime) || isCliProvider(cliRuntime, params.cfg))) {
+  if (isCliAgentRuntime(runtime, params.cfg)) {
     // CLI-owned auth must not inherit provider-profile cooldowns.
     return result(true);
   }
