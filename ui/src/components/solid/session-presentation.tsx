@@ -241,14 +241,14 @@ export function SidebarSessionSubtitle(props: SidebarSessionSubtitle) {
           </span>
         </openclaw-tooltip>
       </Show>
-      <Show
-        when={props.narration}
-        fallback={<span class="sidebar-recent-session__subtitle">{props.subtitle}</span>}
+      <span
+        class={[
+          "sidebar-recent-session__subtitle",
+          { "sidebar-recent-session__subtitle--narration": Boolean(props.narration) },
+        ]}
       >
-        <span class="sidebar-recent-session__subtitle sidebar-recent-session__subtitle--narration">
-          {props.subtitle}
-        </span>
-      </Show>
+        {props.subtitle}
+      </span>
     </Show>
   );
 }
