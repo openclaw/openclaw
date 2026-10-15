@@ -5,6 +5,7 @@ import { parseJsonl } from "../jsonl/parse.js";
 import { formatOcPath, OcPathError, parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
 import { resolveOcPath, setOcPath } from "../universal.js";
+import { parseYaml } from "../yaml/parse.js";
 
 function leafValues(results: ReturnType<typeof findOcPaths>): string[] {
   return results.map(({ match }) => {
@@ -158,6 +159,78 @@ describe("findOcPaths — JSONC", () => {
   });
 });
 
+describe("quoted union targets", () => {
+  it.each([
+    { file: "f.json", parse: parseJsonc, raw: '{"a.b":1}' },
+    { file: "f.yaml", parse: parseYaml, raw: "a.b: 1\n" },
+  ])("resolves either ordering of literal key aliases in $file", ({ file, parse, raw }) => {
+    const ast = parse(raw).ast;
+    const prefix = "oc://" + file;
+    for (const union of ['{a.b,"a.b"}', '{"a.b",a.b}']) {
+      const out = findOcPaths(ast, parseOcPath(prefix + "/" + union));
+      expect(out.map(({ path }) => formatOcPath(path))).toEqual([prefix + '/"a.b"']);
+      expect(leafValues(out)).toEqual(["1"]);
+      for (const { path, match } of out) {
+        expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
+      }
+    }
+  });
+  it.each([
+    { file: "f.json", parse: parseJsonc, raw: '{"*":1,"**":2,"a":3}' },
+    { file: "f.yaml", parse: parseYaml, raw: '"*": 1\n"**": 2\na: 3\n' },
+  ])("preserves explicit quotes in literal unions in $file", ({ file, parse, raw }) => {
+    const ast = parse(raw).ast;
+    const prefix = "oc://" + file;
+    const out = findOcPaths(ast, parseOcPath(prefix + '/{"*","**","a"}'));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      prefix + '/"*"',
+      prefix + '/"**"',
+      prefix + '/"a"',
+    ]);
+    expect(leafValues(out)).toEqual(["1", "2", "3"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
+  });
+});
+
+describe("recursive wildcard targets", () => {
+  it.each([
+    { file: "f.json", parse: parseJsonc, raw: '{"a":{"b":1},"a.b":2}' },
+    { file: "f.yaml", parse: parseYaml, raw: "a:\n  b: 1\na.b: 2\n" },
+  ])("returns each target once across recursive slots in $file", ({ file, parse, raw }) => {
+    const ast = parse(raw).ast;
+    const prefix = "oc://" + file;
+    const out = findOcPaths(ast, parseOcPath(prefix + "/**/**/**"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      prefix,
+      prefix + "/a",
+      prefix + "/a.b",
+      prefix + '/"a.b"',
+    ]);
+    expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1", "2"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
+  });
+
+  it("keeps repeated recursive wildcards within the small-tree CPU budget", () => {
+    let value: unknown = 1;
+    for (let depth = 9; depth >= 0; depth--) {
+      value = { ["k" + depth]: value };
+    }
+    const ast = parseJsonc(JSON.stringify(value)).ast;
+    const pattern = parseOcPath("oc://f.json/" + Array(10).fill("**").join("."));
+    const start = process.threadCpuUsage();
+    const out = findOcPaths(ast, pattern);
+    const { user, system } = process.threadCpuUsage(start);
+
+    expect(out).toHaveLength(11);
+    expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
+    expect((user + system) / 1000).toBeLessThan(100 * (process.env.CI ? 4 : 1));
+  });
+});
+
 describe("findOcPaths — JSONL", () => {
   const ast = parseJsonl(
     '{"event":"start","userId":"u1"}\n{"event":"action","userId":"u1"}\n{"event":"end","userId":"u1"}\n',
@@ -216,6 +289,19 @@ describe("findOcPaths — Markdown", () => {
     const out = findOcPaths(md, parseOcPath("oc://AGENTS.md/tools/*/foo"));
     expect(out.map(({ path }) => path.item)).toEqual(["#0", "#1"]);
     expect(leafValues(out)).toEqual(["a", "b"]);
+  });
+
+  it("keeps item nodes when a recursive wildcard consumes the item slot", () => {
+    const out = findOcPaths(md, parseOcPath("oc://AGENTS.md/tools/**"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      "oc://AGENTS.md/tools",
+      "oc://AGENTS.md/tools/#0",
+      "oc://AGENTS.md/tools/#1",
+      "oc://AGENTS.md/tools/bar",
+    ]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(md, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
   });
 
   it("rejects out-of-range ordinals", () => {
