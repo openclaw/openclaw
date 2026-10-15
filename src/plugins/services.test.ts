@@ -86,6 +86,111 @@ describe("startPluginServices", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  it("overlaps independent plugins with bounded starts and preserves each plugin's order", async () => {
+    const releases = Array.from({ length: 5 }, () => createDeferredCore());
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const registry = createEmptyPluginRegistry();
+    for (let index = 0; index < releases.length; index++) {
+      registry.services.push(
+        ...createRegistry(
+          [
+            {
+              id: `prepare-${index}`,
+              async start() {
+                events.push(`prepare-${index}`);
+                await releases[index]!.promise;
+                events.push(`ready-${index}`);
+              },
+            },
+            {
+              id: `consume-${index}`,
+              start: () => {
+                events.push(`consume-${index}`);
+              },
+            },
+          ],
+          `plugin-${index}`,
+        ).services,
+      );
+    }
+    let settled = false;
+    const startup = start(registry).then(() => {
+      settled = true;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events).toEqual(["prepare-0", "prepare-1", "prepare-2", "prepare-3"]);
+      expect(settled).toBe(false);
+      releases[1]!.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events).toContain("prepare-4");
+      expect(events).toContain("consume-1");
+      expect(events).not.toContain("consume-0");
+      expect(settled).toBe(false);
+    } finally {
+      releases.forEach((entry) => entry.resolve());
+      await startup;
+      vi.useRealTimers();
+    }
+    for (let index = 0; index < releases.length; index++) {
+      expect(events.indexOf(`ready-${index}`)).toBeLessThan(events.indexOf(`consume-${index}`));
+    }
+  });
+
+  it("joins in-flight plugin starts before rejecting a candidate", async () => {
+    const release = createDeferredCore();
+    vi.useFakeTimers();
+    const registry = createRegistry(
+      [
+        {
+          id: "failed",
+          async start() {
+            throw new Error("startup failed");
+          },
+        },
+      ],
+      "failed-plugin",
+    );
+    registry.services.push(
+      ...createRegistry(
+        [
+          {
+            id: "sibling",
+            async start() {
+              await release.promise;
+            },
+          },
+        ],
+        "sibling-plugin",
+      ).services,
+    );
+    let settled = false;
+    const startup = startPluginServices({
+      registry,
+      config: {},
+      throwOnStartError: true,
+      onHandle: (handle) => handles.add(handle),
+    });
+    const observed = startup.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+    } finally {
+      release.resolve();
+      await observed;
+      vi.useRealTimers();
+    }
+    await expect(startup).rejects.toThrow("plugin services failed to start");
+  });
+
   it("fences service health reporters to their owning generation", async () => {
     const contexts: OpenClawPluginServiceContext[] = [];
     const registry = createRegistry([
@@ -731,6 +836,7 @@ describe("startPluginServices", () => {
   it("does not repeat rejected cleanup when startup fails after replacement settles", async () => {
     vi.useFakeTimers();
     const startup = createDeferredCore();
+    const started = createDeferredCore();
     const cleanupError = new Error("cleanup rejected");
     const order: string[] = [];
     const stop = vi.fn(() => {
@@ -744,6 +850,7 @@ describe("startPluginServices", () => {
           id: "interrupted-startup",
           start: () => {
             order.push("start");
+            started.resolve();
             return startup.promise;
           },
           stop,
@@ -754,6 +861,7 @@ describe("startPluginServices", () => {
         handle = issued;
       },
     });
+    await started.promise;
     const stopped = handle
       .stop({
         strict: true,

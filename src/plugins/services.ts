@@ -9,6 +9,7 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { createPluginServiceGatewayEvents } from "./gateway-events.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
@@ -676,39 +677,51 @@ async function startPreparedPluginServices({
   const startupSettled = (async () => {
     // The previous owner's completion clears every marker, including later retained services.
     const reloads = new Map(ownedServices.map((entry) => [entry.registration, entry.reloading]));
-    for (const entry of registry.services) {
-      if (owner.closed) {
-        break;
-      }
-      if (deferStartForPluginIds?.has(entry.pluginId)) {
-        continue;
-      }
-      if (!canStart(entry)) {
-        if (throwOnStartError && owner.stopped.has(entry)) {
-          throw new Error(
-            `Previous plugin service cleanup remains pending (${entry.pluginId}/${entry.id})`,
-          );
+    // Preserve each plugin's dependency order without serializing unrelated plugins.
+    const groups = Map.groupBy(registry.services, (entry) => entry.pluginId);
+    const result = await runTasksWithConcurrency({
+      limit: 4,
+      errorMode: "stop",
+      tasks: [...groups.values()].map((entries) => async () => {
+        for (const entry of entries) {
+          if (owner.closed) {
+            break;
+          }
+          if (deferStartForPluginIds?.has(entry.pluginId)) {
+            continue;
+          }
+          if (!canStart(entry)) {
+            if (throwOnStartError && owner.stopped.has(entry)) {
+              throw new Error(
+                `Previous plugin service cleanup remains pending (${entry.pluginId}/${entry.id})`,
+              );
+            }
+            continue;
+          }
+          const retained = ownedServices.find((service) => service.registration === entry);
+          if (retained) {
+            const reloading = reloads.get(entry);
+            if (!reloading) {
+              continue;
+            }
+            await reloading;
+            if (!retained.cleaned || !canStart(entry)) {
+              continue;
+            }
+          }
+          const failures: unknown[] = [];
+          if (!(await startService(entry, initialConfig, failures, throwOnStartError === true))) {
+            failedCount += 1;
+            if (throwOnStartError) {
+              throw new AggregateError(failures, "plugin services failed to start");
+            }
+          }
         }
-        continue;
-      }
-      const retained = ownedServices.find((service) => service.registration === entry);
-      if (retained) {
-        const reloading = reloads.get(entry);
-        if (!reloading) {
-          continue;
-        }
-        await reloading;
-        if (!retained.cleaned || !canStart(entry)) {
-          continue;
-        }
-      }
-      const failures: unknown[] = [];
-      if (!(await startService(entry, initialConfig, failures, throwOnStartError === true))) {
-        failedCount += 1;
-        if (throwOnStartError) {
-          throw new AggregateError(failures, "plugin services failed to start");
-        }
-      }
+      }),
+    });
+    // Failed candidate startup still owns every in-flight sibling until it settles.
+    if (result.hasError) {
+      throw result.firstError;
     }
   })();
   await startupSettled;
