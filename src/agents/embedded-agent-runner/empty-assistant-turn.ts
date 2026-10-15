@@ -21,10 +21,7 @@ function hasZeroTokenUsageSnapshot(usage: unknown): boolean {
     fields.cacheWrite,
     fields.total ?? fields.totalTokens ?? fields.total_tokens,
   ].map(asFiniteNumber);
-  return (
-    counts.some((count) => count === 0) &&
-    counts.every((count) => count === undefined || count === 0)
-  );
+  return counts.includes(0) && counts.every((count) => count === undefined || count === 0);
 }
 
 export function isZeroUsageEmptyStopAssistantTurn(message: EmptyAssistantTurnLike | null): boolean {

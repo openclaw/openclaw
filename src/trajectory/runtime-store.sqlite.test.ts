@@ -7,15 +7,26 @@ import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statem
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  readSqliteDatabaseScopedWriteToken,
+  sqliteSessionIdWriteScope,
+} from "../infra/sqlite-database-admission.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
-  appendSqliteTrajectoryRuntimeEvents,
+  appendSqliteTrajectoryRuntimeEventsWithWriter,
   loadSqliteTrajectoryRuntimeEventRowsSync,
   loadSqliteTrajectoryRuntimeEvents,
 } from "./runtime-store.sqlite.js";
-import { createTrajectoryEvent } from "./runtime-store.test-support.js";
+import {
+  appendSqliteTrajectoryRuntimeEvents,
+  appendSerializedTrajectoryRuntimeEvents,
+  createTrajectoryEvent,
+} from "./runtime-store.test-support.js";
 import type { TrajectoryEvent } from "./types.js";
 
 type TrajectoryRuntimeTestDatabase = Pick<OpenClawAgentKyselyDatabase, "trajectory_runtime_events">;
@@ -39,7 +50,7 @@ describe("SQLite trajectory runtime store", () => {
     vi.useRealTimers();
   });
 
-  it("appends batches in database order without trusting recorder-local seq", async () => {
+  it("appends serialized batches in database order without trusting recorder-local seq", async () => {
     const events = Array.from({ length: 201 }, (_, index) =>
       createTrajectoryEvent({ seq: 1, type: `event-${index}` }),
     );
@@ -54,7 +65,14 @@ describe("SQLite trajectory runtime store", () => {
       /^insert into "trajectory_runtime_events"/i.test(sql) ? "append" : null,
     );
     try {
-      appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, events);
+      appendSerializedTrajectoryRuntimeEvents(
+        { sessionId: "session-1", storePath },
+        events.map((event) => ({
+          runId: event.runId,
+          ts: event.ts,
+          line: JSON.stringify(event),
+        })),
+      );
       expect(counter.counts.append).toBeLessThan(10);
     } finally {
       counter.restore();
@@ -67,11 +85,148 @@ describe("SQLite trajectory runtime store", () => {
       database.db,
       db
         .selectFrom("trajectory_runtime_events")
-        .select(["seq", "run_id"])
+        .select(["seq", "run_id", "event_json"])
         .where("session_id", "=", "session-1")
         .orderBy("seq", "asc"),
     ).rows;
-    expect(rows).toEqual(events.map((_, seq) => ({ run_id: "run-1", seq })));
+    expect(rows).toEqual(
+      events.map((event, seq) => ({ run_id: "run-1", seq, event_json: JSON.stringify(event) })),
+    );
+  });
+
+  it.each(["session-1", "session-2"])(
+    "keeps transcript receipts current across trajectory append and trimming for %s",
+    async (sessionId) => {
+      await replaceSessionEntry(
+        { sessionKey: "agent:main:other", storePath },
+        { sessionId: "session-2", updatedAt: 10 },
+      );
+      const options = { agentId: "main", path: sqlitePath() };
+      const database = openOpenClawAgentDatabase(options);
+      const scopes = [
+        "agent:main:main",
+        "agent:main:other",
+        sqliteSessionIdWriteScope("session-1"),
+        sqliteSessionIdWriteScope("session-2"),
+      ];
+      const token = readSqliteDatabaseScopedWriteToken(database.db, scopes);
+      expect(token).toBeTypeOf("string");
+      const append = (types: string[], discardPrevious?: boolean, maxRuntimeBytes?: number) =>
+        appendSqliteTrajectoryRuntimeEventsWithWriter(
+          {
+            sessionId,
+            discardPrevious,
+            maxRuntimeBytes,
+            events: types.map((type) => {
+              const event = createTrajectoryEvent({ sessionId, type });
+              return { runId: event.runId, ts: event.ts, line: JSON.stringify(event) };
+            }),
+          },
+          (operationLabel, write) =>
+            runOpenClawAgentWriteTransaction(write, options, { operationLabel }),
+        ).receipt;
+      expect(append(["first", "second"])).toEqual({
+        kind: "trajectory-runtime-append",
+        sessionId,
+        appendedRange: { firstSeq: 0, lastSeq: 1 },
+        removedThroughSeq: undefined,
+        windowFacts: {
+          nextSeq: 2,
+          retainedBytes: ["first", "second"].reduce(
+            (bytes, type) =>
+              bytes +
+              Buffer.byteLength(JSON.stringify(createTrajectoryEvent({ sessionId, type }))) +
+              1,
+            0,
+          ),
+        },
+      });
+      expect(append(["third", "fourth"], true)).toEqual({
+        kind: "trajectory-runtime-append",
+        sessionId,
+        appendedRange: { firstSeq: 2, lastSeq: 3 },
+        removedThroughSeq: 1,
+        windowFacts: {
+          nextSeq: 4,
+          retainedBytes: ["third", "fourth"].reduce(
+            (bytes, type) =>
+              bytes +
+              Buffer.byteLength(JSON.stringify(createTrajectoryEvent({ sessionId, type }))) +
+              1,
+            0,
+          ),
+        },
+      });
+      const last = createTrajectoryEvent({ sessionId, type: "last" });
+      expect(append(["last"], false, Buffer.byteLength(JSON.stringify(last), "utf8") + 1)).toEqual({
+        kind: "trajectory-runtime-append",
+        sessionId,
+        appendedRange: { firstSeq: 4, lastSeq: 4 },
+        removedThroughSeq: 3,
+        windowFacts: {
+          nextSeq: 5,
+          retainedBytes: Buffer.byteLength(JSON.stringify(last), "utf8") + 1,
+        },
+      });
+      expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
+      expect(loadSqliteTrajectoryRuntimeEventRowsSync({ sessionId, storePath })).toEqual([
+        { seq: 4, event: last },
+      ]);
+    },
+  );
+
+  it("uses committed window facts until actual byte overflow needs the SQL suffix", () => {
+    const options = { agentId: "main", path: sqlitePath() };
+    const database = openOpenClawAgentDatabase(options);
+    const events = ["first🦞", "later🦞", "final🦞"].map((type) => createTrajectoryEvent({ type }));
+    const maxRuntimeBytes = events
+      .slice(0, 2)
+      .reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event), "utf8") + 1, 0);
+    const append = (
+      event: TrajectoryEvent,
+      windowFacts?: { nextSeq: number; retainedBytes: number },
+    ) =>
+      appendSqliteTrajectoryRuntimeEventsWithWriter(
+        {
+          sessionId: "session-1",
+          maxRuntimeBytes,
+          windowFacts,
+          events: [{ runId: event.runId, ts: event.ts, line: JSON.stringify(event) }],
+        },
+        (operationLabel, write) =>
+          runOpenClawAgentWriteTransaction(write, options, { operationLabel }),
+      ).receipt.windowFacts;
+    const first = append(events[0]!);
+    let committed = first;
+    const counter = trackSqliteStatementExecutions(database.db, ["window"], (sql) =>
+      /^select\b/i.test(sql) && sql.includes('"trajectory_runtime_events"') ? "window" : null,
+    );
+    try {
+      const second = append(events[1]!, first);
+      expect(counter.counts.window).toBe(0);
+      expect(second).toEqual({ nextSeq: 2, retainedBytes: maxRuntimeBytes });
+      committed = append(events[2]!, second);
+      expect(committed).toEqual({ nextSeq: 3, retainedBytes: maxRuntimeBytes });
+      expect(counter.counts.window).toBe(1);
+      expect(counter.textBytes.window).toBe(0);
+    } finally {
+      counter.restore();
+    }
+    expect(loadSqliteTrajectoryRuntimeEventRowsSync({ sessionId: "session-1", storePath })).toEqual(
+      events.slice(1).map((event, index) => ({ event, seq: index + 1 })),
+    );
+    const empty = append(
+      createTrajectoryEvent({ type: "oversized", payloadSize: maxRuntimeBytes }),
+      committed,
+    );
+    expect(empty).toEqual({ nextSeq: 0, retainedBytes: 0 });
+    expect(append(events[0]!, empty)).toEqual({
+      nextSeq: 1,
+      retainedBytes: Buffer.byteLength(JSON.stringify(events[0]), "utf8") + 1,
+    });
+    expect(loadSqliteTrajectoryRuntimeEventRowsSync({ sessionId: "session-1", storePath })).toEqual(
+      [{ event: events[0], seq: 0 }],
+    );
   });
 
   it("rolls back a later batch failure and retries without losing or duplicating events", async () => {
@@ -130,47 +285,6 @@ describe("SQLite trajectory runtime store", () => {
     await expect(
       loadSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-1", storePath }),
     ).resolves.toEqual([]);
-  });
-
-  it("trims the retained byte window without fetching UTF-8 event bodies", async () => {
-    const history = Array.from({ length: 64 }, (_, index) =>
-      createTrajectoryEvent({ type: `old-${index}`, payloadSize: 64 * 1024 }),
-    );
-    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, history);
-    const newest = createTrajectoryEvent({ type: "newest" });
-    const retained = [...history.slice(-2), newest];
-    const maxRuntimeBytes = retained.reduce(
-      (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event), "utf8") + 1,
-      0,
-    );
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
-    const prepare = database.db.prepare.bind(database.db);
-    let materializedEvents = 0;
-    const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
-      const statement = prepare(sql);
-      const iterate = statement.iterate.bind(statement);
-      vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
-        for (const row of iterate(...args)) {
-          if (typeof row.event_json === "string") {
-            materializedEvents += 1;
-          }
-          yield row;
-        }
-        return undefined;
-      });
-      return statement;
-    });
-    try {
-      appendSqliteTrajectoryRuntimeEvents({ maxRuntimeBytes, sessionId: "session-1", storePath }, [
-        newest,
-      ]);
-      expect(materializedEvents).toBe(0);
-    } finally {
-      prepareSpy.mockRestore();
-    }
-    await expect(
-      loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
-    ).resolves.toEqual(retained);
   });
 
   it.each(

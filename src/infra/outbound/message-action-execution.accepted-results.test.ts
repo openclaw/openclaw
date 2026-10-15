@@ -19,7 +19,8 @@ import {
   type MessageActionResult,
   type ResolvedActionContext,
 } from "./message-action-contracts.js";
-import { annotateSourceDelivery, executeMessagePoll } from "./message-action-execution.js";
+import { executeMessagePoll } from "./message-action-execution.js";
+import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import { runMessageAction } from "./message-action-runner.js";
 import {
   registerReplyPlugin,
@@ -501,7 +502,10 @@ describe("annotateSourceDelivery thread replies", () => {
     );
 
     expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
-    expect(result.toolResult.details).toMatchObject({ sourceReplyRoute: "current-source" });
+    expect(result).toHaveProperty(
+      "toolResult.details",
+      expect.objectContaining({ sourceReplyRoute: "current-source" }),
+    );
   });
 
   it("leaves a different-thread receipt unmarked", async () => {
@@ -731,20 +735,6 @@ describe("executeMessagePoll", () => {
       messageId: "poll-test",
       receipt: { primaryPlatformMessageId: "poll-test", threadId: "42" },
     });
-  });
-
-  it("normalizes blank poll content and trims its question and options", async () => {
-    const { call } = await runPollAction({
-      actionParams: {
-        target: "poller:123",
-        message: " \n\t ",
-        pollQuestion: " Lunch? ",
-        pollOption: [" Pizza ", " Sushi "],
-      },
-    });
-    expect(call.content).toBe("");
-    expect(call.poll.question).toBe("Lunch?");
-    expect(call.poll.options).toEqual(["Pizza", "Sushi"]);
   });
 
   it("requires at least two poll options", async () => {

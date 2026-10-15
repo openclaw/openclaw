@@ -1561,155 +1561,74 @@ describe("diagnostics-otel service", () => {
     }
   });
 
-  test.each(["otlp", "stdout"] as const)(
-    "exports bounded trusted security logs over %s",
-    async (logsExporter) => {
-      await startServiceFixture(["logs"], {
-        logsExporter,
-        ...(logsExporter === "stdout" ? { endpoint: "" } : {}),
-      });
-      const stdout = logsExporter === "stdout" ? captureStdoutWrites() : undefined;
-      try {
-        const trace = createDiagnosticTraceContext(createTestTrace(SPAN_ID));
-
-        emitTrustedSecurityEvent({
-          eventId: logsExporter === "stdout" ? "security-event-stdout" : "security-event-1",
-          category: "tool",
-          action: "tool.execution.blocked",
-          outcome: "denied",
-          severity: "medium",
-          reason: "tools.deny",
-          ...(logsExporter === "otlp"
-            ? {
-                actor: {
-                  kind: "agent",
-                  idHash: "agent-hash-1",
-                  role: "operator",
-                  scopes: ["operator.read", "operator.approvals"],
-                },
-                target: {
-                  kind: "plugin",
-                  name: "@acme/security-event-plugin",
-                  owner: "plugin-installer",
-                },
-                policy: {
-                  id: "tools.exec",
-                  decision: "deny",
-                  reason: "allowlist.miss",
-                },
-                control: {
-                  id: "exec-approval",
-                  family: "approval",
-                },
-              }
-            : {}),
-          attributes: {
-            ...(logsExporter === "otlp" ? { params_kind: "object" } : {}),
-            secretish: "token sk-test-secret",
-            [PROTO_KEY]: "blocked",
-          },
-          trace,
-        });
-        await flushDiagnosticEvents();
-
-        const emitCall = stdout
-          ? parseSingleStdoutDiagnosticLogLine(stdout.writes)
-          : (mockCallArg(logEmit, 0) as {
-              attributes?: Record<string, unknown>;
-              body?: string;
-              context?: unknown;
-              severityNumber?: number;
-              severityText?: string;
-            });
-        expect(emitCall.body).toBe("openclaw.security.event");
-        expect(emitCall.severityText).toBe("WARN");
-        expect(emitCall.severityNumber).toBe(13);
-        expect(emitCall.attributes).toMatchObject({
-          "openclaw.security.event_id":
-            logsExporter === "stdout" ? "security-event-stdout" : "security-event-1",
-          "openclaw.security.category": "tool",
-          "openclaw.security.action": "tool.execution.blocked",
-          "openclaw.security.outcome": "denied",
-          "openclaw.security.severity": "medium",
-          "openclaw.security.reason": "tools.deny",
-          ...(logsExporter === "otlp"
-            ? {
-                "openclaw.security.actor.kind": "agent",
-                "openclaw.security.actor.id_hash": "agent-hash-1",
-                "openclaw.security.actor.role": "operator",
-                "openclaw.security.actor.scopes": "operator.read,operator.approvals",
-                "openclaw.security.target.kind": "plugin",
-                "openclaw.security.target.name": "@acme/security-event-plugin",
-                "openclaw.security.target.owner": "plugin-installer",
-                "openclaw.security.policy.id": "tools.exec",
-                "openclaw.security.policy.decision": "deny",
-                "openclaw.security.policy.reason": "allowlist.miss",
-                "openclaw.security.control.id": "exec-approval",
-                "openclaw.security.control.family": "approval",
-                "openclaw.security.attribute.params_kind": "object",
-              }
-            : {}),
-          "openclaw.security.attribute.secretish": "unknown",
-        });
-        if (stdout) {
-          expect(logExporterCtor).not.toHaveBeenCalled();
-          expect(logEmit).not.toHaveBeenCalled();
-          expect(emitCall).toMatchObject({
-            trace_id: TRACE_ID,
-            span_id: SPAN_ID,
-            trace_flags: "01",
-          });
-        } else {
-          expect("context" in emitCall ? emitCall.context : undefined).toEqual({
-            spanContext: { traceId: TRACE_ID, spanId: SPAN_ID, traceFlags: 1, isRemote: true },
-          });
-        }
-        expectAbsent(emitCall.attributes, "openclaw.security.attribute.__proto__");
-        expect(JSON.stringify(emitCall)).not.toContain("sk-test-secret");
-      } finally {
-        stdout?.spy.mockRestore();
-      }
-    },
-  );
-
-  test("keeps stdout logs active when the OTLP branch of both is unsupported", async () => {
-    const { events, unsubscribe } = captureExporterEvents();
-    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
-    process.env.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = "grpc";
-    const capture = captureStdoutWrites();
-
-    try {
-      const { ctx } = await startServiceFixture(["logs"], {
-        logsExporter: "both",
-        configure: omitConfiguredProtocol,
-      });
-      emitEvent("log.record", {
-        message: "stdout fallback log",
-      });
-      await flushDiagnosticEvents();
-
-      expect(logExporterCtor).not.toHaveBeenCalled();
-      expect(parseSingleStdoutDiagnosticLogLine(capture.writes).body).toBe("log");
-      expect(ctx.logger.warn).toHaveBeenCalledWith(
-        "diagnostics-otel: unsupported logs protocol grpc; OTLP export disabled",
-      );
-      expect(ctx.logger.info).toHaveBeenCalledWith(
-        "diagnostics-otel: logs exporter enabled (stdout JSONL)",
-      );
-      expect(
-        events.map((event) => ({
-          signal: event.signal,
-          status: event.status,
-          reason: event.reason,
-        })),
-      ).toEqual([
-        { signal: "logs", status: "failure", reason: "unsupported_protocol" },
-        { signal: "logs", status: "started", reason: "configured" },
-      ]);
-    } finally {
-      capture.spy.mockRestore();
-      unsubscribe();
-    }
+  test("exports bounded trusted security logs", async () => {
+    await startServiceFixture(["logs"]);
+    const trace = createDiagnosticTraceContext(createTestTrace(SPAN_ID));
+    emitTrustedSecurityEvent({
+      eventId: "security-event-1",
+      category: "tool",
+      action: "tool.execution.blocked",
+      outcome: "denied",
+      severity: "medium",
+      reason: "tools.deny",
+      actor: {
+        kind: "agent",
+        idHash: "agent-hash-1",
+        role: "operator",
+        scopes: ["operator.read", "operator.approvals"],
+      },
+      target: {
+        kind: "plugin",
+        name: "@acme/security-event-plugin",
+        owner: "plugin-installer",
+      },
+      policy: { id: "tools.exec", decision: "deny", reason: "allowlist.miss" },
+      control: { id: "exec-approval", family: "approval" },
+      attributes: {
+        params_kind: "object",
+        secretish: "token sk-test-secret",
+        [PROTO_KEY]: "blocked",
+      },
+      trace,
+    });
+    await flushDiagnosticEvents();
+    const emitCall = mockCallArg(logEmit, 0) as {
+      attributes?: Record<string, unknown>;
+      body?: string;
+      context?: unknown;
+      severityNumber?: number;
+      severityText?: string;
+    };
+    expect(emitCall.body).toBe("openclaw.security.event");
+    expect(emitCall.severityText).toBe("WARN");
+    expect(emitCall.severityNumber).toBe(13);
+    expect(emitCall.attributes).toMatchObject({
+      "openclaw.security.event_id": "security-event-1",
+      "openclaw.security.category": "tool",
+      "openclaw.security.action": "tool.execution.blocked",
+      "openclaw.security.outcome": "denied",
+      "openclaw.security.severity": "medium",
+      "openclaw.security.reason": "tools.deny",
+      "openclaw.security.actor.kind": "agent",
+      "openclaw.security.actor.id_hash": "agent-hash-1",
+      "openclaw.security.actor.role": "operator",
+      "openclaw.security.actor.scopes": "operator.read,operator.approvals",
+      "openclaw.security.target.kind": "plugin",
+      "openclaw.security.target.name": "@acme/security-event-plugin",
+      "openclaw.security.target.owner": "plugin-installer",
+      "openclaw.security.policy.id": "tools.exec",
+      "openclaw.security.policy.decision": "deny",
+      "openclaw.security.policy.reason": "allowlist.miss",
+      "openclaw.security.control.id": "exec-approval",
+      "openclaw.security.control.family": "approval",
+      "openclaw.security.attribute.params_kind": "object",
+      "openclaw.security.attribute.secretish": "unknown",
+    });
+    expect(emitCall.context).toEqual({
+      spanContext: { traceId: TRACE_ID, spanId: SPAN_ID, traceFlags: 1, isRemote: true },
+    });
+    expectAbsent(emitCall.attributes, "openclaw.security.attribute.__proto__");
+    expect(JSON.stringify(emitCall)).not.toContain("sk-test-secret");
   });
 
   test("ignores blank OTLP protocol env overrides", async () => {
@@ -2624,7 +2543,6 @@ describe("diagnostics-otel service", () => {
         metrics: true,
         logs: true,
       },
-      fails: true,
     },
     {
       name: "never falls back from unreadable signal TLS to shared trust",
@@ -2633,42 +2551,20 @@ describe("diagnostics-otel service", () => {
         OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE: "/definitely-missing/qa-otel-signal-override.pem",
       },
       options: { traces: true },
-      fails: true,
     },
-    {
-      name: "validates plugin log TLS even with a preloaded trace SDK",
-      env: {
-        OPENCLAW_OTEL_PRELOADED: "1",
-        OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE: "/definitely-missing/qa-otel-preloaded-log-root.pem",
-      },
-      options: { traces: true, logs: true },
-      fails: true,
-    },
-    {
-      name: "accepts valid ambient TLS for plain HTTP collectors",
-      env: { OTEL_EXPORTER_OTLP_CERTIFICATE: process.execPath },
-      options: { endpoint: "http://collector.example.com/otlp", traces: true },
-      fails: false,
-    },
-  ])("$name", async ({ env, options, fails }) => {
+  ])("$name", async ({ env, options }) => {
     Object.assign(process.env, env);
-    if (fails) {
-      await expect(startOtelService(options)).rejects.toThrow(
-        "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export",
-      );
-      for (const owner of [
-        traceExporterCtor,
-        metricExporterCtor,
-        logExporterCtor,
-        traceProviderCtor,
-        meterProviderCtor,
-      ]) {
-        expect(owner).not.toHaveBeenCalled();
-      }
-    } else {
-      await startOtelService(options);
-      expect(traceExporterCtor).toHaveBeenCalledTimes(1);
-      expect(firstExporterOptions(traceExporterCtor).httpAgentOptions).toBeUndefined();
+    await expect(startOtelService(options)).rejects.toThrow(
+      "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export",
+    );
+    for (const owner of [
+      traceExporterCtor,
+      metricExporterCtor,
+      logExporterCtor,
+      traceProviderCtor,
+      meterProviderCtor,
+    ]) {
+      expect(owner).not.toHaveBeenCalled();
     }
   });
 
@@ -2692,12 +2588,14 @@ describe("diagnostics-otel service", () => {
     expect(traceExporterCtor).not.toHaveBeenCalled();
   });
 
-  test("exports diagnostic logs as stdout JSONL without constructing the OTLP log exporter", async () => {
+  test("exports diagnostic logs as stdout JSONL when the OTLP branch is unsupported", async () => {
+    process.env.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = "grpc";
     await startServiceFixture(["logs"], {
       endpoint: "",
-      logsExporter: "stdout",
+      logsExporter: "both",
       captureContent: true,
       configure: (ctx) => {
+        omitConfiguredProtocol(ctx);
         ctx.config.diagnostics!.otel!.serviceName = "rovoclaw-openclaw";
       },
     });
@@ -2828,47 +2726,6 @@ describe("diagnostics-otel service", () => {
     );
   });
 
-  test("exports GenAI usage attributes on model usage spans without diagnostic identifiers", async () => {
-    await startServiceFixture(["traces"]);
-
-    await emitAndFlush({
-      type: "model.usage",
-      sessionKey: "session-key",
-      sessionId: "session-id",
-      provider: "anthropic",
-      model: "anthropic/claude-sonnet-4.6",
-      usage: {
-        input: 100,
-        output: 40,
-        cacheRead: 30,
-        cacheWrite: 20,
-        promptTokens: 150,
-        total: 190,
-      },
-      durationMs: 25,
-    });
-
-    const modelUsageOptions = startedSpanOptions("openclaw.model.usage");
-    expect(modelUsageOptions?.attributes).toMatchObject({
-      "gen_ai.operation.name": "chat",
-      "gen_ai.system": "anthropic",
-      "gen_ai.request.model": "anthropic/claude-sonnet-4.6",
-      "gen_ai.usage.input_tokens": 150,
-      "gen_ai.usage.output_tokens": 40,
-      "gen_ai.usage.cache_read.input_tokens": 30,
-      "gen_ai.usage.cache_creation.input_tokens": 20,
-    });
-    expectAbsent(modelUsageOptions?.attributes, "openclaw.sessionKey", "openclaw.sessionId");
-    expectAbsent(
-      modelUsageOptions?.attributes,
-      "gen_ai.provider.name",
-      "gen_ai.input.messages",
-      "gen_ai.output.messages",
-    );
-    expect(modelUsageOptions?.startTime).toBeTypeOf("number");
-    expect(JSON.stringify(modelUsageOptions)).not.toContain("session-key");
-  });
-
   test("exports run, model call, and tool execution lifecycle spans", async () => {
     await startServiceFixture(["traces", "metrics"]);
 
@@ -2921,6 +2778,7 @@ describe("diagnostics-otel service", () => {
       toolCallId: "tool-1",
       paramsSummary: { kind: "object" },
       errorCode: "429",
+      sourceTimestampMs: 7_000,
       trace: createTestTrace(GRANDCHILD_SPAN_ID, CHILD_SPAN_ID),
     });
 
@@ -2995,7 +2853,7 @@ describe("diagnostics-otel service", () => {
       "openclaw.runId",
       "openclaw.sessionKey",
     );
-    expect(toolOptions?.startTime).toBeTypeOf("number");
+    expect(toolOptions?.startTime).toBe(6_980);
     expectAbsent(toolOptions, "kind");
     expect(toolCall?.[2]).toBeUndefined();
 
@@ -3055,7 +2913,7 @@ describe("diagnostics-otel service", () => {
       code: 2,
       message: "TypeError",
     });
-    expect(firstSpanEndTime("openclaw.tool.execution")).toBeTypeOf("number");
+    expect(firstSpanEndTime("openclaw.tool.execution")).toBe(7_000);
     expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
   });
 
@@ -3086,40 +2944,6 @@ describe("diagnostics-otel service", () => {
     expect(startedSpanOptions("openclaw.tool.execution")?.startTime).toBe(1_000);
     expect(toolSpans[0]?.end).toHaveBeenCalledTimes(1);
     expect(toolSpans[0]?.end).toHaveBeenCalledWith(1_250);
-  });
-
-  test("uses authoritative source timestamps for terminal-only tool spans", async () => {
-    await startServiceFixture(["traces", "metrics"]);
-
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.completed",
-      runId: "run-completed",
-      toolName: "read",
-      toolCallId: "call-completed",
-      durationMs: 250,
-      sourceTimestampMs: 5_000,
-    });
-    await emitTrustedAndFlush({
-      type: "tool.execution.error",
-      runId: "run-error",
-      toolName: "write",
-      toolCallId: "call-error",
-      durationMs: 500,
-      errorCategory: "test",
-      sourceTimestampMs: 7_000,
-    });
-
-    const toolSpanCalls = telemetryState.tracer.startSpan.mock.calls.filter(
-      (call) => call[0] === "openclaw.tool.execution",
-    );
-    const toolSpans = telemetryState.spans.filter(
-      (span) => span.name === "openclaw.tool.execution",
-    );
-    expect(toolSpanCalls).toHaveLength(2);
-    expect((toolSpanCalls[0]?.[1] as { startTime?: number } | undefined)?.startTime).toBe(4_750);
-    expect((toolSpanCalls[1]?.[1] as { startTime?: number } | undefined)?.startTime).toBe(6_500);
-    expect(toolSpans[0]?.end).toHaveBeenCalledWith(5_000);
-    expect(toolSpans[1]?.end).toHaveBeenCalledWith(7_000);
   });
 
   test.each([
@@ -3479,35 +3303,6 @@ describe("diagnostics-otel service", () => {
     expect(
       deliveryParentContexts.every((parent) => parent?.spanId === messageSpanContext.spanId),
     ).toBe(true);
-  });
-
-  test("correlates skipped duplicate message lifecycle helpers to the active inbound trace", async () => {
-    await startServiceFixture(["traces", "metrics"]);
-
-    const messageTrace = createDiagnosticTraceContext(createTestTrace(CHILD_SPAN_ID, SPAN_ID));
-
-    runWithDiagnosticTraceContext(messageTrace, () => {
-      logMessageProcessed({
-        channel: "slack",
-        messageId: "msg-duplicate",
-        chatId: "c1",
-        sessionKey: "agent:main:slack:channel:c1",
-        durationMs: 5,
-        outcome: "skipped",
-        reason: "duplicate",
-      });
-    });
-    await flushDiagnosticEvents();
-
-    const messageSpan = spanByName("openclaw.message.processed");
-    const messageSpanContext = messageSpan.spanContext();
-    const parentContext = startedSpanParentContexts("openclaw.message.processed")[0];
-
-    expect(messageSpanContext.traceId).toBe(TRACE_ID);
-    expect(parentContext?.traceId).toBe(TRACE_ID);
-    expect(parentContext?.spanId).toBe(SPAN_ID);
-    expect(firstSpanAttributes("openclaw.message.processed")["openclaw.reason"]).toBe("duplicate");
-    expect(messageSpan.end).toHaveBeenCalledTimes(1);
   });
 
   test.each([

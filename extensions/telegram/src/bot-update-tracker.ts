@@ -34,7 +34,7 @@ type BeginUpdateResult =
     }
   | {
       accepted: false;
-      reason: "accepted-watermark" | "semantic-dedupe";
+      reason: "accepted-watermark" | "semantic-dedupe" | "pending";
     };
 
 type FinishUpdateOptions = {
@@ -68,29 +68,21 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
   let highestCompletedUpdateId: number | null = persistenceFloorUpdateId;
   let persistInFlight = false;
   let persistTargetUpdateId: number | null = null;
+  const reportPersistError = (error: unknown) => {
+    options.onPersistError?.(error);
+  };
 
   // One prune rule: drop accepted ids at or below max(persisted offset,
   // highestAccepted - retention) unless still pending or failed. Persisted
   // floor is safe (getUpdates cannot redeliver below it); retention bounds
   // trackers that never advance a persisted floor.
   const pruneAcceptedUpdateIds = () => {
-    if (highestAcceptedUpdateId === null && highestPersistedAcceptedUpdateId === null) {
-      return;
-    }
     const windowFloor =
-      highestAcceptedUpdateId === null
-        ? Number.NEGATIVE_INFINITY
-        : highestAcceptedUpdateId - ACCEPTED_UPDATE_ID_RETENTION;
-    const persistedFloor =
-      highestPersistedAcceptedUpdateId === null
-        ? Number.NEGATIVE_INFINITY
-        : highestPersistedAcceptedUpdateId;
+      (highestAcceptedUpdateId ?? Number.NEGATIVE_INFINITY) - ACCEPTED_UPDATE_ID_RETENTION;
+    const persistedFloor = highestPersistedAcceptedUpdateId ?? Number.NEGATIVE_INFINITY;
     const pruneAtOrBelow = Math.max(persistedFloor, windowFloor);
     for (const id of acceptedUpdateIds) {
-      if (id > pruneAtOrBelow) {
-        continue;
-      }
-      if (pendingUpdateIds.has(id) || failedUpdateIds.has(id)) {
+      if (id > pruneAtOrBelow || pendingUpdateIds.has(id) || failedUpdateIds.has(id)) {
         continue;
       }
       acceptedUpdateIds.delete(id);
@@ -117,7 +109,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
             pruneAcceptedUpdateIds();
           }
         } catch (err) {
-          options.onPersistError?.(err);
+          reportPersistError(err);
         }
       }
     } finally {
@@ -137,9 +129,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     }
     highestPersistenceRequestedUpdateId = updateId;
     persistTargetUpdateId = updateId;
-    void drainPersistQueue().catch((err: unknown) => {
-      options.onPersistError?.(err);
-    });
+    void drainPersistQueue().catch(reportPersistError);
   };
 
   const acceptUpdateId = (updateId: number) => {
@@ -175,9 +165,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     if (!receiveContext?.shouldAckAfter(stage)) {
       return;
     }
-    void receiveContext.ack().catch((err: unknown) => {
-      options.onPersistError?.(err);
-    });
+    void receiveContext.ack().catch(reportPersistError);
   };
 
   const beginUpdate = (ctx: TelegramUpdateKeyContext): BeginUpdateResult => {
@@ -186,18 +174,24 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     if (typeof updateId === "number") {
       if (failedUpdateIds.has(updateId)) {
         failedUpdateIds.delete(updateId);
-      } else if (initialUpdateId !== null && updateId <= initialUpdateId) {
-        // Restored Bot API offset: suppress redelivery of already-persisted ids.
+      } else if (
+        (initialUpdateId !== null && updateId <= initialUpdateId) ||
+        acceptedUpdateIds.has(updateId)
+      ) {
+        // Pending middleware is not a terminal processing fact for a spool retry.
         options.onSkip?.(`update:${updateId}`);
-        return { accepted: false, reason: "accepted-watermark" };
-      } else if (acceptedUpdateIds.has(updateId)) {
-        // Same process already accepted this exact id (completed or in-flight).
-        options.onSkip?.(`update:${updateId}`);
-        return { accepted: false, reason: "accepted-watermark" };
+        return {
+          accepted: false,
+          reason: pendingUpdateIds.has(updateId) ? "pending" : "accepted-watermark",
+        };
       }
     }
     if (updateKey) {
-      if (activeHandledUpdateKeys.has(updateKey) || recentUpdates.peek(updateKey)) {
+      if (activeHandledUpdateKeys.has(updateKey)) {
+        options.onSkip?.(updateKey);
+        return { accepted: false, reason: "pending" };
+      }
+      if (recentUpdates.peek(updateKey)) {
         options.onSkip?.(updateKey);
         return { accepted: false, reason: "semantic-dedupe" };
       }
@@ -251,9 +245,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
         failedUpdateIds.add(update.updateId);
         void update.receiveContext
           ?.nack(new Error("Telegram update handler did not complete"))
-          .catch((err: unknown) => {
-            options.onPersistError?.(err);
-          });
+          .catch(reportPersistError);
       }
       pruneAcceptedUpdateIds();
     }

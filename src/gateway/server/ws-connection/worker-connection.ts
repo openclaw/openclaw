@@ -23,6 +23,7 @@ import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../../../packages/gateway-protocol/src/worker-transcript-budget.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
 import {
   getGatewaySuspendAdmissionPhase,
@@ -33,6 +34,7 @@ import {
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "../../auth-rate-limit.js";
 import type { GatewayConnectionWork } from "../../server-connection-work.js";
 import { runWorkerTurnAdmissionContinuation } from "../../worker-environments/placement-turn-claim-events.js";
+import { isReplayableWorkerTranscriptCommitError } from "../../worker-environments/transcript-commit-failure.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
 import { raiseGatewayReceiverPayloadLimit } from "../ws-receiver.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
@@ -436,7 +438,26 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       await dispatch();
     } catch (error) {
       outcome = "threw";
-      throw error;
+      if (parsed.method !== "worker.transcript.commit") {
+        throw error;
+      }
+      if (isReplayableWorkerTranscriptCommitError(error)) {
+        params.logGateway.warn(
+          `worker transcript commit interrupted; reconnecting: ${formatErrorMessage(error)}`,
+        );
+        throw error;
+      }
+      // A settled persistence failure must not masquerade as a lost ACK and replay forever.
+      params.logGateway.warn(`worker transcript commit failed: ${formatErrorMessage(error)}`);
+      respond(
+        false,
+        undefined,
+        workerProtocolError("gateway-unavailable", {
+          code: ErrorCodes.UNAVAILABLE,
+          message: "Worker transcript commit failed; check Gateway logs.",
+          retryable: false,
+        }),
+      );
     } finally {
       diagnostics?.finish(outcome);
     }

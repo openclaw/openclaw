@@ -3,6 +3,7 @@ import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
 } from "../state/openclaw-state-db-readonly.js";
+import type { OpenClawStateReadCommand } from "../state/openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { formatErrorMessage } from "./errors.js";
@@ -33,7 +34,22 @@ function prepareReconciliation(options: ReconciliationOptions) {
     captured.signal?.throwIfAborted();
   };
   assertCurrent();
-  return { options: captured, context, assertCurrent };
+  return {
+    options: captured,
+    context,
+    assertCurrent,
+    async read<Command extends OpenClawStateReadCommand>(command: Command) {
+      const reply = await withArtifactPreservingStateReads(() =>
+        executeExistingOpenClawStateRead(captured, command, {
+          context,
+          signal: captured.signal,
+          preferIndependentWarmRead: true,
+        }),
+      );
+      assertCurrent();
+      return reply;
+    },
+  };
 }
 
 type Reconciliation = ReturnType<typeof prepareReconciliation>;
@@ -90,23 +106,12 @@ export async function reconcileAbandonedUpdateRunsAsync(
   }
   const selection = { ...input, ...(input.runIds ? { runIds: [...input.runIds] } : {}) };
   const prepared = prepareReconciliation(options);
-  const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(
-      prepared.options,
-      { type: "updateRuns.reconciliationCandidates", input: selection },
-      {
-        context: prepared.context,
-        signal: prepared.options.signal,
-        preferIndependentWarmRead: true,
-      },
-    ),
-  );
-  prepared.assertCurrent();
+  const reply = await prepared.read({
+    type: "updateRuns.reconciliationCandidates",
+    input: selection,
+  });
   if (!reply) {
     return [];
-  }
-  if (!reply.ok || reply.type !== "updateRuns.reconciliationCandidates") {
-    throw new Error("Unexpected update run reconciliation lookup result");
   }
   return (await reconcileCandidates(reply.candidates, selection, prepared)).reconciled;
 }
@@ -117,23 +122,9 @@ export async function getUpdateRunWithReconciliationAsync(
   options: ReconciliationOptions = {},
 ): Promise<{ run: UpdateRunRecord | undefined; reconciliationError?: string }> {
   const prepared = prepareReconciliation(options);
-  const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(
-      prepared.options,
-      { type: "updateRuns.reconciliationCandidate", runId },
-      {
-        context: prepared.context,
-        signal: prepared.options.signal,
-        preferIndependentWarmRead: true,
-      },
-    ),
-  );
-  prepared.assertCurrent();
+  const reply = await prepared.read({ type: "updateRuns.reconciliationCandidate", runId });
   if (!reply) {
     return { run: undefined };
-  }
-  if (!reply.ok || reply.type !== "updateRuns.reconciliationCandidate") {
-    throw new Error("Unexpected update run reconciliation lookup result");
   }
   if (!reply.candidate) {
     return { run: undefined };

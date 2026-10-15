@@ -1,0 +1,551 @@
+import type { JSX } from "@solidjs/web";
+import { createMemo, Show } from "solid-js";
+import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { patchSettings } from "../app/settings.ts";
+import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { openEditor } from "../lib/editor-links.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { openExternalUrlSafe } from "../lib/open-external-url.ts";
+import { t } from "../lib/reactive/i18n.ts";
+import { categoryClearReturnsToGroups } from "../lib/sessions/grouping.ts";
+import {
+  canArchiveSessionRow,
+  canDeleteSessionRows,
+  resolveUiConfiguredMainKey,
+} from "../lib/sessions/session-key.ts";
+import {
+  canCopySessionMarkdown,
+  canSplitSessionView,
+  runSessionNavigationAction,
+} from "../lib/sessions/session-menu-navigation.ts";
+import { showToast } from "../lib/toast.ts";
+import {
+  pluginSessionMenuActions,
+  runControlUiPluginAction,
+} from "../plugins/control-ui-actions.ts";
+import { renderSidebarAgentMenu as SidebarAgentMenu } from "./app-sidebar-agent-menu.tsx";
+import { renderSidebarIdentityMenu as SidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
+import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
+import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
+import { findActiveSidebarLineageRow } from "./app-sidebar-session-lookup.ts";
+import { canRetryGatewayStatus } from "./gateway-status.ts";
+import "../styles/sidebar-menus.css";
+import { sessionMenuReasons } from "./session-menu-access.ts";
+import { SessionMenu, type SessionMenuAction } from "./session-menu.ts";
+import { moveSessionFromMenu, sessionPlacementAction } from "./session-placement-action.ts";
+import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
+import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
+import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
+
+export {
+  renderSidebarCatalogViewMenuForController,
+  renderSidebarSessionGroupMenuForController,
+  renderSidebarSessionSortMenuForController,
+} from "./app-sidebar-session-menu-renderers.tsx";
+export { renderSidebarPluginNavigationMenuForController } from "./app-sidebar-plugin-navigation-menu.tsx";
+export { renderSidebarPeopleFilterMenuForController } from "./app-sidebar-people-filter-menu.tsx";
+
+export function renderSidebarRailPinMenuForController(
+  controller: SidebarMenusController,
+): JSX.Element {
+  const { host } = controller;
+  const position = controller.railPinMenuPosition;
+  if (!position) {
+    return undefined;
+  }
+  const entries = [...host.querySelectorAll<HTMLElement>(".sidebar-rail__pin")].map(
+    (pin) => pin.dataset.sidebarEntry!,
+  );
+  const index = entries.indexOf(position.entry);
+  const before = index >= 0 ? entries[index - 1] : undefined;
+  const after = index >= 0 ? entries[index + 1] : undefined;
+  const trigger = controller.railPinMenuTrigger;
+  return (
+    <Show when={host.sidebarEntries.includes(position.entry)}>
+      <SidebarDropdown
+        position={position}
+        class="sidebar-customize-menu sidebar-rail-pin-menu"
+        label={t("chat.sidebar.reorderItem", { item: position.label })}
+        {...controller.positionedMenuHandlers("railPin")}
+        onSelect={(value) => {
+          controller.closePositionedMenu("railPin");
+          if (value === "remove") {
+            host.sessionOrganizer.removeSidebarEntry(position.entry);
+          } else if (value === "before" || value === "after") {
+            const target = value === "before" ? before : after;
+            if (target) {
+              host.sessionOrganizer.writeSidebarEntryAt(position.entry, target, value);
+              void host.updateComplete.then(() => trigger?.isConnected && trigger.focus());
+            }
+          }
+        }}
+        items={[
+          renderSidebarMenuAction("before", t("chat.sidebar.moveUp"), "arrowUp", {
+            disabled: !before,
+          }),
+          renderSidebarMenuAction("after", t("chat.sidebar.moveDown"), "arrowDown", {
+            disabled: !after,
+          }),
+          renderSidebarMenuAction("remove", t("nav.unpin"), "pin"),
+        ]}
+      />
+    </Show>
+  );
+}
+
+export function renderSidebarAgentMenuForController(
+  controller: SidebarMenusController,
+): JSX.Element {
+  const { host } = controller;
+  const position = controller.agentMenuPosition;
+  if (!position) {
+    return undefined;
+  }
+  const trigger = controller.agentMenuTrigger;
+  const chipAgent = createMemo(() => host.activeChipAgent()),
+    activeId = () => chipAgent().activeId,
+    agent = () => chipAgent().agent,
+    agents = () => chipAgent().agents,
+    identities = () => chipAgent().identities;
+  const activeName = createMemo(() => {
+    const current = chipAgent();
+    return current.agent ? normalizeAgentLabel(current.agent, current.identity) : "";
+  });
+  return (
+    <SidebarAgentMenu
+      {...{
+        position,
+        basePath: host.basePath,
+        activeId: agent() ? activeId() : "",
+        activeName: activeName(),
+        agents: agents(),
+        identities: identities(),
+        pinnedAgentIds: host.pinnedAgentIds,
+        onTogglePinnedAgent: async (agentId) => {
+          if (host.sessionDataContext) {
+            togglePinnedAgent(host.sessionDataContext.navigation, agentId);
+            await host.updateComplete;
+          }
+        },
+        query: controller.agentMenuQuery,
+        onQueryChange: (query) => controller.setAgentMenuQuery(query),
+        rosterMode: host.sidebarAgentsMode === "roster",
+        onShowAllAgents: () => {
+          host.navigationView = "sessions";
+          host.sessionDataContext?.navigation.update({ navCollapsed: false });
+          patchSettings({ sidebarAgentsMode: "roster" });
+          host.requestUpdate();
+          void host.updateComplete.then(() => {
+            host
+              .querySelector<HTMLElement>(
+                ".sidebar-workspace-header__main, .sidebar-agent-card__main",
+              )
+              ?.focus();
+          });
+        },
+        connected: host.connected,
+        resolveAvatarUrl: (url) => controller.agentMenuAvatars.resolve(url),
+        avatarErrorHandler: (url) => controller.agentMenuAvatars.imageErrorHandler(url),
+        openMode: controller.agentMenuInteractionState === "open-hover" ? "hover" : "click",
+        agentUnreadCount: (agentId) => host.agentUnreadCount(agentId),
+        onPointerEnter: () => controller.handleAgentMenuPointerEnter(),
+        onPointerLeave: () => controller.handleAgentMenuPointerLeave(),
+        onAfterShow: () => controller.restoreFocusAfterAgentMenuHoverOpen(),
+        onSwitchAgent: (agentId) => {
+          if (host.sidebarAgentsMode === "roster") {
+            patchSettings({ sidebarAgentsMode: "chip" });
+          }
+          host.switchChipAgent(agentId);
+        },
+        onAskCapabilities: (agentId) => host.askAgentCapabilities(agentId),
+        anchor: trigger ?? undefined,
+        onClose: (restoreFocus) => {
+          if (controller.agentMenuPosition !== position) {
+            return;
+          }
+          controller.closeAgentMenu({ restoreFocus });
+        },
+        onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
+      }}
+    />
+  );
+}
+
+export function renderSidebarIdentityMenuForController(
+  controller: SidebarMenusController,
+): JSX.Element {
+  const { host } = controller;
+  const position = controller.identityMenuPosition;
+  if (!position) {
+    return undefined;
+  }
+  const selfUser = () =>
+    host.sessionDataContext
+      ? gatewayPresentationScope(host.sessionDataContext.gateway).displayUser
+      : null;
+  const context = () => host.sessionDataContext;
+  const overlaySnapshot = () => context()?.overlays.snapshot;
+  const profileViewer = createMemo(() => {
+    const user = selfUser();
+    return user ? { ...user, watchedSessions: [] } : undefined;
+  });
+  const updateAvailable = createMemo(
+    () =>
+      isReleaseUpdateAvailable(
+        overlaySnapshot()?.updateAvailable,
+        overlaySnapshot()?.updateSchedule,
+      ) &&
+      !overlaySnapshot()?.updateRunning &&
+      !overlaySnapshot()?.updateReconciliationPending &&
+      overlaySnapshot()?.updateSchedule?.campaign?.state !== "applying" &&
+      !isUpdateAttentionForced(overlaySnapshot()?.updateStatusBanner?.tone),
+  );
+  return (
+    <SidebarIdentityMenu
+      {...{
+        nativeGatewaySnapshot: host.nativeGatewaySnapshot,
+        position,
+        canPairDevice: host.canPairDevice,
+        basePath: host.basePath,
+        gatewayVersion: host.gatewayVersion,
+        updateAvailable: updateAvailable(),
+        profileViewer: profileViewer(),
+        canRetryConnection: canRetryGatewayStatus(host.connectionStatus),
+        themeMode: host.themeMode,
+        triggerWidth: position.width,
+        ...controller.positionedMenuHandlers("identity"),
+        onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
+        onPairMobile: () => host.onPairMobile?.(),
+        onRetryConnect: host.onRetryConnect,
+      }}
+    />
+  );
+}
+
+export function renderSidebarSessionMenuForController(
+  controller: SidebarMenusController,
+): JSX.Element {
+  const { host } = controller;
+  const menu = controller.sessionMenu;
+  if (!menu) {
+    return undefined;
+  }
+  const context = () => host.sessionDataContext;
+  const pluginActionSignal = () => controller.pluginActionLifetime.signal;
+  const currentSession = () => host.findSidebarMenuSessionByKey(menu.session.key);
+  // Read again at dispatch: session updates can arrive before the menu rerenders.
+  const currentPluginSession = () =>
+    host.sessionData.sessionsResult?.sessions.find(
+      (row) => row.key === menu.session.key && row.sessionId === menu.session.sessionId,
+    );
+  const currentPlacementSession = () => {
+    const row =
+      findActiveSidebarLineageRow(host.sessionData, menu.session.key) ??
+      currentPluginSession() ??
+      Object.values(host.sessionData.sessionResultsByAgent)
+        .flatMap((result) => result.sessions)
+        .find((candidate) => candidate.key === menu.session.key);
+    return row?.sessionId === menu.session.sessionId ? row : undefined;
+  };
+  const pluginSession = () => currentPluginSession();
+  // Appearance editing keeps this menu open. Refresh its row without adopting
+  // a replacement session that happens to reuse the captured key.
+  const session = createMemo(
+    () => {
+      const current = currentSession();
+      return current && current.sessionId === menu.session.sessionId ? current : menu.session;
+    },
+    { equals: false },
+  );
+  const mainKey = createMemo(() =>
+    resolveUiConfiguredMainKey({
+      agentsList: host.sessionDataContext?.agents.state.agentsList,
+      hello: host.sessionDataContext?.gateway.snapshot.hello,
+    }),
+  );
+  const selection = createMemo(() => host.selectedVisibleSessions(), { equals: false });
+  const batchRows = createMemo(() =>
+    selection().length > 1 && selection().some((row) => row.key === session().key)
+      ? selection()
+      : null,
+  );
+  const rows = createMemo(() => batchRows() ?? [session()]);
+  const archiveAllowed = createMemo(() =>
+    rows().every((row) => canArchiveSessionRow(row, mainKey())),
+  );
+  const deleteAllowed = createMemo(() => canDeleteSessionRows(rows(), mainKey()));
+  // Hidden runs have no row of their own; their parent menu acknowledges them.
+  const hiddenUnreadRuns = createMemo(() =>
+    rows().flatMap((row) => row.subagentSummary?.unreadHiddenRuns ?? []),
+  );
+  const allUnread = createMemo(() =>
+    rows().every((row) => row.unread || (row.subagentSummary?.unreadHiddenRuns?.length ?? 0) > 0),
+  );
+  const allArchived = createMemo(() => rows().every((row) => row.archived === true));
+  const sharedCategory = createMemo(() =>
+    rows().every((row) => (row.category ?? null) === (rows()[0]?.category ?? null))
+      ? (rows()[0]?.category ?? null)
+      : null,
+  );
+  const cloudWorkerStopAction = () => session().cloudWorkerStopAction;
+  const cloudWorkerStopAllowed = createMemo(() => {
+    const action = cloudWorkerStopAction();
+    const currentContext = context();
+    return Boolean(
+      !batchRows() &&
+      action &&
+      (!action.blocksActiveRun || !session().hasActiveRun) &&
+      currentContext &&
+      isGatewayMethodAdvertised(currentContext.gateway.snapshot, action.method) === true,
+    );
+  });
+  const selfUser = () => context()?.gateway.snapshot.selfUser ?? null;
+  const assignmentAccess = createMemo(() =>
+    host.readSessionMutationAccess({
+      method: "sessions.assignOwner",
+      params: { key: session().key, owner: { type: "human", id: selfUser()?.id ?? "profile" } },
+      requiredScope: "operator.write",
+    }),
+  );
+  const actionDisabledReasons = createMemo(() => {
+    const access = assignmentAccess();
+    return {
+      ...sessionMenuReasons({
+        snapshot: context()?.gateway.snapshot,
+        placementRow: currentPlacementSession(),
+        requiredProfile: context()?.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
+        session: session(),
+        batchRows: batchRows(),
+        cloudWorkerStopAction: session().cloudWorkerStopAction,
+      }),
+      ...(!access.allowed ? { "assign-owner": access.reason } : {}),
+    };
+  });
+  return (
+    <Show when={menu} keyed>
+      {(_identity) => (
+        <SessionMenu
+          session={{
+            label: session().label,
+            placementAction: sessionPlacementAction(currentPlacementSession()),
+            target: { key: session().key, agentId: session().agentId },
+            sessionId: session().sessionId ?? null,
+            isChild: session().isChild,
+            pinned: host.sessionOrganizer.isPersonalSessionPin(session().key),
+            pinnable: session().pinnable,
+            unread: allUnread(),
+            hiddenFromInvolvingMe: session().hiddenFromInvolvingMe,
+            communication: session().communication,
+            effectiveCommunication: session().effectiveCommunication,
+            archived: allArchived(),
+            snoozedUntil: session().snoozedUntil ?? null,
+            archiving: rows().some(
+              (row) => context()?.sessions.archiveVisibility(row.key) === "pending",
+            ),
+            category: batchRows() ? sharedCategory() : (session().category ?? null),
+            icon: batchRows() ? null : (session().icon ?? null),
+            color: batchRows() ? null : (session().color ?? null),
+            categoryClearReturnsToGroups:
+              sharedCategory() !== null &&
+              rows().every((row) => categoryClearReturnsToGroups(row, host.sessionsGrouping)),
+          }}
+          involvingMeContext={host.sessionInvolvingMeFilterActive}
+          selectionCount={rows().length}
+          compact={isMobileNavLayout()}
+          lastActive={batchRows() ? "" : formatSidebarTimestamp(session().updatedAt)}
+          anchor={menu}
+          trigger={controller.sessionMenuTrigger}
+          disabled={!host.connected}
+          actionDisabledReasons={actionDisabledReasons()}
+          navigationAllowed={Boolean(context())}
+          copyMarkdownAllowed={canCopySessionMarkdown(context()?.gateway.snapshot)}
+          splitAllowed={canSplitSessionView()}
+          forkDisabled={host.sessionData.sessionsLoading || session().modelSelectionLocked}
+          forkFromLastCompleted={session().gatewayHasActiveRun ?? session().hasActiveRun}
+          snoozeAllowed={true}
+          archiveAllowed={archiveAllowed()}
+          deleteAllowed={deleteAllowed()}
+          cloudWorkerStopAllowed={cloudWorkerStopAllowed()}
+          groups={host.knownSessionGroups()}
+          currentOwner={session().owner?.actor ?? null}
+          work={batchRows() ? null : controller.sessionMenuWork}
+          pluginActions={
+            !batchRows() && context()?.plugins && pluginSession()
+              ? pluginSessionMenuActions(context()!.plugins, pluginSession()!)
+              : []
+          }
+          onClose={() => {
+            if (controller.sessionMenu === menu) {
+              controller.closeSessionMenu();
+            }
+          }}
+          onAction={(action: SessionMenuAction) => {
+            const actionContext = context();
+            const actionSignal = pluginActionSignal();
+            const batch = batchRows();
+            if (batch) {
+              void host.sessionOrganizer.runBatchSessionAction(action, batch, allUnread());
+              return;
+            }
+            switch (action.kind) {
+              case "open-pr":
+                openExternalUrlSafe(action.url);
+                break;
+              case "open-in":
+                openEditor(action.editor, action.path);
+                break;
+              case "copy-session-id":
+              case "copy-session-link":
+              case "copy-session-preview-link":
+              case "copy-markdown":
+              case "open-new-tab":
+              case "open-new-window":
+              case "split-right":
+              case "split-below":
+                if (actionContext) {
+                  const selectedAgentId = host.getSessionNavigationState().selectedAgentId;
+                  void runSessionNavigationAction(action.kind, {
+                    context: actionContext,
+                    session: session(),
+                    agentId: selectedAgentId,
+                    isCurrent: () =>
+                      host.sessionDataContext === actionContext &&
+                      host.getSessionNavigationState().selectedAgentId === selectedAgentId,
+                  });
+                }
+                break;
+              case "toggle-pin":
+                host.sessionOrganizer.setPersonalSessionPin(
+                  session().key,
+                  !host.sessionOrganizer.isPersonalSessionPin(session().key),
+                );
+                break;
+              case "toggle-involving-me":
+                void host.sessionOrganizer.setSessionInvolvement(
+                  session(),
+                  !session().hiddenFromInvolvingMe,
+                );
+                break;
+              case "toggle-unread":
+                if (hiddenUnreadRuns().length > 0) {
+                  void host.sessionOrganizer.runBatchSessionAction(action, rows(), allUnread());
+                } else {
+                  void host.sessionOrganizer.patchSession(session(), {
+                    unread: !session().unread,
+                  });
+                }
+                break;
+              case "rename":
+                void host.sessionOrganizer.renameSession(session());
+                break;
+              case "set-color":
+                void host.sessionOrganizer.patchSession(session(), { color: action.color });
+                break;
+              case "set-icon":
+                void host.sessionOrganizer.patchSession(session(), { icon: action.icon });
+                break;
+              case "set-communication":
+                void host.sessionOrganizer.patchSession(session(), {
+                  communication: action.communication,
+                });
+                break;
+              case "reset-appearance":
+                void host.sessionOrganizer.patchSession(session(), { icon: null, color: null });
+                break;
+              case "assign-owner":
+                void host.sessionOrganizer.assignSessionOwner(session(), action.owner);
+                break;
+              case "move-session": {
+                const placementSession = currentPlacementSession();
+                const scopeGeneration = host.sessionData.sessionScopeGeneration;
+                if (actionContext && placementSession) {
+                  void moveSessionFromMenu({
+                    context: actionContext,
+                    row: placementSession,
+                    fallbackAgentId:
+                      session().agentId ?? host.getSessionNavigationState().selectedAgentId,
+                    currentRow: currentPlacementSession,
+                    isCurrent: () =>
+                      !actionSignal.aborted &&
+                      host.sessionDataContext === actionContext &&
+                      host.sessionData.sessionScopeGeneration === scopeGeneration,
+                  });
+                }
+                break;
+              }
+              case "fork":
+                void host.sessionOrganizer.forkSession(session());
+                break;
+              case "plugin":
+                if (actionContext?.plugins) {
+                  void runControlUiPluginAction({
+                    runtime: actionContext.plugins,
+                    id: action.id,
+                    placement: "session",
+                    sessionKey: menu.session.key,
+                    session: currentPluginSession(),
+                    signal: actionSignal,
+                  }).catch((error: unknown) => {
+                    if (!actionSignal.aborted) {
+                      showToast({
+                        message: error instanceof Error ? error.message : String(error),
+                      });
+                    }
+                  });
+                }
+                break;
+              case "move-to-top-level":
+                void host.sessionOrganizer.promoteSession(session());
+                break;
+              case "move-to-group":
+                if (action.category === null || session().category !== action.category) {
+                  void host.sessionOrganizer.assignSessionCategory(session(), action.category);
+                }
+                break;
+              case "new-group":
+                void host.sessionOrganizer.createSessionGroup([session()]);
+                break;
+              case "snooze":
+                void host.sessionOrganizer.snoozeSessionWithUndo(
+                  session(),
+                  action.snoozedUntil,
+                  action.rememberCustom,
+                );
+                break;
+              case "wake":
+                void host.sessionOrganizer.patchSession(
+                  session(),
+                  { snoozedUntil: null },
+                  { sessionScope: true },
+                );
+                break;
+              case "toggle-archived":
+                if (session().archived) {
+                  void host.sessionOrganizer.patchSession(
+                    session(),
+                    { archived: false },
+                    {
+                      sessionScope: true,
+                    },
+                  );
+                } else {
+                  void host.sessionOrganizer.archiveSessionWithUndo(session());
+                }
+                break;
+              case "stop-cloud-worker":
+                void host.sessionOrganizer.stopCloudWorker(session());
+                break;
+              case "delete":
+                void host.sessionOrganizer.deleteSession(session());
+                break;
+              default:
+                action satisfies never;
+            }
+          }}
+        />
+      )}
+    </Show>
+  );
+}

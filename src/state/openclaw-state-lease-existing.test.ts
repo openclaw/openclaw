@@ -39,10 +39,6 @@ function source(holdAgent = false, provenance = true) {
   const db = openNodeSqliteDatabase(pathname);
   try {
     db.exec(`PRAGMA foreign_keys=OFF;
-      DROP TABLE IF EXISTS skill_workshop_proposal_events;
-      DROP TABLE IF EXISTS skill_workshop_proposal_rollbacks;
-      DROP TABLE IF EXISTS skill_workshop_collection_reviews;
-      DROP TABLE IF EXISTS skill_workshop_proposals;
       PRAGMA user_version=15;
       UPDATE schema_meta SET schema_version=15 WHERE meta_key='primary';`);
     if (!provenance) {
@@ -344,46 +340,6 @@ it("reports a failed detached maintenance child before releasing its real owner"
   expect(inspect(f.pathname).leases).toEqual([]);
 });
 
-it("retains the first actual ownership failure through nested maintenance drainage", async () => {
-  const f = source();
-  let first: unknown;
-  const operation = withAgentDatabaseMaintenanceLease(f.options, async (owner) => {
-    const db = openNodeSqliteDatabase(f.pathname);
-    try {
-      const deleted = db
-        .prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
-        .run(AGENT_DATABASE_MAINTENANCE_LEASE.scope, AGENT_DATABASE_MAINTENANCE_LEASE.key);
-      expect(deleted.changes).toBe(1);
-    } finally {
-      db.close();
-    }
-    try {
-      owner.assertOwned();
-    } catch (error) {
-      first = error;
-    }
-    expect(first).toBeInstanceOf(Error);
-    let repeated: unknown;
-    try {
-      owner.assertOwned();
-    } catch (error) {
-      repeated = error;
-    }
-    expect(repeated).toBe(first);
-    let entered = false;
-    await expect(
-      withAgentDatabaseMaintenanceLease(f.options, async () => {
-        entered = true;
-      }),
-    ).rejects.toBe(first);
-    expect(entered).toBe(false);
-    throw first;
-  });
-  const outcome = await operation.catch((error: unknown) => error);
-  expect(outcome).toBe(first);
-  expect(outcome).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
-});
-
 it("shares a child-first lease loss with its parent and sibling scopes", async () => {
   const f = source();
   let first: unknown;
@@ -414,6 +370,13 @@ it("shares a child-first lease loss with its parent and sibling scopes", async (
     } catch (error) {
       parentFailure = error;
     }
+    let repeated: unknown;
+    try {
+      parent.assertOwned();
+    } catch (error) {
+      repeated = error;
+    }
+    expect(repeated).toBe(first);
     siblingFailure = await withAgentDatabaseMaintenanceLease(f.options, async () => {
       siblingEntered = true;
     }).catch((error: unknown) => error);

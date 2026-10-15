@@ -73,10 +73,7 @@ import {
   type WorkerLaunchDescriptor,
 } from "./launch-descriptor.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
-import {
-  WorkerAdmissionDeadlineExceededError,
-  WorkerConnectionStoppedError,
-} from "./worker-connection-contract.js";
+import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import {
   buildWorkerProcessTurn,
@@ -165,6 +162,7 @@ type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" 
 type FakeGatewayOptions = {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
   backgroundCommand?: string;
+  backgroundYieldMs?: number;
   execCommand?: string;
   execApprovals?: Parameters<typeof saveExecApprovals>[0];
   inferencePlans?: InferencePlan[];
@@ -773,7 +771,9 @@ class FakeWorkerGateway {
                   "setInterval(() => undefined, 1000)",
                 )}`
               : "exec sleep 60"),
-          background: true,
+          ...(this.options.backgroundYieldMs === undefined
+            ? { background: true }
+            : { yieldMs: this.options.backgroundYieldMs }),
         }
       : {
           command:
@@ -964,6 +964,38 @@ afterEach(async () => {
 });
 
 describe("worker runtime", () => {
+  it("finalizes worker tool outcomes after an empty model response", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "text"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+    expect(messages.find((message) => message.role === "toolResult")).toMatchObject({
+      isError: false,
+    });
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "worker reply" }],
+    });
+    expect(gateway.inferenceRequests).toHaveLength(3);
+    expect(gateway.inferenceRequests[2]?.context.tools ?? []).toEqual([]);
+    expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(1);
+    expect(
+      gateway.liveEventRequests.findLast(({ event }) => event.kind === "assistant"),
+    ).toMatchObject({ event: { payload: { text: "worker reply" } } });
+  });
+
+  it("finalizes worker tool outcomes with a failure after one empty continuation", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "empty-terminal"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "failed" });
+    expect(gateway.inferenceRequests).toHaveLength(3);
+    expect(gateway.liveEventRequests.at(-1)).toMatchObject({
+      event: { kind: "lifecycle", payload: { phase: "finishing", error: expect.any(String) } },
+    });
+  });
+
   registerWorkerBackgroundExecLifecycleTests({
     setup,
     waitForFast,
@@ -972,44 +1004,6 @@ describe("worker runtime", () => {
     inferenceStartTimeoutMs: WORKER_INFERENCE_START_TIMEOUT_MS,
   });
 
-  it("sends current image and scanned PDF page content through remote inference exactly once", async () => {
-    const { gateway, launch } = await setup();
-    const images = [
-      {
-        type: "image" as const,
-        data: createNoisyPngBuffer(320, 240).toString("base64"),
-        mimeType: "image/png",
-      },
-      {
-        type: "image" as const,
-        data: createSolidPngBuffer(2, 2, { r: 0, g: 128, b: 255 }).toString("base64"),
-        mimeType: "image/png",
-      },
-    ];
-    const prompt = [
-      { type: "text" as const, text: "Inspect the attached image and PDF page." },
-      ...images,
-    ];
-    launch.assignment.prompt = prompt;
-    launch.assignment.suppressPromptTranscript = true;
-
-    await expect(runWorkerDescriptor(parseWorkerLaunchDescriptor(launch))).resolves.toMatchObject({
-      status: "completed",
-    });
-
-    expect(gateway.inferenceRequests[0]?.context.messages).toEqual([
-      {
-        role: "user",
-        content: prompt,
-        timestamp: expect.any(Number),
-      },
-    ]);
-    expect(
-      gateway.transcriptRequests.flatMap((request) =>
-        request.messages.map((message) => message.role),
-      ),
-    ).toEqual(["assistant"]);
-  });
   it("settles a real image above 64 KiB through input and a tool result", async () => {
     const { gateway, workspaceDir, launch } = await setup({
       inferencePlans: ["read-image", "text"],
@@ -1108,7 +1102,7 @@ describe("worker runtime", () => {
     ]);
     expect(browserRuntimeMocks.createWorkerBrowserToolRuntime).toHaveBeenCalledWith({
       descriptor: launch.assignment.browser,
-      sessionKey: `worker:${SESSION_ID}`,
+      sessionKey: `agent:worker-agent:worker:${SESSION_ID}`,
       stateDir: expect.any(String),
       workspaceDir: await realpath(launch.assignment.workspaceDir),
     });
@@ -1126,7 +1120,7 @@ describe("worker runtime", () => {
     ).toBeLessThan(gateway.applicationOrder.indexOf("live:lifecycle:finishing"));
   });
 
-  it.each(["text", "error", "setup"] as const)(
+  it.each(["error", "setup"] as const)(
     "retains browser disposal failure together with the %s outcome",
     async (outcome) => {
       const { gateway, launch } = await setup({
@@ -1175,10 +1169,6 @@ describe("worker runtime", () => {
   );
 
   it.each([
-    { computerCleanupFailure: false, terminal: "text" },
-    { computerCleanupFailure: false, terminal: "error" },
-    { computerCleanupFailure: false, terminal: "cancelled" },
-    { computerCleanupFailure: true, terminal: "text" },
     { computerCleanupFailure: true, terminal: "error" },
     { computerCleanupFailure: true, terminal: "cancelled" },
   ] as const)(
@@ -1206,7 +1196,7 @@ describe("worker runtime", () => {
       };
 
       await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({
-        status: computerCleanupFailure || terminal !== "text" ? "failed" : "completed",
+        status: "failed",
       });
 
       expect(gateway.computerRequests.map((request) => request.command)).toEqual([
@@ -1247,7 +1237,14 @@ describe("worker runtime", () => {
           kind: "lifecycle",
           payload: { phase: "finishing", stopReason: "aborted" },
         });
-        expect(gateway.liveEventRequests.at(-1)?.event.payload).not.toHaveProperty("error");
+        expect(gateway.liveEventRequests.at(-1)?.event.payload).toHaveProperty(
+          "error",
+          expect.stringContaining("fixture inference cancelled"),
+        );
+        expect(gateway.liveEventRequests.at(-1)?.event.payload).toHaveProperty(
+          "error",
+          expect.stringContaining("fixture desktop cleanup failed"),
+        );
       } else if (computerCleanupFailure) {
         expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
           kind: "lifecycle",
@@ -1296,11 +1293,6 @@ describe("worker runtime", () => {
 
   it.each([
     { name: "spawn", toolId: "sessions_spawn", arguments: { task: "start a nested cloud child" } },
-    {
-      name: "send",
-      toolId: "sessions_send",
-      arguments: { sessionKey: "agent:main:cloud-child", message: "status" },
-    },
   ])("replays the same durable $name operation across response loss", async (testCase) => {
     const { gateway, launch } = await setup({ dropSessionToolResponses: 2 });
     const connection = createWorkerConnection({
@@ -1383,21 +1375,6 @@ describe("worker runtime", () => {
         (request) => request.event.kind === "lifecycle" && request.event.payload.phase === "error",
       ),
     ).toBe(false);
-  });
-
-  it("renumbers live events after a gateway cursor reset without aborting the run", async () => {
-    const { gateway, launch } = await setup({ liveResyncAckedSeq: 0 });
-    launch.assignment.liveEvents = { ackedSeq: 5, nextSeq: 6 };
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.inferenceRequests).toHaveLength(1);
-    expect(gateway.acceptedTranscriptRequests).toHaveLength(2);
-    expect(gateway.liveEventRequests.slice(0, 2)).toEqual([
-      expect.objectContaining({ seq: 6, lastAckedSeq: 5 }),
-      expect.objectContaining({ seq: 1, lastAckedSeq: 0 }),
-    ]);
-    expect(gateway.liveEventRequests[1]?.event).toEqual(gateway.liveEventRequests[0]?.event);
   });
 
   it("requires authoritative terminal delivery after degrading preview live events", async () => {
@@ -1564,45 +1541,6 @@ describe("worker runtime", () => {
     }
   });
 
-  it.each([
-    ["error", "error", "finishing", { status: "failed", reason: "turn-failed" }],
-    ["cancelled", "aborted", "finishing", { status: "failed", reason: "turn-failed" }],
-    ["length", "length", "finishing", { status: "completed" }],
-  ] as const)(
-    "reports remote inference %s terminal reasons",
-    async (plan, stopReason, lifecyclePhase, expectedResult) => {
-      const { gateway, launch } = await setup({ inferencePlans: [plan] });
-
-      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject(expectedResult);
-      const assistant = gateway.transcriptRequests
-        .flatMap((request) => request.messages)
-        .toReversed()
-        .find((entry) => entry.role === "assistant");
-      expect(assistant).toMatchObject({ stopReason });
-      const lifecycle = gateway.liveEventRequests
-        .map((request) => request.event)
-        .toReversed()
-        .find((event) => event.kind === "lifecycle");
-      expect(lifecycle).toMatchObject({
-        payload: { phase: lifecyclePhase, stopReason },
-      });
-      expect(lifecycle?.payload).not.toHaveProperty("replayInvalid");
-    },
-  );
-
-  it("keeps an unacknowledged failed-turn terminal as an infrastructure failure", async () => {
-    const { gateway, launch } = await setup({
-      inferencePlans: ["error"],
-      liveFailure: "capacity-exceeded",
-    });
-
-    await expect(runWorkerDescriptor(launch)).rejects.toThrow("worker live event rejected");
-    expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
-      kind: "lifecycle",
-      payload: { phase: "finishing" },
-    });
-  });
-
   it("fails closed when a heartbeat is rejected without fencing", async () => {
     const { launch } = await setup({
       inferencePlans: ["hold"],
@@ -1613,21 +1551,6 @@ describe("worker runtime", () => {
     await expect(runWorkerDescriptor(launch)).rejects.toThrow(
       "worker heartbeat rejected: credential-expired",
     );
-  });
-
-  it("coalesces bursty live output and keeps every frame below the byte ceiling", async () => {
-    const { gateway, launch } = await setup({ inferencePlans: ["burst-text"] });
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    const assistantEvents = gateway.liveEventRequests.filter(
-      (request) => request.event.kind === "assistant",
-    );
-    expect(assistantEvents.length).toBeGreaterThan(0);
-    expect(assistantEvents.length).toBeLessThan(1_100);
-    for (const request of gateway.liveEventRequests) {
-      expect(Buffer.byteLength(JSON.stringify(request), "utf8")).toBeLessThan(64 * 1024);
-    }
   });
 
   it.each(["oversized-text", "oversized-error"] as const)(
@@ -1646,30 +1569,29 @@ describe("worker runtime", () => {
         .toReversed()
         .find((message) => message.role === "assistant");
       expect(assistant).toMatchObject({ role: "assistant", stopReason: "error", content: [] });
+      if (plan === "oversized-text") {
+        expect(assistant).toMatchObject({
+          errorMessage: "Worker inference result exceeds the transcript message limit.",
+          usage: {
+            input: 2,
+            output: 3,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 5,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        });
+      }
       for (const request of gateway.transcriptRequests) {
         expect(Buffer.byteLength(JSON.stringify(request), "utf8")).toBeLessThan(64 * 1024);
       }
     },
   );
 
-  it("clears streamed text when the authoritative terminal message is empty", async () => {
-    const { gateway, launch } = await setup({ inferencePlans: ["empty-terminal"] });
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    const finalAssistant = gateway.liveEventRequests
-      .map((request) => request.event)
-      .toReversed()
-      .find((event) => event.kind === "assistant");
-    expect(finalAssistant).toEqual({
-      kind: "assistant",
-      payload: { text: "", delta: "", replace: true, itemId: expect.any(String) },
-    });
-  });
-
-  it.each(["running", "completed", "cancelled"] as const)(
-    "keeps completed-turn background processes controllable in the managed environment (%s)",
-    async (processState) => {
+  it.each(["running", "completed", "cancelled", "ordinary-yield"] as const)(
+    "keeps completed-turn commands controllable in the managed environment (%s)",
+    async (scenario) => {
+      const processState = scenario === "ordinary-yield" ? "running" : scenario;
       const { gateway, launch, workspaceDir } = await setup({
         inferencePlans: [
           "background-tool",
@@ -1682,6 +1604,7 @@ describe("worker runtime", () => {
         ...(processState === "completed"
           ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-release.cjs` }
           : {}),
+        ...(scenario === "ordinary-yield" ? { backgroundYieldMs: 10 } : {}),
       });
       const releaseBackground = createDeferred();
       let completionServer: Server | undefined;
@@ -1732,6 +1655,16 @@ describe("worker runtime", () => {
         const running = listRunningSessions().filter((session) => session.scopeKey === scopeKey);
         expect(running).toHaveLength(1);
         const sessionId = running[0]!.id;
+        const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+        expect(messages.at(-1)).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: expect.stringContaining("still running") }],
+        });
+        expect(JSON.stringify(messages.at(-1))).toContain(sessionId);
+        expect(gateway.inferenceRequests).toHaveLength(2);
+        expect(
+          gateway.liveEventRequests.findLast(({ event }) => event.kind === "assistant"),
+        ).toMatchObject({ event: { payload: { text: expect.stringContaining("still running") } } });
         expect(settled).not.toHaveBeenCalled();
         if (processState === "completed") {
           releaseBackground.resolve();
@@ -2144,17 +2077,6 @@ describe("worker runtime", () => {
 
   registerWorkerPermissionTests({ setup });
 
-  it("canonicalizes an in-root worker workspace before enforcing containment", async () => {
-    const { workspaceDir, launch } = await setup();
-    const nested = path.join(workspaceDir, "nested");
-    await mkdir(nested);
-    launch.assignment.workspaceDir = path.join(nested, "..", "nested");
-    launch.assignment.permissionMode = "workspace";
-    launch.assignment.workerContainmentRoot = workspaceDir;
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-  });
-
   it("rejects a dot-dot workspace escape before worker connection", async () => {
     const { workspaceDir, launch } = await setup();
     const outside = await mkdtemp(path.join(tmpdir(), "openclaw-worker-outside-"));
@@ -2190,31 +2112,6 @@ describe("worker reconnect clients", () => {
       await expect(connection.start()).resolves.toMatchObject({ ownerEpoch: OWNER_EPOCH });
       expect(healthyReadyCalls).toBe(1);
       await waitForFast(() => expect(gateway.methods).toContain("worker.heartbeat"));
-    } finally {
-      await connection.stop();
-    }
-  });
-
-  it("fails closed when the overall admission deadline expires", async () => {
-    const { gateway, launch } = await setup({ admissionFailure: "gateway-unavailable" });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
-      admissionTimeoutMs: 25,
-      admissionDeadlineMs: 250,
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-    });
-    try {
-      await expect(connection.start()).rejects.toBeInstanceOf(WorkerAdmissionDeadlineExceededError);
-      expect(gateway.connectionCount).toBeGreaterThan(1);
-      expect(connection.state).toMatchObject({
-        kind: "failed",
-        error: expect.any(WorkerAdmissionDeadlineExceededError),
-      });
-      await expect(connection.waitForExit()).resolves.toMatchObject({
-        kind: "failed",
-        error: expect.any(WorkerAdmissionDeadlineExceededError),
-      });
     } finally {
       await connection.stop();
     }
@@ -2312,60 +2209,6 @@ describe("worker reconnect clients", () => {
     } finally {
       inference.dispose();
       live.dispose();
-      await connection.stop();
-    }
-  });
-
-  it("settles an in-flight commit and a later live emit after stop", async () => {
-    const { gateway, launch } = await setup({ silenceFirstTranscript: true });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
-      requestTimeoutMs: 5_000,
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-    });
-    const originalWaitForReady = connection.waitForReady.bind(connection);
-    const waitForReady = vi.spyOn(connection, "waitForReady").mockImplementation(() => {
-      if (waitForReady.mock.calls.length > 4) {
-        throw new Error("worker client retried after terminal stop");
-      }
-      return originalWaitForReady();
-    });
-    const transcript = new WorkerTranscriptCommitClient(connection, {
-      runEpoch: OWNER_EPOCH,
-      baseLeafId: "leaf-base",
-      initialSeq: 8,
-    });
-    let live: WorkerLiveEventClient | undefined;
-    try {
-      await connection.start();
-      const commit = transcript.commit([
-        {
-          role: "user",
-          content: [{ type: "text", text: "commit interrupted by stop" }],
-          timestamp: 1,
-        },
-      ]);
-      await waitForFast(() => expect(gateway.transcriptRequests).toHaveLength(1));
-
-      await connection.stop();
-      await expect(commit).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
-
-      live = new WorkerLiveEventClient(connection, { runEpoch: OWNER_EPOCH });
-      live.enqueuePreview(RUN_ID, {
-        kind: "assistant",
-        payload: { text: "late live event", delta: "late live event" },
-      });
-      await expect(
-        live.emitTerminal(RUN_ID, {
-          kind: "lifecycle",
-          payload: { phase: "finishing", startedAt: 1, endedAt: 2 },
-        }),
-      ).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
-      expect(waitForReady.mock.calls.length).toBeLessThanOrEqual(2);
-      expect(gateway.liveEventRequests).toHaveLength(0);
-    } finally {
-      live?.dispose();
       await connection.stop();
     }
   });

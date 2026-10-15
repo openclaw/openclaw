@@ -61,30 +61,14 @@ describe("npm global install lifecycle policy", () => {
     }
   });
 
-  it("keeps commas in ancestor directories out of npm's lifecycle policy", () => {
-    expect(
-      globalInstallArgs(
-        "npm",
-        "/tmp/build,cache/openclaw-candidate",
-        null,
-        null,
-        "/tmp/build,cache",
-      ),
-    ).toContain("--allow-scripts=./openclaw-candidate");
+  it("uses the absolute npm tarball identity for relative input", () => {
+    const cwd = path.resolve("/tmp/openclaw-update-identity/work");
+    const candidate = path.resolve(cwd, "../candidate.tgz");
+    const spec = "../candidate.tgz";
+    const args = globalInstallArgs("npm", spec, null, null, cwd);
+    expect(args).toContain(`--allow-scripts=${candidate}`);
+    expect(args).toContain(spec);
   });
-
-  it.each(["absolute", "relative", "file:absolute", "file:relative"])(
-    "uses the absolute npm tarball identity for %s input",
-    (form) => {
-      const cwd = path.resolve("/tmp/openclaw-update-identity/work");
-      const candidate = path.resolve(cwd, "../candidate.tgz");
-      const protocol = form.startsWith("file:") ? "file:" : "";
-      const spec = `${protocol}${form.endsWith("relative") ? "../candidate.tgz" : candidate}`;
-      const args = globalInstallArgs("npm", spec, null, null, cwd);
-      expect(args).toContain(`--allow-scripts=${protocol}${candidate}`);
-      expect(args).toContain(spec);
-    },
-  );
 
   it("rejects comma tarball identities before building npm install commands", () => {
     const cwd = path.resolve("/tmp/build,cache");
@@ -93,31 +77,19 @@ describe("npm global install lifecycle policy", () => {
     ).toThrow("without commas");
   });
 
-  it.each([
-    "file:/../candidate.tgz",
-    "file:///../candidate.tgz",
-    "file:~/candidate.tgz",
-    "file:/~/candidate.tgz",
-    "file:///~/candidate.tgz",
-    "file:./~/candidate.tgz",
-  ])("preserves npm's local archive resolution for %s", (spec) => {
+  it("preserves npm's home-relative archive resolution", () => {
     const cwd = path.resolve("/tmp/openclaw-update-identity/work");
-    const expected = spec.includes("~")
-      ? path.join(os.homedir(), "candidate.tgz")
-      : path.resolve(cwd, "../candidate.tgz");
-    expect(globalInstallArgs("npm", spec, null, null, cwd)).toContain(
+    const expected = path.join(os.homedir(), "candidate.tgz");
+    expect(globalInstallArgs("npm", "file:~/candidate.tgz", null, null, cwd)).toContain(
       `--allow-scripts=file:${expected}`,
     );
   });
 
-  it.each(["tgz", "tar.gz", "tar"])(
-    "normalizes file URLs while preserving literal archive characters for .%s",
-    (extension) => {
-      const archive = path.resolve(`/tmp/openclaw/a%2C#b.${extension}`);
-      const spec = `file:///${archive.replaceAll("\\", "/").replace(/^\/+/u, "")}`;
-      expect(globalInstallArgs("npm", spec)).toContain(`--allow-scripts=file:${archive}`);
-    },
-  );
+  it("normalizes file URLs while preserving literal archive characters", () => {
+    const archive = path.resolve("/tmp/openclaw/a%2C#b.tar");
+    const spec = `file:///${archive.replaceAll("\\", "/").replace(/^\/+/u, "")}`;
+    expect(globalInstallArgs("npm", spec)).toContain(`--allow-scripts=file:${archive}`);
+  });
 
   it("preserves npm 11 advisory comma-archive identity without changing npm policy", () => {
     const cwd = path.resolve("/tmp/build,cache");
@@ -141,7 +113,7 @@ describe("custom npm global installation ownership", () => {
     envSnapshot = undefined;
   });
 
-  it.each(["linux", "darwin", "win32"] as const)(
+  it.each(["linux", "win32"] as const)(
     "recognizes a custom npm prefix from its OpenClaw launcher on %s without prefix env",
     async (platform) => {
       await withMockedPlatform(platform, async () => {

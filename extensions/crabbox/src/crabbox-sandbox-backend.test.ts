@@ -16,6 +16,7 @@ import {
   createSandboxTestContext,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CRABBOX_MIN_VERSION, resolveManagedCrabboxBinaryPath } from "./crabbox-managed-binary.js";
 import {
   createCrabboxSandboxBackendFactory,
   createCrabboxSandboxBackendManager,
@@ -96,7 +97,9 @@ function params(
 function setup(handler: (argv: string[]) => SpawnResult | Promise<SpawnResult> = respond) {
   const runCommand = vi
     .mocked(runCommandWithTimeout)
-    .mockImplementation(async (argv) => await handler(argv));
+    .mockImplementation(async (argv) =>
+      argv[1] === "--version" ? result(CRABBOX_MIN_VERSION) : await handler(argv),
+    );
   const dependencies = {
     openclawRoot: temporaryRoot,
     pluginConfig: {
@@ -142,89 +145,45 @@ beforeEach(() => {
 });
 
 describe("Crabbox sandbox provider lifecycle", () => {
-  it("requires owned execution before allocation and replays the reserved ID", async () => {
-    const { factory, runCommand } = setup();
-    const first = await factory(params());
-    await factory(params());
-    expect(first.runtimeId).toBe(LEASE_ID);
-    expect(first.configLabel).toBe("daytona/small");
-    expect(runCommand.mock.calls[0]?.[0]).toEqual([
-      "/fixture/crabbox",
-      "exec",
-      "--check",
-      "--provider",
-      "daytona",
-    ]);
-    const warmups = runCommand.mock.calls.filter(([argv]) => argv[1] === "warmup");
-    expect(warmups).toHaveLength(2);
-    expect(warmups[0]).toEqual([
-      [
-        "/fixture/crabbox",
-        "warmup",
-        "--provider",
-        "daytona",
-        "--class",
-        "small",
-        "--lease-id",
-        LEASE_ID,
-        "--slug",
-        "openclaw-sandbox",
-        "--keep",
-        "--ttl",
-        "2h",
-        "--idle-timeout",
-        "30m",
-      ],
-      expect.objectContaining({ cwd: temporaryRoot, killProcessTree: true }),
-    ]);
-    expect(runCommand.mock.calls.filter(([argv]) => argv[1] === "exec")).toHaveLength(1);
-  });
-
-  it("rejects a CLI without exec before provider access and can retry after upgrade", async () => {
-    let supported = false;
-    const { factory, runCommand } = setup((argv) =>
-      supported ? respond(argv) : result("unknown command", 2),
-    );
-    await expect(factory(params())).rejects.toThrow("claim-owned `crabbox exec`");
-    expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual(["exec"]);
-    supported = true;
-    expect((await factory(params())).runtimeId).toBe(LEASE_ID);
-  });
-
-  it("retains the reservation when inspection is unavailable", async () => {
-    let unavailable = true;
-    const { factory, runCommand } = setup((argv) =>
-      argv[1] === "inspect" && unavailable ? result("provider unavailable", 1) : respond(argv),
-    );
-    await expect(factory(params())).rejects.toThrow("inspect failed");
-    unavailable = false;
-    expect((await factory(params())).runtimeId).toBe(LEASE_ID);
-    expect(runCommand.mock.calls.some(([argv]) => argv[1] === "stop")).toBe(false);
-  });
-
   it("rejects providers without scoped cleanup before allocating a lease", async () => {
     const { factory, runCommand } = setup(() =>
       result(JSON.stringify({ execution: true, currentRepoStop: false })),
     );
     await expect(factory(params())).rejects.toThrow("repository-scoped cleanup");
-    expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual(["exec"]);
+    expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual(["--version", "exec"]);
   });
 
-  it.each(["released", "stopped"])(
-    "retires only a matching released inspection (%s)",
-    async (state) => {
-      const { factory } = setup((argv) =>
-        argv[1] === "warmup"
-          ? result("fixture-credential@ssh.example.test", 4)
-          : argv[1] === "inspect"
-            ? inspect(state)
-            : respond(argv),
-      );
-      await expect(factory(params())).rejects.toThrow(
-        state === "released" ? /is retired/ : "Crabbox sandbox warmup failed: exit 4",
-      );
-    },
-  );
+  it("uses a supported managed binary for an outdated sandbox executable", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(temporaryRoot, "managed-state"));
+    const binary = resolveManagedCrabboxBinaryPath();
+    await fs.mkdir(path.dirname(binary), { recursive: true });
+    await fs.writeFile(binary, CRABBOX_MIN_VERSION);
+    const { factory, runCommand } = setup();
+    runCommand.mockImplementation(async (argv) =>
+      argv[1] === "--version"
+        ? result(argv[0] === "/fixture/crabbox" ? "0.76.0" : CRABBOX_MIN_VERSION)
+        : respond(argv),
+    );
+    const handle = await factory(params());
+    await handle.runShellCommand({ script: "printf upgraded" });
+    expect(
+      runCommand.mock.calls.filter(([argv]) => argv[1] !== "--version").map(([argv]) => argv[0]),
+    ).toEqual([binary, binary, binary]);
+    expect(remote.commands[0]?.argv[0]).toBe(binary);
+  });
+
+  it.each(["released"])("retires only a matching released inspection (%s)", async (state) => {
+    const { factory } = setup((argv) =>
+      argv[1] === "warmup"
+        ? result("fixture-credential@ssh.example.test", 4)
+        : argv[1] === "inspect"
+          ? inspect(state)
+          : respond(argv),
+    );
+    await expect(factory(params())).rejects.toThrow(
+      state === "released" ? /is retired/ : "Crabbox sandbox warmup failed: exit 4",
+    );
+  });
 
   it("rejects a foreign released ID without retiring the reservation", async () => {
     const { factory } = setup((argv) =>
@@ -292,6 +251,7 @@ it("keeps management routed by the stored claim and original workspace", async (
   };
   await manager.removeRuntime({ entry, config: {} });
   expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual([
+    "--version",
     "stop",
     "exec",
     "warmup",

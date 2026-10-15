@@ -1,10 +1,20 @@
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getDiscordChannelPolicyBinding,
+  findDiscordGuildPolicyKey,
+  setDiscordPolicyBindings,
+} from "../channel-policy-state.js";
+import { resolveDiscordGroupToolPolicy } from "../group-policy.js";
 import * as channels from "../resolve-channels.js";
 import * as users from "../resolve-users.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 
 describe("resolveDiscordAllowlistConfig", () => {
+  afterEach(() => {
+    setDiscordPolicyBindings("default", []);
+    setDiscordPolicyBindings("work", []);
+  });
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(channels, "resolveDiscordChannelAllowlist").mockResolvedValue([]);
@@ -28,6 +38,7 @@ describe("resolveDiscordAllowlistConfig", () => {
 
   function resolve(overrides: Partial<Parameters<typeof resolveDiscordAllowlistConfig>[0]>) {
     return resolveDiscordAllowlistConfig({
+      accountId: "default",
       token: "synthetic-token",
       allowFrom: [],
       guildEntries: {},
@@ -96,25 +107,108 @@ describe("resolveDiscordAllowlistConfig", () => {
     expect(logs).not.toContain("(id:387)");
   });
 
-  it("resolves guild and channel names without enabling user name matching", async () => {
-    vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
-      {
-        input: "ops/general",
-        resolved: true,
-        guildId: "145",
-        guildName: "Ops",
-        channelId: "246",
-        channelName: "general",
-      },
-    ]);
-    const result = await resolve({
-      allowFrom: ["Alice"],
-      guildEntries: { ops: { users: ["Bob"], channels: { general: { users: ["Carol"] } } } },
-    });
-    expect(result.allowFrom).toEqual(["Alice"]);
-    expect(result.guildEntries?.["145"]?.channels?.["246"]?.users).toEqual(["Carol"]);
-    expect(result.guildEntries?.ops?.users).toEqual(["Bob"]);
-    expect(channels.resolveDiscordChannelAllowlist).toHaveBeenCalledTimes(1);
-    expect(users.resolveDiscordUserAllowlist).not.toHaveBeenCalled();
-  });
+  it.each(["general", "2026"])(
+    "resolves channel name %s without user name matching",
+    async (channelKey) => {
+      vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
+        {
+          input: `ops/${channelKey}`,
+          resolved: true,
+          guildId: "145",
+          guildName: "Ops",
+          channelId: "246",
+          channelName: channelKey,
+        },
+      ]);
+      const result = await resolve({
+        allowFrom: ["Alice"],
+        guildEntries: { ops: { users: ["Bob"], channels: { [channelKey]: { users: ["Carol"] } } } },
+      });
+      expect(result.allowFrom).toEqual(["Alice"]);
+      expect(result.guildEntries?.["145"]?.channels?.["246"]?.users).toEqual(["Carol"]);
+      expect(result.guildEntries?.ops?.users).toEqual(["Bob"]);
+      expect(channels.resolveDiscordChannelAllowlist).toHaveBeenCalledTimes(1);
+      expect(users.resolveDiscordUserAllowlist).not.toHaveBeenCalled();
+      expect(getDiscordChannelPolicyBinding("default", "ops", channelKey)).toBe("246");
+      expect(getDiscordChannelPolicyBinding("work", "ops", channelKey)).toBeUndefined();
+    },
+  );
+
+  it.each(["unresolved", "failed", "removed"])(
+    "replaces previous channel bindings when a policy resolution is %s",
+    async (outcome) => {
+      setDiscordPolicyBindings(
+        "work",
+        [{ guildKey: "145", channelKey: "ops", channelId: "246" }],
+        new Map([["145", "ops"]]),
+      );
+      if (outcome === "failed") {
+        vi.mocked(channels.resolveDiscordChannelAllowlist).mockRejectedValueOnce(
+          new Error("synthetic lookup failure"),
+        );
+      } else {
+        vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
+          { input: "145/ops", resolved: false, guildId: "145" },
+        ]);
+      }
+
+      await resolve({
+        accountId: "work",
+        guildEntries: outcome === "removed" ? {} : { "145": { channels: { ops: {} } } },
+      });
+
+      expect(getDiscordChannelPolicyBinding("work", "145", "ops")).toBeUndefined();
+      expect(findDiscordGuildPolicyKey("work", "145")).toBeUndefined();
+    },
+  );
+
+  it.each(["general", "246", undefined])(
+    "preserves resolved guild policy with channel %s",
+    async (channelKey) => {
+      const guilds = {
+        ops: {
+          tools: channelKey ? { allow: ["exec"] } : { deny: ["exec"] },
+          channels: channelKey ? { [channelKey]: { tools: { deny: ["exec"] } } } : undefined,
+        },
+      };
+      vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
+        {
+          input: channelKey ? `ops/${channelKey}` : "ops",
+          resolved: true,
+          guildId: "145",
+          guildName: "Ops",
+          channelId: channelKey ? "246" : undefined,
+          channelName: channelKey ? "general" : undefined,
+        },
+      ]);
+      const resolved = await resolve({ guildEntries: guilds });
+      const admittedGuild = resolved.guildEntries?.["145"];
+      expect(channelKey ? admittedGuild?.channels?.["246"]?.tools : admittedGuild?.tools).toEqual({
+        deny: ["exec"],
+      });
+      expect(findDiscordGuildPolicyKey("work", "145")).toBeUndefined();
+      const context = {
+        accountId: "default",
+        groupSpace: "145",
+        groupId: "246",
+        groupChannel: "general",
+      };
+      expect(
+        resolveDiscordGroupToolPolicy({
+          ...context,
+          cfg: {
+            channels: { discord: { guilds: { "*": { tools: { allow: ["exec"] } }, ...guilds } } },
+          },
+        }),
+      ).toEqual({ deny: ["exec"] });
+      expect(
+        resolveDiscordGroupToolPolicy({
+          ...context,
+          cfg: {
+            channels: { discord: { guilds: { ...guilds, "145": { tools: { allow: ["read"] } } } } },
+          },
+        }),
+      ).toEqual({ allow: ["read"] });
+    },
+  );
 });

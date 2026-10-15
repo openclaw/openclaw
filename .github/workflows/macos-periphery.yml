@@ -67,6 +67,8 @@ jobs:
               "apps/macos/.periphery.yml",
               "scripts/install-periphery.sh",
               "scripts/lib/swift-toolchain.sh",
+              ":(exclude)apps/macos/README.md",
+              ":(exclude)apps/macos/AGENTS.md",
             ], { ignoreReturnCode: true, silent: true });
             if (result.exitCode !== 0 && result.exitCode !== 1) {
               throw new Error(`git diff failed with exit code ${result.exitCode}`);

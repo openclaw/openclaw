@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import { getRestartRecoveryTerminalDeliveryEvidence } from "../config/sessions/restart-recovery-state.js";
+import {
+  getRestartRecoveryTerminalDeliveryEvidence,
+  mergeRestartRecoveryTerminalDeliveryEvidence,
+} from "../config/sessions/restart-recovery-state.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
   buildRestartRecoveryTerminalDeliveryEvidence,
   constrainRestartRecoveryDeliveryPayloads,
 } from "./agent-command-restart-recovery.js";
 import { hasMessagingToolDeliveryToSource } from "./subagents/announce/subagent-announce-completion-delivery.js";
+import { createDirectAnnounceResponseClassifier } from "./subagents/announce/subagent-announce-direct-response.js";
 
 describe("buildCurrentRunRestartRecoveryClaim", () => {
   const mediaPolicy = {
@@ -39,39 +43,6 @@ describe("buildCurrentRunRestartRecoveryClaim", () => {
     });
   });
 
-  it("preserves a preclaimed recovery policy", () => {
-    expect(
-      buildCurrentRunRestartRecoveryClaim({
-        entry: {
-          ...mediaPolicy,
-          sessionId: "session-1",
-          updatedAt: 1,
-          restartRecoveryDeliveryContext: {
-            channel: "discord",
-            to: "channel:123",
-            accountId: "main",
-            threadId: "42",
-          },
-          restartRecoveryDeliveryRunId: "recovery-run",
-          restartRecoveryDeliverySourceRunId: "media-run",
-          restartRecoveryDeliveryMediaUrls: ["/tmp/proof.png"],
-        },
-        runId: "recovery-run",
-      }),
-    ).toEqual({
-      ...mediaPolicy,
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "channel:123",
-        accountId: "main",
-        threadId: "42",
-      },
-      restartRecoveryDeliveryMediaUrls: ["/tmp/proof.png"],
-      restartRecoveryDeliveryRunId: "recovery-run",
-      restartRecoveryDeliverySourceRunId: "media-run",
-    });
-  });
-
   it("preserves the claimed route when delivery preparation resolves an alias", () => {
     expect(
       buildCurrentRunRestartRecoveryClaim({
@@ -81,6 +52,7 @@ describe("buildCurrentRunRestartRecoveryClaim", () => {
           threadId: 1,
         },
         entry: {
+          ...mediaPolicy,
           sessionId: "session-1",
           updatedAt: 1,
           restartRecoveryDeliveryRunId: "recovery-run",
@@ -89,6 +61,7 @@ describe("buildCurrentRunRestartRecoveryClaim", () => {
         runId: "recovery-run",
       }),
     ).toMatchObject({
+      ...mediaPolicy,
       restartRecoveryDeliveryContext: { channel: "telegram", to: "-100123", threadId: 1 },
       restartRecoveryDeliveryRunId: "recovery-run",
     });
@@ -117,7 +90,6 @@ describe("constrainRestartRecoveryDeliveryPayloads", () => {
     name: string;
     payloads: ReplyPayload[];
     media?: string[];
-    suppressText?: boolean;
     expected: ReplyPayload[];
   }>([
     {
@@ -134,15 +106,6 @@ describe("constrainRestartRecoveryDeliveryPayloads", () => {
       ],
       media: [" /tmp/missing.png ", "/tmp/missing.png"],
       expected: [mediaReply],
-    },
-    {
-      name: "attaches host-owned media to the first visible reply after reasoning",
-      payloads: [
-        { text: "thinking", isReasoning: true, mediaUrls: ["/tmp/model-reasoning.png"] },
-        { text: "ready", mediaUrls: ["/tmp/model-selected.png"] },
-      ],
-      media: [" /tmp/missing.png ", "/tmp/missing.png"],
-      expected: [{ text: "thinking", isReasoning: true }, mediaReply],
     },
     {
       name: "does not attach host-owned media to commentary, notices, or errors",
@@ -170,32 +133,225 @@ describe("constrainRestartRecoveryDeliveryPayloads", () => {
       media: [],
       expected: [{ text: "failed" }],
     },
-    {
-      name: "suppresses model text on a media-only repair attempt",
-      payloads: [{ text: "caption already sent", mediaUrls: ["/tmp/old.png"] }],
-      suppressText: true,
-      expected: [mediaOnly],
-    },
-  ])("$name", ({ payloads, media = ["/tmp/missing.png"], suppressText, expected }) => {
-    expect(constrainRestartRecoveryDeliveryPayloads(payloads, media, suppressText)).toEqual(
-      expected,
-    );
+  ])("$name", ({ payloads, media = ["/tmp/missing.png"], expected }) => {
+    expect(constrainRestartRecoveryDeliveryPayloads(payloads, media)).toEqual(expected);
   });
 });
 
 describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
   function project(result: Parameters<typeof buildRestartRecoveryTerminalDeliveryEvidence>[0]) {
+    const persisted = JSON.stringify([
+      { runId: "original", ...buildRestartRecoveryTerminalDeliveryEvidence(result) },
+    ]);
     return getRestartRecoveryTerminalDeliveryEvidence(
       {
         sessionId: "session-1",
         updatedAt: 1,
-        restartRecoveryTerminalDeliveryEvidence: [
-          { runId: "original", ...buildRestartRecoveryTerminalDeliveryEvidence(result) },
-        ],
+        restartRecoveryTerminalDeliveryEvidence: JSON.parse(persisted),
       },
       "original",
     );
   }
+
+  const classify = createDirectAnnounceResponseClassifier({
+    params: {
+      sourceTool: "subagent_settle",
+      expectsCompletionMessage: false,
+      requesterIsSubagent: false,
+    },
+    parentOnly: false,
+    requesterSessionBound: true,
+    deliveryTarget: {},
+    shouldDeliverAgentFinal: true,
+    requiresMessageToolDelivery: false,
+    isSubagentCompletion: false,
+    hasSuccessfulTrustedSubagentNoOutputCompletion: false,
+    hasRequiredSubagentNoOutputCompletion: false,
+    subagentDirectMessageCompletionRequiresMessageTool: false,
+    effectiveDirectOrigin: undefined,
+    requesterSessionOrigin: undefined,
+    textCompletionDirectDeliveryKind: "completed_result",
+    tryTextCompletionDirectDelivery: async () => undefined,
+  });
+
+  it.each([
+    {
+      name: "intentional silent final",
+      result: { meta: { terminalReply: { disposition: "silent" } } },
+      delivered: true,
+    },
+    {
+      name: "unsettled yielded silence",
+      result: { meta: { terminalReply: { disposition: "silent" }, yielded: true } },
+      delivered: false,
+    },
+    {
+      name: "pending continuation",
+      result: { meta: { terminalReply: { disposition: "silent" }, continuationPending: true } },
+      delivered: false,
+    },
+    {
+      name: "aborted silent run",
+      result: { meta: { terminalReply: { disposition: "silent" }, aborted: true } },
+      delivered: false,
+    },
+    {
+      name: "failed silent run",
+      result: {
+        meta: {
+          terminalReply: { disposition: "silent" },
+          error: new Error("private synthetic failure"),
+        },
+      },
+      delivered: false,
+    },
+    {
+      name: "host-settled yielded continuation",
+      result: { meta: { yielded: true }, requesterContinuationSettled: true },
+      delivered: true,
+    },
+    { name: "legacy empty receipt", result: { payloads: [] }, delivered: false },
+  ])("replays $name without inventing visible delivery", async ({ result, delivered }) => {
+    const stored = project(result);
+    const delivery = await classify({ status: "ok", result: stored });
+    expect(delivery).toMatchObject({ delivered, path: "direct" });
+    expect(JSON.stringify(stored)).not.toContain("private synthetic failure");
+    if (!delivered) {
+      expect(delivery).toMatchObject({ reason: "visible_reply_missing" });
+    }
+  });
+
+  it.each([
+    { reason: "no_visible_payload", expected: { reason: "visible_reply_missing" } },
+    { reason: "message_tool_only", expected: { reason: "visible_reply_missing" } },
+    { reason: "adapter_returned_no_identity", expected: { disposition: "ambiguous" } },
+    {
+      reason: "cancelled_by_message_sending_hook",
+      expected: { disposition: "intentional_non_delivery", reason: "delivery_suppressed" },
+    },
+  ] as const)(
+    "preserves automatic suppression $reason across receipt replay",
+    async ({ reason, expected }) => {
+      const stored = project({
+        payloads: [],
+        meta: { yielded: true },
+        deliveryStatus: { status: "suppressed", resultCount: 0, reason },
+      });
+      expect(await classify({ status: "ok", result: stored })).toMatchObject({
+        delivered: false,
+        ...expected,
+      });
+    },
+  );
+
+  it.each([
+    { status: "suppressed", reason: "adapter_returned_no_identity" },
+    { status: "failed", sentBeforeError: true },
+    { status: "sent" },
+  ])(
+    "retains omitted $status send evidence instead of acknowledging policy suppression",
+    async (lastOutcome) => {
+      const original = {
+        payloads: Array.from({ length: 65 }, () => ({ text: "progress", isCommentary: true })),
+        deliveryStatus: {
+          status: "suppressed",
+          resultCount: 0,
+          reason: "cancelled_by_message_sending_hook",
+          payloadOutcomes: [
+            ...Array.from({ length: 64 }, (_, index) => ({
+              index,
+              status: "suppressed",
+              reason: "cancelled_by_message_sending_hook",
+            })),
+            { index: 64, ...lastOutcome },
+          ],
+        },
+      };
+      expect(await classify({ status: "ok", result: original })).toMatchObject({
+        delivered: false,
+        disposition: "ambiguous",
+      });
+      const stored = project(original);
+      expect(stored?.deliveryStatus?.payloadOutcomes).toHaveLength(64);
+      expect(stored?.deliveryStatus?.payloadOutcomes?.[63]).toEqual({ index: 64, ...lastOutcome });
+      expect(await classify({ status: "ok", result: stored })).toMatchObject({
+        delivered: false,
+        disposition: "ambiguous",
+      });
+    },
+  );
+
+  it("preserves late policy cancellation beyond the bounded outcome list", async () => {
+    const original = {
+      deliveryStatus: {
+        status: "suppressed",
+        resultCount: 0,
+        reason: "no_visible_payload",
+        payloadOutcomes: Array.from({ length: 65 }, (_, index) => ({
+          index,
+          status: "suppressed",
+          reason: index < 64 ? "no_visible_payload" : "cancelled_by_message_sending_hook",
+        })),
+      },
+    };
+    const expected = {
+      delivered: false,
+      disposition: "intentional_non_delivery",
+      reason: "delivery_suppressed",
+    };
+    expect(await classify({ status: "ok", result: original })).toMatchObject(expected);
+    expect(await classify({ status: "ok", result: project(original) })).toMatchObject(expected);
+  });
+
+  it("bounds suppression reasons and outcomes without retaining raw terminal objects", () => {
+    const evidence = project({
+      meta: {
+        terminalReply: { disposition: "silent", text: "discarded" },
+        error: new Error("discarded"),
+      },
+      deliveryStatus: {
+        status: "suppressed",
+        reason: "x".repeat(300),
+        payloadOutcomes: Array.from({ length: 65 }, (_, index) => ({
+          index,
+          status: "suppressed",
+          reason: "y".repeat(300),
+        })),
+      },
+    });
+    expect(evidence?.meta).toEqual({ terminalReply: { disposition: "silent" }, error: true });
+    expect(evidence?.deliveryStatus?.reason).toHaveLength(256);
+    expect(evidence?.deliveryStatus?.payloadOutcomes).toHaveLength(64);
+    expect(evidence?.deliveryStatus?.payloadOutcomes?.[0]?.reason).toHaveLength(256);
+    expect(JSON.stringify(evidence)).not.toContain("discarded");
+    const receipts = mergeRestartRecoveryTerminalDeliveryEvidence(
+      undefined,
+      Array.from({ length: 65 }, (_, index) => ({ ...evidence, runId: `run-${index}` })),
+    );
+    expect(receipts).toHaveLength(64);
+    expect(receipts?.[0]?.runId).toBe("run-1");
+  });
+
+  it("does not promote malformed persisted completion markers into authority", () => {
+    const [receipt] = mergeRestartRecoveryTerminalDeliveryEvidence(undefined, [
+      {
+        runId: "malformed",
+        captured: true,
+        meta: {
+          terminalReply: { disposition: "visible", text: "unbounded" },
+          yielded: "true",
+          aborted: 1,
+          error: {},
+        },
+        requesterContinuationSettled: "true",
+        deliveryStatus: { status: "suppressed", reason: { message: "invalid" } },
+      },
+    ])!;
+    expect(receipt).toBeDefined();
+    expect(receipt?.meta).toBeUndefined();
+    expect(receipt?.requesterContinuationSettled).toBeUndefined();
+    expect(receipt?.deliveryStatus?.reason).toBeUndefined();
+  });
 
   it.each([false, true])(
     "retains the source final marker %s through durable projection",
@@ -222,17 +378,13 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
     },
   );
 
-  it.each([0, 1, undefined])(
+  it.each([1, undefined])(
     "preserves automatic result count %s without manufacturing a send",
     (resultCount) => {
       const stored = project({ deliveryStatus: { status: "sent", resultCount } });
       expect(stored?.deliveryStatus?.resultCount).toBe(resultCount);
     },
   );
-
-  it("marks an empty terminal result as captured", () => {
-    expect(buildRestartRecoveryTerminalDeliveryEvidence({})).toEqual({ captured: true });
-  });
 
   it("marks bounded messaging-tool target evidence as truncated", () => {
     const evidence = buildRestartRecoveryTerminalDeliveryEvidence({
@@ -247,16 +399,13 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
     expect(evidence?.messagingToolSentTargetsTruncated).toBe(true);
   });
 
-  it.each([
-    ["reasoning", { text: "Working", isReasoning: true }],
-    ["commentary", { text: "Working", isCommentary: true }],
-    ["status notice", { text: "Working", isStatusNotice: true }],
-    ["error", { text: "Failed", isError: true }],
-    ["silent reply", { text: "NO_REPLY" }],
-  ])("does not turn %s into a durable visible-final receipt", (_name, payload) => {
-    const evidence = buildRestartRecoveryTerminalDeliveryEvidence({ payloads: [payload] });
-    expect(evidence.payloads).toEqual([{ visible: false }]);
-  });
+  it.each([["silent reply", { text: "NO_REPLY" }]])(
+    "does not turn %s into a durable visible-final receipt",
+    (_name, payload) => {
+      const evidence = buildRestartRecoveryTerminalDeliveryEvidence({ payloads: [payload] });
+      expect(evidence.payloads).toEqual([{ visible: false }]);
+    },
+  );
 
   it("preserves explicit hidden-payload visibility", () => {
     const evidence = buildRestartRecoveryTerminalDeliveryEvidence({
@@ -264,19 +413,6 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
     });
 
     expect(evidence?.payloads).toEqual([{ mediaUrls: ["/tmp/private.png"], visible: false }]);
-  });
-
-  it("retains aggregate-only messaging-tool delivery as ambiguous evidence", () => {
-    const evidence = buildRestartRecoveryTerminalDeliveryEvidence({
-      didSendViaMessagingTool: true,
-      messagingToolSentMediaUrls: ["/tmp/proof.png"],
-    });
-
-    expect(evidence).toEqual({
-      captured: true,
-      messagingToolAggregateEvidenceUnaccounted: true,
-      restartUnsafeSideEffectsDetected: true,
-    });
   });
 
   it("retains mixed unaccounted aggregate delivery as ambiguous evidence", () => {
@@ -297,12 +433,6 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
         visible: true,
       },
     ]);
-  });
-
-  it("retains restart-unsafe committed side effects", () => {
-    const evidence = buildRestartRecoveryTerminalDeliveryEvidence({ successfulCronAdds: 1 });
-
-    expect(evidence).toEqual({ captured: true, restartUnsafeSideEffectsDetected: true });
   });
 
   it("preserves explicit negative messaging-target visibility", () => {

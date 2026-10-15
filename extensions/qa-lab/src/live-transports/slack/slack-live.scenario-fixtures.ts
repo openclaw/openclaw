@@ -12,24 +12,24 @@ import {
   type SlackQaMessageScenarioRun,
 } from "./slack-live.contracts.js";
 
-export function buildSlackChartMessageToolArgs(summaryText: string) {
+function buildSlackPresentationMessageToolArgs<T>(summaryText: string, block: T) {
   return {
     action: "send",
     message: summaryText,
-    presentation: {
-      blocks: [
-        {
-          type: "chart",
-          chartType: "line",
-          title: SLACK_QA_CHART_TITLE,
-          categories: [...SLACK_QA_CHART_CATEGORIES],
-          series: [{ name: SLACK_QA_CHART_SERIES_NAME, values: [...SLACK_QA_CHART_VALUES] }],
-          xLabel: SLACK_QA_CHART_X_LABEL,
-          yLabel: SLACK_QA_CHART_Y_LABEL,
-        },
-      ],
-    },
+    presentation: { blocks: [block] },
   };
+}
+
+export function buildSlackChartMessageToolArgs(summaryText: string) {
+  return buildSlackPresentationMessageToolArgs(summaryText, {
+    type: "chart",
+    chartType: "line",
+    title: SLACK_QA_CHART_TITLE,
+    categories: [...SLACK_QA_CHART_CATEGORIES],
+    series: [{ name: SLACK_QA_CHART_SERIES_NAME, values: [...SLACK_QA_CHART_VALUES] }],
+    xLabel: SLACK_QA_CHART_X_LABEL,
+    yLabel: SLACK_QA_CHART_Y_LABEL,
+  });
 }
 
 export function renderSlackChartAccessibleText(summaryText: string) {
@@ -44,21 +44,13 @@ export function renderSlackChartAccessibleText(summaryText: string) {
 }
 
 export function buildSlackTableMessageToolArgs(summaryText: string) {
-  return {
-    action: "send",
-    message: summaryText,
-    presentation: {
-      blocks: [
-        {
-          type: "table",
-          caption: SLACK_QA_TABLE_CAPTION,
-          headers: [...SLACK_QA_TABLE_HEADERS],
-          rows: SLACK_QA_TABLE_ROWS.map((row) => [...row]),
-          rowHeaderColumnIndex: 0,
-        },
-      ],
-    },
-  };
+  return buildSlackPresentationMessageToolArgs(summaryText, {
+    type: "table",
+    caption: SLACK_QA_TABLE_CAPTION,
+    headers: [...SLACK_QA_TABLE_HEADERS],
+    rows: SLACK_QA_TABLE_ROWS.map((row) => [...row]),
+    rowHeaderColumnIndex: 0,
+  });
 }
 
 export function renderSlackTableAccessibleText(summaryText: string) {

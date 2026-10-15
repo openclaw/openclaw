@@ -5,9 +5,6 @@ export function resolveTelegramAccountOwnerAgentId(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string {
-  return resolveAgentRoute({
-    cfg: params.cfg,
-    channel: "telegram",
-    accountId: params.accountId,
-  }).agentId;
+  const { cfg, accountId } = params;
+  return resolveAgentRoute({ cfg, channel: "telegram", accountId }).agentId;
 }

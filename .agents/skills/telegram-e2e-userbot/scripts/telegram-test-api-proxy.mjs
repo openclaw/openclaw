@@ -28,7 +28,13 @@ export function telegramTestApiPath(pathname) {
 function requestHeaders(headers) {
   const filtered = {};
   for (const [key, value] of Object.entries(headers)) {
-    if (value !== undefined && key !== "host" && !HOP_BY_HOP_HEADERS.has(key)) {
+    // Fetch owns framing after this proxy buffers or streams the incoming body.
+    if (
+      value !== undefined &&
+      key !== "host" &&
+      key !== "content-length" &&
+      !HOP_BY_HOP_HEADERS.has(key)
+    ) {
       filtered[key] = value;
     }
   }
@@ -352,7 +358,8 @@ export async function startTelegramTestApiProxy({
       });
     } catch (error) {
       recordDoneAt();
-      reportProxyFailure(error, failurePhase, method);
+      // Teardown and downstream disconnects cancel polls; they are not upstream failures.
+      if (!upstreamController.signal.aborted) reportProxyFailure(error, failurePhase, method);
       if (!response.headersSent) {
         response.writeHead(502, { "content-type": "application/json" });
       }

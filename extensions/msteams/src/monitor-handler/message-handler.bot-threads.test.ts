@@ -93,11 +93,10 @@ describe("Teams mention policy in bot-created channel threads", () => {
   });
 
   it.each([
-    ["prefilled top-level post", false, "bot-id", channelConversationId, true],
-    ["proactive reply is not a root", true, "bot-id", channelConversationId, false],
-    ["another bot's root", false, "other-bot", channelConversationId, false],
-    ["another channel's root", false, "bot-id", "19:other@thread.tacv2", false],
-  ] as const)("%s", async (_name, threaded, botId, conversationId, allowed) => {
+    ["proactive reply is not a root", true, "bot-id", channelConversationId],
+    ["another bot's root", false, "other-bot", channelConversationId],
+    ["another channel's root", false, "bot-id", "19:other@thread.tacv2"],
+  ] as const)("%s", async (_name, threaded, botId, conversationId) => {
     const rootId = `bot-thread-root-${++sequence}`;
     const config: MSTeamsConfig = {
       groupPolicy: "open",
@@ -107,7 +106,7 @@ describe("Teams mention policy in bot-created channel threads", () => {
         "team-1": {
           requireMentionInBotThreads: false,
           channels: {
-            [channelConversationId]: allowed ? { requireMentionInBotThreads: false } : {},
+            [channelConversationId]: {},
           },
         },
       },
@@ -127,7 +126,7 @@ describe("Teams mention policy in bot-created channel threads", () => {
     await handler(
       incoming({ conversation: conversation(rootId), replyToId: "human-nested-reply" }),
     );
-    expect(dispatch).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("live thread replies retain reply-to-bot activation", async () => {

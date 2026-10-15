@@ -1,8 +1,9 @@
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { focusChatSidePanel } from "./chat-side-panel.test-support.ts";
+import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -85,16 +86,25 @@ suite.define(() => {
         const frame = page.locator(".board-website__frame");
         const content = page.frameLocator(".board-website__frame");
         await content.getByText("All systems operational", { exact: true }).waitFor();
-        const sidebarRow = page.locator(
-          `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
+        const sidebar = page.locator("openclaw-app-sidebar");
+        await sidebar
+          .locator(".sidebar-rail")
+          .getByRole("button", { name: "Pages", exact: true })
+          .click();
+        const pages = sidebar.locator(".sidebar-pages");
+        const catalogRow = pages.locator(".sidebar-pages__entry").filter({
+          has: page.locator(`[data-sidebar-entry="session:${sessionKey}"]`),
+        });
+        await catalogRow.hover();
+        await catalogRow.getByRole("button", { name: "Pin", exact: true }).click();
+        const pinned = sidebar.locator(
+          `.sidebar-rail__pin[data-sidebar-entry="session:${sessionKey}"]`,
         );
-        await sidebarRow.hover();
-        await sidebarRow.getByRole("button", { name: "Pin session", exact: true }).click();
-        const pinned = page.locator(`[data-sidebar-entry="session:${sessionKey}"]`);
-        await pinned.waitFor();
-        expect(
-          await gateway.getRequests("sessions.patch", { key: sessionKey, pinned: true }),
-        ).toHaveLength(1);
+        await pinned.getByRole("link", { name: "Service status", exact: true }).waitFor();
+        expect(await catalogRow.getByRole("button", { name: "Unpin", exact: true }).count()).toBe(
+          1,
+        );
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         await content.getByRole("textbox", { name: "Status note" }).fill("Keep this note");
         const originalFrame = await frame.elementHandle();
         expect(
@@ -146,9 +156,9 @@ suite.define(() => {
         });
         await page.mouse.move(0, 0);
         await page.screenshot({ path: `${suite.artifactDir}/website-expanded.png` });
-        await page.getByRole("link", { name: "Agents", exact: true }).click();
+        await pages.getByRole("link", { name: "Agents", exact: true }).click();
         await page.waitForURL(`${suite.server.baseUrl}agents`);
-        await pinned.locator(".sidebar-recent-session__link").click();
+        await pinned.getByRole("link", { name: "Service status", exact: true }).click();
         await frame.waitFor();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
         expect(await content.getByRole("textbox", { name: "Status note" }).inputValue()).toBe(
@@ -171,11 +181,21 @@ suite.define(() => {
         await expect.poll(viewportFits).toBe(true);
         await page.screenshot({ path: `${suite.artifactDir}/website-mobile.png` });
         expect(await gateway.getRequests("board.data.read")).toHaveLength(0);
-        await page.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(page, "Restore split");
         await content.getByRole("textbox", { name: "Status note" }).waitFor();
         expect(await content.getByRole("textbox", { name: "Status note" }).inputValue()).toBe(
           "Keep this note",
         );
+        await openChatSidePanelType(page, "Files");
+        const files = page.locator('[data-panel-slot="workspace"]:not([hidden])');
+        await files.waitFor();
+        expect((await files.boundingBox())!.width).toBeGreaterThanOrEqual(390 - 24);
+        expect(await frame.isVisible()).toBe(false);
+        await page.getByRole("button", { name: "Close Files", exact: true }).click();
+        await frame.waitFor();
+        expect(
+          await frame.evaluate((element, previous) => element === previous, originalFrame),
+        ).toBe(true);
         await clickBoardWidgetControl(page, content.getByRole("link", { name: "View details" }));
         await content.getByRole("heading", { name: "Service details" }).waitFor();
         const opened = context.waitForEvent("page");

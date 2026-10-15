@@ -301,7 +301,7 @@ async function resolveClonedProjectCheckout(
 export async function removeClonedProjectCheckout(
   project: ProjectRegistryRecord,
   assertUnreferenced: () => void | Promise<void>,
-  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & { assertCurrent?: () => void } = {},
 ): Promise<boolean> {
   const selectedProject = { ...project };
   const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
@@ -316,11 +316,15 @@ export async function removeClonedProjectCheckout(
       await assertUnreferenced();
       const { runWithOpenClawStateLeaseWorker } =
         await import("../state/openclaw-state-lease-worker-operation.js");
-      const result = await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
-        scope.execute({
-          type: "projects.removeCheckoutReference",
-          input: { project: selectedProject, lease: identity },
-        }),
+      const result = await runWithOpenClawStateLeaseWorker(
+        lease,
+        context,
+        (scope, identity) =>
+          scope.execute({
+            type: "projects.removeCheckoutReference",
+            input: { project: selectedProject, lease: identity },
+          }),
+        options.assertCurrent ? { assertCurrent: options.assertCurrent } : undefined,
       );
       if (result === "missing") {
         return false;
@@ -334,6 +338,7 @@ export async function removeClonedProjectCheckout(
       await assertUnreferenced();
       context.admission.assertCurrent();
       lease.assertOwned();
+      options.assertCurrent?.();
       await fs.rm(checkout, { recursive: true });
       context.admission.assertCurrent();
       lease.assertOwned();

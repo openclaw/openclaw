@@ -1,10 +1,9 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { inspectDiscordAccountTokenState } from "./account-token-inspect.js";
 import {
   resolveDefaultDiscordAccountId,
   mergeDiscordAccountConfig,
-  resolveDiscordAccountConfig,
+  inspectDiscordAccountConfig,
 } from "./accounts.js";
 import { resolveDiscordToken } from "./token.js";
 
@@ -25,22 +24,8 @@ export function inspectDiscordSetupAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) {
-  const { accountId, config } = resolveDiscordSetupAccountConfig(params);
-  const enabled = params.cfg.channels?.discord?.enabled !== false && config.enabled !== false;
-  const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
-  const hasAccountToken = Boolean(
-    accountConfig && Object.hasOwn(accountConfig as Record<string, unknown>, "token"),
-  );
-  return inspectDiscordAccountTokenState({
-    base: {
-      accountId,
-      enabled,
-    },
-    config,
-    accountToken: accountConfig?.token,
-    hasAccountToken,
-    channelToken: params.cfg.channels?.discord?.token,
+  return inspectDiscordAccountConfig(params, {
     // Known divergence: setup keeps the runtime-aware resolver for its final branch.
-    resolveFallbackToken: () => resolveDiscordToken(params.cfg, { accountId }),
+    resolveFallbackToken: (accountId) => resolveDiscordToken(params.cfg, { accountId }),
   });
 }

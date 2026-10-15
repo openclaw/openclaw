@@ -111,6 +111,7 @@ export function recoverRestartTombstoneInDatabase(
       },
       ...sourceEvents.filter((event) => !(isRecord(event) && event.type === "session")),
     ],
+    { scheduleProjectionReconcile: false },
   );
 
   const now = Date.now();

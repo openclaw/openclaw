@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import {
   readVisibleSessionTranscriptMessageEntries,
   type SessionTranscriptMessageEntry,
@@ -37,10 +36,12 @@ export type CodexUpstreamForkBoundaryResult =
         thread: CodexThread;
         turns: CodexTurn[];
         prefix: SessionTranscriptMessageEntry[];
-        assertUnchanged: () => Promise<void>;
       };
     }
   | { ok: false; code: CodexUpstreamForkBoundaryFailureCode; message: string };
+
+const IN_PROGRESS_TURN_MESSAGE =
+  "This Codex turn is still in progress. Wait for it to finish, then try forking again.";
 
 const TURN_PAGE_LIMIT = 100;
 
@@ -141,10 +142,7 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
         );
       }
       if (turn.status === "inProgress") {
-        return failure(
-          "in-progress-turn",
-          "This Codex turn is still in progress. Wait for it to finish, then try forking again.",
-        );
+        return failure("in-progress-turn", IN_PROGRESS_TURN_MESSAGE);
       }
       // beforeTurnId at the first turn yields a valid empty-history fork upstream
       // (codex-rs thread_fork_inner has no minimum-turn guard), matching the empty
@@ -281,8 +279,6 @@ export async function resolveCodexUpstreamForkBoundary(params: {
         "The local display prefix exceeds the safe fork-copy limit. Use native Codex to fork this conversation.",
       );
     }
-    const frozen = structuredClone(selected);
-    const prefix = frozen.slice(0, -1);
     return resolved.ok
       ? {
           ...resolved,
@@ -294,38 +290,7 @@ export async function resolveCodexUpstreamForkBoundary(params: {
                 canonical: {
                   thread,
                   turns,
-                  prefix,
-                  assertUnchanged: async () => {
-                    const current = await readVisibleSessionTranscriptMessageEntries(params);
-                    const index = current.findIndex((entry) => entry.entryId === params.entryId);
-                    if (index < 0 || !isDeepStrictEqual(current.slice(0, index + 1), frozen)) {
-                      throw new Error("The local Codex fork prefix changed during initialization");
-                    }
-                    const currentThread = await params.control.readThread(threadId, false);
-                    assertCodexThreadAcceptsDirectInput(currentThread);
-                    if (
-                      currentThread.id !== thread.id ||
-                      currentThread.path !== thread.path ||
-                      currentThread.cwd !== thread.cwd ||
-                      currentThread.historyMode !== thread.historyMode ||
-                      currentThread.model !== thread.model ||
-                      currentThread.modelProvider !== thread.modelProvider ||
-                      currentThread.status?.type === "active"
-                    ) {
-                      throw new Error("The canonical Codex source changed during initialization");
-                    }
-                    const currentTurns = await listCodexUpstreamTurns(params.control, threadId);
-                    const cut = turns.findIndex(
-                      (turn) => turn.id === resolved.boundary.beforeTurnId,
-                    );
-                    if (
-                      !isDeepStrictEqual(currentTurns.slice(0, cut + 1), turns.slice(0, cut + 1))
-                    ) {
-                      throw new Error(
-                        "The canonical Codex fork boundary changed during initialization",
-                      );
-                    }
-                  },
+                  prefix: displayPrefix,
                 },
               }
             : {}),
@@ -337,24 +302,4 @@ export async function resolveCodexUpstreamForkBoundary(params: {
       "The Codex thread could not be read. Check that Codex is available, then try again.",
     );
   }
-}
-
-export function precheckCodexUpstreamForkBoundary(params: {
-  boundary: CodexUpstreamForkBoundary;
-  turns: readonly CodexTurn[];
-}): CodexUpstreamForkBoundaryResult {
-  const target = params.turns.find((turn) => turn.id === params.boundary.beforeTurnId);
-  if (!target) {
-    return failure(
-      "upstream-unavailable",
-      "The Codex thread changed before it could be forked. Refresh the session and try again.",
-    );
-  }
-  if (target.status === "inProgress") {
-    return failure(
-      "in-progress-turn",
-      "This Codex turn is still in progress. Wait for it to finish, then try forking again.",
-    );
-  }
-  return { ok: true, boundary: params.boundary };
 }

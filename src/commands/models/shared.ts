@@ -62,6 +62,7 @@ export async function loadValidConfigSnapshotOrThrow(): Promise<ConfigFileSnapsh
 
 type UpdateConfigContext = {
   runtimeConfig: OpenClawConfig;
+  providerRegistryAvailable?: boolean;
   canonicalModelKeys?: ReadonlyMap<string, string | undefined>;
   restoreSourceEntry: (
     from: string,
@@ -122,7 +123,8 @@ export async function updateConfig(
           return restored as AgentModelEntryConfig;
         },
       };
-      const mutate = () => {
+      const mutate = (providerRegistryAvailable?: boolean) => {
+        context.providerRegistryAvailable = providerRegistryAvailable;
         if (selectModelRefs) {
           const cfg = context.runtimeConfig;
           const canonicalizer = createModelCatalogProviderAliasCanonicalizer({ cfg });
@@ -207,14 +209,6 @@ export function resolveModelRefsFromEntries(params: {
     });
     return resolved ? canonicalizer.ref(resolved.ref) : undefined;
   });
-}
-
-export function resolveModelKeysFromEntries(
-  params: Parameters<typeof resolveModelRefsFromEntries>[0],
-): Array<string | undefined> {
-  return resolveModelRefsFromEntries(params).map((ref) =>
-    ref ? modelKey(ref.provider, ref.model) : undefined,
-  );
 }
 
 function resolveKnownAgentId(cfg: OpenClawConfig, rawAgentId: string): string {
@@ -348,6 +342,27 @@ function resolveDefaultModelPrimaryTarget(params: {
     : resolveModelTarget({ raw: params.modelRaw, cfg: params.cfg });
 }
 
+/** Rejects a model selection whose provider no installed plugin or config declares. */
+export function requireKnownModelProvider(
+  cfg: OpenClawConfig,
+  ref: ModelRef,
+  providerRegistryAvailable?: boolean,
+): ReturnType<typeof inspectModelReference> & { warning?: string } {
+  const inspection = inspectModelReference({ cfg, ref, providerRegistryAvailable });
+  if (inspection.status === "unknown-provider") {
+    throw new Error(
+      `Unknown model provider "${inspection.provider}". Install a plugin that declares it or configure it under models.providers before selecting "${inspection.ref}". Config was not changed.`,
+    );
+  }
+  return {
+    ...inspection,
+    warning:
+      inspection.status === "unverified-provider"
+        ? `Warning: Provider "${inspection.provider}" could not be verified because the plugin registry is unavailable or has no loaded providers. The selection was saved; verify it after restoring the plugin registry.`
+        : undefined,
+  };
+}
+
 export async function updateDefaultModelPrimaryConfig(params: {
   modelRaw: string;
   field: "model" | "imageModel";
@@ -360,12 +375,12 @@ export async function updateDefaultModelPrimaryConfig(params: {
         resolveCfg: context.runtimeConfig,
         modelRaw: params.modelRaw,
       });
-      const inspection = inspectModelReference({ cfg: context.runtimeConfig, ref: resolvedTarget });
-      if (inspection.status === "unknown-provider") {
-        throw new Error(
-          `Unknown model provider "${inspection.provider}". Install a plugin that declares it or configure it under models.providers before selecting "${inspection.ref}". Config was not changed.`,
-        );
-      }
+      const inspection = requireKnownModelProvider(
+        context.runtimeConfig,
+        resolvedTarget,
+        context.providerRegistryAvailable,
+      );
+      warning = inspection.warning;
       if (inspection.status === "unknown-model") {
         warning = `Warning: Model "${inspection.ref}" is not in the local model catalog for provider "${inspection.provider}". The provider is installed or configured, so the selection was saved; verify the model ID if it is not a newly released or self-hosted model.`;
       } else if (inspection.status === "uncatalogued-provider") {

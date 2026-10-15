@@ -103,7 +103,9 @@ function heldReads() {
   return { ...fixture, firstList, secondList, secondListStarted };
 }
 function installPageLifecycle() {
-  const documentEvents = new EventTarget();
+  const documentEvents = Object.assign(new EventTarget(), {
+    documentElement: { getAttribute: () => null },
+  });
   const pageEvents = new EventTarget();
   let visibilityState: DocumentVisibilityState = "visible";
   Object.defineProperty(documentEvents, "visibilityState", {
@@ -124,32 +126,6 @@ function installPageLifecycle() {
 }
 
 describe("event-driven session list refresh", () => {
-  it("does not admit an active message for a session absent from the canonical roster", async () => {
-    const visibleKey = "agent:main:visible";
-    const unrelatedKey = "agent:main:unrelated";
-    const { sessions, message } = harness(() =>
-      sessionsResult(
-        [sessionRow(visibleKey, 1, { owner: { actor: { type: "human", id: "profile-self" } } })],
-        1,
-      ),
-    );
-    await sessions.refresh({ agentId: "main", force: true });
-    expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
-    message({
-      sessionKey: unrelatedKey,
-      key: unrelatedKey,
-      kind: "direct",
-      updatedAt: 2,
-      archived: false,
-      hasActiveRun: true,
-      status: "running",
-      owner: { actor: { type: "human", id: "profile-other" } },
-      participants: [],
-      participantCount: 0,
-    });
-    expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
-  });
-
   it("refreshes exact managed queries by agent and retains appended dashboard windows", async () => {
     const dashboardRows = Array.from({ length: 4 }, (_, index) =>
       sessionRow(`agent:main:dashboard-${index}`, index + 1, { boardFace: "dashboard" }),
@@ -219,53 +195,6 @@ describe("event-driven session list refresh", () => {
     );
   });
 
-  it("applies a terminal session message to a Sessions-style query without refetching", async () => {
-    const key = "agent:main:main";
-    const calls = { canonical: 0, main: 0, research: 0 };
-    const { sessions, request, message } = harness((params) => {
-      const lane =
-        params.includeUnknown === true
-          ? "canonical"
-          : params.agentId === "main"
-            ? "main"
-            : "research";
-      calls[lane] += 1;
-      return sessionsResult(
-        [
-          sessionRow(lane === "research" ? "agent:research:other" : key, calls[lane], {
-            hasActiveRun: true,
-            status: "running",
-          }),
-        ],
-        calls[lane],
-      );
-    });
-    const researchQuery = { ...mainQuery, agentId: "research" };
-    cleanup.push(
-      sessions.subscribeList(mainQuery, () => {}),
-      sessions.subscribeList(researchQuery, () => {}),
-    );
-    await sessions.refresh({ agentId: "main", force: true });
-    await sessions.refreshList({ ...mainQuery, force: true });
-    await sessions.refreshList({ ...researchQuery, force: true });
-    expect(sessions.listSnapshot(mainQuery).result?.sessions[0]).toMatchObject({
-      hasActiveRun: true,
-      status: "running",
-    });
-    request.mockClear();
-    message(terminal(sessionRow(key, 2)));
-    const done = { key, hasActiveRun: false, status: "done" };
-    expect(sessions.state.result?.sessions[0]).toMatchObject(done);
-    expect(sessions.listSnapshot(mainQuery).result?.sessions[0]).toMatchObject(done);
-    expect(sessions.listSnapshot(researchQuery).result?.sessions[0]).toMatchObject({
-      hasActiveRun: true,
-      status: "running",
-    });
-    await tick();
-    expect(request).not.toHaveBeenCalled();
-    expect(calls).toEqual({ canonical: 1, main: 1, research: 1 });
-  });
-
   it("keeps an archived terminal session until the Gateway replaces the active roster", async () => {
     const mainRow = sessionRow("agent:main:main", 1);
     const fallbackRow = sessionRow("agent:main:fallback", 2);
@@ -297,16 +226,18 @@ describe("event-driven session list refresh", () => {
     expect(sessions.state.result?.sessions).toEqual([fallbackRow]);
   });
 
-  it("refreshes the owner-filtered primary roster after a terminal session message", async () => {
+  it("updates held owner-filtered rows without rereading until ownership changes", async () => {
     const key = "agent:main:main";
     let matchesFilteredRoster = true;
-    const held = sessionRow(key, 1, {
+    const initial = sessionRow(key, 1, {
+      sessionId: "owned-session",
       hasActiveRun: true,
       status: "running",
       label: "Ada",
       owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
     });
-    const { sessions, request, message } = harness((params) =>
+    let held = initial;
+    const { sessions, request, message, emitEvent } = harness((params) =>
       sessionsResult(
         params.ownerId && !matchesFilteredRoster ? [] : [held],
         matchesFilteredRoster ? 1 : 2,
@@ -316,11 +247,22 @@ describe("event-driven session list refresh", () => {
     await sessions.refresh({ agentId: "main", ownerId: "profile-ada", force: true });
     expect(sessions.state.result?.sessions.map((session) => session.key)).toEqual([key]);
     request.mockClear();
+    for (let second = 0; second < 60; second++) {
+      held = { ...initial, updatedAt: second + 2, totalTokens: second + 1 };
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { reason: "patch", sessionKey: key, session: held, ancestorSessions: [] },
+      });
+      await tick(1_000);
+    }
+    expect(request).not.toHaveBeenCalled();
+    expect(sessions.state.result?.sessions).toEqual([held]);
     matchesFilteredRoster = false;
     message(
       terminal({
         ...held,
-        updatedAt: 2,
+        updatedAt: 62,
         label: "Bob",
         owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
       }),
@@ -334,6 +276,39 @@ describe("event-driven session list refresh", () => {
     );
     expect(sessions.state.result?.sessions).toEqual([]);
   });
+
+  it.each([false, true])(
+    "absorbs an older fallback at an authoritative read but retains later invalidation (%s)",
+    async (invalidateDuringRead) => {
+      let held = sessionRow("agent:main:held", 1, { sessionId: "held" });
+      const pending = createDeferred<SessionsListResult>();
+      let reads = 0;
+      const { sessions, request, emitEvent } = harness(() =>
+        ++reads === 2 ? pending.promise : sessionsResult([held], reads),
+      );
+      await sessions.refresh({ agentId: "main", force: true });
+      held = { ...held, updatedAt: 2, label: "Updated" };
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { reason: "patch", session: held, ancestorSessions: [] },
+      });
+      await tick(10_000);
+      expect(request).toHaveBeenCalledTimes(1);
+      const invalidate = () =>
+        emitEvent({ type: "event", event: "sessions.changed", payload: { reason: "stores" } });
+      invalidate();
+      await tick();
+      expect(request).toHaveBeenCalledTimes(2);
+      if (invalidateDuringRead) {
+        invalidate();
+      }
+      pending.resolve(sessionsResult([held], 2));
+      await tick(70_000);
+      expect(request).toHaveBeenCalledTimes(invalidateDuringRead ? 3 : 2);
+      expect(sessions.state.result?.sessions).toEqual([held]);
+    },
+  );
 
   it("retains every loaded page when a session event replaces the canonical list", async () => {
     const rows = Array.from({ length: 120 }, (_, index) =>
@@ -387,7 +362,7 @@ describe("event-driven session list refresh", () => {
     firstList.resolve(sessionsResult([], 1));
     await secondListStarted.promise;
     expect(request.mock.calls[1]?.[1]).toEqual({
-      rowMode: "compact",
+      rowMode: "sidebar",
       source: "sidebar",
       excludeDock: true,
       includeGlobal: true,

@@ -5,7 +5,7 @@ import path from "node:path";
 import { syncDirectory } from "@openclaw/fs-safe/durability";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 
 type PublishFileExclusive = typeof import("@openclaw/fs-safe/durability").publishFileExclusive;
@@ -97,6 +97,7 @@ function mockExclusiveCopyTransfer() {
       return {
         method: "exclusive-copy",
         identity: await target.stat(),
+        exactIdentity: await target.stat({ bigint: true }),
         directorySync: await syncDirectory(path.dirname(options.targetPath)),
       };
     } finally {
@@ -135,6 +136,42 @@ function mockUnavailableBirthtime(
 }
 
 describe("owned SQLite snapshot transfer", () => {
+  it("publishes a snapshot in a deeply nested destination", async () => {
+    let directory = tempDir;
+    while (Buffer.byteLength(directory) < 431) {
+      directory = path.join(
+        directory,
+        "nested".padEnd(Math.min(60, 430 - Buffer.byteLength(directory)), "x"),
+      );
+    }
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const destination = path.join(directory, "snapshot.sqlite");
+    const source = new sqlite.DatabaseSync(sourcePath);
+    try {
+      source.exec(
+        "CREATE TABLE records(value TEXT); INSERT INTO records(rowid,value) VALUES(71,'retained');",
+      );
+    } finally {
+      source.close();
+    }
+    const original = await fs.readFile(sourcePath);
+
+    await createVerifiedSqliteSnapshot({
+      sourcePath,
+      targetPath: destination,
+      preserveRowIds: true,
+    });
+
+    {
+      using snapshot = openNodeSqliteDatabase(destination, { readOnly: true });
+      expect(snapshot.prepare("SELECT rowid,value FROM records").all()).toEqual([
+        { rowid: 71, value: "retained" },
+      ]);
+    }
+    expect(await fs.readFile(sourcePath)).toEqual(original);
+    expect(await fs.readdir(directory)).toEqual(["snapshot.sqlite"]);
+  });
+
   it.each([
     { isolated: false, copyFallback: false, birthtime: "native" },
     { isolated: true, copyFallback: false, birthtime: "native" },
@@ -219,7 +256,7 @@ describe("owned SQLite snapshot transfer", () => {
     const original = await fs.readFile(sourcePath);
     await publishVerifiedSqliteFile({
       sourcePath,
-      sourceIdentity: await fs.stat(sourcePath),
+      sourceIdentity: await fs.stat(sourcePath, { bigint: true }),
       targetPath,
       expectedContent: {
         sha256: createHash("sha256").update(original).digest("hex"),

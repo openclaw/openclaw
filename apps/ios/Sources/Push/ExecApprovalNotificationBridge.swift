@@ -85,48 +85,23 @@ enum ApprovalNotificationBridge {
         actionIdentifier: String,
         userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt?
     {
-        for configuration in self.configurations where
+        self.parsePush(userInfo: userInfo, event: \.requestedKind) { configuration in
             actionIdentifier == UNNotificationDefaultActionIdentifier ||
-            actionIdentifier == configuration.reviewActionIdentifier
-        {
-            if let prompt = self.parsePush(
-                userInfo: userInfo,
-                expectedKind: configuration.requestedKind,
-                configuration: configuration)
-            {
-                return prompt
-            }
+                actionIdentifier == configuration.reviewActionIdentifier
         }
-        return nil
     }
 
     static func parseRequestedPush(
         userInfo: [AnyHashable: Any],
         kind: ApprovalKind? = nil) -> ApprovalNotificationPrompt?
     {
-        for configuration in self.configurations where kind == nil || configuration.kind == kind {
-            if let prompt = self.parsePush(
-                userInfo: userInfo,
-                expectedKind: configuration.requestedKind,
-                configuration: configuration)
-            {
-                return prompt
-            }
+        self.parsePush(userInfo: userInfo, event: \.requestedKind) { configuration in
+            kind == nil || configuration.kind == kind
         }
-        return nil
     }
 
     static func parseResolvedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
-        for configuration in self.configurations {
-            if let prompt = self.parsePush(
-                userInfo: userInfo,
-                expectedKind: configuration.resolvedKind,
-                configuration: configuration)
-            {
-                return prompt
-            }
-        }
-        return nil
+        self.parsePush(userInfo: userInfo, event: \.resolvedKind)
     }
 
     @MainActor
@@ -194,11 +169,12 @@ enum ApprovalNotificationBridge {
 
     private static func parsePush(
         userInfo: [AnyHashable: Any],
-        expectedKind: String,
-        configuration: ApprovalNotificationConfiguration) -> ApprovalNotificationPrompt?
+        event: KeyPath<ApprovalNotificationConfiguration, String>,
+        matching: (ApprovalNotificationConfiguration) -> Bool = { _ in true }) -> ApprovalNotificationPrompt?
     {
         guard let payload = openClawPayload(userInfo: userInfo),
-              (payload["kind"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) == expectedKind,
+              let kind = (payload["kind"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let configuration = self.configurations.first(where: { matching($0) && $0[keyPath: event] == kind }),
               let approvalId = ExecApprovalIdentifier.exact(payload["approvalId"] as? String)
         else {
             return nil

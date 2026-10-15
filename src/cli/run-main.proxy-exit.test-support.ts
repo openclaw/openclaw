@@ -7,6 +7,7 @@ import {
   registerSignalExitBarrier,
   registerSignalExitFinalizer,
   waitForSignalExitBarriers,
+  waitForCliSignalExit,
 } from "./signal-exit-barrier.js";
 
 export function makeProxyHandle() {
@@ -34,6 +35,7 @@ export function registerRunMainProxyExitTests({
   ])(
     "stops the managed proxy and drains capture before $signal exit",
     async ({ signal, exitCode }) => {
+      const previousExitCode = process.exitCode;
       const handle = makeProxyHandle();
       startProxyMock.mockResolvedValueOnce(handle);
       let resolveRoute: (value: boolean) => void = () => {};
@@ -97,9 +99,9 @@ export function registerRunMainProxyExitTests({
         expect(exitSpy).not.toHaveBeenCalled();
         expect(retireWorkerSource).not.toHaveBeenCalled();
         captureFinished.resolve();
-        await vi.waitFor(() => {
-          expect(exitSpy).toHaveBeenCalledWith(exitCode);
-        });
+        expect(await waitForCliSignalExit()).toBe(exitCode);
+        expect(process.exitCode).toBe(exitCode);
+        expect(exitSpy).not.toHaveBeenCalled();
         expect(cleanupOrder).toEqual(["capture", "worker-source"]);
 
         resolveRoute(true);
@@ -117,6 +119,8 @@ export function registerRunMainProxyExitTests({
           unregisterCapture();
           unregisterWorkerSource();
           await waitForSignalExitBarriers();
+          await waitForCliSignalExit();
+          process.exitCode = previousExitCode;
           exitSpy.mockRestore();
           processOnceSpy.mockRestore();
         }

@@ -1,10 +1,10 @@
-// Control UI tests cover the agents overview context display.
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { MultiSelect } from "../../components/multi-select.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
+// Control UI tests cover the agents overview context display.
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
-import { renderAgents } from "./view.ts";
+import { Agents } from "./view.tsx";
 
 const inheritedAgentModel = "openai/gpt-5.4";
 const resolvedAgentWorkspace = "/tmp/agents/beta";
@@ -54,8 +54,9 @@ it.each(["overview", "channels", "cron"] as const)(
   (activePanel) => {
     const container = document.createElement("div");
     const props = createProps();
-    render(
-      renderAgents({
+    mountSolid(
+      Agents,
+      {
         ...props,
         activePanel,
         agentsList: {
@@ -84,7 +85,7 @@ it.each(["overview", "channels", "cron"] as const)(
             },
           },
         },
-      }),
+      },
       container,
     );
 
@@ -109,12 +110,13 @@ it.each([
 ])("shows the actual save state for $label", ({ canUpdateIdentity, identitySaving, text }) => {
   const container = document.createElement("div");
   const props = createProps();
-  render(
-    renderAgents({
+  mountSolid(
+    Agents,
+    {
       ...props,
       access: { ...props.access, canUpdateIdentity },
-      identitySaving,
-    }),
+      overview: { ...props.overview, identitySaving },
+    },
     container,
   );
 
@@ -127,24 +129,23 @@ it.each([
 
 it("shows inherited skills in the Agent Context overview", () => {
   const container = document.createElement("div");
-  render(
-    renderAgents(
-      createProps({
-        config: {
-          configForm: {
-            agents: {
-              defaults: { skills: ["github", "weather"] },
-              entries: { beta: {} },
-            },
+  mountSolid(
+    Agents,
+    createProps({
+      config: {
+        configForm: {
+          agents: {
+            defaults: { skills: ["github", "weather"] },
+            entries: { beta: {} },
           },
-          configSnapshot: null,
-          configLoading: false,
-          configSaving: false,
-          configFormDirty: false,
-          lastError: null,
         },
-      }),
-    ),
+        configSnapshot: null,
+        configLoading: false,
+        configSaving: false,
+        configFormDirty: false,
+        lastError: null,
+      },
+    }),
     container,
   );
 
@@ -161,32 +162,35 @@ describe("fallback field", () => {
     { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
     { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
     { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google" },
-  ] satisfies ReturnType<typeof createProps>["modelCatalog"]["models"];
+  ] satisfies ReturnType<typeof createProps>["overview"]["modelCatalog"];
 
   function renderFallbacks(overrides: Partial<ReturnType<typeof createProps>> = {}) {
     const container = document.createElement("div");
     const onModelFallbacksChange = vi.fn();
-    render(
-      renderAgents(
-        createProps({
-          config: {
-            configForm: {
-              agents: {
-                defaults: { model: { primary, fallbacks: [existingFallback] } },
-                entries: { alpha: {}, beta: {} },
-              },
+    mountSolid(
+      Agents,
+      createProps({
+        config: {
+          configForm: {
+            agents: {
+              defaults: { model: { primary, fallbacks: [existingFallback] } },
+              entries: { alpha: {}, beta: {} },
             },
-            configSnapshot: null,
-            configLoading: false,
-            configSaving: false,
-            configFormDirty: false,
-            lastError: null,
           },
-          modelCatalog: { models: catalog, hasSnapshot: true, retired: false },
+          configSnapshot: null,
+          configLoading: false,
+          configSaving: false,
+          configFormDirty: false,
+          lastError: null,
+        },
+        ...overrides,
+        overview: {
+          ...createProps().overview,
+          modelCatalog: catalog,
+          ...overrides.overview,
           onModelFallbacksChange,
-          ...overrides,
-        }),
-      ),
+        },
+      }),
       container,
     );
     const field = container.querySelector<MultiSelect>("openclaw-multi-select.agent-fallbacks");
@@ -246,10 +250,9 @@ describe("fallback field", () => {
         configFormDirty: false,
         lastError: null,
       },
-      modelCatalog: {
-        hasSnapshot: true,
-        retired: false,
-        models: [
+      overview: {
+        ...createProps().overview,
+        modelCatalog: [
           { provider: "custom", id: "model-a", name: "Lowercase model" },
           { provider: "custom", id: "Model-A", name: "Uppercase model" },
         ],

@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import {
   formatAgentRunRouteChange,
@@ -66,6 +67,7 @@ export function canAdvanceContextEngineTurn(params: {
 
 export function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(params: {
   result: T;
+  config: OpenClawConfig;
   terminalStatus: EmbeddedAgentRunEntryTerminal["outcome"]["status"];
   provider: string;
   model: string;
@@ -115,7 +117,7 @@ export function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(pa
           requested,
           rerouted:
             terminalReceipt.rerouted ||
-            isProviderModelRerouted(requested, terminalReceipt.effective),
+            isProviderModelRerouted(requested, terminalReceipt.effective, params.config),
         },
       }
     : params.result.meta.agentMeta;
@@ -231,11 +233,10 @@ export function buildRunEntryTerminal(params: {
     if (typeof meta.aborted === "boolean") {
       metadata.aborted = meta.aborted;
     }
-    if (meta.replayInvalid === true) {
-      metadata.replayInvalid = true;
-    }
-    if (meta.yielded === true) {
-      metadata.yielded = true;
+    for (const key of ["replayInvalid", "yielded"] as const) {
+      if (meta[key] === true) {
+        metadata[key] = true;
+      }
     }
   }
   return { outcome, metadata };
@@ -253,8 +254,7 @@ export function preserveFollowupResultForDelivery(
   if (
     !classification ||
     !("code" in classification) ||
-    !classification.code ||
-    !PRESERVED_FOLLOWUP_RESULT_CODES.has(classification.code)
+    !PRESERVED_FOLLOWUP_RESULT_CODES.has(classification.code ?? "")
   ) {
     return classification;
   }

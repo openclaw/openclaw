@@ -1,32 +1,21 @@
-import { html, nothing, svg } from "lit";
-import { ref } from "lit/directives/ref.js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { strokeIcon } from "../../components/icons-tools.ts";
-import { icons } from "../../components/icons.ts";
-import { renderKeyboardShortcut, renderShortcutText } from "../../components/kbd.ts";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
-import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import type { NewSessionDraftController } from "./draft-controller.ts";
+import { environmentCloudDisabledReason } from "./hosted-environments.ts";
 import type { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { resolveProjectChip } from "./project-chip.ts";
-import { renderAgentSelect } from "./target-controls.ts";
-import { resolveWhereChip } from "./where-chip.ts";
+import { draftWhereChipParams, resolveWhereChip } from "./where-chip.ts";
 import "../../styles/palette-session-settings.css";
 
 registerNewSessionSetupEnglish();
 
 registerCommandPaletteEnglish();
 
-const settingsIcon = strokeIcon(
-  svg`<path d="M4 7h8m4 0h4M4 17h2m4 0h10"/><circle cx="14" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>`,
-);
-
-type SettingsOptions = {
+export type SettingsOptions = {
   draft: NewSessionDraftController;
   context: ApplicationContext | undefined;
   preferences: PaletteSessionPreferences;
@@ -39,6 +28,7 @@ type MachineChoice = {
   id: string;
   label: string;
   remote: boolean;
+  hosted?: boolean;
   selected: boolean;
   disabledReason?: string;
   select: () => void;
@@ -50,7 +40,8 @@ export class PaletteSessionSettings {
   private query = "";
 
   constructor(
-    private readonly host: OpenClawLightDomElement,
+    private readonly host: Pick<ControllerHost, "requestUpdate" | "updateComplete"> &
+      Pick<HTMLElement, "ownerDocument" | "querySelector" | "querySelectorAll">,
     private readonly id: string,
   ) {}
 
@@ -78,12 +69,14 @@ export class PaletteSessionSettings {
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
       return;
     }
-    // Web Awesome handles dropdown Escape at document level. Let the nested
-    // picker close before this settings dialog, without blocking that listener.
+    // The nested menu owns Escape and roving focus, including its trigger.
     if (
       event
         .composedPath()
-        .some((node) => node instanceof Element && node.matches("wa-dropdown[open]"))
+        .some(
+          (node) =>
+            node instanceof Element && node.matches('[role="menu"], [aria-haspopup="menu"]'),
+        )
     ) {
       return;
     }
@@ -106,12 +99,6 @@ export class PaletteSessionSettings {
     ) {
       return;
     }
-    // The shared agent dropdown owns its own roving focus and keyboard semantics.
-    if (
-      event.composedPath().some((node) => node instanceof Element && node.tagName === "WA-DROPDOWN")
-    ) {
-      return;
-    }
     const controls = [
       ...event.currentTarget.querySelectorAll<HTMLElement>(
         "button:not(:disabled), input:not(:disabled)",
@@ -130,25 +117,18 @@ export class PaletteSessionSettings {
     ]?.focus();
   }
 
-  render(options: SettingsOptions) {
-    const { draft, context, preferences, onChange } = options;
+  view(options: SettingsOptions) {
+    const { draft, onChange } = options;
     const { place, gateway, submission } = draft;
+    const placementLocked = place.requiredPlacement;
+    if (placementLocked) {
+      this.places = false;
+    }
     const locked =
       submission.submitting ||
       Boolean(submission.pendingPlacement.sessionKey) ||
       Boolean(submission.submissionOutcomeUnknown);
-    const where = resolveWhereChip({
-      environments: place.canWrite() ? gateway.environments : [],
-      cloudProfiles: place.isAdmin() ? gateway.cloudProfiles : [],
-      cloudProfileId: place.cloudProfileId,
-      ...place.cloudSelection,
-      deviceId: place.deviceId,
-      autoDevice: place.autoDevice,
-      devicePlacement: place.devicePlacementRuntime()?.devicePlacement,
-      deviceDisabledReason:
-        place.modelControl.devicePlacementUnsupportedReason() ??
-        gateway.deviceCatalogDisabledReason,
-    });
+    const where = resolveWhereChip(draftWhereChipParams(place, gateway));
     const machineLabel =
       where.kind === "local" ? gateway.gatewayName || t("newSession.local") : where.label;
     const cloudSummary = [
@@ -168,11 +148,21 @@ export class PaletteSessionSettings {
       freshWorkspace: place.freshWorkspace,
     });
     const machines: MachineChoice[] = [
+      ...place.modelControl.hostedEnvironments().map((environment) => ({
+        id: "runtime:" + environment.id,
+        label: environment.label,
+        hosted: true,
+        remote: false,
+        selected: where.hostedRuntimeId === environment.id,
+        disabledReason: environment.disabledReason,
+        select: () => place.selectHostedEnvironment(environment.id),
+      })),
       {
         id: "local",
         label: gateway.gatewayName || t("newSession.local"),
         remote: false,
-        selected: !place.remotePlacement,
+        selected: !place.hostedEnvironment && !place.remotePlacement,
+        disabledReason: place.modelControl.hostEnvironmentDisabledReason(),
         select: () => place.selectDevice(""),
       },
       ...where.devices.map((device) => ({
@@ -200,7 +190,7 @@ export class PaletteSessionSettings {
         label: t("newSession.cloudWorker", { profile: profile.id }),
         remote: true,
         selected: place.cloudProfileId === profile.id,
-        disabledReason: place.modelControl.cloudRuntimeUnsupportedReason(profile),
+        disabledReason: environmentCloudDisabledReason(place.modelControl, profile),
         select: () => place.selectCloudProfile(profile.id),
       })),
     ];
@@ -209,11 +199,11 @@ export class PaletteSessionSettings {
         return;
       }
       machine.select();
-      if (projectId) {
+      if (!machine.hosted && projectId) {
         place.selectProjectId(projectId);
-      } else if (machine.remote) {
+      } else if (!machine.hosted && machine.remote) {
         place.selectNewWorkspace();
-      } else {
+      } else if (!machine.hosted) {
         place.applyFolder(place.workspacePath());
       }
       onChange();
@@ -223,212 +213,59 @@ export class PaletteSessionSettings {
     const groups = machines
       .map((machine) => ({
         machine,
-        choices: [
-          {
-            id: "",
-            label: machine.remote
-              ? t("newSession.newWorkspace")
-              : pathDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
-          },
-          ...draft.browser.projects.map((project) => ({
-            id: project.id,
-            label: project.displayName,
-          })),
-        ].filter(
+        choices: (machine.disabledReason || machine.hosted
+          ? [
+              {
+                id: "",
+                label: t(
+                  machine.disabledReason
+                    ? "newSession.environmentUnavailable"
+                    : "newSession.hostedWorkspace",
+                ),
+              },
+            ]
+          : [
+              {
+                id: "",
+                label: machine.remote
+                  ? t("newSession.newWorkspace")
+                  : pathDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
+              },
+              ...draft.browser.projects.map((project) => ({
+                id: project.id,
+                label: project.displayName,
+              })),
+            ]
+        ).filter(
           (choice) =>
             !query || (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
         ),
       }))
       .filter((group) => group.choices.length);
-    return html`
-      <button
-        id=${this.id + "-settings-trigger"}
-        class="palette-session-settings__trigger"
-        type="button"
-        aria-label=${t("commandPalette.newSessionSettings")}
-        title=${t("commandPalette.newSessionSettings")}
-        aria-haspopup="dialog"
-        aria-expanded=${String(this.open)}
-      >
-        ${settingsIcon}
-      </button>
-      <wa-popover
-        ${ref(syncPopoverLabel)}
-        class="palette-session-settings"
-        for=${this.id + "-settings-trigger"}
-        placement="bottom-end"
-        without-arrow
-        .open=${this.open}
-        @wa-show=${(event: Event) => {
-          if (event.target === event.currentTarget) {
-            this.open = true;
-            this.host.requestUpdate();
-          }
-        }}
-        @wa-hide=${(event: Event) => {
-          if (event.target === event.currentTarget) {
-            this.close();
-          }
-        }}
-      >
-        <div
-          class="palette-session-settings__content"
-          @keydown=${(event: KeyboardEvent) => this.keydown(event)}
-        >
-          ${
-            this.places
-              ? html`
-                  <div class="palette-session-settings__heading">
-                    <button
-                      type="button"
-                      class="palette-session-settings__back"
-                      aria-label=${t("common.back")}
-                      @click=${() => this.showPlaces(false)}
-                    >
-                      ${icons.arrowLeft}</button
-                    ><span>${t("newSession.projects")}</span>
-                  </div>
-                  <input
-                    class="palette-session-settings__search"
-                    type="search"
-                    aria-label=${t("common.search")}
-                    placeholder=${t("common.search")}
-                    .value=${this.query}
-                    @input=${(event: Event) => {
-                      if (event.currentTarget instanceof HTMLInputElement) {
-                        this.query = event.currentTarget.value;
-                        this.host.requestUpdate();
-                      }
-                    }}
-                  />
-                  <div class="palette-session-settings__choices">
-                    ${groups.map(
-                      ({ machine, choices }) => html` <section aria-label=${machine.label}>
-                        <div class="palette-session-settings__machine">${machine.label}</div>
-                        ${choices.map((choice) => {
-                          const selected =
-                            machine.selected &&
-                            (choice.id
-                              ? draft.browser.projectId === choice.id
-                              : !draft.browser.projectId &&
-                                (machine.remote
-                                  ? place.freshWorkspace
-                                  : place.folder === place.workspacePath()));
-                          return html`<button
-                            type="button"
-                            class="palette-session-settings__row"
-                            data-machine=${machine.id}
-                            data-project=${choice.id}
-                            aria-pressed=${String(selected)}
-                            title=${machine.disabledReason ?? nothing}
-                            ?disabled=${locked || Boolean(machine.disabledReason)}
-                            @click=${() => choose(machine, choice.id)}
-                          >
-                            <span class="palette-session-settings__icon"
-                              >${choice.id ? icons.gitBranch : icons.folder}</span
-                            ><span class="palette-session-settings__label">${choice.label}</span
-                            ><span class="palette-session-settings__check"
-                              >${selected ? icons.check : nothing}</span
-                            >
-                          </button>`;
-                        })}
-                        ${machine.disabledReason ? html`<div class="palette-session-settings__unavailable">${machine.disabledReason}</div>` : nothing}
-                      </section>`,
-                    )}
-                    ${!groups.length ? html`<div class="palette-session-settings__unavailable">${t("newSession.environmentSearchEmpty")}</div>` : nothing}
-                    ${gateway.cloudProfilesPending ? html`<div role="status" class="palette-session-settings__unavailable">${t("common.loading")}</div>` : nothing}
-                  </div>
-                  ${place.isAdmin() ? html`<button class="palette-session-settings__row" type="button" ?disabled=${locked} @click=${options.onConnectMachine}><span class="palette-session-settings__icon">${icons.plus}</span><span>${t("newSession.connectMachine")}</span></button>` : nothing}
-                `
-              : html`
-                  <div class="palette-session-settings__title">
-                    ${t("commandPalette.newSessionSettings")}
-                  </div>
-                  <div class="palette-session-settings__agent">
-                    ${renderAgentSelect({
-                      agents: place.agents(),
-                      variant: "default",
-                      agentId: place.agentId,
-                      agentIdentity: context?.agentIdentity,
-                      disabled: locked,
-                      onSelect: (id) => {
-                        place.selectAgentId(id);
-                        onChange();
-                      },
-                      onOpenChange: options.onAgentPickerOpen,
-                    })}
-                  </div>
-                  <button
-                    class="palette-session-settings__row palette-session-settings__workspace"
-                    type="button"
-                    ?disabled=${locked}
-                    @click=${(event: MouseEvent) => this.showPlaces(true, event.detail > 0)}
-                  >
-                    <span class="palette-session-settings__icon">${icons.folder}</span
-                    ><span class="palette-session-settings__copy"
-                      ><span class="palette-session-settings__label">${projectState.label}</span
-                      ><span class="palette-session-settings__secondary"
-                        >${machineLabel}${cloudSummary ? " · " + cloudSummary : ""}</span
-                      ></span
-                    ><span class="palette-session-settings__chevron">${icons.chevronRight}</span>
-                  </button>
-                  ${
-                    place.checkoutVisible && !place.remoteRepository
-                      ? html`<button
-                          class="palette-session-settings__row palette-session-settings__worktree"
-                          type="button"
-                          role="switch"
-                          aria-checked=${String(place.worktree)}
-                          aria-label=${t("newSession.checkoutWorktree")}
-                          title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.gitCheckUnavailable") : nothing}
-                          ?disabled=${locked || place.remotePlacement}
-                          @click=${() => {
-                            place.selectWorktree(!place.worktree);
-                            onChange();
-                          }}
-                        >
-                          <span class="palette-session-settings__icon">${icons.gitBranch}</span
-                          ><span>${t("newSession.checkoutWorktree")}</span
-                          ><span class="palette-session-settings__switch" aria-hidden="true"></span>
-                        </button>`
-                      : nothing
-                  }
-                `
-          }
-          ${
-            !this.places || preferences.failed
-              ? html`<div class="palette-session-settings__footer">
-                  ${
-                    !this.places
-                      ? html`<label
-                          class="palette-session-settings__remember"
-                          title=${!preferences.available ? t("commandPalette.rememberUnavailable") : nothing}
-                          ><input
-                            type="checkbox"
-                            .checked=${preferences.remember}
-                            ?disabled=${locked || !preferences.available}
-                            @change=${(event: Event) => {
-                              if (event.currentTarget instanceof HTMLInputElement) {
-                                preferences.setRemember(event.currentTarget.checked);
-                              }
-                            }}
-                          /><span
-                            >${renderShortcutText(
-                              t("commandPalette.rememberSettings", { shortcut: "{shortcut}" }),
-                              renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.commandPalette, {
-                                inline: true,
-                              }),
-                            )}</span
-                          ></label
-                        >`
-                      : nothing
-                  }
-                  ${preferences.failed ? html`<div class="palette-session-settings__error" role="alert">${t("commandPalette.settingsSaveFailed")} <button type="button" class="btn btn--sm" @click=${() => preferences.retry()}>${t("common.retry")}</button></div>` : nothing}
-                </div>`
-              : nothing
-          }
-        </div>
-      </wa-popover>
-    `;
+    return {
+      options,
+      placementLocked,
+      locked,
+      machineLabel,
+      cloudSummary,
+      projectState,
+      groups,
+      id: this.id,
+      open: this.open,
+      places: this.places,
+      query: this.query,
+      choose,
+      onOpen: () => {
+        this.open = true;
+        this.host.requestUpdate();
+      },
+      onHide: () => this.close(),
+      onKeydown: (event: KeyboardEvent) => this.keydown(event),
+      onShowPlaces: (value: boolean, pointer = false) => void this.showPlaces(value, pointer),
+      onQueryInput: (value: string) => {
+        this.query = value;
+        this.host.requestUpdate();
+      },
+    };
   }
 }

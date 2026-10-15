@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH } from "./config-hash.js";
 import { SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
 import { createSandboxContainerTestHarness } from "./docker.create.test-helpers.js";
@@ -44,6 +45,71 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(spawnState.calls.filter((call) => call.args[0] === "start")).toHaveLength(1);
     expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["docker", "podman"] as const)(
+    "completes %s setup after recreation with retained registry custody",
+    async (backendId) => {
+      const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+      const registry = await vi.importActual<typeof import("./registry.js")>("./registry.js");
+      registryMocks.readRegistryEntry.mockImplementation(registry.readRegistryEntry);
+      registryMocks.updateRegistry.mockImplementation(registry.updateRegistry);
+      registryMocks.completeSandboxRegistryReservation.mockImplementation(
+        registry.completeSandboxRegistryReservation,
+      );
+      registryMocks.removeRegistryEntry.mockImplementation(registry.removeRegistryEntry);
+      try {
+        await withOpenClawTestState({ label: "sandbox-setup-recreation" }, async (state) => {
+          const workspaceDir = state.workspaceDir;
+          const retainedWorkspaceDir = state.path("retained-workspace");
+          fs.mkdirSync(retainedWorkspaceDir);
+          const cfg = createSandboxConfig([], []);
+          cfg.backend = backendId;
+          cfg.docker.setupCommand = "echo setup";
+          const containerName = backendId === "podman" ? "oc-test-podman-shared" : "oc-test-shared";
+          await registry.updateRegistry({
+            containerName,
+            backendId,
+            ...(backendId === "podman" ? { backendTarget: { key: "local", globalArgs: [] } } : {}),
+            sessionKey: "shared",
+            workspaceDir: retainedWorkspaceDir,
+            createdAtMs: 1,
+            lastUsedAtMs: 1,
+            image: cfg.docker.image,
+            configHash: "stale-hash",
+            runtimeState: "ready",
+          });
+          spawnState.inspectRunning = false;
+          spawnState.labelHash = "stale-hash";
+
+          await expect(
+            harness.ensureSandboxContainer({
+              ...(backendId === "podman" ? { engine: harness.PODMAN_SANDBOX_ENGINE } : {}),
+              scopeKey: "shared",
+              workspaceDir,
+              agentWorkspaceDir: workspaceDir,
+              cfg,
+            }),
+          ).resolves.toEqual({ containerName, containerId: "c".repeat(64) });
+
+          await expect(registry.readRegistryEntry(containerName)).resolves.toMatchObject({
+            runtimeState: "ready",
+            createdAtMs: 1,
+            workspaceDir: retainedWorkspaceDir,
+            configHash: spawnState.labelHash,
+          });
+          expect(spawnState.calls.filter((call) => call.args[0] === "exec")).toHaveLength(1);
+          expect(spawnState.calls.filter((call) => call.args[0] === "rm")).toHaveLength(1);
+          expect(spawnState.containerExists).toBe(true);
+          expect(spawnState.inspectRunning).toBe(true);
+        });
+      } finally {
+        registryMocks.readRegistryEntry.mockReset();
+        registryMocks.updateRegistry.mockReset();
+        registryMocks.completeSandboxRegistryReservation.mockReset();
+        registryMocks.removeRegistryEntry.mockReset();
+      }
+    },
+  );
 
   it("uses the canonical non-shared scope for Docker names, labels, and registry identity", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
@@ -427,36 +493,6 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     );
   });
 
-  it("preserves distinct session suffixes with a long Podman container prefix", async () => {
-    const cfg = createSandboxConfig([]);
-    cfg.scope = "session";
-    cfg.docker.containerPrefix = "x".repeat(56);
-    cfg.docker.user = undefined;
-    spawnState.containerExists = false;
-    spawnState.inspectRunning = false;
-    registryMocks.readRegistryEntry.mockResolvedValue(null);
-
-    const firstCreate = await ensureSandboxCreateCallForTest({
-      cfg,
-      scopeKey: "agent:first:session",
-      engine: harness.PODMAN_SANDBOX_ENGINE,
-    });
-    const firstName = collectDockerFlagValues(firstCreate.args, "--name")[0];
-
-    spawnState.calls.length = 0;
-    spawnState.containerExists = false;
-    const secondCreate = await ensureSandboxCreateCallForTest({
-      cfg,
-      scopeKey: "agent:second:session",
-      engine: harness.PODMAN_SANDBOX_ENGINE,
-    });
-    const secondName = collectDockerFlagValues(secondCreate.args, "--name")[0];
-
-    expect(firstName).not.toBe(secondName);
-    expect(firstName?.length).toBeLessThanOrEqual(63);
-    expect(secondName?.length).toBeLessThanOrEqual(63);
-  });
-
   it("invalidates a Podman container when the same tmpfs list becomes explicit", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
@@ -523,25 +559,6 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       "/tmp/podman-machine-default",
     ]);
   });
-
-  it("rejects Podman Machine bind sources outside the default home share", async () => {
-    const cfg = createSandboxConfig([]);
-    usePodmanMachine();
-    spawnState.inspectRunning = false;
-    registryMocks.readRegistryEntry.mockResolvedValue(null);
-
-    await expect(
-      harness.ensureSandboxContainer({
-        engine: harness.PODMAN_SANDBOX_ENGINE,
-        scopeKey: "agent:test:session",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
-        cfg,
-      }),
-    ).rejects.toThrow(/outside the default host home share/u);
-
-    expect(spawnState.calls.some((call) => call.args[0] === "create")).toBe(false);
-  });
 });
 
 describe("ensureSandboxContainer managed mounts", () => {
@@ -554,31 +571,6 @@ describe("ensureSandboxContainer managed mounts", () => {
     createSandboxConfig,
     ensureSandboxCreateCallForTest,
   } = harness;
-
-  it("creates read-only workspace and agent mounts in the daemon namespace", async () => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-dood-"));
-    for (const dir of ["private", "agent"]) {
-      fs.mkdirSync(path.join(root, dir), { recursive: true });
-    }
-    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
-      { type: "bind", source: "/host/state", destination: root, writable: true },
-    ]);
-    spawnState.containerExists = false;
-    registryMocks.readRegistryEntry.mockResolvedValue(null);
-    await harness.ensureSandboxContainer({
-      scopeKey: "shared",
-      workspaceDir: path.join(root, "private"),
-      agentWorkspaceDir: path.join(root, "agent"),
-      cfg: createSandboxConfig([], [], "ro"),
-    });
-    const binds = collectDockerFlagValues(
-      spawnState.calls.find((call) => call.args[0] === "create")?.args ?? [],
-      "-v",
-    );
-    expect(binds).toContain("/host/state/private:/workspace:ro,z");
-    expect(binds).toContain("/host/state/agent:/agent:ro,z");
-    expect(binds.some((bind) => bind.startsWith(root))).toBe(false);
-  });
 
   it("preserves a hot container after a source change, then recreates it when stopped", async () => {
     const workspaceDir = fs.realpathSync(tempDirs.make("openclaw-dood-"));

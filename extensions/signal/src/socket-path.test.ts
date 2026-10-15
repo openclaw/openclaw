@@ -165,7 +165,7 @@ describe.skipIf(process.platform === "win32")("Signal socket filesystem boundary
         }
         const preparation = prepareSignalSocketPath(socketPath);
         if (replaced) {
-          await expect(preparation).rejects.toThrow("changed during its ownership probe");
+          await expect(preparation).rejects.toThrow("changed during its ownership check");
           expect((await fsMocks.actualLstat(socketPath)).isSocket()).toBe(true);
         } else {
           await expect(preparation).resolves.toBeUndefined();

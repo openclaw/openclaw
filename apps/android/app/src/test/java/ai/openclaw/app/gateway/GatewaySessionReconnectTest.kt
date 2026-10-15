@@ -925,6 +925,43 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
+  fun failedTalkDetachReconnectsOnlyItsOwningSocket() =
+    runBlocking {
+      val ready = Channel<GatewaySession.RequestLease>(Channel.UNLIMITED)
+      val server =
+        startGatewayServer(json = Json) { webSocket, id, method ->
+          webSocket.send(
+            if (method == "connect") {
+              connectResponseFrame(id, capabilities = setOf("talk-session-close-disposition"))
+            } else {
+              """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"close unavailable"}}"""
+            },
+          )
+        }
+      val harness = createReconnectHarness()
+      try {
+        connectSession(harness.session, server.port, onReady = {
+          ready.trySend(requireNotNull(harness.session.captureRequestLease()))
+        })
+        val original = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() }
+        val abort = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Abort) }
+        assertTrue(abort.exceptionOrNull() is GatewayRequestRejected)
+        assertTrue(original.isCurrent())
+
+        val detach = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Detach) }
+        assertTrue(detach.exceptionOrNull() is GatewayRequestRejected)
+        val replacement = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() }
+        assertFalse(original.isCurrent())
+
+        val stale = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Detach) }
+        assertTrue(stale.exceptionOrNull() is GatewayRequestNotEnqueued)
+        assertTrue(replacement.isCurrent())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
   fun capturedRequestLeaseRejectsReplacementSocketBeforeEnqueue() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
@@ -1835,7 +1872,7 @@ class GatewaySessionReconnectTest {
         socketField.set(connection, RejectFirstSendWebSocket(socket) { rejectedNodeEvent.complete(Unit) })
         val outbox =
           NotificationNodeEventOutbox {
-            harness.session.sendNodeEventWithOutcome(it.event, it.payloadJson)
+            harness.session.sendNodeEventWithOutcomeForEndpoint(null, it.event, it.payloadJson)
           }
         val deliveryJob = launch { outbox.deliver() }
 

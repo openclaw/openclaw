@@ -55,4 +55,26 @@ describe("requester settle wake identity", () => {
       }),
     ).toBe(true);
   });
+
+  it("recognizes an admitted frozen wake after an earlier member retires", () => {
+    const entry = makeSettledChild({
+      runId: "run-b",
+      requesterAgentId: "main",
+      requesterSettleWake: {
+        status: "dispatching",
+        batchRunIds: ["retired-run", "run-b"],
+        rearmGeneration: 1,
+        attemptCount: 1,
+      },
+    });
+    expect(
+      isRequesterSettleWakeForRun({
+        entry,
+        runId: "announce:requester-settle:main:agent:main:main:run-b:yield-1",
+        requesterSessionKey: REQUESTER,
+        requesterAgentId: "main",
+        runsById: new Map([[entry.runId, entry]]),
+      }),
+    ).toBe(true);
+  });
 });

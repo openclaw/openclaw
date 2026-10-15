@@ -16,6 +16,8 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { handleGatewayRequest } from "./server-methods.js";
 import { dispatchSuspensionRequest as dispatch } from "./server-methods.suspension-admission.test-support.js";
@@ -23,11 +25,83 @@ import { suspendHandlers } from "./server-methods/suspend.js";
 
 /** Register host handoff contracts under the caller's shared admission reset hooks. */
 export function registerSuspensionHandoffLifecycleTests() {
+  it.each(["resume", "expiry", "replacement"] as const)(
+    "reports held custody immediately and observes the lease after %s",
+    async (change) => {
+      vi.useFakeTimers();
+      const prepared = prepareGatewaySuspend({
+        requestId: "settling-writes",
+        drain: true,
+        pauseScheduling: () => {},
+        resumeScheduling: () => {},
+        inspect: { getTerminalPersistence: () => 1 },
+      });
+      if (prepared.status !== "draining") {
+        throw new Error("expected a draining lease");
+      }
+      try {
+        if (change === "expiry") {
+          await vi.advanceTimersByTimeAsync(115_000);
+        }
+        const status = () =>
+          dispatch({
+            method: "gateway.suspend.status",
+            requestParams: { suspensionId: prepared.suspensionId },
+            scope: "operator.read",
+            core: true,
+            handler: suspendHandlers["gateway.suspend.status"]!,
+          });
+        const initial = status();
+        await initial.request;
+        expect(initial.respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            status: "draining",
+            activeCount: 1,
+            writeCustody: [{ phase: "terminal-persistence", count: 1 }],
+          }),
+        );
+        if (change !== "expiry") {
+          resumeGatewaySuspend(prepared.suspensionId);
+          if (change === "replacement") {
+            prepareGatewaySuspend({
+              requestId: "replacement",
+              pauseScheduling: () => {},
+              resumeScheduling: () => {},
+            });
+          }
+        }
+        if (change === "expiry") {
+          await vi.advanceTimersByTimeAsync(5_000);
+        }
+        const current = status();
+        await current.request;
+        if (change === "replacement") {
+          expect(current.respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              details: expect.objectContaining({ reason: "gateway-suspension-conflict" }),
+            }),
+          );
+        } else {
+          expect(current.respond).toHaveBeenCalledWith(true, { status: "running" });
+        }
+      } finally {
+        resetGatewaySuspendCoordinatorForLifecycleRestart();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each(["handoff", "installation-replaced"] as const)(
-    "keeps owned status through %s with 200 blocked admissions",
+    "reports held and settled custody before %s without interrupting 200 admitted requests",
     async (restart) => {
       vi.useFakeTimers();
       const roots = Array.from({ length: 200 }, () => tryBeginGatewayRootWorkAdmission());
+      const writing = createDeferredCore();
+      const written = createDeferredCore();
+      let mutation: Promise<void> | undefined;
       const cron = {
         pauseScheduling: vi.fn(),
         resumeScheduling: vi.fn(),
@@ -40,6 +114,7 @@ export function registerSuspensionHandoffLifecycleTests() {
         acceptStop: () => {},
       });
       const context = {
+        getRuntimeConfig: () => ({}),
         cron,
         hostLifecycle: host.capability,
         logGateway: { warn: vi.fn(), info: vi.fn() },
@@ -81,6 +156,29 @@ export function registerSuspensionHandoffLifecycleTests() {
           Array.from({ length: 200 }, () => beginGatewayRootWorkAdmissionWhenOpen()),
         );
         await vi.advanceTimersByTimeAsync(30_000);
+        mutation = runExclusiveSessionLifecycleMutation("patch", {
+          scope: "suspension-status",
+          identities: ["session"],
+          run: async () => {
+            writing.resolve();
+            await written.promise;
+          },
+        });
+        await writing.promise;
+        expect(await rpc("gateway.suspend.status", { suspensionId })).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            status: "draining",
+            activeCount: 201,
+            writeCustody: [{ phase: "session-mutation", count: 1 }],
+          }),
+        );
+        written.resolve();
+        await mutation;
+        expect(await rpc("gateway.suspend.status", { suspensionId })).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "draining", activeCount: 200, writeCustody: [] }),
+        );
         if (restart === "handoff") {
           const armed = await rpc("gateway.suspend.handoff", {
             suspensionId,
@@ -172,6 +270,8 @@ export function registerSuspensionHandoffLifecycleTests() {
         markGatewayRestartDraining();
         expect(getGatewaySuspendStatus(suspensionId)).toEqual({ status: "running" });
       } finally {
+        written.resolve();
+        await mutation;
         for (const root of roots) {
           root?.release();
         }
@@ -236,6 +336,7 @@ export function registerSuspensionHandoffAuthorizationTests() {
           },
         },
         context: {
+          getRuntimeConfig: () => ({}),
           hostLifecycle: host.capability,
           logGateway: { warn: vi.fn() },
         } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],

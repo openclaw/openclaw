@@ -23,6 +23,54 @@ describe("github item references", () => {
     return htmlFragment(toSanitizedMarkdownHtml(source, options));
   }
 
+  it.each([
+    "Posted [the summary](https://github.com/acme/research/pull/24#issuecomment-123) and merged PR #24 into `main`.",
+    "Merged PR **#24**: [the summary](https://github.com/acme/research/pull/24).",
+    "https://github.com/acme/research/pull/24 and PR #24.",
+  ])("uses matching explicit links instead of the checkout in %s", (source) => {
+    for (const html of [
+      toSanitizedMarkdownHtml(source, { githubRepo }),
+      toStreamingMarkdownParts(source, { githubRepo }).join(""),
+    ]) {
+      const fragment = htmlFragment(html);
+      const chip = [...fragment.querySelectorAll("a")].findLast(
+        (a) => a.textContent === "acme/research#24",
+      );
+      expect(chip?.getAttribute("href")).toBe("https://github.com/acme/research/pull/24");
+    }
+  });
+
+  it("leaves a shorthand plain when matching explicit links disagree", () => {
+    const source =
+      "[A](https://github.com/acme/a/pull/24) and " +
+      "[B](https://github.com/acme/b/pull/24): PR #24.";
+    for (const html of [
+      toSanitizedMarkdownHtml(source, { githubRepo }),
+      toStreamingMarkdownParts(source, { githubRepo }).join(""),
+    ]) {
+      const fragment = htmlFragment(html);
+      expect(fragment.querySelectorAll("a")).toHaveLength(2);
+      expect(fragment.textContent?.trim()).toBe("A and B: PR #24.");
+    }
+  });
+
+  it.each([
+    ["[Other](https://github.com/acme/research/pull/25): PR #24.", "openclaw/openclaw/pull/24"],
+    ["[Other](https://github.com/acme/research/issues/24): PR #24.", "openclaw/openclaw/pull/24"],
+    ["[Other](https://github.com/acme/research/pull/24).\n\nPR #24.", "openclaw/openclaw/pull/24"],
+    ["`https://github.com/acme/research/pull/24` PR #24.", "openclaw/openclaw/pull/24"],
+    [
+      "[Other](https://github.com/acme/research/pull/24): ClawSweeper PR #24.",
+      "openclaw/clawsweeper/pull/24",
+    ],
+  ])("keeps unrelated links and explicit qualifiers independent in %s", (source, target) => {
+    const fragment = render(source, { githubRepo, githubRepositories });
+    const chip = [...fragment.querySelectorAll("a")].findLast(
+      (a) => a.textContent === target.replace("/pull/", "#"),
+    );
+    expect(chip?.getAttribute("href")).toBe("https://github.com/" + target);
+  });
+
   it.each<[string, string, MarkdownRenderOptions]>([
     ["Original ClawSweeper PR **#1558 merged**", "openclaw/clawsweeper/pull/1558", resolved],
     ["Release.Tools issue **#42**", "other/release-tools/issues/42", resolved],
@@ -86,7 +134,11 @@ describe("github item references", () => {
       "https://github.com/other/release-tools/pull/1576",
       "https://github.com/openclaw/openclaw/pull/1576",
     ]);
-    expect(fragment.textContent?.trim()).toBe(input);
+    expect([...fragment.querySelectorAll("a")].map((a) => a.textContent)).toEqual([
+      "openclaw/clawsweeper#1576",
+      "other/release-tools#1576",
+      "openclaw/openclaw#1576",
+    ]);
   });
 
   it.each<[string, MarkdownRenderOptions]>([
@@ -148,17 +200,20 @@ describe("github item references", () => {
   );
 
   it.each([
-    ["openclaw/clawsweeper#1576", "issues"],
-    ["PR openclaw/clawsweeper#42", "pull"],
-    ["openclaw/clawsweeper PR #42", "pull"],
-  ])("resolves explicit owner/repo without a checkout: %s", (source, kind) => {
+    ["openclaw/clawsweeper#1576", "issues", "openclaw/clawsweeper#1576"],
+    ["PR openclaw/clawsweeper#42", "pull", "PR openclaw/clawsweeper#42"],
+    ["openclaw/clawsweeper PR #42", "pull", "openclaw/clawsweeper PR openclaw/clawsweeper#42"],
+  ])("resolves explicit owner/repo without a checkout: %s", (source, kind, display) => {
     const fragment = render(source, {});
     expect(fragment.querySelector("a")?.getAttribute("href")).toBe(
       "https://github.com/openclaw/clawsweeper/" +
         kind +
         (source.includes("1576") ? "/1576" : "/42"),
     );
-    expect(fragment.textContent?.trim()).toBe(source);
+    expect(fragment.textContent?.trim()).toBe(display);
+    expect(fragment.querySelector("a")?.textContent).toBe(
+      source.includes("1576") ? "openclaw/clawsweeper#1576" : "openclaw/clawsweeper#42",
+    );
   });
 
   it.each(["Release Tools (Legacy)", "Build:"])(
@@ -194,10 +249,10 @@ describe("github item references", () => {
     expect(anchor?.getAttribute("href")).toBe(href);
     expect(anchor?.classList.contains("markdown-github-link")).toBe(true);
     expect(anchor?.dataset.githubKind).toBe(kind);
-    expect(anchor?.textContent).toBe(`#${number}`);
+    expect(anchor?.textContent).toBe(`openclaw/openclaw#${number}`);
     expect(anchor?.hasAttribute("title")).toBe(false);
     expect(anchor?.previousSibling?.textContent ?? "").toBe(prefix);
-    expect(fragment.textContent).toBe(`${input}\n`);
+    expect(fragment.textContent).toBe(`${prefix}openclaw/openclaw#${number}\n`);
   });
 
   it.each([
@@ -213,6 +268,8 @@ describe("github item references", () => {
     "[PR #141270](https://example.test)",
     "PR #141270\n===========",
     "/path#141270",
+    "./.#141270",
+    "../..#141270",
   ])("does not infer an item from %j", (input) => {
     const fragment = render(input, { githubRepo, fileLinks: true, sessionLinks: true });
     expect(fragment.querySelector("a.markdown-github-item")).toBeNull();
@@ -231,8 +288,10 @@ describe("github item references", () => {
       `https://github.com/openclaw/openclaw/${kind === "pull" ? "pull" : "issues"}/${number}`,
     );
     expect(anchor?.dataset.githubKind).toBe(kind);
-    expect(anchor?.textContent).toBe(`#${number}`);
-    expect(fragment.textContent?.trim()).toBe(label);
+    expect(anchor?.textContent).toBe(`openclaw/openclaw#${number}`);
+    expect(fragment.textContent?.trim()).toBe(
+      label.replace(`#${number}`, `openclaw/openclaw#${number}`),
+    );
     expect(fragment.querySelector("strong, em")).not.toBeNull();
   });
 
@@ -256,12 +315,12 @@ describe("github item references", () => {
     const fragment = render(input);
     const anchors = fragment.querySelectorAll("a.markdown-github-item");
     expect([...anchors].map((anchor) => anchor.textContent)).toEqual([
-      "#141270",
-      "#123",
-      "#141271",
+      "openclaw/openclaw#141270",
+      "openclaw/openclaw#123",
+      "openclaw/openclaw#141271",
     ]);
     expect(fragment.querySelector("p")?.textContent).toBe(
-      "(PR #141270), issue #123; #141270 and #141271!",
+      "(PR openclaw/openclaw#141270), issue openclaw/openclaw#123; #141270 and openclaw/openclaw#141271!",
     );
     expect(fragment.querySelector("h1 a")).toBeNull();
   });
@@ -272,9 +331,11 @@ describe("github item references", () => {
   ])("links a reference that ends a sentence in %j", (input, kind, label) => {
     const fragment = render(input);
     const anchor = fragment.querySelector("a.markdown-github-item");
-    expect(anchor?.textContent).toBe(label);
+    expect(anchor?.textContent).toBe("openclaw/openclaw" + label);
     expect(anchor?.getAttribute("data-github-kind")).toBe(kind);
-    expect(fragment.querySelector("p")?.textContent).toBe(input);
+    expect(fragment.querySelector("p")?.textContent).toBe(
+      input.replace(label, "openclaw/openclaw" + label),
+    );
   });
 
   it("encodes repository path segments in streaming references", () => {

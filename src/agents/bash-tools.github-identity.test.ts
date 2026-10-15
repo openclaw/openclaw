@@ -1,5 +1,13 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { gitNullConfigPath } from "../infra/git-exec.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
@@ -9,9 +17,21 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../secrets/store/secret-store.js")>()),
   readSecretStoreExecEnvironment: storeMocks.readSecretStoreExecEnvironment,
 }));
-const snapshot = captureEnv(["GH_TOKEN", "GITHUB_TOKEN", "PREVIEW_SERVICE_TOKEN"]);
+const snapshot = captureEnv([
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "PREVIEW_SERVICE_TOKEN",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_AUTHOR_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "GIT_COMMITTER_NAME",
+  "GIT_COMMITTER_EMAIL",
+]);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const execFileAsync = promisify(execFile);
 afterEach(() => {
   snapshot.restore();
+  vi.unstubAllEnvs();
   storeMocks.readSecretStoreExecEnvironment.mockReset();
 });
 
@@ -48,12 +68,157 @@ function prepare(
       : undefined,
     credentialScrubEnv: prepared.credentialScrubEnv,
     localIdentityEnv: prepared.localIdentityEnv,
+    localGitConfigParameters: prepared.localGitConfigParameters,
     managedLocalIdentity: prepared.managedLocalIdentity,
     warnings: [],
   });
 }
 
 describe("exec GitHub identity", () => {
+  it("keeps the executing agent's credentials when borrowing tool policy", async () => {
+    const root = tempDirs.make("native-exec-credential-owner-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const config = {
+      tools: { exec: { host: "gateway" as const, mode: "full" as const } },
+      agents: {
+        entries: {
+          worker: { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } },
+          policy: { tools: { github: { profileId: "ghp_22222222222222222222222222222222" } } },
+        },
+      },
+    };
+    const prepared = prepareGitHubToolEnvironment({ config, agentId: "worker" });
+    const profileDir = prepared.localIdentityEnv.GH_CONFIG_DIR!;
+    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      path.join(profileDir, "hosts.yml"),
+      "github.com:\n  oauth_token: synthetic-executing-agent\n",
+      { mode: 0o600 },
+    );
+    const tools = createOpenClawCodingTools({
+      agentId: "worker",
+      policyAgentId: "policy",
+      sessionKey: "agent:policy:main",
+      runSessionKey: "agent:worker:main",
+      config,
+      workspaceDir: root,
+      exec: { preparedStoreEnvironment: { env: {} }, notifyOnExit: false, allowBackground: false },
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: true,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
+    });
+    const tool = tools.find(({ name }) => name === "exec");
+    expect(tool).toBeDefined();
+    const script = path.join(root, "identity.cjs");
+    await fs.writeFile(
+      script,
+      'process.stdout.write(process.env.GH_TOKEN === "synthetic-executing-agent" ? "executing-agent" : "wrong-agent")',
+    );
+    const result = await tool!.execute("native-owner", {
+      command: [process.execPath, script].map((value) => JSON.stringify(value)).join(" "),
+    });
+    expect(result.details).toMatchObject({ status: "completed", aggregated: "executing-agent" });
+  });
+
+  it("fetches missing partial-clone blobs without launching automatic maintenance", async () => {
+    // This fixture tests repository author inheritance, not the invoking session's override.
+    for (const key of [
+      "GIT_AUTHOR_NAME",
+      "GIT_AUTHOR_EMAIL",
+      "GIT_COMMITTER_NAME",
+      "GIT_COMMITTER_EMAIL",
+    ]) {
+      deleteTestEnvValue(key);
+    }
+    const root = tempDirs.make("agent-git-maintenance-");
+    const origin = path.join(root, "origin");
+    const clone = path.join(root, "partial");
+    const worktree = path.join(root, "worktree");
+    const env = {
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+      GIT_TERMINAL_PROMPT: "0",
+    };
+    const git = (cwd: string, args: string[], overlay: NodeJS.ProcessEnv = {}) =>
+      execFileAsync("git", ["-C", cwd, ...args], { env: { ...env, ...overlay } });
+    await git(root, ["init", "--initial-branch=main", origin]);
+    await git(origin, ["config", "user.name", "Fixture Author"]);
+    await git(origin, ["config", "user.email", "fixture@example.invalid"]);
+    await fs.writeFile(path.join(origin, "missing.txt"), "promised content\n");
+    await git(origin, ["add", "."]);
+    await git(origin, ["commit", "-m", "fixture"]);
+    await git(origin, ["config", "uploadpack.allowFilter", "true"]);
+    const blob = (await git(origin, ["rev-parse", "HEAD:missing.txt"])).stdout.trim();
+    await git(root, [
+      "clone",
+      "--filter=blob:none",
+      "--no-checkout",
+      pathToFileURL(origin).href,
+      clone,
+    ]);
+    await git(clone, ["config", "user.name", "Fixture Author"]);
+    await git(clone, ["config", "user.email", "fixture@example.invalid"]);
+    await git(clone, ["worktree", "add", "--no-checkout", "--detach", worktree]);
+    const configPath = path.join(clone, ".git", "config");
+    const configBefore = await fs.readFile(configPath, "utf8");
+    const missing = await git(worktree, ["rev-list", "--objects", "--missing=print", "HEAD"]);
+    expect(missing.stdout).toContain(`?${blob}`);
+    setTestEnvValue(
+      "GIT_CONFIG_PARAMETERS",
+      "'user.name=Inherited Author' 'user.email=inherited@example.invalid' 'http.version=HTTP/1.1'",
+    );
+
+    for (const managed of [false, true]) {
+      const prepared = prepareGitHubToolEnvironment({
+        config: managed
+          ? {
+              tools: {
+                github: {
+                  profileId: "ghp_99999999999999999999999999999999",
+                  gitAuthor: { name: "Agent Author", email: "agent@example.invalid" },
+                },
+              },
+            }
+          : {},
+        agentId: "main",
+      });
+      const tracePath = path.join(root, `trace-${managed}.jsonl`);
+      const { env: childEnv, requestedEnv } = prepare("gateway", prepared, false);
+      // Real Git consumes the composed exec environment, including inherited parameters.
+      const overlay = { ...childEnv, ...env, GIT_TRACE2_EVENT: tracePath };
+      await git(worktree, ["fetch", "origin", blob], overlay);
+      expect((await git(worktree, ["cat-file", "blob", blob], overlay)).stdout).toBe(
+        "promised content\n",
+      );
+      expect((await git(worktree, ["var", "GIT_AUTHOR_IDENT"], overlay)).stdout).toContain(
+        managed
+          ? "Agent Author <agent@example.invalid>"
+          : "Inherited Author <inherited@example.invalid>",
+      );
+      expect(
+        (await git(worktree, ["config", "--get", "http.version"], overlay)).stdout.trim(),
+      ).toBe("HTTP/1.1");
+      expect(requestedEnv?.GIT_CONFIG_PARAMETERS).toBeUndefined();
+      const trace = (await fs.readFile(tracePath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const maintenance = trace.filter(
+        (event) =>
+          event.event === "child_start" &&
+          event.argv?.includes("--auto") &&
+          (event.argv.includes("maintenance") || event.argv.includes("gc")),
+      );
+      expect(maintenance).toEqual([]);
+    }
+    expect(await fs.readFile(configPath, "utf8")).toBe(configBefore);
+  });
+
   it("keeps required sandbox execution isolated from host overrides, elevation, and GitHub credentials", async () => {
     setTestEnvValue("GH_TOKEN", "ambient-token");
     setTestEnvValue("GITHUB_TOKEN", "ambient-fallback");

@@ -19,7 +19,10 @@ const mocks = vi.hoisted(() => {
 vi.mock("../infra/sqlite-snapshot-staging.js", () => ({
   acquireSqliteSnapshotReadToken: mocks.acquireToken,
 }));
-vi.mock("../infra/sqlite-worker-identity.js", () => ({
+vi.mock("../infra/sqlite-worker-identity.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
+    "../infra/sqlite-worker-identity.js",
+  )),
   assertExistingDatabaseIdentity: mocks.identity,
 }));
 vi.mock("../infra/node-sqlite.js", () => ({
@@ -32,7 +35,8 @@ vi.mock("../infra/sqlite-schema-facts.js", async (importOriginal) => ({
 vi.mock("./openclaw-state-db-handle.js", () => ({
   openTrackedStateDatabaseResult: () => ({ status: "available", database: mocks.openTracked() }),
 }));
-vi.mock("./openclaw-state-db-schema-version.js", () => ({
+vi.mock("./openclaw-state-db-schema-version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-db-schema-version.js")>()),
   assertSupportedStateSchemaVersion: mocks.schema,
 }));
 vi.mock("./openclaw-state-db-schema-policy.js", () => ({

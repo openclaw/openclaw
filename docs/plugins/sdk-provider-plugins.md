@@ -28,6 +28,17 @@ API calls, not exported OpenClaw functions.
   details in core.
 </Tip>
 
+Auth methods can return `agentRuntimeId` with `defaultModel` when sign-in belongs
+to a native harness. Model Setup applies that runtime to the selected agent's
+model entry, not to global model defaults.
+
+`ProviderAuthContext.agentId` identifies the target agent when the caller has one.
+Native sign-in methods may use it to check previously remembered permissions.
+After explicit user consent, return `ProviderAuthResult.nativeRuntimeConsent`
+with the accepted harness IDs. Model Setup stages those permissions on that
+agent in the same verified config commit as the runtime routing and plugin enable.
+Do not write a separate permission store or infer consent from successful login.
+
 ## Import an existing credential during sign-in
 
 An auth method can declare `credentialImport` with a `migrationProviderId`,
@@ -330,6 +341,17 @@ a saved policy is not proof that the running Gateway applied it.
     timeline](/plugins/sdk-migration/removal-timeline) for the dates and gates
     that govern deprecated surfaces named on this page and its child pages.
 
+    To read runtime auth profiles, await `loadAuthProfileStoreForRuntimeAsync`
+    from `openclaw/plugin-sdk/agent-runtime`. It reads persisted profiles in a
+    database worker and preserves the optional third `env` argument for
+    service-owned state directories. The synchronous `loadAuthProfileStoreForRuntime`
+    is deprecated through 2026-12-31 and will be removed in the first January 2027 stable release.
+
+    `createProviderApiKeyAuthMethod` accepts an optional `validateApiKey` callback.
+    Return an error message to reject a resolved key before any auth profile is
+    returned or saved. The check runs for interactive input, resolved SecretRefs,
+    and non-interactive flag, environment, or saved-profile credentials.
+
     Bundled custom API-key methods can use `captureProviderApiKey` and
     `persistProviderApiKey` from `openclaw/plugin-sdk/provider-auth-api-key`
     when vendor prompts or validation need to stay between auth steps.
@@ -515,6 +537,30 @@ providers:
 | `paired`  | After profile | Synthesize multiple related entries             |
 | `late`    | Last pass     | Override existing providers (wins on collision) |
 
+Within each phase, OpenClaw runs up to four catalog hooks concurrently. It waits
+for the phase to settle, then merges model rows and provider outcomes in provider
+label order. Hooks retain their individual discovery deadlines; completion order
+does not change catalog precedence.
+
+## Provider stream decorators
+
+`wrapStreamFn` receives optional request context for provider-owned behavior:
+
+- `modelParams` contains only per-model params, with the current agent's model
+  params taking precedence over default model params. Global and agent-wide
+  params are excluded; `extraParams` still contains the merged request params.
+- `modelCallUrgency` is the host's `foreground`, `normal`, or `background`
+  classification. Translate it into provider-native scheduling hints only when
+  the selected endpoint supports them and the operator has enabled the behavior.
+
+A wrapper that only decorates requests can return its callable with
+`preservesGenericCompatibility: true`, for example
+`Object.assign(decoratedStream, { preservesGenericCompatibility: true })`.
+This keeps shared request shaping and output normalization active, including
+MiMo reasoning replay and final-answer handling. Without the flag, a replacement
+stream keeps the existing behavior of taking ownership of those compatibility
+policies. Returning the original stream or no wrapper also preserves them.
+
 ## Next steps
 
 - [Channel Plugins](/plugins/sdk-channel-plugins) - if your plugin also provides a channel
@@ -536,9 +582,9 @@ resolve here.
 
 ### Provider hook families
 
-[Provider hook families](/plugins/sdk-provider-plugins/hook-families) — Shared replay, stream, and tool-compat family builders and the SDK seams behind them.
+[Provider hook families](/plugins/sdk-provider-plugins/hook-families) — Shared replay, stream, and tool-compat family builders and the SDK interfaces behind them.
 
-- <a id="sdk-seams-powering-the-family-builders"></a>[SDK seams powering the family builders](/plugins/sdk-provider-plugins/hook-families#sdk-seams-powering-the-family-builders)
+- <a id="sdk-seams-powering-the-family-builders"></a>[SDK interfaces behind the family builders](/plugins/sdk-provider-plugins/hook-families#sdk-seams-powering-the-family-builders)
 
 ### Provider hook wiring
 

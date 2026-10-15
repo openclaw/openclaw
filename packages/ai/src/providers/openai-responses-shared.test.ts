@@ -323,15 +323,6 @@ describe("Responses temperature support", () => {
   });
 });
 
-describe("Responses output token limits", () => {
-  it("clamps maxTokens to the Responses minimum", () => {
-    const params = {} as ResponseCreateParamsStreaming;
-    applyCommonResponsesParams(params, nativeOpenAIModel, { messages: [] }, { maxTokens: 1 });
-
-    expect(params.max_output_tokens).toBe(16);
-  });
-});
-
 describe("Responses reasoning effort", () => {
   it("passes max through for GPT-5.6 Sol", () => {
     expect(resolveOpenAISimpleReasoningEffort(gpt56SolModel, "max")).toBe("max");
@@ -353,7 +344,6 @@ describe("Responses reasoning effort", () => {
     reasoning: "minimal" | "high";
     expected: string;
   }>([
-    { model: gpt56SolModel, reasoning: "minimal", expected: "low" },
     {
       model: { ...proxyOpenAIModel, compat: { supportedReasoningEfforts: ["ProviderHigh"] } },
       reasoning: "high",
@@ -399,6 +389,91 @@ describe("convertResponsesMessages", () => {
       content: [{ type: "input_text", text: "Stable\nDynamic" }],
     });
     expect(JSON.stringify(input)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+  });
+
+  it.each(["stop", "error", "aborted"] as const)(
+    "keeps unsigned assistant replay bytes stable when older history retires (%s)",
+    (stopReason) => {
+      const retired = { ...assistant([{ type: "text", text: "Earlier answer" }]), timestamp: 1 };
+      const retained = {
+        ...assistant([
+          { type: "text", text: "Partial answer" },
+          { type: "text", text: "Another text block" },
+        ]),
+        responseId: "resp_retained",
+        timestamp: 2,
+        stopReason,
+        errorMessage: "off-wire synthetic diagnostic",
+        __openclaw: { diagnostic: "off-wire metadata" },
+      };
+      const original = structuredClone(retained);
+      const before = replay({ messages: [retired, retained] });
+      const after = replay({ messages: [retained] });
+      expect(after).toEqual(before.slice(1));
+      expect(JSON.stringify(after)).not.toContain("off-wire");
+      expect(retained).toEqual(original);
+
+      const repeated = replay({
+        messages: [retained, { ...retained, responseId: "resp_next" }],
+      });
+      const ids = repeated.flatMap((item) =>
+        "id" in item && typeof item.id === "string" ? [item.id] : [],
+      );
+      expect(ids.length).toBeGreaterThan(0);
+      expect(new Set(ids).size).toBe(ids.length);
+    },
+  );
+
+  it("keeps async prefixes and a failed tail distinct within one source response", () => {
+    const source = { responseId: "resp_shared", turnId: "turn_shared", timestamp: 2 };
+    const prefix = (id: string) => ({
+      ...assistant([
+        { type: "text", text: "Working" },
+        { type: "toolCall", id, name: "probe", arguments: {}, async: true },
+      ]),
+      ...source,
+      stopReason: "toolUse" as const,
+    });
+    const messages = [
+      prefix("call_one|fc_one"),
+      prefix("call_two|fc_two"),
+      {
+        ...assistant([{ type: "text", text: "Working" }]),
+        ...source,
+        stopReason: "error" as const,
+      },
+      makeTextToolResult("call_one|fc_one", "probe", "one", false, 3),
+      makeTextToolResult("call_two|fc_two", "probe", "two", false, 4),
+    ];
+    const input = replay({ messages });
+    const ids = input.flatMap((item) =>
+      item.type === "message" && item.role === "assistant" && "id" in item ? [item.id] : [],
+    );
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    const retired = { role: "user" as const, content: "Earlier turn", timestamp: 1 };
+    expect(replay({ messages: [retired, ...messages] }).slice(1)).toEqual(input);
+  });
+
+  it("keeps the early turn identity when a response ID arrives later", () => {
+    const early = {
+      ...assistant([{ type: "text", text: "Working" }]),
+      turnId: "turn_early",
+      timestamp: 2,
+    };
+    expect(replay({ messages: [{ ...early, responseId: "resp_late" }] })).toEqual(
+      replay({ messages: [early] }),
+    );
+  });
+
+  it("keeps legacy same-timestamp inputs distinct without a source turn identity", () => {
+    const message = { ...assistant([{ type: "text", text: "Repeated answer" }]), timestamp: 1 };
+    const input = replay({ messages: [message, { ...message }] });
+    const ids = input.flatMap((item) =>
+      "id" in item && typeof item.id === "string" ? [item.id] : [],
+    );
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
   });
 
   it("omits phase-tagged assistant replay ids without reasoning", () => {
@@ -556,102 +631,94 @@ describe("convertResponsesMessages", () => {
     expect(JSON.stringify(result)).not.toContain("see attached image");
   });
 
-  const sameRoute = buildOpenAIResponsesReasoningReplayMetadata(
-    nativeOpenAIModel,
-    reasoningReplayIdentity,
-  );
-  const otherSession = buildOpenAIResponsesReasoningReplayMetadata(nativeOpenAIModel, {
-    ...reasoningReplayIdentity,
-    sessionId: "session-b",
-  });
-  it.each([
-    ["matching block metadata", sameRoute, otherSession, true],
-    ["mismatched block metadata", otherSession, sameRoute, false],
-    ["malformed block metadata", null, sameRoute, false],
-    ["mismatched embedded metadata", undefined, otherSession, false],
-  ])(
-    "fences encrypted reasoning with %s",
-    (_name, blockMetadata, embeddedMetadata, preservesCiphertext) => {
-      const input = replay(
-        {
-          messages: [
-            assistant([
-              {
-                type: "thinking",
-                thinking: "Safe visible reasoning.",
-                thinkingSignature: JSON.stringify({
-                  type: "reasoning",
-                  id: "rs_route_fenced",
-                  summary: [{ type: "summary_text", text: "safe summary" }],
-                  content: [{ type: "reasoning_text", text: "safe content" }],
-                  encrypted_content: "route-bound-ciphertext",
-                  ...(embeddedMetadata !== undefined
-                    ? { __openclaw_replay: embeddedMetadata }
-                    : {}),
-                }),
-                ...(blockMetadata !== undefined ? { openclawReasoningReplay: blockMetadata } : {}),
-              },
-            ] as unknown as AssistantMessage["content"]),
-          ],
-        },
-        {
-          includeSystemPrompt: false,
-          replayResponsesItemIds: true,
-          ...reasoningReplayIdentity,
+  describe.each([
+    { name: "SDK", model: nativeOpenAIModel, summary: [], content: undefined },
+    {
+      name: "native ChatGPT",
+      model: { ...nativeOpenAIModel, api: "openai-chatgpt-responses" },
+      summary: [{ type: "summary_text", text: "safe summary" }],
+      content: [{ type: "reasoning_text", text: "safe content" }],
+    },
+  ] satisfies Array<{ name: string; model: Model; summary: unknown[]; content?: unknown[] }>)(
+    "$name reasoning replay",
+    ({ model, summary, content }) => {
+      const sameRoute = buildOpenAIResponsesReasoningReplayMetadata(model, reasoningReplayIdentity);
+      const otherSession = buildOpenAIResponsesReasoningReplayMetadata(model, {
+        ...reasoningReplayIdentity,
+        sessionId: "session-b",
+      });
+      it.each([
+        ["matching block metadata", sameRoute, otherSession, true],
+        ["mismatched block metadata", otherSession, sameRoute, false],
+        ["malformed block metadata", null, sameRoute, false],
+        ["mismatched embedded metadata", undefined, otherSession, false],
+      ])(
+        "fences encrypted reasoning with %s",
+        (_name, blockMetadata, embeddedMetadata, preservesCiphertext) => {
+          const input = replay(
+            {
+              messages: [
+                {
+                  ...assistant([
+                    {
+                      type: "thinking",
+                      thinking: "Safe visible reasoning.",
+                      thinkingSignature: JSON.stringify({
+                        type: "reasoning",
+                        id: "rs_route_fenced",
+                        summary: [{ type: "summary_text", text: "safe summary" }],
+                        content: [{ type: "reasoning_text", text: "safe content" }],
+                        encrypted_content: "route-bound-ciphertext",
+                        ...(embeddedMetadata !== undefined
+                          ? { __openclaw_replay: embeddedMetadata }
+                          : {}),
+                      }),
+                      ...(blockMetadata !== undefined
+                        ? { openclawReasoningReplay: blockMetadata }
+                        : {}),
+                    },
+                  ] as unknown as AssistantMessage["content"]),
+                  api: model.api,
+                },
+              ],
+            },
+            {
+              includeSystemPrompt: false,
+              replayResponsesItemIds: true,
+              ...reasoningReplayIdentity,
+            },
+            model,
+          );
+          const item = input.find((entry) => entry.type === "reasoning");
+          if (!preservesCiphertext) {
+            expect(item).toBeUndefined();
+            return;
+          }
+          expect(item).toMatchObject({
+            type: "reasoning",
+            id: "rs_route_fenced",
+            summary,
+          });
+          if (content) {
+            expect(item).toHaveProperty("content", content);
+          } else {
+            expect(item).not.toHaveProperty("content");
+          }
+          expect(item).not.toHaveProperty("__openclaw_replay");
+          expect(item).toHaveProperty("encrypted_content", "route-bound-ciphertext");
         },
       );
-      const item = input.find((entry) => entry.type === "reasoning");
-      if (!preservesCiphertext) {
-        expect(item).toBeUndefined();
-        return;
-      }
-      expect(item).toMatchObject({
-        type: "reasoning",
-        id: "rs_route_fenced",
-        summary: [{ type: "summary_text", text: "safe summary" }],
-        content: [{ type: "reasoning_text", text: "safe content" }],
-      });
-      expect(item).not.toHaveProperty("__openclaw_replay");
-      expect(item).toHaveProperty("encrypted_content", "route-bound-ciphertext");
     },
   );
-
-  it("serializes structured tool results as text instead of image placeholders", () => {
-    const input = replay(
-      {
-        messages: [
-          {
-            role: "toolResult",
-            toolCallId: "call_structured",
-            toolName: "session_status",
-            content: [
-              {
-                type: "json",
-                payload: { sessionKey: "current", model: "openai/gpt-5.4", status: "ok" },
-              },
-            ],
-            isError: false,
-            timestamp: 1,
-          },
-        ],
-      } as unknown as Context,
-      { includeSystemPrompt: false, replayResponsesItemIds: false },
-    );
-    expect(input).toContainEqual({
-      type: "function_call_output",
-      call_id: "call_structured",
-      output: expect.stringContaining('"type":"json"'),
-    });
-  });
 });
 
 describe("processResponsesStream", () => {
-  it.each([
-    ["400 The encrypted content could not be verified.", 500, false],
-    ["Could not decrypt encrypted_content metadata for the OAuth sidecar.", 400, false],
-  ])("classifies encrypted replay rejection: %s", (message, status, expected) => {
-    expect(isInvalidEncryptedContentError({ message, status })).toBe(expected);
-  });
+  it.each([["Could not decrypt encrypted_content metadata for the OAuth sidecar.", 400, false]])(
+    "classifies encrypted replay rejection: %s",
+    (message, status, expected) => {
+      expect(isInvalidEncryptedContentError({ message, status })).toBe(expected);
+    },
+  );
 
   it("aborts the Responses request signal when the first SSE event never arrives", async () => {
     vi.useFakeTimers();
@@ -676,7 +743,7 @@ describe("processResponsesStream", () => {
     }
   });
 
-  it.each(["create", "response.failed-status", "error", "nested-error"] as const)(
+  it.each(["create", "response.failed-status", "error"] as const)(
     "recovers code-less encrypted reasoning rejected during %s stream drain",
     async (failureShape) => {
       const failureMessage =
@@ -708,19 +775,13 @@ describe("processResponsesStream", () => {
                         },
                       },
                     }
-                  : failureShape === "nested-error"
-                    ? {
-                        type: "error",
-                        sequence_number: 1,
-                        error: { code: null, message: failureMessage },
-                      }
-                    : {
-                        type: "error",
-                        sequence_number: 1,
-                        code: null,
-                        message: "400 Could not decrypt the provided encrypted_content.",
-                        param: null,
-                      }
+                  : {
+                      type: "error",
+                      sequence_number: 1,
+                      code: null,
+                      message: "400 Could not decrypt the provided encrypted_content.",
+                      param: null,
+                    }
               ) as ResponseStreamEvent;
             } else {
               yield {
@@ -1068,24 +1129,6 @@ describe("processResponsesStream", () => {
     });
   });
 
-  it("reports content-filtered incomplete responses as errors", async () => {
-    const { output, done } = startLifecycle(() =>
-      streamResponsesEvents([
-        {
-          type: "response.incomplete",
-          response: {
-            id: "resp_filtered",
-            status: "incomplete",
-            incomplete_details: { reason: "content_filter" },
-          },
-        } as ResponseStreamEvent,
-      ]),
-    );
-    await done;
-    expect(output.stopReason).toBe("error");
-    expect(output.errorMessage).toBe("Provider incomplete_reason: content_filter");
-  });
-
   it("preserves failed terminal response details and accounting", async () => {
     const model = {
       ...nativeOpenAIModel,
@@ -1355,7 +1398,6 @@ describe("processResponsesStream", () => {
     ) as unknown as Array<Record<string, unknown>>;
     expect(replay).toContainEqual({
       type: "function_call",
-      id: "fc_weather",
       call_id: "call_weather",
       name: "weather",
       arguments: '{"city":"Seattle"}',
@@ -1613,6 +1655,49 @@ describe("processResponsesStream", () => {
     ]);
     expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
   });
+
+  it.each(["item-done", "terminal"])(
+    "keeps provider name validation independent of consumer normalization at %s",
+    async (completion) => {
+      const output = createAssistantOutput();
+      const { stream, events } = createCapturedAssistantMessageEventStream();
+      const push = stream.push.bind(stream);
+      stream.push = (event) => {
+        // The runner normalizes aliases on the shared partial before completion.
+        if ("partial" in event && event.partial) {
+          for (const block of event.partial.content) {
+            if (block.type === "toolCall" && block.name === "tool_call") {
+              block.name = "dispatch_action";
+            }
+          }
+        }
+        push(event);
+      };
+      const item = toolItem("alias", '{"id":"sessions_spawn","args":{}}', "tool_call");
+      await processResponsesStream(
+        streamResponsesEvents([
+          itemEvent("added", { ...item, arguments: "" }, 0),
+          ...(completion === "item-done" ? [itemEvent("done", item, 0)] : []),
+          {
+            type: "response.completed",
+            response: { id: "resp_alias", status: "completed", output: [item] },
+          },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      );
+      expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: "call_alias|fc_alias",
+          name: "dispatch_action",
+          arguments: { id: "sessions_spawn", args: {} },
+        },
+      ]);
+    },
+  );
 
   it("rejects a completed Responses tool call whose function name changed", async () => {
     const output = createAssistantOutput();

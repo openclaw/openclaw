@@ -127,7 +127,11 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     }
     visited.add(id);
     const source = fs.readFileSync(absolute, "utf8");
-    const sourceFile = (parser.api ??= new API({ cwd: root })).createSourceFile(absolute, source);
+    using retainedSource = (parser.api ??= new API({ cwd: root })).createSourceFile(
+      absolute,
+      source,
+    );
+    const sourceFile = retainedSource.sourceFile;
     const expressions = dynamicEdgeExpressions(sourceFile);
     const owner = dynamicOwners.get(id);
     if (
@@ -156,6 +160,7 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
             [
               "../../src/shared/freebsd-process-identity.ts",
               "../../src/infra/update-managed-service-handoff-native-loader.ts",
+              "../../src/infra/package-update-activation-native-loader.ts",
             ].includes(reference.specifier);
           visit(target, targetIsCompilerSource);
         }

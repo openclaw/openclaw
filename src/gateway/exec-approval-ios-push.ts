@@ -1,7 +1,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
-import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { hasEffectivePairedDeviceRole, listDevicePairing } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
@@ -184,7 +184,7 @@ async function sendApprovalPushes(params: {
   label: "request" | "cleanup";
   send: (params: ApprovalPushParams) => Promise<ApprovalPushSendResult>;
 }): Promise<{ attempted: number; delivered: number }> {
-  const gatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
+  const gatewayDeviceId = (await loadOrCreateProcessDeviceIdentityAsync()).deviceId;
   // Stale registrations are cleared on both direct and relay failures so future
   // approval prompts do not keep targeting dead APNs device tokens.
   const results = await Promise.allSettled(

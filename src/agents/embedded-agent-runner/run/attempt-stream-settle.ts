@@ -15,9 +15,11 @@ import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscri
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { withPreparedSessionCapabilityRead } from "../../subagents/spawn/subagent-session-store.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -35,6 +37,7 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
+import { wrapStreamFnWithSessionFork } from "../session-fork.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -81,7 +84,6 @@ export async function settleEmbeddedAttemptStream(input: {
     promptError: unknown;
     promptErrorSource: AgentRunAttemptFailureSource | null;
     yieldAborted: boolean;
-    sessionIdUsed: string;
   };
   readLifecycleState: () => {
     aborted: boolean;
@@ -106,7 +108,6 @@ export async function settleEmbeddedAttemptStream(input: {
   shouldFlushForContextEngine: boolean;
 }) {
   const { attempt, activeSession, sessionManager, subscription, state } = input;
-  let { promptError, promptErrorSource } = state;
 
   try {
     if (
@@ -132,12 +133,10 @@ export async function settleEmbeddedAttemptStream(input: {
       // An aborted run legitimately leaves async tasks unfinished; stamping a
       // timeout failure here would reclassify the abort as an errored completion.
       if (asyncTaskWait.timedOutRunIds.length > 0 && !input.readLifecycleState().aborted) {
-        promptError = new Error(
+        state.promptError = new Error(
           `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
         );
-        promptErrorSource = "prompt";
-        state.promptError = promptError;
-        state.promptErrorSource = promptErrorSource;
+        state.promptErrorSource = "prompt";
       }
     }
   } catch (err) {
@@ -166,7 +165,7 @@ export async function settleEmbeddedAttemptStream(input: {
         prePromptMessageCount: input.prePromptMessageCount,
       });
       const attemptAccepted =
-        !promptError &&
+        !state.promptError &&
         !input.readLifecycleState().aborted &&
         !input.readLifecycleState().timedOut &&
         !state.yieldAborted &&
@@ -211,11 +210,9 @@ export async function settleEmbeddedAttemptStream(input: {
     if (!isRunnerAbortError(err)) {
       throw err;
     }
-    if (!promptError) {
-      promptError = err;
-      promptErrorSource = "compaction";
-      state.promptError = promptError;
-      state.promptErrorSource = promptErrorSource;
+    if (!state.promptError) {
+      state.promptError = err;
+      state.promptErrorSource = "compaction";
     }
     if (!input.isProbeSession) {
       log.debug(`compaction wait aborted: runId=${attempt.runId} sessionId=${attempt.sessionId}`);
@@ -292,7 +289,7 @@ export async function settleEmbeddedAttemptStream(input: {
   let captured: ReturnType<typeof captureStreamSnapshot>;
   try {
     captured = await input.withOwnedTranscriptWrite(() =>
-      withSessionManagerWrite(sessionManager, async () => {
+      withSessionManagerAppend(sessionManager, async () => {
         const { timedOutDuringCompaction } = input.readLifecycleState();
         const compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
         const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
@@ -328,8 +325,8 @@ export async function settleEmbeddedAttemptStream(input: {
         const streamSnapshot = captureStreamSnapshot();
 
         if (
-          promptError &&
-          promptErrorSource === "prompt" &&
+          state.promptError &&
+          state.promptErrorSource === "prompt" &&
           !streamSnapshot.compactionOccurredThisAttempt &&
           !attempt.abortSignal?.aborted
         ) {
@@ -341,9 +338,12 @@ export async function settleEmbeddedAttemptStream(input: {
               provider: attempt.provider,
               model: attempt.modelId,
               api: attempt.model.api,
-              error: formatErrorMessage(promptError),
+              error: formatErrorMessage(state.promptError),
             });
           } catch (entryErr) {
+            // Worker errors lose object identity; use the live owner's cancellation reason.
+            attempt.abortSignal?.throwIfAborted();
+            input.runAbortSignal.throwIfAborted();
             log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
           }
         }
@@ -365,8 +365,8 @@ export async function settleEmbeddedAttemptStream(input: {
   }
 
   return {
-    promptError,
-    promptErrorSource,
+    promptError: state.promptError,
+    promptErrorSource: state.promptErrorSource,
     timedOutDuringCompaction: input.readLifecycleState().timedOutDuringCompaction,
     ...captured,
     successfulNestedToolNames: [...input.nestedToolActivityState.successfulToolNames],
@@ -419,33 +419,32 @@ export async function prepareEmbeddedAttemptTransport(input: {
   const streamExtraParamsOverride = {
     ...attempt.streamParams,
     fastMode: attempt.fastMode,
+    // Memory extraction must see the original history, not a provider summary.
+    ...(attempt.trigger === "memory"
+      ? { anthropicServerCompaction: false, responsesServerCompaction: false }
+      : {}),
   };
   const selectedAuth = attempt.runtimePlan?.auth;
   const auth = selectedAuth?.selectedAuthMode
     ? { mode: selectedAuth.selectedAuthMode, authFlow: selectedAuth.selectedAuthFlow }
     : undefined;
-  const preparedRuntimeExtraParams = attempt.runtimePlan?.transport.resolveExtraParams({
+  const extraParamsContext = {
     extraParamsOverride: streamExtraParamsOverride,
     thinkingLevel: input.providerThinkingLevel,
     agentId: input.sessionAgentId,
     workspaceDir: input.workspaceDir,
     model: attempt.model,
     resolvedTransport,
-  });
+  };
   const effectiveExtraParams =
-    preparedRuntimeExtraParams ??
+    attempt.runtimePlan?.transport.resolveExtraParams(extraParamsContext) ??
     resolvePreparedExtraParams({
+      ...extraParamsContext,
       cfg: attempt.config,
       provider: attempt.provider,
       modelId: attempt.modelId,
       providerRuntimeHandle: input.getProviderRuntimeHandle(),
-      extraParamsOverride: streamExtraParamsOverride,
-      thinkingLevel: input.providerThinkingLevel,
-      agentId: input.sessionAgentId,
       agentDir: input.agentDir,
-      workspaceDir: input.workspaceDir,
-      model: attempt.model,
-      resolvedTransport,
       auth,
     });
   const providerStreamFn = registerProviderStreamForModel({
@@ -455,9 +454,14 @@ export async function prepareEmbeddedAttemptTransport(input: {
     workspaceDir: input.workspaceDir,
     auth,
   });
+  const sessionFork = {
+    runId: attempt.runId,
+    sessionId: attempt.sessionId,
+    agentId: input.sessionAgentId,
+  };
   const directProviderStreamFn = providerStreamFn
     ? wrapStreamFnWithMessageTransform(
-        providerStreamFn,
+        wrapStreamFnWithSessionFork(providerStreamFn, sessionFork),
         (messages) => messages,
         async ({ context, ...provider }) => {
           assertRunCurrent?.();
@@ -502,8 +506,17 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: attempt.authStorage,
     assertCurrent: assertRunCurrent,
+    sessionFork,
   });
-  session.agent.streamFn = streamFn;
+  // A direct provider transport replaces the session SDK stream, so attach
+  // turn-owned thinking provenance to the selected transport as well.
+  session.agent.streamFn = (model, context, options) => {
+    const providerOptions = {
+      ...options,
+      openclawThinkingExplicit: attempt.thinkingExplicit,
+    };
+    return streamFn(model, context, providerOptions);
+  };
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({
@@ -555,23 +568,26 @@ export async function prepareEmbeddedAttemptTransport(input: {
     senderE164: attempt.senderE164,
   };
 
-  const { nativeWebSearchAllowedByToolPolicy } = applyExtraParamsToAgent(
-    session.agent,
-    attempt.config,
-    attempt.provider,
-    attempt.modelId,
-    streamExtraParamsOverride,
-    input.providerThinkingLevel,
-    input.sessionAgentId,
-    input.workspaceDir,
-    attempt.model,
-    input.agentDir,
-    resolvedTransport,
-    {
-      preparedExtraParams: effectiveExtraParams,
-      auth,
-      nativeWebSearchPolicyContext,
-    },
+  const { nativeWebSearchAllowedByToolPolicy } = await withPreparedSessionCapabilityRead(() =>
+    applyExtraParamsToAgent(
+      session.agent,
+      attempt.config,
+      attempt.provider,
+      attempt.modelId,
+      streamExtraParamsOverride,
+      input.providerThinkingLevel,
+      input.sessionAgentId,
+      input.workspaceDir,
+      attempt.model,
+      input.agentDir,
+      resolvedTransport,
+      {
+        preparedExtraParams: effectiveExtraParams,
+        modelCallUrgency: resolveModelCallUrgency(attempt),
+        auth,
+        nativeWebSearchPolicyContext,
+      },
+    ),
   );
   if (input.codeModeControlsEnabled) {
     session.agent.streamFn = createCodexNativeWebSearchWrapper(session.agent.streamFn, {
@@ -651,6 +667,11 @@ export async function prepareEmbeddedAttemptTransport(input: {
           baseUrl: model.baseUrl,
           ...observation,
         }),
+      {
+        runId: attempt.runId,
+        sessionId: attempt.sessionId,
+        accountRoute: selectedCredential.identityKey,
+      },
     );
   }
   return {

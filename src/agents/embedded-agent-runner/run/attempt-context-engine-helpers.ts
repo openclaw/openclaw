@@ -1,5 +1,6 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AssistantMessage } from "../../../llm/types.js";
+import type { resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import {
   isHeartbeatLifecycleRunKind,
   type BootstrapContextRunKind,
@@ -7,13 +8,9 @@ import {
 } from "../../bootstrap-mode.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
+import { isUnreadableWorkspaceBootstrapFile } from "../../workspace-bootstrap-read.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
-
-type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> = {
-  bootstrapFiles: TBootstrapFile[];
-  contextFiles: TContextFile[];
-};
 
 /**
  * Resolves bootstrap/context files for this attempt and reports whether the
@@ -21,46 +18,37 @@ type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> =
  * intentionally suppresses reinjection after a full bootstrap turn has already
  * been recorded for the session.
  */
-export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFile>(params: {
+export async function resolveAttemptBootstrapContext(params: {
   contextInjectionMode: "always" | "continuation-skip" | "never";
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   bootstrapMode?: BootstrapMode;
+  deliversCompleteWorkspaceContext: boolean;
   hasCompletedBootstrapTurn: () => Promise<boolean>;
-  resolveBootstrapContextForRun: () => Promise<
-    AttemptBootstrapContext<TBootstrapFile, TContextFile>
-  >;
-}): Promise<
-  AttemptBootstrapContext<TBootstrapFile, TContextFile> & {
-    isContinuationTurn: boolean;
-    shouldRecordCompletedBootstrapTurn: boolean;
-  }
-> {
+  resolveBootstrapContextForRun: () => ReturnType<typeof resolveBootstrapContextForRun>;
+}) {
   const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind);
   const isContinuationTurn =
     params.bootstrapMode !== "full" &&
     params.contextInjectionMode === "continuation-skip" &&
     !isHeartbeatLifecycleRun &&
     (await params.hasCompletedBootstrapTurn());
-  // Continuation-skip and explicit never both produce an empty injection set,
-  // but only a clean full bootstrap later records a durable completion marker.
   const shouldSkipBootstrapInjection =
     params.contextInjectionMode === "never" || isContinuationTurn;
+  const context = shouldSkipBootstrapInjection
+    ? { bootstrapFiles: [], contextFiles: [] }
+    : await params.resolveBootstrapContextForRun();
+  // Check both workspace layers after loading: an unreadable file must be retried next turn.
   const shouldRecordCompletedBootstrapTurn =
     !shouldSkipBootstrapInjection &&
     params.bootstrapContextMode !== "lightweight" &&
     !isHeartbeatLifecycleRun &&
-    params.bootstrapMode === "full";
+    params.bootstrapContextRunKind !== "cron" &&
+    params.deliversCompleteWorkspaceContext &&
+    !context.bootstrapFiles.some(isUnreadableWorkspaceBootstrapFile) &&
+    (params.bootstrapMode === "full" || params.contextInjectionMode === "continuation-skip");
 
-  const context = shouldSkipBootstrapInjection
-    ? { bootstrapFiles: [], contextFiles: [] }
-    : await params.resolveBootstrapContextForRun();
-
-  return {
-    ...context,
-    isContinuationTurn,
-    shouldRecordCompletedBootstrapTurn,
-  };
+  return { ...context, isContinuationTurn, shouldRecordCompletedBootstrapTurn };
 }
 
 /**
@@ -120,13 +108,10 @@ export function findCurrentAttemptAssistantMessage(params: {
   prePromptMessageCount: number;
 }): AssistantMessage | undefined {
   const firstAttemptIndex = Math.max(0, params.prePromptMessageCount);
-  for (let i = params.messagesSnapshot.length - 1; i >= firstAttemptIndex; i--) {
-    const message = params.messagesSnapshot[i];
-    if (message?.role === "assistant") {
-      return message;
-    }
-  }
-  return undefined;
+  return params.messagesSnapshot.findLast(
+    (message, index): message is AssistantMessage =>
+      index >= firstAttemptIndex && message?.role === "assistant",
+  );
 }
 
 /** Finds the newest usable per-call usage without letting a zero-usage abort erase it. */
@@ -154,10 +139,7 @@ export function findLatestUncompactedAttemptUsageSnapshot(params: {
   prePromptMessageCount: number;
   compactionOccurred: boolean;
 }): { assistant: AssistantMessage; usage: NormalizedUsage } | undefined {
-  if (params.compactionOccurred) {
-    return undefined;
-  }
-  return findLatestCurrentAttemptUsageSnapshot(params);
+  return params.compactionOccurred ? undefined : findLatestCurrentAttemptUsageSnapshot(params);
 }
 
 /**
@@ -173,11 +155,10 @@ export function resolvePromptCacheTouchTimestamp(params: {
   const hasCacheUsage =
     typeof params.lastCallUsage?.cacheRead === "number" ||
     typeof params.lastCallUsage?.cacheWrite === "number";
-  if (!hasCacheUsage) {
-    return params.fallbackLastCacheTouchAt ?? null;
-  }
   return (
-    parseDateFirstTimestampMs(params.assistantTimestamp) ?? params.fallbackLastCacheTouchAt ?? null
+    (hasCacheUsage ? parseDateFirstTimestampMs(params.assistantTimestamp) : undefined) ??
+    params.fallbackLastCacheTouchAt ??
+    null
   );
 }
 

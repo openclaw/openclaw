@@ -7,10 +7,7 @@ import type {
   SessionsProcessesListResult,
   SessionsProcessesStopResult,
 } from "../../../packages/gateway-protocol/src/schema/session-processes.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.ts";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
@@ -18,9 +15,9 @@ import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
-import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import {
   backgroundWorkFixture as fixture,
+  createBackgroundWorkInstance,
   observeBackgroundWorkRpc,
   startBackgroundWorkProvider,
   type BackgroundWorkRpc,
@@ -71,44 +68,7 @@ const suite = createControlUiE2eSuite({
         saveProof,
       );
     try {
-      instance = await createOpenClawTestInstance({
-        name: "background-work",
-        env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
-        config: {
-          gateway: { controlUi: { enabled: true } },
-          cron: { enabled: false },
-          // Exercise ordinary shell exec and native spawn, not Code Mode discovery.
-          tools: {
-            profile: "full",
-            codeMode: false,
-            toolSearch: false,
-            exec: { host: "gateway", mode: "full", notifyOnExit: false },
-          },
-          agents: {
-            ownership: "explicit",
-            defaults: {
-              model: "background-fixture/parent",
-              modelPolicy: { allow: ["background-fixture/*"] },
-            },
-            entries: { main: { identity: { name: "Background work fixture" } } },
-          },
-          models: {
-            catalogRefresh: { enabled: false },
-            providers: {
-              "background-fixture": {
-                api: "openai-responses",
-                apiKey: "synthetic-background-fixture-key",
-                baseUrl: "http://127.0.0.1:" + provider.port + "/v1",
-                models: [
-                  { id: "parent", name: "Fixture parent" },
-                  { id: "child", name: "Fixture child" },
-                ],
-              },
-            },
-          },
-          plugins: { allow: [] },
-        },
-      });
+      instance = await createBackgroundWorkInstance(provider.port);
       await instance.startGateway();
       return { baseUrl: "http://127.0.0.1:" + instance.port + "/", close: cleanup };
     } catch (error) {
@@ -187,6 +147,19 @@ suite.define(() => {
         });
         const page = await context.newPage();
         const wire = observeBackgroundWorkRpc(page, signal);
+        // The scenario aborts before closing the page, including native test timeouts.
+        const logFailure = () =>
+          console.error(
+            "[background-work-real-gateway] failure",
+            JSON.stringify({
+              stage: proof.stage,
+              parentRequests: provider.parentRequests(),
+              parentPending: provider.parentIsPending(),
+              processOpen: provider.processIsOpen(),
+              rpc: wire.diagnostics(),
+            }),
+          );
+        signal.addEventListener("abort", logFailure, { once: true });
         proof.stage = "create parent and pair browser";
         await runCli([
           "gateway",
@@ -202,7 +175,6 @@ suite.define(() => {
         ]);
         await pairControlUiPage(page, runCli);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, fixture.key));
-        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         const parent = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const composer = parent.getByRole("textbox", { name: "Chat composer", exact: true });
@@ -234,6 +206,7 @@ suite.define(() => {
           await provider.wait(gate, signal);
         }
         await composer.fill(fixture.draft);
+        proof.stage = "persist parent draft";
         await waitForCommittedComposerDraft(
           page,
           "chat:v3:" + fixture.key + "\u0000agent:main",
@@ -256,11 +229,13 @@ suite.define(() => {
         await openChatSidePanelType(page, "Subagents");
         const subagents = parent.locator("openclaw-chat-subagents-panel");
         const childOpen = subagents.getByRole("button", { name: fixture.childLabel, exact: true });
+        proof.stage = "wait for child row";
         await childOpen.waitFor();
         const childKey = await childOpen
           .locator("xpath=ancestor::*[@data-session-key]")
           .getAttribute("data-session-key");
         expect(childKey).toMatch(/^agent:main:subagent:/);
+        proof.stage = "wait for child roster response";
         const roster = payloadOf(
           await wire.waitFor(
             (rpc) =>
@@ -280,11 +255,13 @@ suite.define(() => {
         await capture(page, "desktop-subagents-list", childOpen);
         await childOpen.click();
         const detail = subagents.locator(".chat-subagent-detail");
+        proof.stage = "wait for child task transcript";
         await detail.getByText(fixture.childTask, { exact: false }).waitFor();
+        proof.stage = "observe child in-flight startup response";
         const history = payloadOf(
           await wire.waitFor(
             (rpc) =>
-              rpc.request.method === "chat.history" &&
+              rpc.request.method === "chat.startup" &&
               paramsOf(rpc).sessionKey === childKey &&
               Boolean((rpc.response.payload as ChatHistoryResult | undefined)?.inFlightRun),
           ),
@@ -293,7 +270,9 @@ suite.define(() => {
         proof.childHistory = { runId: run.runId, sessionAbortable: run.sessionAbortable ?? false };
         expect(run.runId).toBeTruthy();
         expect(run.runId).not.toBe(parentRunId);
+        proof.stage = "render child streaming progress";
         provider.writeChildProgress();
+        proof.stage = "wait for child progress";
         await detail.getByText(fixture.childText, { exact: true }).waitFor();
         const childStop = detail.getByRole("button", { name: "Stop generating", exact: true });
         await childStop.waitFor();
@@ -304,6 +283,7 @@ suite.define(() => {
         proof.stage = "independent process list and retained output";
         await openChatSidePanelType(page, "Processes");
         const processes = parent.locator("openclaw-chat-processes-panel");
+        proof.stage = "wait for process list with retained output";
         const processList = payloadOf(
           await wire.waitFor(
             (rpc) =>
@@ -379,6 +359,7 @@ suite.define(() => {
             runIds: expect.arrayContaining([run.runId]),
           });
         }
+        proof.stage = "settle child provider cancellation";
         await provider.wait(provider.childClosed, signal);
         await childStop.waitFor({ state: "hidden" });
         expect(provider.processIsOpen(), "child Stop must not stop parent exec").toBe(true);
@@ -420,6 +401,7 @@ suite.define(() => {
         expect(payloadOf(stoppedProcess) as SessionsProcessesStopResult).toEqual({
           requested: true,
         });
+        proof.stage = "settle process cancellation and observe terminal response";
         await provider.wait(provider.processClosed, signal);
         const terminal = (
           payloadOf(
@@ -467,7 +449,6 @@ suite.define(() => {
         proof.stage = "reload parent with independent panels and durable draft";
         await page.setViewportSize({ width: 1440, height: 1000 });
         await page.reload();
-        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         await composer.waitFor();
         await assertParent();
@@ -492,6 +473,7 @@ suite.define(() => {
         proof.stage = "complete";
         proof.complete = true;
         await saveProof();
+        signal.removeEventListener("abort", logFailure);
       },
     });
   }, 120_000);

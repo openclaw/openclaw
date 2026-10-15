@@ -79,7 +79,7 @@ const GatewayGitHubEndpointSchema = z
       });
     }
   });
-const GatewayOperatorRoleDefinitionSchema = z.strictObject({
+export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
   sessions: z.strictObject({
     /** Maximum access to another person's sessions without explicit membership. */
     others: z.enum(["none", "view", "suggest", "write"]),
@@ -207,6 +207,15 @@ export const GatewayConfigSchema = z
           .strictObject({
             /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
             customPlugins: z.boolean().optional(),
+            /** Enable experimental speech bubbles in the Control UI (default false). */
+            chatBubbles: z.boolean().optional(),
+            /** Optional, tool-free next-message suggestions (disabled by default). */
+            composerPredictions: z
+              .strictObject({
+                enabled: z.boolean().optional(),
+                model: z.enum(["utility", "conversation", "default"]).optional(),
+              })
+              .optional(),
           })
           .optional(),
         /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */

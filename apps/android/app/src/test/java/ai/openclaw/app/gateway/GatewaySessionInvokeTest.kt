@@ -162,6 +162,42 @@ private data class InvokeScenarioResult(
 @Config(sdk = [34])
 class GatewaySessionInvokeTest {
   @Test
+  fun talkCatalogRetriesOnlyTheCorrelatedWarmingResponse() =
+    runBlocking {
+      for ((method, retryable) in listOf("talk.catalog" to true, "talk.catalog" to false, "models.list" to true)) {
+        val connected = CompletableDeferred<Unit>()
+        val lastDisconnect = AtomicReference("")
+        val requests = AtomicInteger()
+        val server =
+          startGatewayServer(testJson()) { webSocket, id, requestedMethod, _ ->
+            if (requestedMethod == "connect") {
+              webSocket.send(connectResponseFrame(id))
+            } else if (requests.incrementAndGet() == 1) {
+              webSocket.send(
+                """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"warming","retryable":$retryable,"retryAfterMs":250,"details":{"reason":"talk-catalog-warming"}}}""",
+              )
+            } else {
+              webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"realtime":{"providers":[]}}}""")
+            }
+          }
+        val harness =
+          createNodeHarness(connected = connected, lastDisconnect = lastDisconnect) {
+            GatewaySession.InvokeResult.ok("{}")
+          }
+        try {
+          connectNodeSession(harness.session, server.port)
+          awaitConnectedOrThrow(connected, lastDisconnect, server)
+          val result = harness.session.requestDetailed(method, "{}")
+          val shouldRetry = method == "talk.catalog" && retryable
+          assertEquals(shouldRetry, result.ok)
+          assertEquals(if (shouldRetry) 2 else 1, requests.get())
+        } finally {
+          shutdownHarness(harness, server)
+        }
+      }
+    }
+
+  @Test
   fun connect_usesGatewayChallengeTimestamp() =
     runBlocking {
       val json = testJson()
@@ -384,7 +420,7 @@ class GatewaySessionInvokeTest {
         contextPath = contextPath,
       )
       awaitConnectedOrThrow(connected, lastDisconnect, server)
-      val oldUrl = requireNotNull(harness.session.currentCanvasHostUrl())
+      val oldUrl = requireNotNull(harness.session.currentCanvasHostRoute()?.url)
       val beforeRefresh = loadDocument(oldUrl)
       val refreshed = harness.session.refreshCanvasHostUrlIfCurrent(oldUrl)
       val lagging = harness.session.refreshCanvasHostUrlIfCurrent(oldUrl)
@@ -397,7 +433,7 @@ class GatewaySessionInvokeTest {
       assertEquals(404, expiredDocument.first)
       assertTrue(oldUrl.endsWith("/old-token"))
       assertTrue(refreshed.endsWith("/new-token"))
-      assertEquals(refreshed, harness.session.currentCanvasHostUrl())
+      assertEquals(refreshed, harness.session.currentCanvasHostRoute()?.url)
       assertEquals(refreshed, lagging)
       assertEquals(1, refreshRequests.get())
     } finally {
@@ -428,7 +464,7 @@ class GatewaySessionInvokeTest {
       try {
         connectNodeSession(harness.session, server.port, role = "operator", scopes = listOf("operator.read"), contextPath = contextPath)
         awaitConnectedOrThrow(connected, lastDisconnect, server)
-        assertEquals(advertised.get(), harness.session.currentCanvasHostUrl())
+        assertEquals(advertised.get(), harness.session.currentCanvasHostRoute()?.url)
         val origin = "http://127.0.0.1:${server.port}"
         val explicitRoutes =
           listOf(
@@ -445,7 +481,7 @@ class GatewaySessionInvokeTest {
           )
         for (route in explicitRoutes) {
           advertised.set(route)
-          assertEquals(route, harness.session.refreshCanvasHostUrlIfCurrent(harness.session.currentCanvasHostUrl()))
+          assertEquals(route, harness.session.refreshCanvasHostUrlIfCurrent(harness.session.currentCanvasHostRoute()?.url))
         }
       } finally {
         shutdownHarness(harness, server)
@@ -2069,7 +2105,8 @@ class GatewaySessionInvokeTest {
 
         val sent =
           async {
-            harness.session.sendNodeEvent(
+            harness.session.sendNodeEventForEndpoint(
+              expectedEndpointStableId = null,
               event = "agent.request",
               payloadJson = """{"message":"restore"}""",
             )
@@ -2141,7 +2178,8 @@ class GatewaySessionInvokeTest {
         withTimeout(TEST_TIMEOUT_MS) { connectRequestSeen.await() }
 
         assertFalse(
-          harness.session.sendNodeEvent(
+          harness.session.sendNodeEventForEndpoint(
+            expectedEndpointStableId = null,
             event = "notifications.changed",
             payloadJson = """{"change":"posted","key":"before"}""",
           ),
@@ -2151,7 +2189,8 @@ class GatewaySessionInvokeTest {
         releaseConnectResponse.complete(Unit)
         awaitConnectedOrThrow(connected, lastDisconnect, server)
         assertTrue(
-          harness.session.sendNodeEvent(
+          harness.session.sendNodeEventForEndpoint(
+            expectedEndpointStableId = null,
             event = "notifications.changed",
             payloadJson = """{"change":"posted","key":"after"}""",
           ),

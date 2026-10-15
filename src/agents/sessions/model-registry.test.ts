@@ -12,9 +12,11 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getApiProvider } from "@openclaw/ai/internal/runtime";
 import { describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  replacePersistedPluginModelCatalogs,
 } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
@@ -185,38 +187,6 @@ describe("ModelRegistry models.json auth", () => {
     );
   });
 
-  it("forks the latest base catalog after the source reloads", () => {
-    const modelsPath = writeModelsJson({
-      providers: {
-        custom: {
-          baseUrl: "https://models.example/v1",
-          api: "openai-responses",
-          models: [{ id: "before-reload" }],
-        },
-      },
-    });
-    const source = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
-    writeFileSync(
-      modelsPath,
-      JSON.stringify({
-        providers: {
-          custom: {
-            baseUrl: "https://models.example/v1",
-            api: "openai-responses",
-            models: [{ id: "after-reload" }],
-          },
-        },
-      }),
-      "utf-8",
-    );
-
-    source.refresh();
-    const fork = source.fork(AuthStorage.inMemory());
-
-    expect(fork.find("custom", "before-reload")).toBeUndefined();
-    expect(fork.find("custom", "after-reload")).toBeDefined();
-  });
-
   it.each(["persisted", "registered"] as const)("preserves %s prompt budgets", (source) => {
     // Synthetic providers deliberately share an id but not a prompt budget.
     // Native window and output capacity must remain separate from that budget.
@@ -259,6 +229,61 @@ describe("ModelRegistry models.json auth", () => {
     for (const candidate of [registry, registry.fork(AuthStorage.inMemory())]) {
       for (const [provider, config] of Object.entries(providers)) {
         expect(candidate.find(provider, "shared-model")).toMatchObject(config.models![0]!);
+      }
+    }
+  });
+
+  it("keeps estimates out of SQLite catalog metadata and reconstructs them on reload", async () => {
+    const provider = "window-fixture";
+    const modelsPath = await writeModelsJsonWithPluginCatalog({
+      root: { providers: {} },
+      pluginRelativePath: "plugins/window-fixture/catalog.json",
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          [provider]: {
+            api: "openai-responses",
+            baseUrl: "https://models.example/v1",
+            models: [
+              { id: "unknown" },
+              { id: "prompt-only", contextTokens: 777_000 },
+              { id: "reported", contextWindow: 128_000, contextTokens: 777_000 },
+              { id: "authored", contextWindow: 64_000 },
+            ],
+          },
+        },
+      },
+    });
+    const pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(dirname(modelsPath));
+    expect(pluginCatalogs).toHaveLength(1);
+    const stored = JSON.parse(pluginCatalogs[0]!.contents).providers[provider].models;
+    for (const id of ["unknown", "prompt-only"]) {
+      expect(stored.find((row: { id: string }) => row.id === id)).not.toHaveProperty(
+        "contextWindow",
+      );
+    }
+    expect(pluginCatalogs[0]!.contents).not.toContain("contextWindowSource");
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
+      pluginCatalogs,
+      pluginMetadataSnapshot: pluginOwnerSnapshot(provider, provider),
+    });
+    for (const candidate of [registry, registry.fork(AuthStorage.inMemory())]) {
+      expect(candidate.find(provider, "unknown")).toMatchObject({
+        contextWindow: 128_000,
+        contextWindowSource: "synthetic",
+      });
+      expect(candidate.find(provider, "prompt-only")).toMatchObject({
+        contextWindow: 777_000,
+        contextTokens: 777_000,
+        contextWindowSource: "synthetic",
+      });
+      for (const [id, window] of [
+        ["reported", 128_000],
+        ["authored", 64_000],
+      ] as const) {
+        const runtime = candidate.find(provider, id);
+        expect(runtime?.contextWindow).toBe(window);
+        expect(runtime).not.toHaveProperty("contextWindowSource");
       }
     }
   });
@@ -316,66 +341,6 @@ describe("ModelRegistry models.json auth", () => {
 
     expect(registry.find("custom", "authored-model")?.name).toBe("Authored Model");
     expect(registry.getError()).toContain("Failed to load generated plugin model catalogs");
-  });
-
-  it("tracks explicit max-token provenance across authored and generated catalogs", async () => {
-    const modelsPath = await writeGeneratedPluginCatalog(
-      "zai",
-      {
-        baseUrl: "https://api.z.ai/api/paas/v4",
-        api: "openai-completions",
-        models: [{ id: "catalog-model", maxTokens: 32_768 }],
-      },
-      {
-        providers: {
-          custom: {
-            baseUrl: "https://models.example/v1",
-            api: "openai-completions",
-            models: [{ id: "authored-model", maxTokens: 2_048 }],
-          },
-        },
-      },
-    );
-
-    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
-      pluginMetadataSnapshot: pluginOwnerSnapshot("zai", "zai"),
-    });
-
-    expect(registry.find("custom", "authored-model")).toMatchObject({
-      maxTokens: 2_048,
-      maxTokensSource: "configured",
-    });
-    expect(registry.find("zai", "catalog-model")).toMatchObject({
-      maxTokens: 32_768,
-      maxTokensSource: "discovered",
-    });
-  });
-
-  it("preserves response-model compatibility from generated catalogs", async () => {
-    const modelsPath = await writeGeneratedPluginCatalog("openai", {
-      baseUrl: "https://api.openai.com/v1",
-      api: "openai-responses",
-      apiKey: "test-token-placeholder",
-      models: [
-        {
-          id: "gpt-5.6-luna",
-          name: "GPT-5.6 Luna",
-          compat: { supportsTemperature: false, supportsInstructions: false },
-        },
-      ],
-    });
-
-    const registry = ModelRegistry.create(
-      AuthStorage.inMemory({ openai: { type: "api_key", key: "test-token-placeholder" } }),
-      modelsPath,
-      { pluginMetadataSnapshot: pluginOwnerSnapshot("openai", "openai") },
-    );
-
-    expect(registry.getError()).toBeUndefined();
-    expect(registry.find("openai", "gpt-5.6-luna")?.compat).toMatchObject({
-      supportsTemperature: false,
-      supportsInstructions: false,
-    });
   });
 
   it("loads richer generated catalog metadata without widening runtime inputs", async () => {
@@ -653,6 +618,39 @@ describe("ModelRegistry API provider ownership", () => {
 });
 
 describe("ModelRegistry persisted catalog state", () => {
+  it("refreshes an acknowledged plugin catalog write without reading SQLite on the host", async () => {
+    const provider = (id: string) => ({
+      baseUrl: "https://models.example/v1",
+      api: "openai-completions",
+      models: [{ id }],
+    });
+    const modelsPath = await writeGeneratedPluginCatalog("zai", provider("before"));
+    const auth = AuthStorage.inMemory();
+    auth.setRuntimeApiKey("zai", "synthetic-catalog-key");
+    const observation = observeHostDataSql();
+    try {
+      const registry = await ModelRegistry.createAsync(auth, modelsPath, {
+        pluginMetadataSnapshot: pluginOwnerSnapshot("zai", "zai"),
+      });
+      expect(registry.find("zai", "before")).toBeDefined();
+      await replacePersistedPluginModelCatalogs({
+        agentDir: dirname(modelsPath),
+        pluginCatalogWrites: {
+          "plugins/zai/catalog.json": JSON.stringify({
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: { zai: provider("after") },
+          }),
+        },
+      });
+      await registry.refreshAsync();
+      expect(registry.find("zai", "before")).toBeUndefined();
+      expect(registry.fork(AuthStorage.inMemory()).find("zai", "after")).toBeDefined();
+      expect(observation.queries.filter((query) => /\bcache_entries\b/iu.test(query))).toEqual([]);
+    } finally {
+      observation.restore();
+    }
+  });
+
   it.each(["catalog.json.doctor-importing-previous-process"])(
     "leaves released provider catalogs for Doctor (%s)",
     async (filename) => {

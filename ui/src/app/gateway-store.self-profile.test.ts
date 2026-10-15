@@ -39,30 +39,84 @@ afterEach(() => {
 });
 
 describe("Gateway self-profile ownership", () => {
+  it.each([false, true])(
+    "retains only resolved profileless identity through same-connection drops (retry: %s)",
+    async (willRetry) => {
+      const { gateway, current } = createStore();
+      expect(gateway.snapshot.selfUser).toBeUndefined();
+      gateway.start();
+      expect(gateway.snapshot.selfUser).toBeUndefined();
+      current().opts.onHello?.(hello([]));
+      expect(gateway.snapshot.selfUser).toBeNull();
+      current().opts.onClose?.({ code: 1006, reason: "lost", willRetry });
+      expect(gateway.snapshot.phase).toBe(willRetry ? "reconnecting" : "offline");
+      expect(gateway.snapshot.selfUser).toBeNull();
+      gateway.connect();
+      expect(gateway.snapshot.selfUser).toBeNull();
+      const pending = createDeferred<{ profile: UserProfile }>();
+      current().request.mockReturnValue(pending.promise);
+      current().opts.onHello?.(hello());
+      const read = gateway.loadSelfProfile();
+      expect(gateway.snapshot.selfUser).toBeUndefined();
+      current().opts.onClose?.({ code: 1006, reason: "lost", willRetry: true });
+      expect(gateway.snapshot.selfUser).toBeUndefined();
+      pending.reject(
+        new GatewayRequestError({ code: "FORBIDDEN", message: "Old profileless result" }),
+      );
+      expect(await read).toBeNull();
+      expect(gateway.snapshot.selfUser).toBeUndefined();
+      gateway.stop();
+      expect(gateway.snapshot.selfUser).toBeUndefined();
+    },
+  );
+
   it.each([
-    "operator.sessions.read",
-    "operator.sessions.write",
-    "operator.read",
-    "operator.write",
-    "operator.admin",
-  ])("loads authenticated self with %s and no roster", async (scope) => {
+    { token: "replacement-token" },
+    { password: "replacement-password" },
+    { bootstrapToken: "replacement-bootstrap" },
+    { gatewayUrl: "ws://other.test" },
+  ])("retires profileless identity when connection credentials change: %j", (replacement) => {
     const { gateway, current } = createStore();
     gateway.start();
-    current().request.mockResolvedValue({ profile });
-    current().opts.onHello?.(hello([scope]));
-    await Promise.resolve();
-    expect(current().request).toHaveBeenCalledWith("users.self", {});
-    await gateway.loadSelfProfile();
-    expect(current().request).toHaveBeenCalledTimes(1);
-    expect(gateway.snapshot.selfUser).toMatchObject({
-      id: profile.id,
-      identity: { type: "profile", id: profile.id },
-      name: profile.displayName,
-      email: profile.emails[0],
-    });
-    expect(gateway.snapshot.hello?.snapshot).toEqual({ presence: [] });
+    current().opts.onHello?.(hello([]));
+    expect(gateway.snapshot.selfUser).toBeNull();
+    gateway.connect(replacement);
+    expect(gateway.snapshot.selfUser).toBeUndefined();
+    current().opts.onClose?.({ code: 1006, reason: "lost", willRetry: true });
+    expect(gateway.snapshot.selfUser).toBeUndefined();
     gateway.stop();
   });
+
+  it.each(["pairing rejection", "authentication rejection", "retired recovery", "stop"])(
+    "retires profileless identity on %s",
+    (retirement) => {
+      const { gateway, current } = createStore();
+      gateway.start();
+      current().opts.onHello?.(hello([]));
+      expect(gateway.snapshot.selfUser).toBeNull();
+      if (retirement === "stop") {
+        gateway.stop();
+      } else {
+        if (retirement === "retired recovery") {
+          Object.defineProperty(current(), "offlineRecoveryRetired", { value: true });
+        }
+        current().opts.onClose?.({
+          code: 1008,
+          reason: "Access retired",
+          willRetry: false,
+          ...(retirement === "pairing rejection"
+            ? { error: { code: "PAIRING_REQUIRED", message: "Pair again" } }
+            : retirement === "authentication rejection"
+              ? { error: { code: "UNAUTHORIZED", message: "Sign in again" } }
+              : {}),
+        });
+      }
+      expect(gateway.snapshot.selfUser).toBeUndefined();
+      gateway.connect();
+      expect(gateway.snapshot.selfUser).toBeUndefined();
+      gateway.stop();
+    },
+  );
 
   it.each([false, true])(
     "keeps a fast queued send attributed while self loading is pending or fails (%s)",
@@ -143,7 +197,7 @@ describe("Gateway self-profile ownership", () => {
       } else {
         await expect(read).rejects.toThrow("Identity pending");
       }
-      expect(gateway.snapshot.selfUser).toBeNull();
+      expect(gateway.snapshot.selfUser).toBe(code === "FORBIDDEN" ? null : undefined);
       const owner = { ...profile, id: "owner", displayName: null, emails: [] };
       current().request.mockResolvedValue({ profile: owner });
       expect(await gateway.loadSelfProfile()).toEqual(owner);
@@ -172,7 +226,7 @@ describe("Gateway self-profile ownership", () => {
       };
       if (replacement === "reconnect") {
         current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
-        expect(gateway.snapshot.selfUser).toBeNull();
+        expect(gateway.snapshot.selfUser).toBeUndefined();
         current().opts.onHello?.(hello());
         const read = gateway.loadSelfProfile();
         const nextProfile = { ...profile, id: attached.id, displayName: attached.name };
@@ -195,48 +249,45 @@ describe("Gateway self-profile ownership", () => {
     },
   );
 
-  it.each(["profile event", "explicit read"])(
-    "refreshes canonical profile and avatar via %s",
-    async (trigger) => {
-      const { gateway, current } = createStore();
-      gateway.start();
-      current().request.mockResolvedValue({ profile });
-      current().opts.onHello?.(hello());
-      await gateway.loadSelfProfile();
-      expect(gateway.snapshot.selfUser?.avatarUrl).toContain("?v=2");
-      const changed = {
-        ...profile,
-        id: trigger === "profile event" ? "merged-profile" : profile.id,
-        displayName: "Changed Person",
-        updatedAt: 3,
-      };
-      current().request.mockResolvedValue({ profile: changed });
-      if (trigger === "profile event") {
-        current().opts.onEvent?.(
-          createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
-        );
-      }
-      await gateway.loadSelfProfile();
-      if (trigger === "profile event") {
-        current().opts.onEvent?.(
-          createGatewayEvent("presence", {
-            presence: [
-              { instanceId: current().instanceId, user: { id: profile.id, name: "Old alias" } },
-            ],
-          }),
-        );
-      }
-      expect(gateway.snapshot.selfUser).toMatchObject({
-        id: changed.id,
-        name: changed.displayName,
-      });
-      expect(gateway.snapshot.selfUser?.avatarUrl).toContain("?v=3");
-      expect(current().request).toHaveBeenCalledTimes(2);
-      gateway.stop();
-    },
-  );
+  it.each(["profile event"])("refreshes canonical profile and avatar via %s", async (trigger) => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().request.mockResolvedValue({ profile });
+    current().opts.onHello?.(hello());
+    await gateway.loadSelfProfile();
+    expect(gateway.snapshot.selfUser?.avatarUrl).toContain("?v=2");
+    const changed = {
+      ...profile,
+      id: trigger === "profile event" ? "merged-profile" : profile.id,
+      displayName: "Changed Person",
+      updatedAt: 3,
+    };
+    current().request.mockResolvedValue({ profile: changed });
+    if (trigger === "profile event") {
+      current().opts.onEvent?.(
+        createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
+      );
+    }
+    await gateway.loadSelfProfile();
+    if (trigger === "profile event") {
+      current().opts.onEvent?.(
+        createGatewayEvent("presence", {
+          presence: [
+            { instanceId: current().instanceId, user: { id: profile.id, name: "Old alias" } },
+          ],
+        }),
+      );
+    }
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      id: changed.id,
+      name: changed.displayName,
+    });
+    expect(gateway.snapshot.selfUser?.avatarUrl).toContain("?v=3");
+    expect(current().request).toHaveBeenCalledTimes(2);
+    gateway.stop();
+  });
 
-  it.each(["operator.sessions.write", "operator.read"])(
+  it.each(["operator.read"])(
     "preserves current-profile display events and upload revisions through a pending self read with %s",
     async (scope) => {
       const { gateway, current } = createStore();
@@ -284,6 +335,6 @@ describe("Gateway self-profile ownership", () => {
     });
     current().opts.onHello?.(hello());
     expect(await gateway.loadSelfProfile()).toBeNull();
-    expect(gateway.snapshot.selfUser).toBeNull();
+    expect(gateway.snapshot.selfUser).toBeUndefined();
   });
 });

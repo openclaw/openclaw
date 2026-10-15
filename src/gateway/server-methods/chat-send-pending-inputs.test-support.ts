@@ -10,14 +10,19 @@ import { getRuntimeConfig } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEventsSync,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
@@ -66,28 +71,35 @@ export function useBrowserFollowupFixture() {
       createdActor?: SessionCreatedActor;
       sandbox?: "required";
       preserveContent?: boolean;
+      deviceIdentity?: boolean;
       transientProjectionFailures?: number;
       persistDuringDispatch?: boolean;
+      storage?: "durable" | "memory";
     } = {},
   ) {
+    if (options.deviceIdentity !== false) {
+      await loadOrCreateProcessDeviceIdentityAsync();
+    }
     const active = options.active !== false;
     const storePath = path.join(temporaryDirs.make("openclaw-chat-custody-"), "sessions.json");
     testState.sessionStorePath = storePath;
+    const memoryIncognito = options.storage === "memory";
     const scope = {
       agentId: "main",
-      sessionKey: "agent:main:main",
+      sessionKey: memoryIncognito ? "agent:main:dashboard:incognito-custody" : "agent:main:main",
       sessionId: "cloud-session",
       storePath,
     };
+    const entry = {
+      sessionId: scope.sessionId,
+      updatedAt: Date.now(),
+      status: active ? undefined : ("done" as const),
+      ...(options.createdActor ? { createdActor: options.createdActor } : {}),
+      ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+    };
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: scope.sessionId,
-          updatedAt: Date.now(),
-          status: active ? undefined : "done",
-          ...(options.createdActor ? { createdActor: options.createdActor } : {}),
-          ...(options.sandbox ? { sandbox: options.sandbox } : {}),
-        },
+        ...(!memoryIncognito ? { main: entry } : {}),
         unrelated: {
           sessionId: "unrelated-browser-session",
           updatedAt: Date.now(),
@@ -95,10 +107,45 @@ export function useBrowserFollowupFixture() {
         },
       },
     });
-    await appendTranscriptMessage(scope, {
-      message: { role: "user", content: "Keep working on the current task.", timestamp: 1 },
-    });
-    const activeTranscript = loadTranscriptEventsSync(scope);
+    const authority = { assertCurrent() {}, authorize() {} };
+    const seedTranscript = () =>
+      appendTranscriptMessage(scope, {
+        message: { role: "user", content: "Keep working on the current task.", timestamp: 1 },
+      });
+    if (memoryIncognito) {
+      scope.storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: scope.agentId });
+      await withSessionActorStorage(
+        scope,
+        {
+          create: true,
+          lifetime: { assertCurrent() {}, assertReadable() {} },
+          authority,
+        },
+        async () => {
+          await upsertSessionEntryCore(scope, { ...entry, incognito: true });
+          await seedTranscript();
+        },
+      );
+    } else {
+      await seedTranscript();
+    }
+    const readTranscript = () => {
+      if (!memoryIncognito) {
+        return loadTranscriptEventsSync(scope);
+      }
+      const snapshot = memorySessionActorOwners
+        .read({ agentId: scope.agentId, path: scope.storePath })
+        ?.readStorage(
+          scope.sessionKey,
+          { type: "session.history.hydrate", input: { sessionId: scope.sessionId } },
+          authority,
+        );
+      if (snapshot?.kind !== "full") {
+        throw new Error("Expected the memory transcript fixture");
+      }
+      return snapshot.snapshot.events;
+    };
+    const activeTranscript = readTranscript();
     const activeRun = active
       ? createReplyOperation({ ...scope, resetTriggered: false })
       : undefined;
@@ -208,7 +255,7 @@ export function useBrowserFollowupFixture() {
     };
     const finishDispatch = async () => {
       const completion = getSessionWorkAdmissionRelease({
-        scope: storePath,
+        scope: scope.storePath,
         identities: [scope.sessionKey, scope.sessionId],
       });
       dispatchRelease.resolve();
@@ -224,12 +271,19 @@ export function useBrowserFollowupFixture() {
       beforeApprove,
       activeRun,
       activeTranscript,
+      readTranscript,
       send,
       dispatchedRecorder: dispatchedRecorder.promise,
       finishDispatch,
       cleanup: async () => {
         await finishDispatch();
         dispatchInboundMessageMock.mockReset();
+        if (memoryIncognito) {
+          memorySessionActorOwners.closeSession(
+            { agentId: scope.agentId, path: scope.storePath },
+            scope.sessionKey,
+          );
+        }
       },
     };
   };

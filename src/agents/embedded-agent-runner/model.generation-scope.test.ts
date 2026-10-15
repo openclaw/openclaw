@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import "../../claws/tool-policy-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -251,118 +252,91 @@ describe("model runtime generation scope", () => {
     });
   });
 
-  it.each([
-    { auth: true, registry: false },
-    { auth: false, registry: true },
-  ])(
-    "fills missing stores from the prepared runtime (auth=$auth, registry=$registry)",
-    async (supplied) => {
-      const provider = "generation-stores";
-      const modelId = "literal-store-model";
-      const createStores = (label: string) => {
-        const authStorage = AuthStorage.inMemory({});
-        authStorage.setRuntimeApiKey(provider, `fixture-${label}-key`);
-        const modelRegistry = ModelRegistry.inMemory(authStorage);
-        modelRegistry.registerProvider(provider, {
-          api: "openai-completions",
-          baseUrl: "https://stores.example.test/v1",
-          models: [
-            {
-              id: modelId,
-              name: label,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 32_768,
-              maxTokens: 4_096,
-            },
-          ],
-        });
-        return { authStorage, modelRegistry };
-      };
-      const preparedStores = createStores("prepared");
-      const callerStores = createStores("caller");
-      const generation = generationFixture({
-        label: "stores",
-        provider,
-        requestProvider: provider,
-        modelId,
-        createStores: () => preparedStores,
+  it("fills the missing registry from the prepared runtime with caller auth", async () => {
+    const provider = "generation-stores";
+    const modelId = "literal-store-model";
+    const createStores = (label: string) => {
+      const authStorage = AuthStorage.inMemory({});
+      authStorage.setRuntimeApiKey(provider, `fixture-${label}-key`);
+      const modelRegistry = ModelRegistry.inMemory(authStorage);
+      modelRegistry.registerProvider(provider, {
+        api: "openai-completions",
+        baseUrl: "https://stores.example.test/v1",
+        models: [
+          {
+            id: modelId,
+            name: label,
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 32_768,
+            maxTokens: 4_096,
+          },
+        ],
       });
-      const { preparedModelRuntime } = generation;
+      return { authStorage, modelRegistry };
+    };
+    const preparedStores = createStores("prepared");
+    const callerStores = createStores("caller");
+    const generation = generationFixture({
+      label: "stores",
+      provider,
+      requestProvider: provider,
+      modelId,
+      createStores: () => preparedStores,
+    });
+    const { preparedModelRuntime } = generation;
 
-      const result = await resolveModelAsync(
-        provider,
-        modelId,
-        preparedModelRuntime.agentDir,
-        preparedModelRuntime.config,
-        {
-          ...(supplied.auth ? { authStorage: callerStores.authStorage } : {}),
-          ...(supplied.registry ? { modelRegistry: callerStores.modelRegistry } : {}),
-          preparedModelRuntime,
-          skipAgentDiscovery: true,
-          workspaceDir: preparedModelRuntime.workspaceDir,
-        },
-      );
+    const result = await resolveModelAsync(
+      provider,
+      modelId,
+      preparedModelRuntime.agentDir,
+      preparedModelRuntime.config,
+      {
+        authStorage: callerStores.authStorage,
+        preparedModelRuntime,
+        skipAgentDiscovery: true,
+        workspaceDir: preparedModelRuntime.workspaceDir,
+      },
+    );
 
-      if (supplied.auth) {
-        expect(result.authStorage).toBe(callerStores.authStorage);
-      }
-      if (supplied.registry) {
-        expect(result.modelRegistry).toBe(callerStores.modelRegistry);
-      }
-      const model = expectDefined(result.model, "resolved fixture model");
-      expect(model).toMatchObject({
-        provider,
-        id: modelId,
-        name: supplied.registry ? "caller" : "prepared",
-        contextWindow: 32_768,
-        maxTokens: 4_096,
-      });
-      expect(await result.authStorage.getApiKey(provider)).toBe(
-        supplied.auth ? "fixture-caller-key" : "fixture-prepared-key",
-      );
-      expect(await result.modelRegistry.getApiKeyAndHeaders(model)).toMatchObject({
-        apiKey: supplied.auth || supplied.registry ? "fixture-caller-key" : "fixture-prepared-key",
-      });
-      expect(await preparedStores.modelRegistry.getApiKeyAndHeaders(model)).toMatchObject({
-        apiKey: "fixture-prepared-key",
-      });
-    },
-  );
+    expect(result.authStorage).toBe(callerStores.authStorage);
+    const model = expectDefined(result.model, "resolved fixture model");
+    expect(model).toMatchObject({
+      provider,
+      id: modelId,
+      name: "prepared",
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    });
+    expect(await result.authStorage.getApiKey(provider)).toBe("fixture-caller-key");
+    expect(await result.modelRegistry.getApiKeyAndHeaders(model)).toMatchObject({
+      apiKey: "fixture-caller-key",
+    });
+    expect(await preparedStores.modelRegistry.getApiKeyAndHeaders(model)).toMatchObject({
+      apiKey: "fixture-prepared-key",
+    });
+  });
 
-  it.each(["explicit-config", "mutable-scope"] as const)(
-    "preserves metadata compatibility for %s discovery",
-    async (mode) => {
-      const config = { plugins: { enabled: false } } satisfies OpenClawConfig;
-      await state.writeConfig(config);
-      const generation = generationFixture({
-        label: "compatibility",
+  it("preserves metadata compatibility for mutable-scope discovery", async () => {
+    const config = { plugins: { enabled: false } } satisfies OpenClawConfig;
+    await state.writeConfig(config);
+    await captureRuntimeConfigAsyncReader()();
+    const generation = generationFixture({
+      label: "compatibility",
+    });
+    const resolve = () =>
+      resolveModelPluginMetadataSnapshot({
+        workspaceDir: state.workspaceDir,
       });
-      if (mode === "explicit-config") {
-        publishCurrentModelGeneration(generation);
-      }
-      const resolve = () =>
-        resolveModelPluginMetadataSnapshot({
-          workspaceDir: state.workspaceDir,
-          ...(mode === "explicit-config" ? { config } : {}),
-        });
-      const snapshot =
-        mode === "mutable-scope"
-          ? withPluginMetadataSnapshotScope(generation.metadataSnapshot, resolve, {
-              config: generation.preparedModelRuntime.config,
-            })
-          : resolve();
-      expect(snapshot).toBeDefined();
-      expect(snapshot).not.toBe(generation.metadataSnapshot);
-      expect(snapshot).toMatchObject({ policyHash: resolveInstalledPluginIndexPolicyHash(config) });
-      if (mode === "explicit-config") {
-        expect(getRuntimeConfigSnapshot()).toBeNull();
-      } else {
-        expect(getRuntimeConfigSnapshot()?.plugins?.enabled).toBe(false);
-      }
-    },
-  );
+    const snapshot = withPluginMetadataSnapshotScope(generation.metadataSnapshot, resolve, {
+      config: generation.preparedModelRuntime.config,
+    });
+    expect(snapshot).toBeDefined();
+    expect(snapshot).not.toBe(generation.metadataSnapshot);
+    expect(snapshot).toMatchObject({ policyHash: resolveInstalledPluginIndexPolicyHash(config) });
+    expect(getRuntimeConfigSnapshot()?.plugins?.enabled).toBe(false);
+  });
 
   it("selects from a prepared generation without reading or publishing ambient config", async () => {
     const generation = generationFixture({
@@ -512,7 +486,6 @@ describe("model runtime generation scope", () => {
   });
 
   it.each([
-    { ambientScope: false, invalidation: "none" },
     { ambientScope: true, invalidation: "none" },
     { ambientScope: false, invalidation: "abort" },
     { ambientScope: false, invalidation: "authority" },
@@ -522,20 +495,24 @@ describe("model runtime generation scope", () => {
       const missingProvider = "generation-missing";
       const fallbackProvider = "generation-fallback";
       const children: ChildProcess[] = [];
-      const closed = new Set<ChildProcess>();
       let liveDuringFallback: ChildProcess[] = [];
       let liveAfterSelection: ChildProcess[] = [];
-      let prepared = false;
       let current = true;
       const controller = new AbortController();
-      const stopped = new Error("Model selection stopped during reader close");
+      const stopped = new Error("Model selection stopped during fallback preparation");
       const generation = generationFixture({
         label: "readonly-reuse",
         provider: fallbackProvider,
         requestProvider: fallbackProvider,
         prepareDynamicModel: async () => {
           liveDuringFallback = children.filter((child) => child.exitCode === null);
-          prepared = true;
+          await Promise.resolve();
+          if (invalidation === "abort") {
+            controller.abort(stopped);
+          }
+          if (invalidation === "authority") {
+            current = false;
+          }
         },
       });
       await state.writeAuthProfiles({
@@ -566,15 +543,6 @@ describe("model runtime generation scope", () => {
               args[1].includes("session")
             ) {
               children.push(child);
-              child.once("close", () => {
-                closed.add(child);
-                if (prepared && invalidation === "abort") {
-                  controller.abort(stopped);
-                }
-                if (prepared && invalidation === "authority") {
-                  current = false;
-                }
-              });
             }
             return child;
           });
@@ -614,19 +582,22 @@ describe("model runtime generation scope", () => {
           missingProvider,
           fallbackProvider,
         ]);
-        expect(generation.resolveDynamicModel).toHaveBeenCalledWith(
-          expect.objectContaining({
-            authProfileId: `${fallbackProvider}:default`,
-            authProfileMode: "api_key",
-          }),
-        );
+        if (invalidation === "authority") {
+          expect(generation.resolveDynamicModel).not.toHaveBeenCalled();
+        } else {
+          expect(generation.resolveDynamicModel).toHaveBeenCalledWith(
+            expect.objectContaining({
+              authProfileId: `${fallbackProvider}:default`,
+              authProfileMode: "api_key",
+            }),
+          );
+        }
         expect(children).toHaveLength(1);
         expect(liveDuringFallback).toEqual(children);
-        expect(liveAfterSelection).toEqual(ambientScope ? children : []);
+        expect(liveAfterSelection).toEqual(invalidation === "none" ? children : []);
         for (const child of children) {
-          expect(closed.has(child)).toBe(true);
-          expect(child.exitCode).toBe(0);
-          expect(child.connected).toBe(false);
+          expect(child.exitCode).toBeNull();
+          expect(child.connected).toBe(true);
         }
       } finally {
         vi.mocked(spawn).mockImplementation(actual.spawn);

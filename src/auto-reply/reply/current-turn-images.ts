@@ -59,21 +59,19 @@ function appendOrderedImages(params: {
 }) {
   const images = params.images ?? [];
   let inlineIndex = 0;
-  for (const imageOrder of params.imageOrder ?? []) {
+  const appendImage = (imageOrder: PromptImageOrderEntry) => {
     params.entries.push({
       image: imageOrder === "inline" ? images[inlineIndex++] : undefined,
       imageOrder,
       sourceIndex: params.sourceIndex,
       sequence: params.entries.length,
     });
+  };
+  for (const imageOrder of params.imageOrder ?? []) {
+    appendImage(imageOrder);
   }
   while (inlineIndex < images.length) {
-    params.entries.push({
-      image: images[inlineIndex++],
-      imageOrder: "inline",
-      sourceIndex: params.sourceIndex,
-      sequence: params.entries.length,
-    });
+    appendImage("inline");
   }
 }
 

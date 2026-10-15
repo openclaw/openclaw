@@ -1,5 +1,7 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
+import { formatErrorMessageWithCode } from "../infra/errors.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
 import type { createHookRunner } from "../plugins/hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -18,23 +20,33 @@ const loadMainSessionRestartRecoveryMarkingModule = createLazyRuntimeModule(
 );
 
 /** Mark predecessors before channels admit work, independently of plugin registration. */
-export async function markGatewayStartupMainSessionOrphans(params: {
-  cfg: OpenClawConfig;
-  startupCheckedStorePaths: Set<string>;
-  startupTrace?: GatewayStartupTrace;
-  log: { warn: (message: string) => void };
-}): Promise<void> {
+export async function markGatewayStartupMainSessionOrphans(
+  params: {
+    gatewayPluginConfigAtStart: OpenClawConfig;
+    isRestartRecoverySuppressed: () => boolean;
+    scheduler: { signal: AbortSignal };
+    startupTrace?: GatewayStartupTrace;
+    log: { warn: (message: string) => void };
+  },
+  startupCheckedStorePaths: Set<string>,
+): Promise<void> {
   await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
     try {
+      if (params.scheduler.signal.aborted || params.isRestartRecoverySuppressed()) {
+        return;
+      }
       const { markStartupOrphanedMainSessionsForRecovery } = await measureStartup(
         params.startupTrace,
         "sidecars.main-session-recovery-load",
         loadMainSessionRestartRecoveryMarkingModule,
       );
+      if (params.scheduler.signal.aborted || params.isRestartRecoverySuppressed()) {
+        return;
+      }
       await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
         markStartupOrphanedMainSessionsForRecovery({
-          cfg: params.cfg,
-          startupCheckedStorePaths: params.startupCheckedStorePaths,
+          cfg: params.gatewayPluginConfigAtStart,
+          startupCheckedStorePaths,
         }),
       );
     } catch (err) {
@@ -79,38 +91,52 @@ export async function runGatewayStartupObservers(params: {
   if (params.signal.aborted || params.isClosing?.()) {
     return;
   }
-  try {
-    await runWithGatewayIndependentRootWorkAdmission(
-      async () => {
-        await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
-          // Restored wakes start their admission budget at dispatch. Join reader startup
-          // first, including maintenance that shares compute with foreground admission.
-          const { prewarmGatewaySessionHistory } = await import("./server-history-prewarm.js");
-          await prewarmGatewaySessionHistory(params.config, {
-            includeMaintenance: true,
-            isCancelled: () => params.signal.aborted || params.isClosing?.() === true,
-          });
-          const activateSubagentRegistry = await params.loadSubagentRegistryActivation();
-          if (!params.signal.aborted && params.isClosing?.() !== true) {
-            await activateSubagentRegistry(params.resolveGatewayContext);
-          }
-        });
-      },
-      "startup:subagent-recovery",
-      params.signal,
-    );
-  } catch (err) {
-    if (!params.signal.aborted && !params.isClosing?.()) {
-      params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);
-    }
-  }
-  if (params.signal.aborted || params.isClosing?.()) {
-    return;
-  }
   await nextTurn();
   if (params.signal.aborted || params.isClosing?.()) {
     return;
   }
+  const recovery = runWithGatewayIndependentRootWorkAdmission(
+    async () => {
+      const context = params.resolveGatewayContext();
+      if (context && !params.signal.aborted && !params.isClosing?.()) {
+        const { resumeAgentDeletions } = await import("./server-agent-deletion-recovery.js");
+        await resumeAgentDeletions(context, params.signal);
+      }
+      await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
+        // Restored wakes start their admission budget at dispatch. Join reader startup
+        // first, including maintenance that shares compute with foreground admission.
+        const { prewarmGatewaySessionHistory } = await import("./server-history-prewarm.js");
+        await prewarmGatewaySessionHistory(params.config, {
+          includeMaintenance: true,
+          isCancelled: () => params.signal.aborted || params.isClosing?.() === true,
+        });
+        // A crash can leave agent databases under background integrity admission.
+        // Discover saved deliveries only after the existing reader startup joins it.
+        if (context && !params.signal.aborted && !params.isClosing?.()) {
+          try {
+            const { recoverSessionSendDeliveries } = await import("./session-send-recovery.js");
+            await recoverSessionSendDeliveries(context, params.signal);
+          } catch (error) {
+            if (!params.signal.aborted) {
+              params.log.warn(
+                `Session delivery restart recovery could not complete; saved inputs remain available: ${formatErrorMessageForDisplay(error, formatErrorMessageWithCode(error))}`,
+              );
+            }
+          }
+        }
+        const activateSubagentRegistry = await params.loadSubagentRegistryActivation();
+        if (!params.signal.aborted && params.isClosing?.() !== true) {
+          await activateSubagentRegistry(params.resolveGatewayContext);
+        }
+      });
+    },
+    "startup:subagent-recovery",
+    params.signal,
+  ).catch((err: unknown) => {
+    if (!params.signal.aborted && !params.isClosing?.()) {
+      params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);
+    }
+  });
   const sentinelRefresh = runWithGatewayIndependentRootWorkAdmission(
     async () => {
       await measureStartup(params.startupTrace, "post-attach.update-sentinel", async () => {
@@ -158,7 +184,7 @@ export async function runGatewayStartupObservers(params: {
       params.log.warn(`gateway_start hook failed: ${String(err)}`);
     });
   } finally {
-    // Refresh and hooks run concurrently; failed hook loading still owns the refresh.
-    await sentinelRefresh;
+    // Independent observers overlap, but shutdown joins all accepted startup work.
+    await Promise.all([sentinelRefresh, recovery]);
   }
 }

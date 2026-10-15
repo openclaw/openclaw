@@ -1,14 +1,14 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { deleteSubagentSessionForCleanup } from "../agents/subagents/registry/subagent-session-cleanup.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { callGateway } from "./call.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -22,12 +22,14 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
     let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
     let agentDispatch: typeof import("./agent-turn/agent-run-dispatch.js");
     let acquisition: Promise<GatewayServerHarness> | undefined;
-    let restartMarkers: ReturnType<typeof vi.fn>;
+    let restartMarkers: MockInstance<typeof markRestartAbortedMainSessions>;
+    let markRestartAbortedMainSessions: (typeof import("../agents/main-session-recovery/main-session-restart-recovery.js"))["markRestartAbortedMainSessions"];
     installGatewayTestHooks({
       scope: "suite",
       setup: async () => {
         const recoveryModule =
           await import("../agents/main-session-recovery/main-session-restart-recovery.js");
+        markRestartAbortedMainSessions = recoveryModule.markRestartAbortedMainSessions;
         restartMarkers = vi.spyOn(recoveryModule, "markRestartAbortedMainSessions");
         const kernelModule = await import("./server-kernel.js");
         const createKernel = kernelModule.createGatewayKernel;
@@ -41,6 +43,12 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
           acquisition = startGatewayServerHarness();
           harness = await acquisition;
           agentDispatch = await import("./agent-turn/agent-run-dispatch.js");
+          const [{ coreGatewayHandlers }, { prepareGatewayRequestHandler }] = await Promise.all([
+            import("./server-methods/core-handlers.js"),
+            import("./server-methods/lazy-core-handlers.js"),
+          ]);
+          // Lazy module transformation belongs to fixture setup, outside the RPC deadline.
+          await prepareGatewayRequestHandler(coreGatewayHandlers["sessions.create"]!);
         } finally {
           capture.mockRestore();
         }
@@ -101,6 +109,12 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
       let dispatchStarted = false;
       let runSignal: AbortSignal | undefined;
       let abortedAtDrain: boolean | undefined;
+      let abortedAtRecoveryMark: boolean | undefined;
+      let receivedWorkAbortedAtRecoveryMark: boolean | undefined;
+      let abortedAfterRecoveryMark: boolean | undefined;
+      let runtimeAvailableAtRecoveryMark: boolean | undefined;
+      let entryFencedAtRecoveryMark: boolean | undefined;
+      let recoveryMarked = false;
       let emergencyReleaseUsed = false;
       let closing: Promise<void> | undefined;
       let request: Promise<unknown> | undefined;
@@ -139,7 +153,9 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
                 await deleteSubagentSessionForCleanup(cleanupParams),
               );
               order.push(
-                loadSessionEntry(childSessionKey).entry ? "child retained" : "child deleted",
+                (await loadSessionEntryAsync(childSessionKey)).entry
+                  ? "child retained"
+                  : "child deleted",
               );
               const result = await params.onSettled?.(outcome);
               order.push("finalizer settled");
@@ -210,18 +226,46 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
 
         if (mode === "graceful") {
           // This is the same owner inventory the CLI waits on before ordinary server.close().
-          grace = waitForGatewayActiveWork(5_000, {
-            onSnapshot: (snapshot) => {
-              if (!snapshot.idle) {
-                graceObserved.resolve();
-              }
-            },
+          // Keep real polling and cleanup, but decouple the grace budget from runner speed.
+          vi.useFakeTimers({ toFake: ["Date"] });
+          try {
+            grace = waitForGatewayActiveWork(5_000, {
+              onSnapshot: (snapshot) => {
+                if (!snapshot.idle) {
+                  graceObserved.resolve();
+                }
+              },
+            });
+            await withinTest(graceObserved.promise, signal);
+            expect(runSignal?.aborted).toBe(false);
+            release();
+            await withinTest(terminalObserved.promise, signal);
+            expect(await withinTest(grace, signal)).toMatchObject({ drained: true });
+          } finally {
+            vi.useRealTimers();
+          }
+        }
+        if (mode === "restart") {
+          restartMarkers.mockImplementationOnce(async (params) => {
+            abortedAtRecoveryMark = runSignal?.aborted;
+            receivedWorkAbortedAtRecoveryMark = kernel.connectionWork.signal.aborted;
+            runtimeAvailableAtRecoveryMark = kernel.gatewayInstanceRuntime.isAvailable();
+            entryFencedAtRecoveryMark = await kernel.gatewayInstanceRuntime.recovery
+              .dispatchAgent({
+                message: "must not enter during shutdown",
+                sessionKey: "main",
+                idempotencyKey: `${runId}-late`,
+              })
+              .then(
+                () => false,
+                (error: unknown) => String(error).includes("Gateway request entry is closed"),
+              );
+            const result = await markRestartAbortedMainSessions(params);
+            const { entry } = await loadSessionEntryAsync("main");
+            recoveryMarked = Boolean(entry?.mainRestartRecovery?.cycleId);
+            abortedAfterRecoveryMark = runSignal?.aborted;
+            return result;
           });
-          await graceObserved.promise;
-          expect(runSignal?.aborted).toBe(false);
-          release();
-          await terminalObserved.promise;
-          expect(await grace).toMatchObject({ drained: true });
         }
         closing = harness.server.close({
           reason: mode === "restart" ? "gateway restart" : "gateway stopping",
@@ -248,6 +292,15 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
         expect(foreign.controller.signal.aborted).toBe(false);
         if (mode === "restart") {
           expect(restartMarkers).toHaveBeenCalledOnce();
+          // The actual server.close entry point must preserve received execution
+          // and its admission until the durable restart marker has committed.
+          expect(receivedWorkAbortedAtRecoveryMark).toBe(false);
+          expect(abortedAtRecoveryMark).toBe(false);
+          expect(abortedAfterRecoveryMark).toBe(false);
+          expect(runtimeAvailableAtRecoveryMark).toBe(true);
+          expect(entryFencedAtRecoveryMark).toBe(true);
+          expect(recoveryMarked).toBe(true);
+          expect(kernel.gatewayInstanceRuntime.isAvailable()).toBe(false);
         } else {
           expect(restartMarkers).not.toHaveBeenCalled();
         }

@@ -69,6 +69,47 @@ it("reads recovery health from the admitted snapshot without overwriting a forei
   ).toBe("foreign commit");
 });
 
+it("compares every raw health field and absence before applying an observed patch", async () => {
+  const { deps, configPath } = fixture();
+  await closeOpenClawStateDatabaseAsync();
+  using writer = new DatabaseSync(resolveOpenClawStateSqlitePath(deps.env));
+  const row = () =>
+    writer.prepare("SELECT * FROM config_health_entries WHERE config_path = ?").get(configPath);
+  for (const [column, value] of [
+    ["last_known_good_json", '{ "hash": "foreign" }'],
+    ["last_promoted_good_json", '{"hash":"promoted"}'],
+    ["last_observed_suspicious_signature", null],
+    ["updated_at_ms", 123],
+  ] as const) {
+    using observation = captureConfigHealthStateStore(deps, configPath);
+    const before = await observation.read();
+    if (!before) {
+      throw new Error("Expected a current observation");
+    }
+    writer
+      .prepare(`UPDATE config_health_entries SET ${column} = ? WHERE config_path = ?`)
+      .run(value, configPath);
+    const foreign = row();
+    await observation.update({ lastObservedSuspiciousSignature: "stale" }, before);
+    expect(row()).toEqual(foreign);
+  }
+
+  writer.prepare("DELETE FROM config_health_entries WHERE config_path = ?").run(configPath);
+  using observation = captureConfigHealthStateStore(deps, configPath);
+  const absent = await observation.read();
+  if (!absent) {
+    throw new Error("Expected a current absence observation");
+  }
+  writer
+    .prepare(
+      "INSERT INTO config_health_entries(config_path, last_observed_suspicious_signature, updated_at_ms) VALUES (?, ?, ?)",
+    )
+    .run(configPath, "concurrently created", 456);
+  const foreign = row();
+  await observation.update({ lastObservedSuspiciousSignature: "stale creation" }, absent);
+  expect(row()).toEqual(foreign);
+});
+
 it.each([false, true])(
   "publishes nested health invalidation only on outer commit (rollback: %s)",
   async (rollback) => {

@@ -1,6 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
-import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -11,21 +9,12 @@ import {
   type RestartSentinel,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
-
-export type UpdateFailureReportReceipt = {
-  artifactSweep?: "pending";
-  cleanup?: "pending";
-  fallbackUrl?: string;
-  preparingSinceMs?: number;
-  previewDigest?: string;
-  replacementReady?: true;
-  reservationId: string;
-  status: "preparing" | "prepared" | "pending" | "retryable" | "created" | "fallback";
-  sweepGeneration?: string;
-  sweepOwnerId?: string;
-  sweepSinceMs?: number;
-  url?: string;
-};
+import type { EngineConnection } from "./sql-connection.js";
+import {
+  isValidTerminalReceipt,
+  parseUpdateFailureReportReceipt,
+  type UpdateFailureReportReceipt,
+} from "./update-failure-report-receipt.js";
 
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
 
@@ -33,63 +22,10 @@ const RECEIPT_KEY_PREFIX = "update-failure-report:";
 const PREPARING_RECEIPT_STALE_AFTER_MS = 2 * 60_000;
 const ARTIFACT_SWEEP_STALE_AFTER_MS = 2 * 60_000;
 
-function isCanonicalGithubUrl(
-  value: unknown,
-  pathname: RegExp,
-  allowSearch: boolean,
-): value is string {
-  if (typeof value !== "string") {
-    return false;
-  }
-  try {
-    const parsed = new URL(value);
-    return (
-      parsed.origin === "https://github.com" &&
-      !parsed.username &&
-      !parsed.password &&
-      !parsed.hash &&
-      (allowSearch || !parsed.search) &&
-      pathname.test(parsed.pathname)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function isPreviewDigest(value: unknown): value is string {
-  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
-}
-
 function retainedArtifactSweep(
   receipt: UpdateFailureReportReceipt,
 ): Pick<UpdateFailureReportReceipt, "artifactSweep"> {
   return receipt.artifactSweep ? { artifactSweep: receipt.artifactSweep } : {};
-}
-
-function isValidTerminalReceipt(receipt: UpdateFailureReportReceipt): boolean {
-  if (!isPreviewDigest(receipt.previewDigest) || receipt.preparingSinceMs !== undefined) {
-    return false;
-  }
-  if (receipt.status === "created") {
-    return (
-      receipt.cleanup === "pending" &&
-      receipt.fallbackUrl === undefined &&
-      isCanonicalGithubUrl(receipt.url, /^\/openclaw\/openclaw\/issues\/\d+$/u, false)
-    );
-  }
-  if (receipt.status === "fallback") {
-    return (
-      receipt.cleanup === undefined &&
-      receipt.url === undefined &&
-      isCanonicalGithubUrl(receipt.fallbackUrl, /^\/openclaw\/openclaw\/issues\/new$/u, true)
-    );
-  }
-  return (
-    receipt.status === "retryable" &&
-    receipt.cleanup === undefined &&
-    receipt.url === undefined &&
-    receipt.fallbackUrl === undefined
-  );
 }
 
 function receiptKey(attemptId: string): string {
@@ -106,65 +42,12 @@ function parseReceipt(sentinel: RestartSentinel | null): UpdateFailureReportRece
     return null;
   }
   const value = safeParseJson(sentinel.payload.message);
-  if (
-    !isPlainRecord(value) ||
-    (value.status !== "preparing" &&
-      value.status !== "prepared" &&
-      value.status !== "pending" &&
-      value.status !== "retryable" &&
-      value.status !== "created" &&
-      value.status !== "fallback") ||
-    typeof value.reservationId !== "string" ||
-    ((value.status === "preparing" || value.status === "prepared") &&
-      (typeof value.preparingSinceMs !== "number" || !Number.isFinite(value.preparingSinceMs))) ||
-    (value.artifactSweep !== undefined && value.artifactSweep !== "pending") ||
-    (value.cleanup !== undefined && value.cleanup !== "pending") ||
-    (value.previewDigest !== undefined && !isPreviewDigest(value.previewDigest)) ||
-    (value.replacementReady !== undefined && value.replacementReady !== true) ||
-    (value.replacementReady === true &&
-      (value.status !== "retryable" ||
-        value.cleanup !== undefined ||
-        value.artifactSweep !== "pending")) ||
-    (value.sweepOwnerId === undefined) !== (value.sweepSinceMs === undefined) ||
-    (value.sweepOwnerId === undefined) !== (value.sweepGeneration === undefined) ||
-    (value.sweepGeneration !== undefined && typeof value.sweepGeneration !== "string") ||
-    (value.sweepOwnerId !== undefined && typeof value.sweepOwnerId !== "string") ||
-    (value.sweepSinceMs !== undefined &&
-      (typeof value.sweepSinceMs !== "number" || !Number.isFinite(value.sweepSinceMs))) ||
-    (value.sweepOwnerId !== undefined && value.artifactSweep !== "pending") ||
-    (value.status === "created" &&
-      !isCanonicalGithubUrl(value.url, /^\/openclaw\/openclaw\/issues\/\d+$/u, false)) ||
-    (value.status === "fallback" &&
-      !isCanonicalGithubUrl(value.fallbackUrl, /^\/openclaw\/openclaw\/issues\/new$/u, true)) ||
-    (value.cleanup !== undefined && value.status !== "created" && value.status !== "retryable") ||
-    (value.status !== "created" && value.url !== undefined) ||
-    (value.status !== "fallback" && value.fallbackUrl !== undefined)
-  ) {
-    return null;
-  }
-  return {
-    ...(value.artifactSweep === "pending" ? { artifactSweep: value.artifactSweep } : {}),
-    reservationId: value.reservationId,
-    status: value.status,
-    ...(value.cleanup === "pending" ? { cleanup: value.cleanup } : {}),
-    ...(typeof value.preparingSinceMs === "number"
-      ? { preparingSinceMs: value.preparingSinceMs }
-      : {}),
-    ...(typeof value.previewDigest === "string" ? { previewDigest: value.previewDigest } : {}),
-    ...(value.replacementReady === true ? { replacementReady: value.replacementReady } : {}),
-    ...(typeof value.sweepGeneration === "string"
-      ? { sweepGeneration: value.sweepGeneration }
-      : {}),
-    ...(typeof value.sweepOwnerId === "string" ? { sweepOwnerId: value.sweepOwnerId } : {}),
-    ...(typeof value.sweepSinceMs === "number" ? { sweepSinceMs: value.sweepSinceMs } : {}),
-    ...(typeof value.url === "string" ? { url: value.url } : {}),
-    ...(typeof value.fallbackUrl === "string" ? { fallbackUrl: value.fallbackUrl } : {}),
-  };
+  return parseUpdateFailureReportReceipt(value);
 }
 
 /** Reads one existing report receipt without creating state. */
 export function readUpdateFailureReportReceiptRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
   attemptId: string,
 ): UpdateFailureReportReceipt | null {
   const current = readRestartSentinelRowForKeySync(db, receiptKey(attemptId));
@@ -182,7 +65,7 @@ function buildReceiptPayload(receipt: UpdateFailureReportReceipt): RestartSentin
 }
 
 function replaceReceiptAtRevision(
-  db: DatabaseSync,
+  db: EngineConnection,
   sentinelKey: string,
   revision: number,
   receipt: UpdateFailureReportReceipt,
@@ -205,7 +88,7 @@ function replaceReceiptAtRevision(
 }
 
 function mutateReceipt(
-  db: DatabaseSync,
+  db: EngineConnection,
   attemptId: string,
   update: (receipt: UpdateFailureReportReceipt) => UpdateFailureReportReceipt | false,
 ): boolean {
@@ -221,7 +104,7 @@ function mutateReceipt(
 
 /** Atomically owns one report attempt in the canonical state database. */
 export function reserveUpdateFailureReportReceiptRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
   attemptId: string,
   reservationId: string,
   previewDigest: string,
@@ -271,7 +154,7 @@ export function reserveUpdateFailureReportReceiptRowSync(
 
 /** CAS-refreshes one owned, definitely-unstarted phase before fallback publication. */
 export function refreshUpdateFailureReportReceiptPreparationRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
   attemptId: string,
   reservationId: string,
 ): boolean {
@@ -293,60 +176,42 @@ export function refreshUpdateFailureReportReceiptPreparationRowSync(
   });
 }
 
-/** Fences final artifact publication behind one process-owned preparation. */
-export function markUpdateFailureReportReceiptPreparedRowSync(
-  db: DatabaseSync,
-  attemptId: string,
-  reservationId: string,
-  previewDigest: string,
-): boolean {
-  return mutateReceipt(db, attemptId, (currentReceipt) => {
-    if (
-      currentReceipt.status !== "preparing" ||
-      currentReceipt.sweepOwnerId !== undefined ||
-      currentReceipt.reservationId !== reservationId ||
-      currentReceipt.previewDigest !== previewDigest
-    ) {
-      return false;
-    }
-    return {
-      preparingSinceMs: Date.now(),
-      previewDigest,
-      ...retainedArtifactSweep(currentReceipt),
-      reservationId,
-      status: "prepared",
-    };
-  });
+function preparationTransition(status: "prepared" | "pending") {
+  const priorStatus = status === "prepared" ? "preparing" : "prepared";
+  return (
+    db: EngineConnection,
+    attemptId: string,
+    reservationId: string,
+    previewDigest: string,
+  ): boolean =>
+    mutateReceipt(db, attemptId, (currentReceipt) => {
+      if (
+        currentReceipt.status !== priorStatus ||
+        currentReceipt.sweepOwnerId !== undefined ||
+        currentReceipt.reservationId !== reservationId ||
+        currentReceipt.previewDigest !== previewDigest
+      ) {
+        return false;
+      }
+      return {
+        ...(status === "prepared" ? { preparingSinceMs: Date.now() } : {}),
+        previewDigest,
+        ...retainedArtifactSweep(currentReceipt),
+        reservationId,
+        status,
+      };
+    });
 }
 
+/** Fences final artifact publication behind one process-owned preparation. */
+export const markUpdateFailureReportReceiptPreparedRowSync = preparationTransition("prepared");
+
 /** Makes one published preparation ambiguity-safe immediately before issue creation starts. */
-export function markUpdateFailureReportReceiptPendingRowSync(
-  db: DatabaseSync,
-  attemptId: string,
-  reservationId: string,
-  previewDigest: string,
-): boolean {
-  return mutateReceipt(db, attemptId, (currentReceipt) => {
-    if (
-      currentReceipt.status !== "prepared" ||
-      currentReceipt.sweepOwnerId !== undefined ||
-      currentReceipt.reservationId !== reservationId ||
-      currentReceipt.previewDigest !== previewDigest
-    ) {
-      return false;
-    }
-    return {
-      ...(currentReceipt.previewDigest ? { previewDigest: currentReceipt.previewDigest } : {}),
-      ...retainedArtifactSweep(currentReceipt),
-      reservationId,
-      status: "pending",
-    };
-  });
-}
+export const markUpdateFailureReportReceiptPendingRowSync = preparationTransition("pending");
 
 /** Finalizes only a process-owned reservation in the required prior phase. */
 export function finalizeUpdateFailureReportReceiptRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
   attemptId: string,
   receipt: UpdateFailureReportReceipt,
 ): boolean {
@@ -375,7 +240,7 @@ export function finalizeUpdateFailureReportReceiptRowSync(
 
 /** Records post-commit cleanup intent without performing filesystem work in SQLite. */
 export function beginUpdateFailureReportReceiptCleanupRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
   attemptId: string,
   reservationId: string,
 ): boolean {
@@ -402,7 +267,7 @@ export function beginUpdateFailureReportReceiptCleanupRowSync(
 
 /** Atomically transfers an expired preparation into durable cleanup custody. */
 export function beginStaleUpdateFailureReportReceiptCleanupRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
   attemptId: string,
   reservationId: string,
 ): boolean {
@@ -430,7 +295,7 @@ export function beginStaleUpdateFailureReportReceiptCleanupRowSync(
 
 /** Serializes one attempt-wide retired-artifact sweep against successor publication. */
 export function claimUpdateFailureReportArtifactSweepRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
   attemptId: string,
   expectedReservationId: string,
   sweepOwnerId: string,
@@ -456,26 +321,9 @@ export function claimUpdateFailureReportArtifactSweepRowSync(
   });
 }
 
-/** Checks the exact sweep generation without renewing or otherwise mutating it. */
-export function hasUpdateFailureReportArtifactSweepLeaseRowSync(
-  db: DatabaseSync,
-  attemptId: string,
-  expectedReservationId: string,
-  sweepOwnerId: string,
-  sweepGeneration: string,
-): boolean {
-  const currentReceipt = readUpdateFailureReportReceiptRowSync(db, attemptId);
-  return (
-    currentReceipt?.artifactSweep === "pending" &&
-    currentReceipt.reservationId === expectedReservationId &&
-    currentReceipt.sweepOwnerId === sweepOwnerId &&
-    currentReceipt.sweepGeneration === sweepGeneration
-  );
-}
-
 /** Releases only the exact attempt-wide artifact sweep lease held by this worker. */
 export function releaseUpdateFailureReportArtifactSweepRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
   attemptId: string,
   expectedReservationId: string,
   sweepOwnerId: string,
@@ -501,7 +349,7 @@ export function releaseUpdateFailureReportArtifactSweepRowSync(
 
 /** Completes one idempotent artifact cleanup after the cleanup intent has committed. */
 export function completeUpdateFailureReportReceiptCleanupRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
   attemptId: string,
   reservationId: string,
 ): boolean {

@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as configMachineState from "../state/config-machine-state-write.js";
-import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -14,6 +13,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeSharedStateCommand } from "../state/openclaw-state-worker-runtime.js";
+import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   buildTuiLastSessionScopeKey,
@@ -40,6 +40,32 @@ afterEach(async () => {
 });
 
 describe("tui last session state", () => {
+  it("the worker confines a credential-shaped scope to the TUI namespace", async () => {
+    const stateDir = await makeTempStateDir();
+    const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+    const database = openOpenClawStateDatabase(options);
+    const context = captureOpenClawStateWorkerContext(options);
+    const open = () => database;
+    const unused = () => {
+      throw new Error("Unexpected writer route");
+    };
+    runWithSqliteWorkerStateContext(context, () =>
+      executeSharedStateCommand(
+        {
+          type: "tui.lastSession.write",
+          input: { scopeKey: "authProfiles.store", sessionKey: "agent:main:scoped" },
+        },
+        { databasePath: database.path },
+        open,
+        unused,
+        unused,
+      ),
+    );
+    expect(readConfigMachineStateWithMetadata("authProfiles.store", options)).toBeUndefined();
+    expect(
+      readConfigMachineStateWithMetadata("tui.lastSession.authProfiles.store", options)?.value,
+    ).toBe("agent:main:scoped");
+  });
   it("reads and clears remembered sessions without creating state on a fresh install", async () => {
     const stateDir = await makeTempStateDir();
 
@@ -233,6 +259,7 @@ describe("tui last session state", () => {
         executeSharedStateCommand(
           { type: "tui.lastSession.clear", input: { retiredSessionKeys: ["agent:main:retired"] } },
           { databasePath: context.admission.databasePath },
+          open,
           open,
           open,
         ),

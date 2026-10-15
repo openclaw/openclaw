@@ -4,7 +4,10 @@ import type {
   SessionsProcessesStopResult,
 } from "../../packages/gateway-protocol/src/schema/session-processes.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { boundedWorkerErrorWithCode } from "../gateway/worker-environments/worker-error.js";
+import {
+  boundedWorkerError,
+  boundedWorkerErrorWithCode,
+} from "../gateway/worker-environments/worker-error.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
@@ -20,6 +23,7 @@ import {
   NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
+import { logWarn } from "../logger.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE,
   NodeWorkerBundleInstallError,
@@ -66,6 +70,7 @@ import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
 
 const WORKSPACE_TRANSFER_DIAGNOSTIC_MAX_CHARS = 1_024;
+const WORKSPACE_DIAGNOSTIC_MAX_CHARS = 500;
 
 type NodeWorkerSupervisorCommandPayload =
   | SessionsProcessesListResult
@@ -253,8 +258,17 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   if (!invoke) {
     return { handled: false as const };
   }
+  const workspaceCommand =
+    params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND ||
+    params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND ||
+    params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND;
   try {
     const payload = await invoke();
+    if (payload === undefined && workspaceCommand) {
+      logWarn(
+        `node workspace command failed (${params.command}, UNAVAILABLE): node worker runtime unavailable`,
+      );
+    }
     return payload === undefined
       ? {
           handled: true as const,
@@ -268,23 +282,27 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     const bundleInstallFailure = error instanceof NodeWorkerBundleInstallError;
     const capacityFailure = error instanceof NodeWorkerCapacityExhaustedError;
     const transferFailure = error instanceof NodeWorkerWorkspaceTransferError;
-    return {
-      handled: true as const,
-      ok: false as const,
-      code: invalid
-        ? ("INVALID_REQUEST" as const)
-        : bundleInstallFailure
-          ? NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE
-          : capacityFailure
-            ? NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
-            : transferFailure
-              ? NODE_WORKSPACE_TRANSFER_ERROR_CODE
-              : ("UNAVAILABLE" as const),
-      message: transferFailure
-        ? workspaceTransferDiagnostic(error)
+    const code = invalid
+      ? ("INVALID_REQUEST" as const)
+      : bundleInstallFailure
+        ? NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE
+        : capacityFailure
+          ? NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
+          : transferFailure
+            ? NODE_WORKSPACE_TRANSFER_ERROR_CODE
+            : ("UNAVAILABLE" as const);
+    const message = transferFailure
+      ? workspaceTransferDiagnostic(error)
+      : workspaceCommand
+        ? boundedWorkerErrorWithCode(error, WORKSPACE_DIAGNOSTIC_MAX_CHARS)
         : invalid || bundleInstallFailure || capacityFailure
           ? error.message
-          : "node worker supervisor command failed",
-    };
+          : "node worker supervisor command failed";
+    if (workspaceCommand) {
+      logWarn(
+        `node workspace command failed (${params.command}, ${code}): ${boundedWorkerError(message, WORKSPACE_DIAGNOSTIC_MAX_CHARS)}`,
+      );
+    }
+    return { handled: true as const, ok: false as const, code, message };
   }
 }

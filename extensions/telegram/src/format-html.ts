@@ -15,6 +15,14 @@ export function escapeTelegramHtmlAttr(text: string): string {
 const TELEGRAM_HTML_ENTITY_PATTERN = /&(#(?:[xX][0-9A-Fa-f]+|\d+)|[A-Za-z0-9]+);/g;
 const TELEGRAM_HTML_ENTITY_AT = new RegExp(TELEGRAM_HTML_ENTITY_PATTERN.source, "y");
 
+const TELEGRAM_NAMED_HTML_ENTITIES = new Map([
+  ["amp", "&"],
+  ["lt", "<"],
+  ["gt", ">"],
+  ["quot", '"'],
+  ["apos", "'"],
+]);
+
 // Structural tags force line boundaries when projecting HTML to plain text (transcript protection).
 const TELEGRAM_LINE_BREAK_STRUCTURAL_TAGS = new Set([
   "aside",
@@ -62,38 +70,19 @@ export function isTelegramRichLineBreakStructuralTag(rawTag: string, tagName: st
   );
 }
 
-function isValidTelegramHtmlEntityCodePoint(codePoint: number): boolean {
-  return (
-    Number.isInteger(codePoint) &&
-    codePoint >= 0 &&
-    codePoint <= 0x10ffff &&
-    !(codePoint >= 0xd800 && codePoint <= 0xdfff)
-  );
-}
-
 function decodeTelegramHtmlEntity(entity: string, fallback: string): string {
   if (entity.startsWith("#")) {
     const hex = entity[1] === "x" || entity[1] === "X";
     const radix = hex ? 16 : 10;
     const codePoint = Number.parseInt(entity.slice(hex ? 2 : 1), radix);
-    return isValidTelegramHtmlEntityCodePoint(codePoint)
-      ? String.fromCodePoint(codePoint)
-      : fallback;
+    const valid =
+      Number.isInteger(codePoint) &&
+      codePoint >= 0 &&
+      codePoint <= 0x10ffff &&
+      !(codePoint >= 0xd800 && codePoint <= 0xdfff);
+    return valid ? String.fromCodePoint(codePoint) : fallback;
   }
-  switch (entity) {
-    case "amp":
-      return "&";
-    case "lt":
-      return "<";
-    case "gt":
-      return ">";
-    case "quot":
-      return '"';
-    case "apos":
-      return "'";
-    default:
-      return fallback;
-  }
+  return TELEGRAM_NAMED_HTML_ENTITIES.get(entity) ?? fallback;
 }
 
 export function decodeTelegramHtmlEntities(text: string): string {

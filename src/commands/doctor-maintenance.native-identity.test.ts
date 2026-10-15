@@ -19,7 +19,8 @@ const native = vi.hoisted(() => ({
   open: vi.fn<typeof import("../daemon/systemd-peer-native.js").openSystemdBroker>(),
 }));
 // The manager identity fixture runs Doctor outside its synthetic Gateway's service.
-vi.mock("../daemon/service-process-membership.js", () => ({
+vi.mock("../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: () => "outside",
 }));
 vi.mock("../gateway/call.js", async (original) => {
@@ -58,7 +59,6 @@ const unitName = "openclaw-gateway.service";
 const unitFile = `/etc/systemd/system/${unitName}`;
 const unitObject = "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice";
 type Scenario =
-  | "unchanged"
   | "account-refused"
   | "account-reassigned-at-activation"
   | "manager-replaced"
@@ -315,23 +315,15 @@ it.each([
   },
 );
 
-it.each([
-  { scenario: "unchanged", action: "RestartUnit" },
-  { scenario: "inspection-failed", action: "StartUnit" },
-] as const)(
-  "Doctor restores and verifies native ownership after $scenario",
-  async ({ scenario, action }) => {
-    const result = await repair(scenario);
-    expect(result.error).toBeUndefined();
-    expect(result.effects).toEqual(["stop", "ResetFailedUnit", action]);
-    expect(result.running).toBe(true);
-    expect(waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
-    expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
-    if (scenario === "inspection-failed") {
-      expect(result.logs.join("\n")).toContain("restoration inspection was inconclusive");
-    }
-  },
-);
+it("Doctor restores and verifies native ownership after inspection fails", async () => {
+  const result = await repair("inspection-failed");
+  expect(result.error).toBeUndefined();
+  expect(result.effects).toEqual(["stop", "ResetFailedUnit", "StartUnit"]);
+  expect(result.running).toBe(true);
+  expect(waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
+  expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
+  expect(result.logs.join("\n")).toContain("restoration inspection was inconclusive");
+});
 
 it("leaves the Gateway running and warns when restoration identity cannot be captured", async () => {
   const result = await repair("capture-unavailable");

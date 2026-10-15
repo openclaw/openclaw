@@ -2,7 +2,6 @@ import type {
   ContentBlockParam,
   MessageCreateParamsStreaming,
   MessageParam,
-  Tool as AnthropicTool,
   ImageBlockParam,
   TextBlockParam,
   ToolResultBlockParam,
@@ -12,7 +11,6 @@ import {
   supportsClaudeInHistorySystemMessages,
   type Context,
   type Model,
-  type Tool,
 } from "@openclaw/llm-core";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost } from "../host.js";
@@ -23,6 +21,7 @@ import {
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
+import { preparedRequestSuffix } from "../provider-options.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
@@ -32,6 +31,7 @@ import {
   requiresClaudeBetweenToolsThinking,
   resolveAnthropicThinkingEffort,
   resolveClaudeSonnet55ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "../providers/anthropic-model-contract.js";
@@ -110,7 +110,6 @@ async function convertContentBlocks(
           (profile === "transport" ? "(no output)" : isError ? "[tool error with no output]" : ""));
   }
   const blocks: Array<TextBlockParam | ImageBlockParam> = [];
-  let hasTextBlock = false;
   for (const block of content) {
     const record = asOptionalObjectRecord(block);
     if (!record) {
@@ -119,7 +118,6 @@ async function convertContentBlocks(
     const blockText = extractToolResultBlockText(block);
     if (blockText) {
       blocks.push({ type: "text", text: blockText });
-      hasTextBlock = true;
     }
     if (!isImageWithMediaPayload(record)) {
       continue;
@@ -151,7 +149,7 @@ async function convertContentBlocks(
       },
     });
   }
-  if (!hasTextBlock) {
+  if (!blocks.some((block) => block.type === "text")) {
     blocks.unshift({ type: "text", text: mediaPlaceholder ?? "(see attached image)" });
   }
   return blocks;
@@ -167,12 +165,18 @@ async function convertAnthropicMessages(
     replayThinkingEnabled?: boolean;
     allowEmptySignature?: boolean;
     profile: "provider" | "transport";
+    context: Context;
     /** Emitted indexes of transient carriers that cannot anchor the cached prefix. */
     cacheBreakpointOptOutMessageIndexes?: Set<number>;
   },
 ): Promise<AnthropicWireMessage[]> {
   const params: AnthropicWireMessage[] = [];
   const appendMessage = (message: AnthropicWireMessage) => {
+    if (message.role === "system" && (!params.length || params.at(-1)?.role === "assistant")) {
+      // Replay can exclude a consult's user anchor. Preserve its updates in place
+      // without moving them into the pinned system prompt or dropping instructions.
+      params.push({ role: "user", content: "." });
+    }
     // Interrupted turns can leave a system update last; retain it before the next user turn.
     if (message.role === "user" && params.at(-1)?.role === "system") {
       params.push({
@@ -352,7 +356,13 @@ async function convertAnthropicMessages(
         }
         toolResults.push({
           type: "tool_result",
-          tool_use_id: nextMsg.toolCallId,
+          tool_use_id: preparedRequestSuffix.has(options.context)
+            ? preparedRequestSuffix.toolCallId(
+                options.context,
+                nextMsg.toolCallId,
+                normalizeAnthropicToolCallId(nextMsg.toolCallId),
+              )
+            : nextMsg.toolCallId,
           content: await convertContentBlocks(
             nextMsg.content,
             model,
@@ -378,14 +388,14 @@ async function convertAnthropicMessages(
 function buildAnthropicGenerationParams({
   model,
   options,
-  tools,
   toolProjection,
+  eagerToolInputStreaming,
   profile,
 }: {
   model: Model<"anthropic-messages">;
   options?: AnthropicOptions;
-  tools?: AnthropicTool[];
   toolProjection?: AnthropicToolProjection;
+  eagerToolInputStreaming: boolean;
   profile: "provider" | "transport";
 }) {
   const params: Pick<
@@ -409,8 +419,13 @@ function buildAnthropicGenerationParams({
     params.stop_sequences = options.stop;
   }
 
-  if (tools && tools.length > 0) {
-    params.tools = tools;
+  if (toolProjection && toolProjection.tools.length > 0) {
+    params.tools = toolProjection.tools.map((tool) => ({
+      name: tool.wireName,
+      description: tool.description,
+      input_schema: tool.inputSchema,
+      ...(eagerToolInputStreaming ? { eager_input_streaming: true } : {}),
+    }));
   }
 
   // Configure thinking mode: always-on adaptive (Fable 5 and Mythos 5),
@@ -454,9 +469,10 @@ function buildAnthropicGenerationParams({
 
   if (options?.toolChoice) {
     const normalizedToolChoice = normalizeAnthropicToolChoice(
-      mandatoryAdaptiveThinking ||
-        options?.thinkingEnabled === true ||
-        resolveClaudeSonnet55ModelIdentity(model) !== undefined,
+      resolveClaudeHaiku55ModelIdentity(model) === undefined &&
+        (mandatoryAdaptiveThinking ||
+          options?.thinkingEnabled === true ||
+          resolveClaudeSonnet55ModelIdentity(model) !== undefined),
       options.toolChoice,
     );
     const projectedToolChoice = toolProjection
@@ -468,33 +484,6 @@ function buildAnthropicGenerationParams({
   }
 
   return params;
-}
-
-function convertAnthropicTools(
-  tools: Tool[],
-  isOAuthTokenLocal: boolean,
-  supportsEagerToolInputStreaming: boolean,
-): {
-  projection: AnthropicToolProjection;
-  tools: AnthropicTool[];
-} {
-  const projection = projectAnthropicTools(tools, (name) =>
-    isOAuthTokenLocal ? toClaudeCodeToolName(name) : name,
-  );
-  return {
-    projection,
-    tools: projection.tools.map((tool) => {
-      const projected: AnthropicTool = {
-        name: tool.wireName,
-        description: tool.description,
-        input_schema: tool.inputSchema,
-      };
-      if (supportsEagerToolInputStreaming) {
-        projected.eager_input_streaming = true;
-      }
-      return projected;
-    }),
-  };
 }
 
 /** Assemble both public Messages routes without changing their replay/default profiles. */
@@ -530,15 +519,16 @@ export async function buildAnthropicRequest(
     cacheControl,
     claudeCodeVersion,
   );
-  const convertedTools = context.tools
-    ? convertAnthropicTools(
-        context.tools,
-        isOAuthToken,
-        !managed &&
-          (model.compat?.supportsEagerToolInputStreaming ?? model.provider !== "fireworks"),
-      )
-    : undefined;
-  const toolProjection = convertedTools?.projection;
+  let toolProjection: AnthropicToolProjection | undefined;
+  let eagerToolInputStreaming = false;
+  if (context.tools) {
+    const tools = context.tools;
+    eagerToolInputStreaming =
+      !managed && (model.compat?.supportsEagerToolInputStreaming ?? model.provider !== "fireworks");
+    toolProjection = projectAnthropicTools(tools, (name) =>
+      isOAuthToken ? toClaudeCodeToolName(name) : name,
+    );
+  }
   const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
     enabled: !isOAuthToken && options?.anthropicServerCompaction === true,
     authProfileId: options?.authProfileId,
@@ -550,11 +540,12 @@ export async function buildAnthropicRequest(
         replayPlan.messages,
         model,
         normalizeAnthropicToolCallId,
-        undefined,
+        { preserveUnframedToolResults: preparedRequestSuffix.has(context) },
       )
     : transformProviderMessages(replayPlan.messages, model, normalizeAnthropicToolCallId);
   const messages = await convertAnthropicMessages(transformed, model, isOAuthToken, {
     profile,
+    context,
     allowReasoningContentReplay:
       managed && resolveProviderEndpoint(model).endpointClass === "xiaomi-native",
     allowEmptySignature: model.compat?.allowEmptySignature,
@@ -585,8 +576,8 @@ export async function buildAnthropicRequest(
     buildAnthropicGenerationParams({
       model,
       options,
-      tools: convertedTools?.tools,
       toolProjection,
+      eagerToolInputStreaming,
       profile,
     }),
   );
@@ -596,7 +587,7 @@ export async function buildAnthropicRequest(
     supportsCacheControlOnTools,
     cacheBreakpointOptOutMessageIndexes,
   );
-  return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
+  return { params, toolProjection, replayedCompaction: replayPlan.compaction };
 }
 
 /** Apply caller payload edits before restoring required request contracts and beta headers. */

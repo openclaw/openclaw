@@ -87,13 +87,13 @@ export async function collectLegacyMemoryHostEventSources(
           continue;
         }
         const claim = claimPattern.exec(entry);
-        if (claim) {
-          candidates.push({ entry, storage: "claim", generation: BigInt(claim[1] ?? "1") });
-          continue;
-        }
-        const archive = archivePattern.exec(entry);
-        if (archive) {
-          candidates.push({ entry, storage: "archive", generation: BigInt(archive[1] ?? "1") });
+        const match = claim ?? archivePattern.exec(entry);
+        if (match) {
+          candidates.push({
+            entry,
+            storage: claim ? "claim" : "archive",
+            generation: BigInt(match[1] ?? "1"),
+          });
         }
       }
       candidates.sort((left, right) => {
@@ -134,14 +134,12 @@ export async function collectLegacyMemoryHostEventSources(
       if (code === "ENOENT" || code === "ENOTDIR" || code === "not-found") {
         continue;
       }
-      if (!seenWorkspaces.has(canonicalWorkspaceDir)) {
-        seenWorkspaces.add(canonicalWorkspaceDir);
-      }
+      seenWorkspaces.add(canonicalWorkspaceDir);
       sources.push({
         kind: "rejected",
         workspaceDir: canonicalWorkspaceDir,
         filePath,
-        reason: `Skipped unsafe Memory Core host event source ${filePath}: ${String(error)}. Check permissions and use regular files and directories inside the workspace, then rerun openclaw doctor --fix. For shared notes, use canonical paths in memory.search.extraPaths; this does not migrate legacy events.`,
+        reason: `Skipped unsafe Memory Core host event source ${filePath}: ${String(error)}. Check permissions and use regular files and directories inside the workspace, then rerun openclaw doctor --fix. For shared notes, use resolved paths in memory.search.extraPaths; this does not migrate legacy events.`,
       });
     }
   }

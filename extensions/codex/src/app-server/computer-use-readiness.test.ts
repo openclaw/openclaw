@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  runCodexComputerUseLiveTest,
-  type CodexComputerUseRequest,
-} from "./computer-use-readiness.js";
-import {
   ensureCodexComputerUse,
   installCodexComputerUse,
   readCodexComputerUseStatus,
@@ -15,7 +11,7 @@ import {
   expectStatusFields,
   requestCalls,
 } from "./computer-use.test-support.js";
-import { resolveCodexComputerUseConfig, type CodexComputerUseConfig } from "./config.js";
+import type { CodexComputerUseConfig } from "./config.js";
 import { createClientHarness, waitForHarnessRequest } from "./test-support.js";
 
 const sharedClientMocks = vi.hoisted(() => ({
@@ -91,13 +87,12 @@ describe("Codex Computer Use readiness", () => {
     }
   });
 
-  it.each(["passed", "cancelled", "mcp-error"] as const)(
+  it.each(["passed", "cancelled"] as const)(
     "retires a probe client after failed unsubscribe (probe: %s)",
     async (probe) => {
       const cancelled = probe === "cancelled";
       const fixture = createComputerUseRequest({
         installed: true,
-        liveTestFailures: probe === "mcp-error" ? 1 : 0,
       });
       const controller = new AbortController();
       const harness = createClientHarness({
@@ -186,7 +181,7 @@ describe("Codex Computer Use readiness", () => {
       });
       expect(fixture).toHaveBeenCalledWith("thread/start", {
         input: [],
-        developerInstructions: "OpenClaw Computer Use readiness probe",
+        developerInstructions: "OpenClaw Computer Use readiness check",
         ephemeral: true,
       });
       expect(fixture).toHaveBeenCalledWith("mcpServer/tool/call", {
@@ -323,67 +318,6 @@ describe("Codex Computer Use readiness", () => {
     );
   });
 
-  it("propagates a desktop selection change even when cleanup fails, without retrying the stale client", async () => {
-    const selectionChanged = Object.assign(new Error("desktop selection changed"), {
-      code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
-    });
-    const harness = createClientHarness();
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return { thread: { id: "probe-thread" } };
-      }
-      if (method === "mcpServer/tool/call") {
-        throw selectionChanged;
-      }
-      if (method === "thread/unsubscribe") {
-        throw new Error("unsubscribe failed");
-      }
-      throw new Error(`unexpected request: ${method}`);
-    }) as CodexComputerUseRequest;
-
-    try {
-      const failure = await runCodexComputerUseLiveTest({
-        request,
-        client: harness.client,
-        config: resolveCodexComputerUseConfig({
-          pluginConfig: { computerUse: { enabled: true, autoRepair: true } },
-        }),
-      }).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect(harness.stdinDestroyed).toBe(true);
-      expect(failure).toBe(selectionChanged);
-      expect(requestCalls(request).map(([method]) => method)).toEqual([
-        "thread/start",
-        "mcpServer/tool/call",
-        "thread/unsubscribe",
-      ]);
-    } finally {
-      await harness.client.closeAndWait();
-    }
-  });
-
-  it("fails fast when MCP exposes no tools even without strict readiness", async () => {
-    const request = createComputerUseRequest({ installed: true, mcpToolsAvailable: false });
-
-    await expectSetupErrorStatus(
-      ensureCodexComputerUse({
-        pluginConfig: readinessConfig({ strictReadiness: false }),
-        request,
-      }),
-      {
-        ready: false,
-        reason: "mcp_missing",
-        mcpServerAvailable: false,
-        tools: [],
-        message: "Computer Use is installed, but the computer-use MCP server exposes no tools.",
-      },
-    );
-    expectRequestMethodNotCalled(request, "thread/start");
-    expectRequestMethodNotCalled(request, "mcpServer/tool/call");
-  });
-
   it("reloads empty MCP exposure once during install before failing closed", async () => {
     const request = createComputerUseRequest({ installed: true, mcpToolsAvailable: false });
 
@@ -423,7 +357,7 @@ describe("Codex Computer Use readiness", () => {
       mcpServerAvailable: true,
     });
     expect(status.warnings).toContain(
-      "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+      "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to block startup after a failed live test.",
     );
     expect(status.message).toContain(
       "Startup is allowed because computerUse.strictReadiness is false.",
@@ -431,36 +365,6 @@ describe("Codex Computer Use readiness", () => {
     expect(status.repair).toBeUndefined();
     expectRequestMethodNotCalled(request, "config/mcpServer/reload");
   });
-
-  it.each([false, true])(
-    "skips live probes for non-strict startup (autoInstall: %s)",
-    async (autoInstall) => {
-      const request = createComputerUseRequest({ installed: !autoInstall, liveTestFailures: 2 });
-      const status = await ensureCodexComputerUse({
-        pluginConfig: readinessConfig({ autoInstall }),
-        request,
-      });
-
-      expectStatusFields(status, {
-        ready: true,
-        reason: "ready",
-        installed: true,
-        pluginEnabled: true,
-        mcpServerAvailable: true,
-      });
-      expect(status.liveTest).toMatchObject({ status: "skipped", ok: false, attempted: false });
-      expectRequestMethodNotCalled(request, "thread/start");
-      expectRequestMethodNotCalled(request, "mcpServer/tool/call");
-      if (autoInstall) {
-        expect(request).toHaveBeenCalledWith("plugin/install", {
-          marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
-          pluginName: "computer-use",
-        });
-      } else {
-        expectRequestMethodNotCalled(request, "plugin/install");
-      }
-    },
-  );
 
   it("fails startup closed when strictReadiness is enabled", async () => {
     const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });

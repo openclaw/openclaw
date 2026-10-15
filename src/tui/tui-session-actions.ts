@@ -1,4 +1,5 @@
 import type { TUI } from "@earendil-works/pi-tui";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
@@ -184,15 +185,20 @@ export function createSessionActions(context: SessionActionContext) {
     }
   };
 
-  const updateAgentFromSessionKey = (key: string) => {
+  const adoptSessionKey = (key: string | undefined) => {
+    if (!key || key === state.currentSessionKey) {
+      return false;
+    }
     const parsed = parseAgentSessionKey(key);
-    if (!parsed) {
-      return;
+    if (parsed) {
+      const agentId = normalizeAgentId(parsed.agentId);
+      if (agentId !== state.currentAgentId) {
+        state.currentAgentId = agentId;
+      }
     }
-    const next = normalizeAgentId(parsed.agentId);
-    if (next !== state.currentAgentId) {
-      state.currentAgentId = next;
-    }
+    state.currentSessionKey = key;
+    updateHeader();
+    return true;
   };
 
   const resolveModelSelection = (entry?: SessionInfoEntry) => {
@@ -324,11 +330,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (entry && (!entry.key || !matchesTuiSessionMetadata(state, entry))) {
         return;
       }
-      if (entry?.key && entry.key !== state.currentSessionKey) {
-        updateAgentFromSessionKey(entry.key);
-        state.currentSessionKey = entry.key;
-        updateHeader();
-      }
+      adoptSessionKey(entry?.key);
       state.currentSessionId = typeof entry?.sessionId === "string" ? entry.sessionId : null;
       applySessionInfo({
         entry,
@@ -353,11 +355,7 @@ export function createSessionActions(context: SessionActionContext) {
     if (!result?.entry || !matchesTuiSessionMetadata(state, result)) {
       return;
     }
-    if (result.key && result.key !== state.currentSessionKey) {
-      updateAgentFromSessionKey(result.key);
-      state.currentSessionKey = result.key;
-      updateHeader();
-    }
+    adoptSessionKey(result.key);
     const resolved = result.resolved;
     const entry = resolved
       ? {
@@ -388,11 +386,7 @@ export function createSessionActions(context: SessionActionContext) {
       type: "sessionReset",
       scope: readTuiSessionProjectionScope(state),
     });
-    if (result.key && result.key !== state.currentSessionKey) {
-      updateAgentFromSessionKey(result.key);
-      state.currentSessionKey = result.key;
-      updateHeader();
-    }
+    adoptSessionKey(result.key);
     const sessionId = result.entry.sessionId;
     state.currentSessionId = typeof sessionId === "string" ? sessionId : null;
     applySessionInfoFromPatch(result);
@@ -445,12 +439,9 @@ export function createSessionActions(context: SessionActionContext) {
       };
       const sessionInfo = record.sessionInfo;
       const historyKey = sessionInfo?.key ?? read.legacyHistoryKey;
-      if (historyKey && historyKey !== state.currentSessionKey) {
-        updateAgentFromSessionKey(historyKey);
-        state.currentSessionKey = historyKey;
+      if (adoptSessionKey(historyKey)) {
         selection.sessionKey = state.currentSessionKey;
         selection.agentId = state.currentAgentId;
-        updateHeader();
       }
       const historySessionInfo =
         sessionInfo && sessionInfo.thinkingLevel === undefined && record.thinkingLevel !== undefined
@@ -641,17 +632,32 @@ export function createSessionActions(context: SessionActionContext) {
       // Session-scoped abort is the only reliable TUI stop contract: queued
       // chat.send calls can terminalize before the queue drains, so their run
       // ids may no longer exist in local UI state.
-      const result = await client.abortChat({
+      const target = {
         sessionKey: selection.sessionKey,
         ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
-      });
+      };
+      const result = await client.abortChat(target);
+      const history = result.aborted
+        ? undefined
+        : await client.loadHistory({ ...target, limit: 1 });
+      const sessionInfo = asOptionalRecord(asOptionalRecord(history)?.sessionInfo);
       if (!isCurrentAbort()) {
         return;
       }
-      if (!result.aborted) {
-        chatLog.addSystem("no active run", { coalesceConsecutive: true });
+      if (!result.aborted && sessionInfo?.hasActiveRun !== false) {
+        chatLog.addSystem("run is still active; waiting for completion", {
+          coalesceConsecutive: true,
+        });
         tui.requestRender();
         return;
+      }
+      const clearIdleRun =
+        !result.aborted &&
+        state.activeChatRunId === activeRunId &&
+        submit.getPendingSubmitAcceptedRunId(state) === pendingRunId &&
+        state.pendingSubmit?.phase !== "sending";
+      if (!result.aborted) {
+        chatLog.addSystem("no active run", { coalesceConsecutive: true });
       }
       for (const runId of result.runIds ?? []) {
         const stillTracked =
@@ -670,7 +676,13 @@ export function createSessionActions(context: SessionActionContext) {
           dropPendingRun(pendingRunId);
         }
       }
-      setActivityStatus("aborted");
+      if (clearIdleRun) {
+        invalidateRunOwnership?.();
+        state.activeChatRunId = null;
+      }
+      if (result.aborted || (!state.activeChatRunId && !submit.hasPendingSubmit(state))) {
+        setActivityStatus(result.aborted ? "aborted" : "idle");
+      }
     } catch (err) {
       if (!isCurrentAbort()) {
         return;

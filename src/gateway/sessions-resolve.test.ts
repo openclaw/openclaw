@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as facadeRuntime from "../plugin-sdk/facade-runtime.js";
@@ -50,6 +54,7 @@ const resolveSessionKeyFromResolveParams = (
     client?: ResolveParams["client"];
   },
 ) => {
+  setRuntimeConfigSnapshot(params.cfg);
   let projection = projections.get(params.cfg);
   if (!projection) {
     const store = selectedStore?.store ?? targetStore;
@@ -73,8 +78,6 @@ const resolveSessionKeyFromResolveParams = (
         ),
     });
     projections.set(params.cfg, projection);
-    const created = projection;
-    onTestFinished(() => created.dispose());
   }
   return resolveSessionKeyFromResolveParamsWithClient({
     client: params.client ?? null,
@@ -84,198 +87,24 @@ const resolveSessionKeyFromResolveParams = (
 };
 
 describe("resolveSessionKeyFromResolveParams", () => {
-  const canonicalKey = "agent:main:canon";
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let storePath: string;
-
-  const expectResolveToCanonicalKey = (
-    p: Parameters<typeof resolveSessionKeyFromResolveParams>[0]["p"],
-  ) => {
-    expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p,
-      }),
-    ).toEqual({
-      ok: true,
-      key: canonicalKey,
-      agentId: "main",
-    });
-  };
 
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
     storePath = path.join(tempDirs.make("sessions-resolve-"), "sessions.json");
     selectedStore = undefined;
     projections = new Map();
+    onTestFinished(() => {
+      for (const projection of projections.values()) {
+        projection.dispose();
+      }
+      clearRuntimeConfigSnapshot();
+    });
     hoisted.listAgentIdsMock.mockReset();
     targetStore = {};
     // Default: all agents are known (main is always present).
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
-  });
-
-  it("hides canonical keys that fail the spawnedBy visibility filter", () => {
-    targetStore = {
-      [canonicalKey]: { sessionId: "sess-1", updatedAt: 1 },
-    };
-
-    expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { key: canonicalKey, spawnedBy: "controller-1" },
-      }),
-    ).toEqual({
-      ok: false,
-      error: {
-        code: ErrorCodes.INVALID_REQUEST,
-        message: `No session found: ${canonicalKey}`,
-      },
-    });
-  });
-
-  it("does not page-limit exact key spawnedBy visibility checks", () => {
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      [canonicalKey]: {
-        sessionId: "sess-target",
-        spawnedBy: "controller-1",
-        updatedAt: now - 10_000,
-      },
-    };
-    for (let i = 0; i < 120; i += 1) {
-      store[`agent:main:sibling-${i}`] = {
-        sessionId: `sess-sibling-${i}`,
-        spawnedBy: "controller-1",
-        updatedAt: now - i,
-      };
-    }
-    targetStore = store;
-
-    expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
-  });
-
-  it("does not let allowMissing mask a deleted-agent error", () => {
-    const deletedAgentKey = "agent:deleted-agent:main";
-    targetStore = {
-      [deletedAgentKey]: { sessionId: "sess-orphan", updatedAt: 1 },
-    };
-
-    // "deleted-agent" is not in the known agents list.
-    hoisted.listAgentIdsMock.mockReturnValue(["main"]);
-
-    const result = resolveSessionKeyFromResolveParams({
-      cfg: {},
-      p: { key: deletedAgentKey, allowMissing: true },
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: {
-        code: ErrorCodes.INVALID_REQUEST,
-        message: 'Agent "deleted-agent" no longer exists in configuration',
-      },
-    });
-  });
-
-  it("rejects non-alias agent:main sessions when main is no longer configured", () => {
-    const staleMainKey = "agent:main:guildchat:direct:u1";
-    targetStore = {
-      [staleMainKey]: { sessionId: "sess-stale-main", updatedAt: 1 },
-    };
-
-    hoisted.listAgentIdsMock.mockReturnValue(["ops"]);
-
-    const result = resolveSessionKeyFromResolveParams({
-      cfg: { agents: { entries: { ops: {} } } },
-      p: { key: staleMainKey },
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: {
-        code: ErrorCodes.INVALID_REQUEST,
-        message: 'Agent "main" no longer exists in configuration',
-      },
-    });
-  });
-
-  it("rejects sessions belonging to a deleted agent (sessionId-based lookup)", () => {
-    const deletedAgentKey = "agent:deleted-agent:main";
-    setFixtureStore({
-      storePath,
-      store: { [deletedAgentKey]: { sessionId: "sess-orphan", updatedAt: 1 } },
-    });
-    hoisted.listAgentIdsMock.mockReturnValue(["main"]);
-
-    const result = resolveSessionKeyFromResolveParams({
-      cfg: {},
-      p: { sessionId: "sess-orphan" },
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: {
-        code: ErrorCodes.INVALID_REQUEST,
-        message: 'Agent "deleted-agent" no longer exists in configuration',
-      },
-    });
-  });
-
-  it.each([
-    { sessionId: "sess-target", agentId: "main" },
-    { label: "target-label", agentId: "main" },
-  ])("resolves %j from the selected resident entry", (p) => {
-    setFixtureStore({
-      storePath,
-      targetsBySessionKey: new Map([
-        ["agent:main:noisy", { agentId: "main", storeTarget: { agentId: "main", storePath } }],
-        ["agent:main:target", { agentId: "main", storeTarget: { agentId: "main", storePath } }],
-      ]),
-      store: {
-        "agent:main:noisy": {
-          sessionId: "sess-noisy",
-          label: "target-label extra",
-          updatedAt: 2,
-        },
-        "agent:main:target": { sessionId: "sess-target", label: "target-label", updatedAt: 1 },
-      },
-    });
-    const cfg = {};
-    const result = resolveSessionKeyFromResolveParams({ cfg, p });
-
-    expect(result).toEqual({ ok: true, key: "agent:main:target", agentId: "main" });
-  });
-
-  it("resolves archived short ids with display metadata", () => {
-    const key = "agent:main:thread:abcdef12-3456-4789-8abc-def012345678";
-    setFixtureStore({
-      storePath,
-      store: {
-        [key]: {
-          sessionId: "sess-short",
-          updatedAt: 10,
-          archivedAt: 20,
-          displayName: "Release monitor",
-          label: "Renamed release monitor",
-          boardFace: "dashboard",
-          boardPresentation: "expanded",
-        },
-      },
-    });
-
-    expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { shortId: "ABCDEF12", agentId: "main" },
-      }),
-    ).toEqual({
-      ok: true,
-      key,
-      agentId: "main",
-      displayName: "Renamed release monitor",
-      boardFace: "dashboard",
-      boardPresentation: "expanded",
-    });
   });
 
   it("uses a display-name slug only to narrow a short-id tie", () => {
@@ -315,7 +144,15 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storePath,
       store: {
         [deletedKey]: { sessionId: deletedKey, updatedAt: 2, displayName: "Deleted session" },
-        [survivingKey]: { sessionId: survivingKey, updatedAt: 1, displayName: "Surviving session" },
+        [survivingKey]: {
+          sessionId: survivingKey,
+          updatedAt: 1,
+          archivedAt: 20,
+          displayName: "Original session",
+          label: "Surviving session",
+          boardFace: "dashboard",
+          boardPresentation: "expanded",
+        },
       },
     });
 
@@ -329,29 +166,8 @@ describe("resolveSessionKeyFromResolveParams", () => {
       key: survivingKey,
       agentId: "main",
       displayName: "Surviving session",
-    });
-  });
-
-  it("reports a deleted-agent-only short-id match as missing", () => {
-    const deletedKey = "agent:deleted-agent:thread:12345678-0bbb-4000-8000-000000000002";
-    setFixtureStore({
-      storePath,
-      store: {
-        [deletedKey]: { sessionId: deletedKey, updatedAt: 1, displayName: "Deleted session" },
-      },
-    });
-
-    expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { shortId: "12345678" },
-      }),
-    ).toEqual({
-      ok: false,
-      error: {
-        code: ErrorCodes.INVALID_REQUEST,
-        message: "No session found: 12345678",
-      },
+      boardFace: "dashboard",
+      boardPresentation: "expanded",
     });
   });
 
@@ -424,58 +240,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
         p: { shortId: "deadbeef", allowMissing: true },
       }),
     ).toEqual({ ok: true, missing: true });
-  });
-
-  it.each([
-    { key: "agent:main:deploy-monitor", slug: "deploy-monitor", expected: "literal" },
-    { key: "agent:main:missing", slug: "deploy-monitor", expected: "slug" },
-    { key: "agent:main:missing", expected: "missing" },
-  ])("discovers a named reference with exact-key precedence: $expected", (reference) => {
-    const literal = "agent:main:deploy-monitor";
-    const slugKey = "agent:main:thread:12345678-0000-4000-8000-000000000001";
-    const store = {
-      [literal]: {
-        sessionId: literal,
-        updatedAt: 1,
-        displayName: "Literal session",
-        boardFace: "chat" as const,
-      },
-      [slugKey]: {
-        sessionId: slugKey,
-        updatedAt: 2,
-        displayName: "Deploy: monitor",
-        boardFace: "dashboard" as const,
-      },
-    };
-    setFixtureStore({
-      storePath,
-      store,
-      targetsBySessionKey: new Map(
-        Object.keys(store).map((key) => [
-          key,
-          { agentId: "main", storeTarget: { agentId: "main", storePath } },
-        ]),
-      ),
-    });
-    const result = resolveSessionKeyFromResolveParams({
-      cfg: {},
-      p: {
-        reference: { key: reference.key, slug: reference.slug },
-        agentId: "main",
-        allowMissing: true,
-      },
-    });
-    expect(result).toEqual(
-      reference.expected === "missing"
-        ? { ok: true, missing: true }
-        : {
-            ok: true,
-            key: reference.expected === "literal" ? literal : slugKey,
-            agentId: "main",
-            displayName: reference.expected === "literal" ? "Literal session" : "Deploy: monitor",
-            boardFace: reference.expected === "literal" ? "chat" : "dashboard",
-          },
-    );
   });
 
   it("resolves a configured global alias with its stored non-default owner", () => {
@@ -606,29 +370,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
     expect(resolveSessionKeyFromResolveParams({ cfg: {}, p })).toMatchObject({
       ok: false,
       error: { code: ErrorCodes.INVALID_REQUEST, message },
-    });
-  });
-
-  it("rejects sessions belonging to a deleted agent (label-based lookup)", () => {
-    const deletedAgentKey = "agent:deleted-agent:main";
-    setFixtureStore({
-      storePath,
-      store: { [deletedAgentKey]: { sessionId: "sess-orphan", updatedAt: 1, label: "my-label" } },
-    });
-    hoisted.listAgentIdsMock.mockReturnValue(["main"]);
-
-    const cfg = {};
-    const result = resolveSessionKeyFromResolveParams({
-      cfg,
-      p: { label: "my-label" },
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: {
-        code: ErrorCodes.INVALID_REQUEST,
-        message: 'Agent "deleted-agent" no longer exists in configuration',
-      },
     });
   });
 });

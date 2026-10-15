@@ -82,31 +82,25 @@ export function evaluateStoredCredentialEligibility(params: {
 
   // SecretRef and literal secret strings are both configured credentials;
   // unresolved refs are classified separately for callers to surface useful copy.
-  if (credential.type === "api_key") {
-    const hasKey = normalizeSecretInputString(credential.key) !== undefined;
-    const hasKeyRef = parseSecretRef(credential.keyRef) !== null;
-    if (isMalformedApiKeyInput(credential.key)) {
+  if (credential.type === "api_key" || credential.type === "token") {
+    const hasLiteral =
+      normalizeSecretInputString(
+        credential.type === "api_key" ? credential.key : credential.token,
+      ) !== undefined;
+    const hasRef =
+      parseSecretRef(credential.type === "api_key" ? credential.keyRef : credential.tokenRef) !==
+      null;
+    if (credential.type === "api_key" && isMalformedApiKeyInput(credential.key)) {
       return { eligible: false, reasonCode: "malformed_api_key" };
     }
-    if (!hasKey && !hasKeyRef) {
+    if (!hasLiteral && !hasRef) {
       return { eligible: false, reasonCode: "missing_credential" };
     }
-    return { eligible: true, reasonCode: "ok" };
-  }
-
-  if (credential.type === "token") {
-    const hasToken = normalizeSecretInputString(credential.token) !== undefined;
-    const hasTokenRef = parseSecretRef(credential.tokenRef) !== null;
-    if (!hasToken && !hasTokenRef) {
-      return { eligible: false, reasonCode: "missing_credential" };
-    }
-
-    const expiryState = resolveTokenExpiryState(credential.expires, now);
-    if (expiryState === "invalid_expires") {
-      return { eligible: false, reasonCode: "invalid_expires" };
-    }
-    if (expiryState === "expired") {
-      return { eligible: false, reasonCode: "expired" };
+    if (credential.type === "token") {
+      const expiryState = resolveTokenExpiryState(credential.expires, now);
+      if (expiryState === "invalid_expires" || expiryState === "expired") {
+        return { eligible: false, reasonCode: expiryState };
+      }
     }
     return { eligible: true, reasonCode: "ok" };
   }

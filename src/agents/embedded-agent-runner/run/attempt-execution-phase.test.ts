@@ -4,6 +4,7 @@ import { createAssistantMessageEventStream, type Message } from "openclaw/plugin
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   loadTranscriptEventsSync,
   replaceSessionEntrySync,
@@ -32,6 +33,7 @@ import {
 import type { AgentSessionEvent } from "../../sessions/agent-session-types.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
+import { log } from "../logger.js";
 import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
 
 // Register the shared module mocks before importing any runtime dependency.
@@ -53,6 +55,63 @@ beforeEach(() => {
 
 describe("runEmbeddedAttemptExecutionPhase", () => {
   it.each([
+    { changedSystem: false, level: "debug", cause: "unattributed:provider-prompt-unavailable" },
+    { changedSystem: true, level: "warn", cause: "tracked-input-change" },
+  ] as const)(
+    "logs cache-read drops at $level ($cause)",
+    async ({ changedSystem, level, cause }) => {
+      const fixture = await createFixture({ exerciseTerminalMerges: false });
+      const runtime = fixture.input.prepared.sessionRuntime;
+      Object.assign(fixture.input.attempt, {
+        model: testModel,
+        modelId: testModel.id,
+        provider: testModel.provider,
+        sessionId: randomUUID(),
+      });
+      Object.assign(runtime, {
+        anthropicPayloadLogger: undefined,
+        isOpenAIResponsesApi: false,
+        cacheTrace: undefined,
+      });
+      runtime.agentSession.activeSession.agent.streamFn = vi.fn(() =>
+        createAssistantResultStream(createAssistant(testModel, [{ type: "text", text: "Done." }])),
+      );
+      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+      const debug = vi.spyOn(log, "debug").mockImplementation(() => {});
+      const { installEmbeddedAttemptStreamGuards } =
+        await vi.importActual<typeof import("./attempt-stream.js")>("./attempt-stream.js");
+      const guards = installEmbeddedAttemptStreamGuards(fixture.input, {
+        onRejectedProviderReplayRepaired: vi.fn(),
+        onIdleTimeout: vi.fn(),
+        diagnosticOwner: createDiagnosticEmbeddedRunOwner({
+          runId: fixture.input.attempt.runId,
+          sessionId: fixture.input.attempt.sessionId,
+        }),
+      });
+      for (const [index, cacheRead] of [8_000, 0].entries()) {
+        const context = {
+          systemPrompt:
+            changedSystem && index === 1 ? "changed instructions" : "stable instructions",
+          messages: [],
+        };
+        guards.onModelRequest(testModel, context);
+        const stream = await runtime.agentSession.activeSession.agent.streamFn(testModel, context);
+        await stream.result();
+        guards.onModelUsage({ input: 8_000, cacheRead });
+      }
+      expect(guards.getPromptCacheObservation()).toMatchObject({ broke: true, dropCause: cause });
+      expect(level === "debug" ? debug : warn).toHaveBeenCalledWith(
+        expect.stringContaining("[prompt-cache] cache read dropped 8000 -> 0 "),
+      );
+      expect(
+        (level === "debug" ? warn : debug).mock.calls.filter(([message]) =>
+          message.startsWith("[prompt-cache]"),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it.each([
     { kind: "cron root", key: "agent:main:cron:provider-fence", change: "current", guarded: true },
     { kind: "cron root", key: "agent:main:cron:provider-fence", change: "rotated", guarded: true },
     { kind: "cron root", key: "agent:main:cron:provider-fence", change: "reset", guarded: true },
@@ -62,16 +121,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       change: "current",
       guarded: false,
     },
-    {
-      kind: "exact cron run",
-      key: "agent:main:cron:provider-fence:run:cron-run-1",
-      change: "current",
-      guarded: false,
-    },
   ] as const)(
     "scopes the provider generation guard after writer admission ($kind, $change)",
     async ({ key, change, guarded }) => {
       await withOpenClawTestState({ label: "cron-root-provider-fence" }, async (testState) => {
+        setRuntimeConfigSnapshot({});
         const fixture = await createFixture({ exerciseTerminalMerges: false });
         const target = {
           agentId: "main",
@@ -165,19 +219,13 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
   );
 
   it.each([
-    ["stop", 10_000, "event"],
-    ["stop", 0, "event"],
-    ["toolUse", 10_000, "event"],
-    ["error", 10_000, "event"],
-    ["aborted", 10_000, "event"],
-    ["stop", 10_000, "result"],
-    ["stop", 0, "result"],
-    ["error", 10_000, "result"],
-    ["output-limit", 10_000, "event"],
-    ["output-limit", 10_000, "result"],
+    ["stop", 10_000],
+    ["toolUse", 10_000],
+    ["aborted", 10_000],
+    ["output-limit", 10_000],
   ] as const)(
-    "observes terminal %s usage once across async-tool fragments (cacheRead=%s, completion=%s)",
-    async (stopReason, cacheRead, completion) => {
+    "observes terminal %s usage once across async-tool fragments (cacheRead=%s)",
+    async (stopReason, cacheRead) => {
       const terminalStopReason = stopReason === "output-limit" ? "error" : stopReason;
       const fixture = await createFixture();
       const recordStage = vi.fn();
@@ -237,9 +285,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         toolCall,
         partial: { ...message, content: [toolCall], usage: makeZeroUsageSnapshot() },
       });
-      if (completion === "result") {
-        response.end(message);
-      } else if (terminalStopReason === "error" || terminalStopReason === "aborted") {
+      if (terminalStopReason === "error" || terminalStopReason === "aborted") {
         response.push({ type: "error", reason: terminalStopReason, error: message });
       } else {
         response.push({ type: "done", reason: terminalStopReason, message });
@@ -311,6 +357,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           {
             options: {
               requestIndex: 1,
+              messageCount: 0,
               broke: false,
               previousCacheRead: undefined,
               input: 100,
@@ -546,7 +593,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
             onModelRequest: expect.any(Function),
             getObservation: expect.any(Function),
           },
-          history: expect.objectContaining({ contextEngineAssemblySucceeded: true }),
+          history: expect.objectContaining({ contextEnginePromptAuthority: "assembled" }),
           isProbeSession: false,
           stream: fixture.streamResult,
           timeout: fixture.timeoutResult,

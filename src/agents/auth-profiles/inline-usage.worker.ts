@@ -1,3 +1,4 @@
+import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
   assertTransactionUsable,
   runSqliteWorkerTransactionSync,
@@ -6,15 +7,17 @@ import {
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
+import { enrollAuthProfileAuthorizationInDatabase } from "./authorization-enrollment.js";
 import { reportCommittedInlineAuthFailure } from "./constants.js";
 import {
   recordInlineAuthFailureInDatabase,
   type InlineAuthFailureOperations,
-  type InlineAuthFailureReceipt,
 } from "./inline-usage-kernel.js";
 import { inspectAuthProfileJsonCell } from "./sqlite-json.js";
-import { updateAuthProfileStoreInDatabase } from "./store-update-kernel.js";
-import type { AuthProfileUsageReceipt } from "./store.worker-contract.js";
+import {
+  authProfilePeerGenerationMayMatch,
+  updateAuthProfileStoreInDatabase,
+} from "./store-update.worker.js";
 import { recordAuthProfileUsageInDatabase } from "./usage-kernel.js";
 
 /** The canonical agent executor lends its connection and transaction/commit admission. */
@@ -24,10 +27,21 @@ export function bindSqliteWorkerBackend(
 ): SqliteWorkerBackend<InlineAuthFailureOperations> {
   return {
     execute(command) {
-      if (command.type === "authProfiles.update") {
+      if (command.type === "authProfiles.enrollAuthorization") {
         return runSqliteWorkerTransactionSync(context, () =>
-          updateAuthProfileStoreInDatabase(context.database, "agent", command.input),
+          enrollAuthProfileAuthorizationInDatabase(context.database, "agent", command.input),
         );
+      }
+      if (command.type === "authProfiles.update") {
+        if (!authProfilePeerGenerationMayMatch(context.database, command.input)) {
+          return false;
+        }
+        withSqlitePostCommitPublications(context.database, () =>
+          runSqliteWorkerTransactionSync(context, () =>
+            updateAuthProfileStoreInDatabase(context.database, "agent", command.input),
+          ),
+        );
+        return true;
       }
       if (command.type === "authProfiles.inlineSnapshot") {
         return runSqliteDeferredTransactionSync(context.database, () => ({
@@ -36,26 +50,29 @@ export function bindSqliteWorkerBackend(
           cacheable: false,
         }));
       }
-      let receipt: InlineAuthFailureReceipt | undefined;
-      let usageReceipt: AuthProfileUsageReceipt | undefined;
+      let result:
+        | InlineAuthFailureOperations["authProfiles.inlineFailure" | "authProfiles.usage"]["output"]
+        | undefined;
       let committed = false;
       try {
         runSqliteWorkerTransactionSync(
           context,
           () => {
             if (command.type === "authProfiles.usage") {
-              usageReceipt = recordAuthProfileUsageInDatabase(
+              const receipt = recordAuthProfileUsageInDatabase(
                 context.database,
                 context.databasePath,
                 "agent",
                 command.input,
               );
+              result = { ok: true, receipt };
             } else {
-              receipt = recordInlineAuthFailureInDatabase(
+              const receipt = recordInlineAuthFailureInDatabase(
                 context.database,
                 context.databasePath,
                 command.input,
               );
+              result = { ok: true, receipt };
             }
           },
           {
@@ -66,7 +83,7 @@ export function bindSqliteWorkerBackend(
           },
         );
       } catch (error) {
-        if (!committed || (!receipt && !usageReceipt)) {
+        if (!committed || !result) {
           // A confirmed rollback is a domain refusal, not an unsettled executor.
           assertTransactionUsable(context.database);
           if (!context.database.isOpen || context.database.isTransaction) {
@@ -83,13 +100,10 @@ export function bindSqliteWorkerBackend(
           error,
         );
       }
-      if (usageReceipt) {
-        return { ok: true, receipt: usageReceipt };
-      }
-      if (!receipt) {
+      if (!result) {
         throw new Error("Auth usage transaction produced no durable result");
       }
-      return { ok: true, receipt };
+      return result;
     },
     assertSettled() {
       assertTransactionUsable(context.database);

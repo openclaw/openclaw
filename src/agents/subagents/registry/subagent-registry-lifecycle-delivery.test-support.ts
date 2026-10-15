@@ -1,17 +1,24 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   runSubagentAnnounceDispatch,
   type SubagentAnnounceDeliveryResult,
 } from "../announce/subagent-announce-dispatch.js";
 import {
+  mutateLifecycleRun,
   readLifecycleRun,
   type LifecycleControllerFixtureOptions,
+  type LifecycleFixtureWrite,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
 import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
+import {
+  findAuthorizedSwarmCollectorRequest,
+  findSwarmCollectorSession,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -45,6 +52,56 @@ export function registerLifecycleDeliveryReceiptCases({
   completeAndJoinCleanup: CompleteRun;
   waitForLifecycleState: <T>(assertion: () => T | Promise<T>) => Promise<T>;
 }) {
+  it("authorizes and completes both collectors sharing a raw key across agents", async () => {
+    const entries = ["main", "research"].map((childAgentId) =>
+      createRunEntry({
+        runId: `collector-${childAgentId}`,
+        childSessionKey: "global",
+        childAgentId,
+        childSessionIdentity: { sessionId: `session-${childAgentId}` },
+        collect: true,
+        groupId: "shared-group",
+        swarmLaunchIdempotencyKey: `launch-${childAgentId}`,
+        expectsCompletionMessage: false,
+      }),
+    );
+    onTestFinished(() => subagentRuns.clear());
+    for (const entry of entries) {
+      subagentRuns.set(entry.runId, entry);
+    }
+    const controller = createLifecycleController({
+      entry: entries[0]!,
+      runs: subagentRuns,
+      captureSubagentCompletionReply: vi
+        .fn()
+        .mockResolvedValueOnce("main result")
+        .mockResolvedValueOnce("research result"),
+    });
+    for (const entry of entries) {
+      expect(
+        findAuthorizedSwarmCollectorRequest({
+          childSessionKey: entry.childSessionKey,
+          childAgentId: entry.childAgentId,
+          idempotencyKey: entry.swarmLaunchIdempotencyKey,
+        }),
+      ).toMatchObject({ runId: entry.runId });
+      await completeRun(controller, entry);
+    }
+    for (const entry of entries) {
+      expect(findSwarmCollectorSession(entry.childSessionKey, entry.childAgentId)).toMatchObject({
+        runId: entry.runId,
+        collectorCompletion: { status: "done" },
+        completion: { resultText: `${entry.childAgentId} result` },
+      });
+    }
+    expect(findSwarmCollectorSession("global")).toBeUndefined();
+    subagentRuns.delete(entries[0]!.runId);
+    expect(findSwarmCollectorSession("global", "research")).toMatchObject({
+      runId: entries[1]!.runId,
+      collectorCompletion: { status: "done" },
+    });
+  });
+
   const visibleCompletion = {
     triggerCleanup: true,
     terminalReply: { disposition: "visible", text: "final completion reply" },
@@ -70,6 +127,42 @@ export function registerLifecycleDeliveryReceiptCases({
     });
     return { entry, controller, runSubagentAnnounceFlow };
   }
+
+  it("delivers a restored legacy completion without mutating its unbound child session", async () => {
+    const entry = createRunEntry({
+      runId: "legacy-completion-without-identity",
+      childSessionIdentity: undefined,
+      expectsCompletionMessage: true,
+    });
+    const warn = vi.fn();
+    const cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {});
+    const runSubagentAnnounceFlow = vi.fn<LifecycleControllerParams["runSubagentAnnounceFlow"]>(
+      async (params) => {
+        expect(params.suppressChildSessionEffects).toBe(true);
+        await params.onDeliveryResult?.({ delivered: true, path: "steered", deliveredAt: 12_300 });
+        return "delivered";
+      },
+    );
+    const controller = createLifecycleController({
+      entry,
+      warn,
+      cleanupBrowserSessionsForLifecycleEnd,
+      runSubagentAnnounceFlow,
+    });
+
+    await completeAndJoinCleanup(controller, entry, visibleCompletion);
+
+    expect(readLifecycleRun(entry)).toMatchObject({
+      execution: { status: "terminal", suppressSessionEffects: true },
+      completion: { resultText: "final completion reply" },
+      delivery: { status: "delivered", deliveredAt: 12_300 },
+      cleanupCompletedAt: expect.any(Number),
+    });
+    expect(readLifecycleRun(entry).childSessionIdentity).toBeUndefined();
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+    expect(cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
 
   it("records completion announcement timestamps from transcript delivery", async () => {
     const { entry, controller } = createReceiptFixture(
@@ -222,7 +315,14 @@ export function registerLifecycleDeliveryReceiptCases({
   });
 
   it("persists identified completion delivery while completing the active multipart send", async () => {
-    const persist = vi.fn();
+    const cleanupSnapshots: SubagentRunRecord[] = [];
+    const persist = vi.fn(({ postimages }: LifecycleFixtureWrite) => {
+      for (const postimage of postimages.values()) {
+        if (postimage) {
+          cleanupSnapshots.push(postimage);
+        }
+      }
+    });
     const entry = createRunEntry({
       expectsCompletionMessage: true,
       delivery: {
@@ -279,12 +379,33 @@ export function registerLifecycleDeliveryReceiptCases({
       expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
       expect(persist).toHaveBeenCalledWith(expect.objectContaining({ runIds: [entry.runId] }));
       expect.soft(sentChunks).toEqual([1, 2, 3]);
+      await mutateLifecycleRun(entry, (draft) => {
+        draft.label = "updated while sending";
+        draft.completion = {
+          ...draft.completion,
+          required: true,
+          fallbackResultText: "earlier fallback",
+          fallbackCapturedAt: 12_000,
+        };
+        draft.wakeOnDescendantSettle = true;
+      });
+      cleanupSnapshots.length = 0;
     } finally {
       announcePending.resolve();
       await join();
     }
     expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
     expect(readLifecycleRun(entry).delivery?.nextAttemptAt).toBeUndefined();
+    expect(readLifecycleRun(entry).label).toBe("updated while sending");
+    expect(readLifecycleRun(entry).completion?.fallbackResultText).toBeUndefined();
+    expect(readLifecycleRun(entry).completion?.fallbackCapturedAt).toBeUndefined();
+    expect(readLifecycleRun(entry).wakeOnDescendantSettle).toBeUndefined();
+    expect(cleanupSnapshots.length).toBeGreaterThan(0);
+    for (const snapshot of cleanupSnapshots) {
+      expect(snapshot.cleanupCompletedAt).toBeTypeOf("number");
+      expect(snapshot.completion?.fallbackResultText).toBeUndefined();
+      expect(snapshot.label).toBe("updated while sending");
+    }
   });
 
   it("keeps a delivered receipt when a late failure arrives after the next turn starts", async () => {

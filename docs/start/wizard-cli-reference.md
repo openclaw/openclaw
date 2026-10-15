@@ -175,7 +175,7 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
     - Native Windows: Scheduled Task first
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
-    - Runtime selection: Node is the primary, default, and recommended runtime. Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in.
+    - Runtime selection: Node is the primary, default, and recommended runtime. Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in.
       QuickStart reports the runtime selected by the install plan, including Bun when no supported Node is available on a Bun-only first install.
     - A SecretRef-managed `gateway.auth.token` is validated without copying its
       resolved plaintext value into supervisor service metadata. An unresolved
@@ -334,8 +334,8 @@ on a different release.
     More detail: [Synthetic](/providers/synthetic).
   </Accordion>
   <Accordion title="Ollama (Cloud and local open models)">
-    Prompts for `Cloud + Local`, `Cloud only`, or `Local only` first.
-    `Cloud only` uses `OLLAMA_API_KEY` with `https://ollama.com`.
+    Prompts for `Cloud + Local` or `Local only` first.
+    For hosted models without a local Ollama host, choose `Ollama Cloud` (`--auth-choice ollama-cloud`) instead.
     The host-backed modes prompt for base URL (default `http://127.0.0.1:11434`), discover available models, and suggest defaults.
     `Cloud + Local` also checks whether that Ollama host is signed in for cloud access.
     More detail: [Ollama](/providers/ollama).

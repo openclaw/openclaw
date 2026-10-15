@@ -347,34 +347,18 @@ public enum OpenClawChatGatewayRequests {
         supportsSessionSettingsCAS: Bool = false) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID)
-        if let model {
-            params["model"] = model.map(AnyCodable.init) ?? AnyCodable(NSNull())
-        }
-        if let thinkingLevel {
-            params["thinkingLevel"] = thinkingLevel.map(AnyCodable.init) ?? AnyCodable(NSNull())
-        }
-        if let fastMode {
-            params["fastMode"] = fastMode.map(self.fastModeValue) ?? AnyCodable(NSNull())
-        }
-        if let verboseLevel {
-            params["verboseLevel"] = verboseLevel.map(AnyCodable.init) ?? AnyCodable(NSNull())
-        }
+        params["model"] = self.patchValue(model)
+        params["thinkingLevel"] = self.patchValue(thinkingLevel)
+        params["fastMode"] = self.patchValue(fastMode, encode: self.fastModeValue)
+        params["verboseLevel"] = self.patchValue(verboseLevel)
         if supportsSessionSettingsContract {
             self.add(expectedSessionID, to: &params, key: "expectedSessionId")
-            if let permissionMode {
-                params["permissionMode"] = permissionMode.map { AnyCodable($0.rawValue) } ?? AnyCodable(NSNull())
-            }
-            if let toolOverrides {
-                params["toolOverrides"] = toolOverrides.map(self.toolOverridesValue) ?? AnyCodable(NSNull())
-            }
+            params["permissionMode"] = self.patchValue(permissionMode) { AnyCodable($0.rawValue) }
+            params["toolOverrides"] = self.patchValue(toolOverrides, encode: self.toolOverridesValue)
         }
-        if supportsSessionSettingsCAS, let expectedToolOverrides {
-            params["expectedToolOverrides"] = expectedToolOverrides
-                .map(self.toolOverridesValue) ?? AnyCodable(NSNull())
-        }
-        if supportsSessionSettingsCAS, let expectedPermissionMode {
-            params["expectedPermissionMode"] = expectedPermissionMode
-                .map { AnyCodable($0.rawValue) } ?? AnyCodable(NSNull())
+        if supportsSessionSettingsCAS {
+            params["expectedToolOverrides"] = self.patchValue(expectedToolOverrides, encode: self.toolOverridesValue)
+            params["expectedPermissionMode"] = self.patchValue(expectedPermissionMode) { AnyCodable($0.rawValue) }
         }
         return OpenClawChatGatewayRequest(
             method: "sessions.patch",
@@ -422,15 +406,9 @@ public enum OpenClawChatGatewayRequests {
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID)
         self.add(expectedSessionID, to: &params, key: "expectedSessionId")
-        if let label {
-            params["label"] = label.map(AnyCodable.init) ?? AnyCodable(NSNull())
-        }
-        if let category {
-            params["category"] = category.map(AnyCodable.init) ?? AnyCodable(NSNull())
-        }
-        if let color {
-            params["color"] = color.map(AnyCodable.init) ?? AnyCodable(NSNull())
-        }
+        params["label"] = self.patchValue(label)
+        params["category"] = self.patchValue(category)
+        params["color"] = self.patchValue(color)
         params["pinned"] = pinned.map(AnyCodable.init)
         params["archived"] = archived.map(AnyCodable.init)
         if let snoozedUntil {
@@ -755,6 +733,13 @@ public enum OpenClawChatGatewayRequests {
         var params = [key: AnyCodable(sessionKey)]
         self.add(agentID, to: &params, key: "agentId")
         return params
+    }
+
+    private static func patchValue<Value>(
+        _ update: Value??,
+        encode: (Value) -> AnyCodable = { AnyCodable($0) }) -> AnyCodable?
+    {
+        update.map { $0.map(encode) ?? AnyCodable(NSNull()) }
     }
 
     private static func add(

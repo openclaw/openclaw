@@ -10,8 +10,8 @@ import {
   normalizeTrimmedStringList,
   normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
-import { z } from "zod";
 import { parseWorkerCapacity } from "../../../../packages/gateway-protocol/src/worker-capacity.js";
+import { isNodeHostStats } from "../../../../src/shared/node-host-stats.js";
 import type {
   NodeListNode,
   NodeWorkerBundleStatus,
@@ -20,26 +20,6 @@ import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
 
 type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
-
-const hostStatsSchema = z
-  .object({
-    cpuCount: z.number().int().positive(),
-    loadAverage: z
-      .tuple([z.number().nonnegative(), z.number().nonnegative(), z.number().nonnegative()])
-      .optional(),
-    memoryTotalBytes: z.number().positive(),
-    memoryFreeBytes: z.number().nonnegative(),
-    diskTotalBytes: z.number().positive().optional(),
-    diskAvailableBytes: z.number().nonnegative().optional(),
-    updatedAtMs: z.number().nonnegative(),
-  })
-  .refine(
-    (stats) =>
-      stats.memoryFreeBytes <= stats.memoryTotalBytes &&
-      (stats.diskAvailableBytes === undefined ||
-        stats.diskTotalBytes === undefined ||
-        stats.diskAvailableBytes <= stats.diskTotalBytes),
-  );
 
 type NodeListEntry = NodeListNode & {
   caps: string[];
@@ -125,7 +105,7 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
     pendingRequestId: normalizeOptionalString(raw.pendingRequestId),
     workerSlots: parseWorkerCapacity(raw.workerSlots) ?? undefined,
     workerBundle: parseWorkerBundleStatus(raw.workerBundle),
-    hostStats: hostStatsSchema.safeParse(raw.hostStats).data,
+    hostStats: isNodeHostStats(raw.hostStats) ? raw.hostStats : undefined,
     connected: raw.connected === true,
     paired: raw.paired === true,
     connectedAtMs: optionalNumber(raw.connectedAtMs),
@@ -244,24 +224,22 @@ export function buildDeviceInventory(params: {
       }
     }
   }
-  const entries: DeviceInventoryEntry[] = [];
-  const seen = new Set<string>();
+  const entries = new Map<string, DeviceInventoryEntry>();
   for (const device of params.paired) {
     const id = normalizeOptionalString(device.deviceId);
-    if (!id || seen.has(id)) {
+    if (!id || entries.has(id)) {
       continue;
     }
-    seen.add(id);
-    entries.push(buildEntry(id, device, nodesById.get(id), presenceById.get(id.toLowerCase())));
+    entries.set(id, buildEntry(id, device, nodesById.get(id), presenceById.get(id.toLowerCase())));
   }
   for (const [id, node] of nodesById) {
-    if (!seen.has(id)) {
-      entries.push(buildEntry(id, undefined, node, presenceById.get(id.toLowerCase())));
+    if (!entries.has(id)) {
+      entries.set(id, buildEntry(id, undefined, node, presenceById.get(id.toLowerCase())));
     }
   }
 
-  const groupsByKey = new Map<string, DeviceInventoryEntry[]>();
-  for (const entry of entries) {
+  const groupsByKey = new Map<string, [DeviceInventoryEntry, ...DeviceInventoryEntry[]]>();
+  for (const entry of entries.values()) {
     const key = groupKey(entry);
     const bucket = groupsByKey.get(key);
     if (bucket) {
@@ -271,20 +249,10 @@ export function buildDeviceInventory(params: {
     }
   }
 
-  const groups: DeviceInventoryGroup[] = [];
-  for (const [key, bucket] of groupsByKey) {
-    const sorted = bucket.toSorted(compareEntries);
-    const primary = sorted[0];
-    if (!primary) {
-      continue;
-    }
-    groups.push({
-      key,
-      name: primary.name,
-      primary,
-      duplicates: sorted.slice(1),
-    });
-  }
+  const groups = [...groupsByKey].flatMap(([key, bucket]) => {
+    const [primary, ...duplicates] = bucket.toSorted(compareEntries);
+    return primary ? [{ key, name: primary.name, primary, duplicates }] : [];
+  });
   return groups.toSorted((left, right) => {
     const order = compareEntries(left.primary, right.primary);
     return order !== 0 ? order : left.name.localeCompare(right.name);

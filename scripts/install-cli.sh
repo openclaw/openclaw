@@ -297,7 +297,7 @@ preflight_fresh_git_disk_space() {
   local available_kib
   local available_gib
 
-  if [[ -d "$repo_dir/.git" ]]; then
+  if [[ -e "$repo_dir/.git" ]]; then
     return 0
   fi
 
@@ -961,7 +961,7 @@ ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.5.1"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.10.1"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -1134,7 +1134,7 @@ install_openclaw_from_git() {
   fi
 
   emit_json step name openclaw status start method git repo "$repo_url"
-  if [[ -d "$repo_dir/.git" ]]; then
+  if [[ -e "$repo_dir/.git" ]]; then
     log "Installing Openclaw from git checkout: ${repo_dir}"
   else
     log "Installing Openclaw from GitHub (${repo_url})..."
@@ -1144,15 +1144,9 @@ install_openclaw_from_git() {
   ensure_git
   emit_json step name git-tools status ok
 
-  if [[ -d "$repo_dir/.git" ]] &&
-    ! git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
-    fail "Git checkout has no commit: ${repo_dir}. Move or remove this incomplete checkout, then retry."
-  fi
+  validate_git_checkout "$repo_dir" || return 1
 
-  if [[ ! -d "$repo_dir/.git" ]]; then
-    if [[ -d "$repo_dir" && -n "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
-      fail "Git install dir exists but is not a git repo: ${repo_dir}"
-    fi
+  if [[ ! -e "$repo_dir/.git" ]]; then
     emit_json step name git-clone status start
     clone_git_checkout_transactionally "$repo_url" "$repo_dir" --filter=blob:none
     emit_json step name git-clone status ok

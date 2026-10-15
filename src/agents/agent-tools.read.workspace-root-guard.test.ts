@@ -6,6 +6,7 @@ import {
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
 import { createSandboxFsBridgeFromResolver } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 type AssertSandboxPath = typeof import("./sandbox-paths.js").assertSandboxPath;
@@ -18,9 +19,9 @@ const root = path.resolve("/tmp/root");
 function createToolHarness() {
   const execute = vi.fn(async () => ({
     content: [{ type: "text" as const, text: "ok" }],
-    details: undefined,
+    details: { kind: "text" as const, content: "ok" },
   }));
-  const tool: AnyAgentTool = {
+  const tool: AnyAgentTool<ReadToolDetails> = {
     name: "read",
     label: "read",
     description: "read",
@@ -173,7 +174,6 @@ describe("read path normalization", () => {
       undefined,
     );
   });
-
   it("rejects paths emptied by suffix stripping without reading", async () => {
     const { tool, execute } = createToolHarness();
     await expect(

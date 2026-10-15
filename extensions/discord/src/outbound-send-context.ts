@@ -44,13 +44,7 @@ export async function createDiscordPayloadSendContext(ctx: {
   replyToMode?: ReplyToMode;
   formatting?: DiscordFormattingOptions;
   threadId?: string | number | null;
-}): Promise<{
-  target: string;
-  formatting: DiscordFormattingOptions;
-  resolveReply: () => ReturnType<typeof resolveDiscordReplyReference>;
-  send: DiscordSendFn;
-  sendVoice: DiscordVoiceSendFn;
-}> {
+}) {
   const runtime = await loadDiscordSendRuntime();
   const nextReplyToId = createReplyToFanout(ctx);
   return {

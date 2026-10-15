@@ -74,7 +74,7 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
   switch (ast.kind) {
     case "jsonc":
       if (ast.root !== null) {
-        walkJsonc(ast.root, subs, 0, [], onMatch);
+        jsoncOps.walk(ast.root, subs, 0, [], onMatch);
       }
       break;
     case "jsonl":
@@ -85,7 +85,7 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
       break;
     case "yaml":
       if (ast.doc.contents !== null) {
-        walkYaml(ast.doc.contents, subs, 0, [], onMatch);
+        yamlOps.walk(ast.doc.contents, subs, 0, [], onMatch);
       }
       break;
   }
@@ -222,21 +222,6 @@ function dispatchSeg<T, Child>(
   ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
 }
 
-function walkJsonc(
-  node: JsoncValue,
-  subs: readonly SlotSub[],
-  i: number,
-  walked: readonly SlotSub[],
-  onMatch: OnMatch,
-): void {
-  checkDepth(walked);
-  if (i >= subs.length) {
-    onMatch(walked);
-    return;
-  }
-  dispatchSeg(node, jsoncOps, subs, i, walked, onMatch);
-}
-
 const jsoncOps: WalkOps<JsoncValue> = {
   *enumerate(node, matches) {
     if (node.kind === "object") {
@@ -278,18 +263,21 @@ const jsoncOps: WalkOps<JsoncValue> = {
     if (concrete === null) {
       return null;
     }
-    const match = jsoncOps.lookup(node, concrete);
-    if (match === null || node.kind !== "object") {
-      return match;
-    }
-    return { keySub: quoteSeg(concrete), child: match.child };
+    return jsoncOps.lookup(node, node.kind === "object" ? quoteSeg(concrete) : concrete);
   },
   *predicate(node, pred) {
     yield* jsoncOps.enumerate(node, (child) =>
       evaluatePredicate(jsoncChildFieldText(child, pred.key, "null"), pred),
     );
   },
-  walk: walkJsonc,
+  walk(node, subs, i, walked, onMatch) {
+    checkDepth(walked);
+    if (i >= subs.length) {
+      onMatch(walked);
+      return;
+    }
+    dispatchSeg(node, jsoncOps, subs, i, walked, onMatch);
+  },
 };
 
 // First slot is a line address; subsequent slots descend into its JSONC value.
@@ -351,24 +339,9 @@ const jsonlOps: WalkOps<JsonlAst, JsonlLine> = {
     if (child.kind !== "value") {
       return;
     }
-    walkJsonc(child.value, subs, i, walked, onMatch);
+    jsoncOps.walk(child.value, subs, i, walked, onMatch);
   },
 };
-
-function walkYaml(
-  node: Node,
-  subs: readonly SlotSub[],
-  i: number,
-  walked: readonly SlotSub[],
-  onMatch: OnMatch,
-): void {
-  checkDepth(walked);
-  if (i >= subs.length) {
-    onMatch(walked);
-    return;
-  }
-  dispatchSeg(node, yamlOps, subs, i, walked, onMatch);
-}
 
 const yamlOps: WalkOps<Node> = {
   *enumerate(node, matches) {
@@ -414,14 +387,24 @@ const yamlOps: WalkOps<Node> = {
   },
   positional(node, seg) {
     const concrete = resolveYamlPositionalSegment(node, seg);
-    return concrete === null ? null : yamlOps.lookup(node, concrete);
+    if (concrete === null) {
+      return null;
+    }
+    return yamlOps.lookup(node, isMap(node) ? quoteSeg(concrete) : concrete);
   },
   *predicate(node, pred) {
     yield* yamlOps.enumerate(node, (child) =>
       evaluatePredicate(yamlChildFieldText(child, pred.key), pred),
     );
   },
-  walk: walkYaml,
+  walk(node, subs, i, walked, onMatch) {
+    checkDepth(walked);
+    if (i >= subs.length) {
+      onMatch(walked);
+      return;
+    }
+    dispatchSeg(node, yamlOps, subs, i, walked, onMatch);
+  },
 };
 
 function yamlChildFieldText(node: Node, key: string): string | null {

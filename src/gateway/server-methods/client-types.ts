@@ -34,6 +34,7 @@ export type GatewayClient = Pick<
   | "authPolicy"
   | "invalidated"
   | "connectionSignal"
+  | "remoteControlUiIngress"
   | "browserOrigin"
   | "presenceKey"
   | "clientIp"
@@ -46,7 +47,9 @@ export type GatewayClient = Pick<
   | "pluginNodeCapabilitySurfaces"
   | "pluginNodeCapabilities"
   | "isDeviceTokenAuth"
+  | "sharedGatewaySessionGeneration"
 > & {
+  usesSharedGatewayAuth?: boolean;
   connId?: string;
   authenticatedUserProfile?: Omit<
     NonNullable<GatewayWsClient["authenticatedUserProfile"]>,
@@ -55,8 +58,6 @@ export type GatewayClient = Pick<
     avatarRevision?: string;
   };
   internal?: NonNullable<GatewayWsClient["internal"]> & {
-    /** Authenticated operator transport ingress; never accepted from wire params. */
-    authenticatedOperator?: true;
     /** Marks the server-constructed client used by trusted in-process dispatch. */
     syntheticClient?: true;
     /** Original source restriction carried only by trusted in-process run admission. */

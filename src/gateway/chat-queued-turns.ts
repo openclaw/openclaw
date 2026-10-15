@@ -9,6 +9,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import {
   resolveChatAbortDiagnosticReason,
   type ChatAbortDiagnosticReason,
@@ -89,7 +90,9 @@ function deleteQueuedChatTurnEntry(
     return false;
   }
   detachQueuedChatTurnAbortListener(entry);
-  return chatQueuedTurns.delete(runId);
+  chatQueuedTurns.delete(runId);
+  notifyGatewayWorkMetricsChanged();
+  return true;
 }
 
 export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): boolean {
@@ -132,6 +135,7 @@ export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): bo
     }
   };
   params.controller.signal.addEventListener("abort", entry.abortListener, { once: true });
+  notifyGatewayWorkMetricsChanged();
   return true;
 }
 
@@ -164,6 +168,9 @@ export function retireQueuedChatTurnCancellation(
   }
   entry.abortable = false;
   detachQueuedChatTurnAbortListener(entry);
+  // Retired collect entries remain counted until abort or aggregate completion.
+  entry.abortListener = notifyGatewayWorkMetricsChanged;
+  controller.signal.addEventListener("abort", entry.abortListener, { once: true });
   return true;
 }
 

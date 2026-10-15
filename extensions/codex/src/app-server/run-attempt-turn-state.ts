@@ -29,6 +29,7 @@ class CodexAttemptState {
   rateLimitsRevisionBeforeLastTurnStart?: number;
   completed = false;
   abortCleanup = Promise.resolve();
+  nativeCancellationConfirmed = false;
   pluginRuntimeRefreshStop?: Promise<void>;
   // Only completed native cleanup can advance this state to confirmed.
   permissionChangeRestart?: "requested" | "confirmed";
@@ -59,7 +60,6 @@ class CodexAttemptState {
   };
   terminalDynamicToolReleaseCheckScheduled = false;
   currentTurnHadNonTerminalDynamicToolResult = false;
-  currentTurnHadToolAuthoredFinalReply = false;
 }
 
 export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
@@ -109,6 +109,8 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     });
     if (!completed) {
       await closeCodexStartupClientBestEffort(resourceState.client);
+    } else if (turnId) {
+      state.nativeCancellationConfirmed = true;
     }
     return completed;
   };
@@ -173,6 +175,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   };
   const deadlines = createAgentHarnessAttemptDeadlineController({
     startedAtMs: connection.attemptStartedAt,
+    startedAtMonotonicMs: connection.attemptStartedAtMonotonicMs,
     timeoutMs: params.timeoutMs,
     settlementTimeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
     signal: runAbortController.signal,

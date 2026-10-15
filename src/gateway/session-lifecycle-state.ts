@@ -339,6 +339,7 @@ type GatewaySessionLifecycleEventParams = {
   event: LifecycleEventLike;
   assertCommitAllowed?: () => void;
   expectedWriter?: {
+    requireYielded?: true;
     runId: string;
     sessionId: string;
     lifecycleRevision?: string;
@@ -374,6 +375,18 @@ async function persistPreparedGatewaySessionLifecycleEvent(
   sessionEntry: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
 ): Promise<void> {
   if (!sessionEntry.entry) {
+    return;
+  }
+  const startedRunId = phase === "start" ? normalizeLifecycleRunId(params.event.runId) : undefined;
+  if (
+    startedRunId &&
+    sessionEntry.entry.lifecycleRunId === startedRunId &&
+    sessionEntry.entry.status === undefined &&
+    sessionEntry.entry.endedAt === undefined &&
+    sessionEntry.entry.abortedLastRun !== true
+  ) {
+    // Admission already committed the running marker. Live events carry backend
+    // timing until settlement persists it; yielded runs still need a resume write.
     return;
   }
   // Incognito keeps its existing native lifecycle writer. The runtime's private fact
@@ -430,6 +443,14 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           (entry.activeWriterRunId !== expected.runId && entry.lifecycleRunId !== expected.runId) ||
           (entry.activeWriterRunId !== undefined && entry.activeWriterRunId !== expected.runId) ||
           (entry.lifecycleRunId !== undefined && entry.lifecycleRunId !== expected.runId))
+      ) {
+        return null;
+      }
+      if (
+        expected?.requireYielded &&
+        (entry.status !== undefined ||
+          !Number.isFinite(entry.endedAt) ||
+          entry.pendingFinalDelivery !== undefined)
       ) {
         return null;
       }
@@ -552,7 +573,8 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           sessionKey: sessionEntry.canonicalKey,
           agentId: sessionEntry.agentId,
           storePath: sessionEntry.storePath,
-          // The SQLite writer already published sharing facts; this adapter only projects run state.
+          // The writer already published stored facts; this adapter only projects run state.
+          scope: "runtime",
           facts: { kind: "unchanged" },
         }),
     },

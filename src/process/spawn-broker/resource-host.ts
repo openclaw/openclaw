@@ -1,4 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomBytes } from "node:crypto";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { deserialize, serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { decodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
@@ -43,10 +47,6 @@ type Claim = {
       size: number;
       completion: Deferred;
     }
-  >;
-  buffered: Map<
-    number,
-    { response: Extract<BrokerResourceResponse, { type: "resource-owner" }>; size: number }
   >;
   pending?: { requestId: number; completion: Deferred };
 };
@@ -100,7 +100,6 @@ export class BrokerResourceClaims {
       lastSequence: 0,
       ownerSequence: 0,
       ownerMessages: new Map(),
-      buffered: new Map(),
     };
     void claim.attached.promise.catch(() => {});
     this.claims.set(captured.id, claim);
@@ -127,9 +126,6 @@ export class BrokerResourceClaims {
           throw new SpawnBrokerError("Native resource is closed");
         }
         const sequence = claim.ownerSequence + 1;
-        if (!Number.isSafeInteger(sequence)) {
-          throw new SpawnBrokerError("Native resource owner sequence exhausted");
-        }
         const serialized = serialize({ type: "resource-owner", id: captured.id, sequence, value });
         if (
           this.bufferedBytes + serialized.length > MAX_PENDING_BYTES ||
@@ -174,9 +170,6 @@ export class BrokerResourceClaims {
           return claim.pending.completion.promise;
         }
         const requestId = --this.closeSequence;
-        if (!Number.isSafeInteger(requestId)) {
-          return Promise.reject(new SpawnBrokerError("Native resource close sequence exhausted"));
-        }
         const completion = createDeferredCore();
         void completion.promise.catch(() => {});
         claim.pending = { requestId, completion };
@@ -259,40 +252,12 @@ export class BrokerResourceClaims {
       }
       return;
     } else if (response.type === "resource-owner") {
-      if (!Number.isSafeInteger(response.sequence) || response.sequence <= 0) {
-        this.failClaim(claim, new SpawnBrokerError("Invalid native resource owner sequence"));
+      // Both transports carry every owner event in order; only their duplicate copies can lag.
+      if (response.sequence <= claim.lastSequence) {
         return;
       }
-      if (response.sequence <= claim.lastSequence || claim.buffered.has(response.sequence)) {
-        return;
-      }
-      if (response.sequence !== claim.lastSequence + 1) {
-        const size = serialize(response).length;
-        if (
-          this.bufferedBytes + size > MAX_PENDING_BYTES ||
-          this.bufferedMessages >= MAX_PENDING_MESSAGES
-        ) {
-          this.failClaim(claim, new SpawnBrokerError("Native resource receive capacity exceeded"));
-          return;
-        }
-        claim.buffered.set(response.sequence, { response, size });
-        this.bufferedBytes += size;
-        this.bufferedMessages++;
-        return;
-      }
-      // The missing next frame can drain a full reorder buffer without reserving another slot.
       claim.lastSequence = response.sequence;
       claim.inContext(() => claim.callbacks.message(response));
-      for (;;) {
-        const next = claim.buffered.get(claim.lastSequence + 1);
-        if (!next) {
-          break;
-        }
-        claim.buffered.delete(++claim.lastSequence);
-        this.bufferedBytes -= next.size;
-        this.bufferedMessages--;
-        claim.inContext(() => claim.callbacks.message(next.response));
-      }
       return;
     } else if (response.type === "resource-closed") {
       if (claim.closed) {
@@ -365,12 +330,6 @@ export class BrokerResourceClaims {
     }
   }
 
-  private failClaim(claim: Claim, error: Error): void {
-    if (this.rejectClaim(claim, error)) {
-      claim.inContext(() => claim.callbacks.failed(error));
-    }
-  }
-
   private rejectClaim(claim: Claim, error: Error): boolean {
     if (claim.failure || claim.closed) {
       return false;
@@ -382,16 +341,7 @@ export class BrokerResourceClaims {
       pending.completion.reject(error);
     }
     claim.pending = undefined;
-    this.clearBuffered(claim);
     return true;
-  }
-
-  private clearBuffered(claim: Claim): void {
-    for (const value of claim.buffered.values()) {
-      this.bufferedBytes -= value.size;
-    }
-    this.bufferedMessages -= claim.buffered.size;
-    claim.buffered.clear();
   }
 
   private clearOwnerMessages(claim: Claim, error: Error): void {
@@ -404,7 +354,6 @@ export class BrokerResourceClaims {
   }
 
   private remove(claim: Claim, error?: Error): void {
-    this.clearBuffered(claim);
     this.clearOwnerMessages(
       claim,
       error ??
@@ -413,4 +362,33 @@ export class BrokerResourceClaims {
     this.claims.delete(claim.attachment.id);
     this.host.refreshReference();
   }
+}
+
+const UNIX_SOCKET_PATH_BYTES = 103;
+
+function createNativeResourceDirectory(): string {
+  const directory = mkdtempSync(join(tmpdir(), "oc-br-"));
+  if (
+    process.platform === "win32" ||
+    Buffer.byteLength(join(directory, "resource.sock")) <= UNIX_SOCKET_PATH_BYTES
+  ) {
+    return directory;
+  }
+  // A configured temp root can exceed Darwin's sockaddr_un even for a short private socket.
+  rmSync(directory, { recursive: true, force: true });
+  return mkdtempSync("/tmp/oc-br-");
+}
+
+export function createNativeResourceAuthority() {
+  const directory = createNativeResourceDirectory();
+  chmodSync(directory, 0o700);
+  const secret = randomBytes(32).toString("hex");
+  return {
+    directory,
+    secret,
+    endpoint:
+      process.platform === "win32"
+        ? `\\\\.\\pipe\\oc-br-${secret}`
+        : join(directory, "resource.sock"),
+  };
 }

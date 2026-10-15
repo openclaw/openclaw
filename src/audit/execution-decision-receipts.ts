@@ -1,5 +1,5 @@
 /** Bounded receipt projection across admission, owner-native, and generic decision facts. */
-import type { DatabaseSync } from "node:sqlite";
+
 import type {
   DecisionReceiptDisplayV1,
   DecisionReceiptV1,
@@ -9,6 +9,7 @@ import {
   pageOperatorApprovalReceiptsForRunInDatabase,
   summarizeOperatorApprovalReceiptsForRunInDatabase,
 } from "../gateway/operator-approval-store.receipts.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { parsePositiveAuditCursor } from "./audit-cursor.js";
 import {
   pageExecutionDecisionFactsForContextInDatabase,
@@ -210,7 +211,7 @@ function projectDecisionDisplay({
 }
 
 export function presentExecutionDecisionReceiptsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     schema: OwnerLifecycleSchemaFacts;
     context: ExecutionIdentityContextV1;

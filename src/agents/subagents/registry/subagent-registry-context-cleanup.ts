@@ -18,10 +18,7 @@ import {
   resolveSubagentRegistryContextEngine,
 } from "./subagent-registry-deps.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
-import {
-  buildSafeLifecycleErrorMeta,
-  maskLifecycleIdentifier,
-} from "./subagent-registry-lifecycle-log.js";
+import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteOutcomeKnown,
@@ -88,7 +85,7 @@ export function createSubagentRegistryContextCleanup(config: {
     } catch (err) {
       warn(warning, {
         error: buildSafeLifecycleErrorMeta(err),
-        childSessionKey: maskLifecycleIdentifier(params.childSessionKey, "session"),
+        childSessionKey: params.childSessionKey,
         reason: params.reason,
       });
       return false;
@@ -185,13 +182,6 @@ export function createSubagentRegistryContextCleanup(config: {
       );
     }
     return internalEffectsRemoved && attachmentsRemoved && contextEnded && isCurrent();
-  }
-
-  function shouldEmitEndedHookForRun(params: {
-    entry: SubagentRunRecord;
-    reason: SubagentLifecycleEndedReason;
-  }) {
-    return params.reason === SUBAGENT_ENDED_REASON_KILLED || params.entry.spawnMode !== "session";
   }
 
   async function emitSubagentEndedHookForRun(params: {
@@ -317,7 +307,10 @@ export function createSubagentRegistryContextCleanup(config: {
     cleanupCollectorLaunchResources,
     suppressAnnounceForSteerRestart: (entry?: SubagentRunRecord) =>
       entry?.suppressAnnounceReason === "steer-restart",
-    shouldEmitEndedHookForRun,
+    shouldEmitEndedHookForRun: (params: {
+      entry: SubagentRunRecord;
+      reason: SubagentLifecycleEndedReason;
+    }) => params.reason === SUBAGENT_ENDED_REASON_KILLED || params.entry.spawnMode !== "session",
     emitSubagentEndedHookForRun,
     reset: () => {
       endedHookInFlightOwners.clear();

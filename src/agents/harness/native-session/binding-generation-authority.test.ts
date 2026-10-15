@@ -6,10 +6,12 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
   reclaimNativeSessionGenerationWithAuthority,
-  resolveNativeSessionBindingWithAuthority,
+  retainNativeSessionGenerationAuthority,
+  resolvePreparedNativeSessionBinding,
   type NativeSessionGenerationOperationsV2,
 } from "./binding-generation-authority.js";
 
@@ -44,10 +46,10 @@ describe("native session binding generation authority", () => {
         state === "ephemeral" ? { ...scope(), sessionKey: "agent:main:other" } : scope(),
         { sessionId: state === "ephemeral" ? "session-other" : target.sessionId, updatedAt: 1 },
       );
-      const pending = resolveNativeSessionBindingWithAuthority({
+      const pending = resolvePreparedNativeSessionBinding({
         target: state === "stale" ? { ...target, sessionId: "session-stale" } : target,
         storePath,
-        readBinding: () => binding,
+        readBinding: async () => binding,
         createSupersededError,
         assertCurrent: () => {
           if (!active) {
@@ -60,6 +62,7 @@ describe("native session binding generation authority", () => {
         return;
       }
       const resolved = await pending;
+      using _ = { [Symbol.dispose]: () => resolved.release() };
       expect(resolved.binding).toEqual(binding);
       await expect(resolved.authority.withCurrent(() => undefined)).resolves.toBeUndefined();
       if (state === "ephemeral") {
@@ -67,6 +70,11 @@ describe("native session binding generation authority", () => {
       } else {
         await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
       }
+      expect(() => resolved.authority.assertCurrent()).toThrow(
+        state === "ephemeral"
+          ? "caller authority closed"
+          : "Session generation is no longer current",
+      );
       await expect(resolved.authority.withCurrent(() => undefined)).rejects.toThrow(
         state === "ephemeral"
           ? "caller authority closed"
@@ -74,6 +82,123 @@ describe("native session binding generation authority", () => {
       );
     },
   );
+
+  it("rechecks host generation after an awaited binding read", async () => {
+    await upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
+    const reading = createDeferred();
+    const release = createDeferred();
+    const pending = resolvePreparedNativeSessionBinding({
+      target,
+      storePath,
+      createSupersededError,
+      readBinding: async () => {
+        reading.resolve();
+        await release.promise;
+        return binding;
+      },
+    }).catch((error: unknown) => error);
+    await reading.promise;
+    try {
+      await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
+    } finally {
+      release.resolve();
+    }
+    expect(await pending).toMatchObject({
+      message: `Session generation is no longer current: ${target.sessionId}`,
+    });
+  });
+
+  it("retains published lineage through foreground abort and terminal cleanup without main-thread SQL", async () => {
+    await upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
+    const controller = new AbortController();
+    const retained = await retainNativeSessionGenerationAuthority({
+      target,
+      storePath,
+      createSupersededError,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+    });
+    using _ = { [Symbol.dispose]: () => retained.release() };
+    const cleanup = retained.authority.withLiveness(() => {});
+    const calls = observeMainThreadSql();
+    try {
+      retained.authority.assertCurrent();
+      retained.authority.assertLegacyCurrent();
+      await retained.authority.withCurrent(() => undefined);
+      await cleanup.prepareMutation();
+      calls.expectIdle();
+
+      controller.abort(new Error("foreground stopped"));
+      expect(() => retained.authority.assertCurrent()).toThrow("foreground stopped");
+      expect(() => retained.authority.assertLegacyCurrent()).toThrow("foreground stopped");
+      expect(() => cleanup.assertCurrent()).not.toThrow();
+      expect(() => cleanup.assertLegacyCurrent()).not.toThrow();
+      await patchSessionEntryCore(scope(), () => ({ label: "renamed" }));
+      calls.clear();
+      expect(() => cleanup.assertCurrent()).not.toThrow();
+      expect(() => cleanup.assertLegacyCurrent()).not.toThrow();
+      calls.expectIdle();
+
+      await patchSessionEntryCore(scope(), () => ({ previousSessionId: "changed-predecessor" }));
+      calls.clear();
+      expect(() => cleanup.assertCurrent()).toThrow("Session generation is no longer current");
+      expect(() => cleanup.assertLegacyCurrent()).toThrow(
+        "Session generation is no longer current",
+      );
+      calls.expectIdle();
+    } finally {
+      calls.restore();
+    }
+  });
+
+  it("releases a composed child capture without releasing its borrowed parent", async () => {
+    await upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
+    const parent = await retainNativeSessionGenerationAuthority({
+      target,
+      storePath,
+      createSupersededError,
+    });
+    using _ = { [Symbol.dispose]: () => parent.release() };
+    const child = await resolvePreparedNativeSessionBinding({
+      target,
+      storePath,
+      createSupersededError,
+      authority: parent.authority,
+      readBinding: async () => binding,
+    });
+    const cleanup = child.authority.withLiveness(() => {});
+    child.release();
+    expect(() => cleanup.assertLegacyCurrent()).toThrow("Session generation is no longer current");
+    expect(() => parent.authority.assertLegacyCurrent()).not.toThrow();
+    parent.release();
+    expect(() => parent.authority.assertLegacyCurrent()).toThrow(
+      "Session generation is no longer current",
+    );
+  });
+
+  it("consumes transferred lineage even when resolver admission is already revoked", async () => {
+    await upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
+    const retained = await retainNativeSessionGenerationAuthority({
+      target,
+      storePath,
+      createSupersededError,
+    });
+    using _ = { [Symbol.dispose]: () => retained.release() };
+    const controller = new AbortController();
+    controller.abort(new Error("resolver revoked"));
+    await expect(
+      resolvePreparedNativeSessionBinding({
+        target,
+        storePath,
+        createSupersededError,
+        generationAuthority: retained,
+        signal: controller.signal,
+        readBinding: async () => binding,
+      }),
+    ).rejects.toThrow("resolver revoked");
+    expect(() => retained.authority.assertLegacyCurrent()).toThrow(
+      "Session generation is no longer current",
+    );
+  });
 
   it("does not bridge two generations when the host rotates during a predecessor wait", async () => {
     const previous = { ...target, sessionId: "previous" };

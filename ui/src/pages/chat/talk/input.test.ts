@@ -211,12 +211,17 @@ describe("realtime Talk microphone inputs", () => {
     expect(enumerateDevices).toHaveBeenCalledTimes(2);
   });
 
-  it("reports the blocked reason when microphone permission is denied", async () => {
+  it.each([
+    ["NotAllowedError", "permission-blocked"],
+    ["UnknownError", "failed"],
+    ["constructor", "failed"],
+    ["toString", "failed"],
+  ])("reports microphone error %s as %s", async (errorName, expectedIssue) => {
     vi.stubGlobal("navigator", {
       mediaDevices: {
         enumerateDevices: vi.fn(async () => [mediaDevice("audioinput", "", "")]),
         getUserMedia: vi.fn(async () => {
-          throw new DOMException("denied", "NotAllowedError");
+          throw new DOMException("media request failed", errorName);
         }),
       },
     });
@@ -225,7 +230,7 @@ describe("realtime Talk microphone inputs", () => {
 
     expect(result.devices).toEqual([]);
     expect(result.permissionRequired).toBe(true);
-    expect(result.issue).toBe("permission-blocked");
+    expect(result.issue).toBe(expectedIssue);
   });
 
   it("separates an empty machine from a blocked browser", async () => {

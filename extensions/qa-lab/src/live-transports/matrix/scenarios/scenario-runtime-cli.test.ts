@@ -155,34 +155,10 @@ describe("Matrix QA CLI runtime", () => {
     }
   });
 
-  it("can preserve expected non-zero CLI output for negative scenarios", async () => {
-    const root = await mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-nonzero-"),
-    );
-    try {
-      await mkdir(path.join(root, "dist"));
-      await writeFile(
-        path.join(root, "dist", "index.mjs"),
-        [
-          "process.stdout.write(JSON.stringify({ success: false, error: 'expected failure' }));",
-          "process.exit(7);",
-        ].join("\n"),
-      );
-      const result = await runMatrixQaOpenClawCli({
-        allowNonZero: true,
-        args: ["matrix", "verify", "backup", "restore", "--json"],
-        cwd: root,
-        env: process.env,
-        timeoutMs: 5_000,
-      });
-      expect(result.exitCode).toBe(7);
-      expect(result.stdout).toContain('"success":false');
-    } finally {
-      await rm(root, { force: true, recursive: true });
-    }
-  });
-
-  it("can pass stdin to CLI commands", async () => {
+  it.each([
+    { exitCode: 0, allowNonZero: false },
+    { exitCode: 7, allowNonZero: true },
+  ])("can pass stdin to CLI commands exiting $exitCode", async ({ exitCode, allowNonZero }) => {
     const root = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-stdin-"));
     try {
       await mkdir(path.join(root, "dist"));
@@ -194,16 +170,19 @@ describe("Matrix QA CLI runtime", () => {
           "process.stdin.on('data', (chunk) => { input += chunk; });",
           "process.stdin.on('end', () => {",
           "  process.stdout.write(JSON.stringify({ input: input.trim() }));",
+          `  process.exitCode = ${exitCode};`,
           "});",
         ].join("\n"),
       );
       const result = await runMatrixQaOpenClawCli({
+        allowNonZero,
         args: ["matrix", "verify", "backup", "restore", "--recovery-key-stdin", "--json"],
         cwd: root,
         env: process.env,
         stdin: "stdin-recovery-key\n",
         timeoutMs: 5_000,
       });
+      expect(result.exitCode).toBe(exitCode);
       expect(result.stdout).toContain('"input":"stdin-recovery-key"');
     } finally {
       await rm(root, { force: true, recursive: true });
@@ -483,6 +462,7 @@ describe("Matrix QA CLI runtime", () => {
       );
 
       session = startMatrixQaOpenClawCli({
+        allowNonZero: true,
         args: ["matrix", "verify", "self"],
         cwd: root,
         env: process.env,
@@ -501,7 +481,7 @@ describe("Matrix QA CLI runtime", () => {
         signal,
       );
 
-      const sessionExit = session.wait().catch(() => undefined);
+      const sessionExit = expect(session.wait()).rejects.toThrow(/was cancelled/u);
       session.kill();
 
       await withinTest(sessionExit, signal);

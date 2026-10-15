@@ -2,12 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as sqliteQueries from "../infra/kysely-sync.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseByPathAsync,
 } from "./openclaw-state-db-cache.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -16,15 +16,21 @@ import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-conte
 import { fenceUserProfileMutationAuthority, onUserProfilesChanged } from "./user-profile-events.js";
 import {
   getUserProfileDisplay,
-  getUserProfileDisplays,
+  hasMultipleSessionSharingIdentities,
   prepareUserProfileCatalog,
   prepareUserProfileIdentity,
   readUserProfileAliases,
   readUserProfileIdentity,
+  readResidentUserProfileAliases,
+  readResidentUserProfileId,
+  readResidentUserProfileIdentity,
+  hasMultipleResidentSessionSharingIdentities,
+  getResidentUserProfileDisplay,
   captureResidentUserProfileAccess,
+  isUserProfileCatalogReady,
   resolveUserProfileReference,
-  retainUserProfileCatalog,
 } from "./user-profile-list.js";
+import { getUserProfileDisplaysNative } from "./user-profile-list.native.js";
 import {
   linkEmail,
   setAvatar,
@@ -56,18 +62,72 @@ function fixture() {
 }
 
 describe("resident profile display and reference catalog", () => {
+  it("never opens native storage from an unprepared runtime read", async () => {
+    const options = fixture();
+    const profile = ensureProfileForEmail("cold@example.test", options);
+    const native = vi.spyOn(stateReads, "withExistingOpenClawStateDatabaseReadOnly");
+    const queries = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
+    expect(readUserProfileIdentity(profile.id, options)).toBeUndefined();
+    expect(readUserProfileAliases(profile.id, options)).toEqual(new Set([profile.id]));
+    expect(hasMultipleSessionSharingIdentities(options)).toBe(false);
+    expect(() => getUserProfileDisplay(profile.id, options)).toThrow("user profile not found");
+    expect(native).not.toHaveBeenCalled();
+    expect(queries).not.toHaveBeenCalled();
+
+    const catalog = await prepareUserProfileCatalog(options);
+    releases.push(catalog.release);
+    expect(getUserProfileDisplay(profile.id, options).displayName).toBe("cold");
+    queries.mockClear();
+    setDisplayName(profile.id, "Current", options);
+    queries.mockClear();
+    expect(getUserProfileDisplay(profile.id, options).displayName).toBe("Current");
+    expect(queries).not.toHaveBeenCalled();
+    expect(native).not.toHaveBeenCalled();
+  });
+
+  it("prepares first physical admission after a retained absent catalog without native hydration", async () => {
+    const options = fixture();
+    const absent = await prepareUserProfileCatalog(options);
+    releases.push(absent.release);
+    expect(isUserProfileCatalogReady(options.path)).toBe(true);
+    expect(fs.existsSync(options.path)).toBe(false);
+    const profile = ensureProfileForEmail("appeared@example.test", options);
+    expect(isUserProfileCatalogReady(options.path)).toBe(false);
+    const database = openOpenClawStateDatabase(options);
+    await database.walMaintenance.stop();
+    const native = vi.spyOn(database.db, "prepare");
+    const current = await prepareUserProfileCatalog(options);
+    releases.push(current.release);
+    expect(current.readCurrentIdentity(profile.id)?.profileId).toBe(profile.id);
+    expect(getUserProfileDisplay(profile.id, options).displayName).toBe("appeared");
+    expect(isUserProfileCatalogReady(options.path)).toBe(true);
+    expect(native).not.toHaveBeenCalled();
+    absent.release();
+    expect(isUserProfileCatalogReady(options.path)).toBe(true);
+    current.release();
+    expect(isUserProfileCatalogReady(options.path)).toBe(false);
+  });
+
   it("reads current batch identities through merges and refuses unsettled authority without host SQL", async () => {
     const options = fixture();
     const alias = ensureProfileForEmail("alias@example.test", options);
     const target = ensureProfileForEmail("target@example.test", options);
     const catalog = await prepareUserProfileCatalog(options);
     releases.push(catalog.release);
+    expect(hasMultipleResidentSessionSharingIdentities(options)).toBe(true);
     const access = captureResidentUserProfileAccess(alias.id, options);
     expect(catalog.readCurrentIdentity(alias.id)?.profileId).toBe(alias.id);
     linkEmail("alias@example.test", target.id, options);
     setUserProfileRole(target.id, "reader", options);
     const admission = captureOpenClawStateWorkerContext(options).admission;
     const native = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
+    expect(readResidentUserProfileId(alias.id, options)).toBe(target.id);
+    expect(readResidentUserProfileIdentity(alias.id, options)?.role).toBe("reader");
+    expect(readResidentUserProfileAliases(target.id, options)).toEqual(
+      new Set([alias.id, target.id]),
+    );
+    expect(getResidentUserProfileDisplay(alias.id, options).id).toBe(target.id);
+    expect(hasMultipleResidentSessionSharingIdentities(options)).toBe(false);
     for (const id of [alias.id, target.id]) {
       expect(catalog.readCurrentIdentity(id)).toEqual({
         profileId: target.id,
@@ -207,8 +267,7 @@ describe("resident profile display and reference catalog", () => {
     async (admission) => {
       const options = fixture();
       if (admission === "native") {
-        releases.push(retainUserProfileCatalog(options));
-        (await prepareUserProfileCatalog(options)).release();
+        releases.push((await prepareUserProfileCatalog(options)).release);
         expect(resolveUserProfileReference("deadbeef", options)).toEqual({
           ok: true,
           value: undefined,
@@ -229,11 +288,11 @@ describe("resident profile display and reference catalog", () => {
       fs.renameSync(replacement.path, options.path);
       expect(() => prepared.readCurrentFacts()).toThrow();
       expect(() => prepared.readCurrentProfile()).toThrow();
-      const seen = vi.fn(() => getUserProfileDisplay(current.id, options).displayName);
+      const seen = vi.fn(() => isUserProfileCatalogReady(options.path));
       releases.push(onUserProfilesChanged(seen));
       if (admission === "native") {
         openOpenClawStateDatabase(options);
-        expect(seen.mock.results.map((result) => result.value)).toEqual(["current"]);
+        expect(seen.mock.results.map((result) => result.value)).toEqual([false]);
       }
       expect(() => access.assertCurrent()).toThrow();
       const next = await prepareUserProfileIdentity(current.id, options);
@@ -262,7 +321,7 @@ describe("resident profile display and reference catalog", () => {
 
   it.each(["email", "github"])(
     "publishes committed %s merge chains and cosmetics before session observers without clean SQL",
-    (producer) => {
+    async (producer) => {
       const options = fixture();
       const first = ensureProfileForEmail("first@example.test", options);
       const second = ensureProfileForEmail("second@example.test", options);
@@ -274,7 +333,7 @@ describe("resident profile display and reference catalog", () => {
           options,
         );
       }
-      releases.push(retainUserProfileCatalog(options));
+      releases.push((await prepareUserProfileCatalog(options)).release);
       const merge = () =>
         producer === "email"
           ? linkEmail("first@example.test", second.id, options)
@@ -282,21 +341,21 @@ describe("resident profile display and reference catalog", () => {
               { identity, authenticationAlias: { kind: "email", email: "first@example.test" } },
               options,
             );
-      const seen = vi.fn(() => readUserProfileAliases(second.id, options));
+      const seen = vi.fn(() => readResidentUserProfileAliases(second.id, options));
       releases.push(sessionChanges.subscribe(seen));
       expect(() =>
         runOpenClawStateWriteTransaction(() => {
           merge();
           setDisplayName(second.id, "Rolled back", options);
           setUserProfileRole(second.id, "rolled-back-role", options);
-          expect(readUserProfileIdentity(second.id, options)?.role).toBeNull();
+          expect(readResidentUserProfileIdentity(second.id, options)?.role).toBeNull();
           expect(getUserProfileDisplay(first.id, options).id).toBe(first.id);
           expect(seen).not.toHaveBeenCalled();
           throw new Error("rollback");
         }, options),
       ).toThrow("rollback");
       expect(seen).not.toHaveBeenCalled();
-      expect(readUserProfileIdentity(second.id, options)?.role).toBeNull();
+      expect(readResidentUserProfileIdentity(second.id, options)?.role).toBeNull();
       merge();
       expect(seen.mock.results.at(-1)?.value).toEqual(new Set([first.id, second.id]));
       linkEmail("first@example.test", third.id, options);
@@ -306,7 +365,6 @@ describe("resident profile display and reference catalog", () => {
       if (!head.ok || !head.value) {
         throw new Error("missing merge head");
       }
-      const headProfileId = head.value;
       setDisplayName(first.id, "Current person", options);
       setUserProfileRole(first.id, "reader", options);
       expect(setAvatar(first.id, new Uint8Array([1, 2]), "image/png", options).ok).toBe(true);
@@ -318,7 +376,7 @@ describe("resident profile display and reference catalog", () => {
           hasAvatar: true,
           avatarRevision: expect.stringMatching(/-png$/),
         });
-        expect(readUserProfileIdentity(id, options)).toMatchObject({
+        expect(readResidentUserProfileIdentity(id, options)).toMatchObject({
           profileId: head.value,
           role: "reader",
         });
@@ -326,16 +384,13 @@ describe("resident profile display and reference catalog", () => {
         expect(resolveUserProfileReference(id.replaceAll("-", ""), options)).toEqual(head);
         expect(readUserProfileAliases(id, options)).toContain(first.id);
       }
-      expect([
-        ...getUserProfileDisplays([first.id, second.id, head.value, "missing"], options).values(),
-      ]).toEqual(Array.from({ length: 3 }, () => getUserProfileDisplay(headProfileId, options)));
       expect(native).not.toHaveBeenCalled();
     },
   );
 
-  it("reads only display columns for one-hop aliases and native text keys without creating missing storage", () => {
+  it("keeps native display reads bounded for one-hop aliases and text keys without creating missing storage", () => {
     const options = fixture();
-    expect(getUserProfileDisplays(["missing"], options).size).toBe(0);
+    expect(getUserProfileDisplaysNative(["missing"], options).size).toBe(0);
     expect(fs.existsSync(options.path)).toBe(false);
     const target = ensureProfileForEmail("target@example.test", options);
     const alias = ensureProfileForEmail("alias@example.test", options);
@@ -353,14 +408,11 @@ describe("resident profile display and reference catalog", () => {
       "INSERT INTO user_profiles (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
     ).run(boundId, "Native text", 1, 1);
     const ids = [alias.id, dangling.id, requestedId, "missing"];
-    const displays = getUserProfileDisplays(ids, options);
+    const displays = getUserProfileDisplaysNative(ids, options);
     expect(displays.size).toBe(3);
-    for (const id of ids.slice(0, -1)) {
-      expect(displays.get(id)).toEqual(getUserProfileDisplay(id, options));
-    }
-    expect(displays.get(alias.id)?.id).toBe(target.id);
-    expect(displays.get(dangling.id)?.id).toBe(dangling.id);
-    expect(displays.get(requestedId)?.id).toBe(boundId);
+    expect(displays.get(alias.id)).toMatchObject({ id: target.id, displayName: "target" });
+    expect(displays.get(dangling.id)).toMatchObject({ id: dangling.id, displayName: "dangling" });
+    expect(displays.get(requestedId)).toMatchObject({ id: boundId, displayName: "Native text" });
 
     const nonStrictOptions = fixture();
     const nonStrictDb = openOpenClawStateDatabase(nonStrictOptions).db;
@@ -381,15 +433,12 @@ describe("resident profile display and reference catalog", () => {
         "INSERT INTO user_profiles (id, display_name, merged_into, updated_at) VALUES (?, ?, ?, 1)",
       )
       .run("blob-alias", "Alias", blobId);
-    expect(getUserProfileDisplays(["blob-alias"], nonStrictOptions).get("blob-alias")).toEqual(
-      getUserProfileDisplay("blob-alias", nonStrictOptions),
-    );
-    expect(getUserProfileDisplay("blob-alias", nonStrictOptions).displayName).toBe(
-      "Native BLOB target",
-    );
+    expect(
+      getUserProfileDisplaysNative(["blob-alias"], nonStrictOptions).get("blob-alias"),
+    ).toMatchObject({ displayName: "Native BLOB target" });
   });
 
-  it("keeps dormant ambiguity and exact-ID precedence inside the allowed visibility scope", () => {
+  it("keeps dormant ambiguity and exact-ID precedence inside the allowed visibility scope", async () => {
     const options = fixture();
     const visible = ensureProfileForEmail("visible@example.test", options);
     const prefix = visible.id.slice(0, 8);
@@ -398,7 +447,7 @@ describe("resident profile display and reference catalog", () => {
     db.prepare(
       "INSERT INTO user_profiles (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
     ).run(dormant, "Dormant person", 1, 1);
-    releases.push(retainUserProfileCatalog(options));
+    releases.push((await prepareUserProfileCatalog(options)).release);
     const native = vi.spyOn(db, "prepare");
     expect(resolveUserProfileReference(prefix, options)).toEqual({ ok: false, error: "ambiguous" });
     expect(resolveUserProfileReference(visible.id, options)).toEqual({
@@ -411,13 +460,16 @@ describe("resident profile display and reference catalog", () => {
     expect(native).not.toHaveBeenCalled();
   });
 
-  it("tracks committed changes in every database already open before catalog admission", () => {
+  it("tracks committed changes in every database already open before catalog admission", async () => {
     const firstOptions = fixture();
     const secondOptions = fixture();
     const first = ensureProfileForEmail("first-open@example.test", firstOptions);
     const second = ensureProfileForEmail("second-open@example.test", secondOptions);
     const target = ensureProfileForEmail("merge-target@example.test", secondOptions);
-    releases.push(retainUserProfileCatalog(firstOptions), retainUserProfileCatalog(secondOptions));
+    releases.push(
+      (await prepareUserProfileCatalog(firstOptions)).release,
+      (await prepareUserProfileCatalog(secondOptions)).release,
+    );
     const seen = vi.fn(() => getUserProfileDisplay(second.id, secondOptions));
     releases.push(onUserProfilesChanged(seen));
     setDisplayName(first.id, "First current", firstOptions);
@@ -444,7 +496,7 @@ describe("resident profile display and reference catalog", () => {
     }
   });
 
-  it("shares committed profile facts and one hydration across symlink and canonical locators", () => {
+  it("shares committed profile facts and one hydration across symlink and canonical locators", async () => {
     const canonical = fixture();
     const source = ensureProfileForEmail("alias-source@example.test", canonical);
     const target = ensureProfileForEmail("alias-target@example.test", canonical);
@@ -453,26 +505,22 @@ describe("resident profile display and reference catalog", () => {
     const alias = { path: path.join(roots.make("resident-profile-alias-"), "alias.sqlite") };
     paths.push(alias.path);
     fs.symlinkSync(canonical.path, alias.path);
-    const reads = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
-    releases.push(retainUserProfileCatalog(alias), retainUserProfileCatalog(canonical));
-    const release = retainUserProfileCatalog(canonical);
+    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    releases.push(
+      (await prepareUserProfileCatalog(alias)).release,
+      (await prepareUserProfileCatalog(canonical)).release,
+    );
+    const release = (await prepareUserProfileCatalog(canonical)).release;
     releases.push(release);
     release();
     release();
-    const scans = reads.mock.calls
-      .map(([, query]) => query.compile().sql)
-      .filter((sql) => sql.includes('from "user_profiles"') && !sql.includes("where"));
-    expect(scans).toHaveLength(1);
+    expect(reads.mock.calls.map(([, command]) => command.type)).toEqual(["userProfiles.catalog"]);
     reads.mockClear();
     const { db } = openOpenClawStateDatabase(canonical);
-    expect(
-      reads.mock.calls
-        .map(([, query]) => query.compile().sql)
-        .filter((sql) => sql.includes('from "user_profiles"')),
-    ).toEqual([]);
+    expect(reads).not.toHaveBeenCalled();
     const reopened = vi.spyOn(db, "prepare");
     expect(getUserProfileDisplay(source.id, canonical).displayName).toBe("alias-source");
-    expect(readUserProfileIdentity(source.id, canonical)?.role).toBe("reader");
+    expect(readResidentUserProfileIdentity(source.id, canonical)?.role).toBe("reader");
     expect(reopened).not.toHaveBeenCalled();
     reopened.mockRestore();
     setDisplayName(source.id, "Through alias", alias);
@@ -480,11 +528,7 @@ describe("resident profile display and reference catalog", () => {
     expect(getUserProfileDisplay(source.id, canonical).displayName).toBe("Through alias");
     linkEmail("alias-source@example.test", target.id, canonical);
     setDisplayName(source.id, "Through canonical", canonical);
-    expect(
-      reads.mock.calls
-        .map(([, query]) => query.compile().sql)
-        .filter((sql) => sql.includes('from "user_profiles"') && !sql.includes("where")),
-    ).toEqual([]);
+    expect(reads).not.toHaveBeenCalled();
     reads.mockClear();
     const native = vi.spyOn(openOpenClawStateDatabase(canonical).db, "prepare");
     for (const options of [alias, canonical]) {
@@ -497,8 +541,55 @@ describe("resident profile display and reference catalog", () => {
         value: target.id,
       });
       expect(readUserProfileAliases(source.id, options)).toEqual(new Set([source.id, target.id]));
+      expect(readResidentUserProfileAliases(source.id, options)).toEqual(
+        new Set([source.id, target.id]),
+      );
     }
     expect(reads).not.toHaveBeenCalled();
     expect(native).not.toHaveBeenCalled();
+    native.mockRestore();
+
+    const oldIdentity = await prepareUserProfileIdentity(target.id, alias);
+    releases.push(oldIdentity.release);
+    await closeOpenClawStateDatabaseByPathAsync(alias.path);
+    await closeOpenClawStateDatabaseByPathAsync(canonical.path);
+    fs.renameSync(canonical.path, `${canonical.path}.old`);
+    const replacement = fixture();
+    const nextSource = ensureProfileForEmail("next-source@example.test", replacement);
+    const nextTarget = ensureProfileForEmail("next-target@example.test", replacement);
+    await closeOpenClawStateDatabaseByPathAsync(replacement.path);
+    fs.renameSync(replacement.path, canonical.path);
+    openOpenClawStateDatabase(canonical);
+    expect(() => oldIdentity.readCurrentFacts()).toThrow();
+    reads.mockClear();
+    releases.push(
+      (await prepareUserProfileCatalog(canonical)).release,
+      (await prepareUserProfileCatalog(alias)).release,
+    );
+    expect(reads.mock.calls.map(([, command]) => command.type)).toEqual(["userProfiles.catalog"]);
+    reads.mockClear();
+    linkEmail("next-source@example.test", nextTarget.id, canonical);
+    setDisplayName(nextSource.id, "Replacement person", canonical);
+    setUserProfileRole(nextTarget.id, "reader", alias);
+    const currentNative = vi.spyOn(openOpenClawStateDatabase(canonical).db, "prepare");
+    for (const options of [canonical, alias]) {
+      expect(getUserProfileDisplay(nextSource.id, options)).toMatchObject({
+        id: nextTarget.id,
+        displayName: "Replacement person",
+      });
+      expect(readResidentUserProfileIdentity(nextSource.id, options)).toMatchObject({
+        profileId: nextTarget.id,
+        role: "reader",
+        aliases: new Set([nextSource.id, nextTarget.id]),
+      });
+      expect(
+        captureResidentUserProfileAccess(nextSource.id, options).readCurrentFacts(),
+      ).toMatchObject({
+        profileId: nextTarget.id,
+        emails: ["next-source@example.test", "next-target@example.test"],
+      });
+    }
+    expect(reads).not.toHaveBeenCalled();
+    expect(currentNative).not.toHaveBeenCalled();
   });
 });

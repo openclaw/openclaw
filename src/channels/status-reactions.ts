@@ -163,8 +163,7 @@ export function createStatusReactionController(params: {
   let currentEmoji = "";
   let pendingEmoji = "";
   let debounceTimer: NodeJS.Timeout | null = null;
-  let stallSoftTimer: NodeJS.Timeout | null = null;
-  let stallHardTimer: NodeJS.Timeout | null = null;
+  let stallTimers: NodeJS.Timeout[] = [];
   let terminalHold: { timer: NodeJS.Timeout; resolve: () => void } | null = null;
   let terminalHoldGeneration = 0;
   let finished = false;
@@ -178,14 +177,14 @@ export function createStatusReactionController(params: {
 
   function clearActivityTimers(): void {
     clearDebounceTimer();
-    if (stallSoftTimer) {
-      clearTimeout(stallSoftTimer);
-      stallSoftTimer = null;
+    clearStallTimers();
+  }
+
+  function clearStallTimers(): void {
+    for (const timer of stallTimers) {
+      clearTimeout(timer);
     }
-    if (stallHardTimer) {
-      clearTimeout(stallHardTimer);
-      stallHardTimer = null;
-    }
+    stallTimers = [];
   }
 
   function cancelTerminalHold(): void {
@@ -223,20 +222,12 @@ export function createStatusReactionController(params: {
     if (!showActivity) {
       return;
     }
-    if (stallSoftTimer) {
-      clearTimeout(stallSoftTimer);
-    }
-    if (stallHardTimer) {
-      clearTimeout(stallHardTimer);
-    }
-
-    stallSoftTimer = setTimeout(() => {
-      scheduleEmoji(emojis.stallSoft, { immediate: true, skipStallReset: true });
-    }, timing.stallSoftMs);
-
-    stallHardTimer = setTimeout(() => {
-      scheduleEmoji(emojis.stallHard, { immediate: true, skipStallReset: true });
-    }, timing.stallHardMs);
+    clearStallTimers();
+    stallTimers = (["stallSoft", "stallHard"] as const).map((phase) =>
+      setTimeout(() => {
+        scheduleEmoji(emojis[phase], { immediate: true, skipStallReset: true });
+      }, timing[`${phase}Ms`]),
+    );
   }
 
   async function removeActiveEmojis(options: { keepEmoji?: string } = {}): Promise<void> {

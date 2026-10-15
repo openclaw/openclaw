@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import * as terminalStart from "../../lib/sessions/catalog-terminal.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../../lib/toast.ts";
@@ -228,6 +227,7 @@ describe("DraftSubmissionFlow", () => {
         mentions: flow.mentions,
         attachments: flow.attachmentDraft.attachments,
       };
+      const navigationsBeforeCleanup = vi.mocked(context.navigateAndWait).mock.calls.length;
       if (next === "reconnect") {
         flow.invalidate("gateway-changed");
       }
@@ -239,6 +239,7 @@ describe("DraftSubmissionFlow", () => {
       expect(flow.mentions).toEqual([]);
       expect(flow.attachmentDraft.attachments).toEqual([]);
       expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      expect(navigationsBeforeCleanup).toBe(0);
       expect(context.navigateAndWait).toHaveBeenCalledTimes(next === "navigation" ? 1 : 0);
       const retained = context.chatSubmissions.readInitial(
         sessionKey,
@@ -270,38 +271,6 @@ describe("DraftSubmissionFlow", () => {
       }
     },
   );
-  it("replaces the native draft route with the started terminal session", async () => {
-    const { context, flow } = createDraftFixture({
-      scopes: ["operator.admin"],
-      methods: ["sessions.catalog.startTerminal", "terminal.open"],
-      data: {
-        agentId: "main",
-        requestedAgentId: "main",
-        catalogId: "codex",
-        catalogLabel: "Codex",
-        startTerminal: true,
-        terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
-      },
-    });
-    Object.assign(context, { basePath: "/openclaw", replace: vi.fn() });
-    vi.spyOn(terminalStart, "startCatalogSessionInTerminal").mockResolvedValue({
-      sessionId: "terminal-created",
-      cwd: "/workspace",
-      shell: "codex",
-      agentId: "main",
-      confined: false,
-    });
-    flow.setMessage("Start this task");
-    await flow.submit();
-
-    expect(context.replace).toHaveBeenCalledWith("terminal", {
-      pathname: "/openclaw/terminal/terminal-created",
-      search: "",
-      hash: "",
-    });
-    expect(flow.message).toBe("");
-    expect(context.sessions.createResult).not.toHaveBeenCalled();
-  });
   it("starts a cloud repository with its selected ref without cloning on the Gateway", async () => {
     const { context, flow, gateway, place, request } = createDraftFixture({
       methods: ["sessions.create", "sessions.dispatch"],
@@ -545,7 +514,7 @@ describe("DraftSubmissionFlow", () => {
     expect(getChatAttachmentDataUrl(displaced)).toBeNull();
     expect(noteUserMutation).not.toHaveBeenCalled();
     expect(requestUpdate).toHaveBeenCalledOnce();
-    flow.attachmentDraft.reset({ release: true });
+    flow.attachmentDraft.reset();
   });
 
   it("releases the displaced payload and renders placement recovery once without a user mutation", () => {
@@ -602,7 +571,7 @@ describe("DraftSubmissionFlow", () => {
         content: "cmVjb3ZlcmVk",
       },
     ]);
-    flow.attachmentDraft.reset({ release: true });
+    flow.attachmentDraft.reset();
   });
 
   it.each([

@@ -26,6 +26,7 @@ import {
 import { errorShapeFromError } from "./error-shape.js";
 import { createExpectedProfileBinding } from "./expected-profile.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
+import type { GatewayMethodRegistryView } from "./methods/descriptor.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
@@ -117,7 +118,7 @@ type GatewayRequestEnvelopeOptions<T> = Pick<
   GatewayRequestOptions,
   "context" | "isWebchatConnect" | "signal" | "hasCurrentClientAuthority"
 > & {
-  methodRegistry: GatewayMethodRegistry;
+  methodRegistry: GatewayMethodRegistryView;
   requestParams?: unknown;
   admission?: "continuation";
   reject: (error: ReturnType<typeof errorShape>) => T | Promise<T>;
@@ -334,6 +335,7 @@ export async function handleGatewayRequest(
     const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
     const releaseForegroundWork = retainSessionListForegroundWork();
     let sessionAccessAuthority: GatewaySessionAccessAuthority | undefined;
+    let releaseSessionMutation: (() => void) | undefined;
     try {
       entry?.assertOpen();
       const requestMutationAuthority = readGatewayRequestMutationAuthority(opts);
@@ -344,7 +346,13 @@ export async function handleGatewayRequest(
         : captureGatewayRequestOperatorGuard(opts);
       const assertOperatorCurrent = () =>
         (capturedOperatorGuard ??= captureGatewayRequestOperatorGuard(opts))();
-      const requestFacts = { method: req.method, requestParams: req.params, client, context };
+      const requestFacts = {
+        method: req.method,
+        requestParams: req.params,
+        client,
+        context,
+        signal,
+      };
       const authorization = await authorizeGatewayRequestPreDispatch({
         ...requestFacts,
         methodRegistry,
@@ -365,6 +373,7 @@ export async function handleGatewayRequest(
         },
       });
       sessionAccessAuthority = authorization.sessionAccessAuthority;
+      releaseSessionMutation = authorization.sessionMutationAuthorization?.release;
       entry?.assertOpen();
       if (authorization.error) {
         respond(false, undefined, authorization.error);
@@ -541,6 +550,7 @@ export async function handleGatewayRequest(
       }
       respond(false, undefined, error.error);
     } finally {
+      releaseSessionMutation?.();
       sessionAccessAuthority?.release();
       releaseForegroundWork();
       // Transport/import owners retain failures through their response and logging paths.

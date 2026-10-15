@@ -73,7 +73,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: mocks.getRuntimeConfig,
+  readRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 vi.mock("openclaw/plugin-sdk/config-mutation", async (importOriginal) => ({
@@ -298,7 +298,6 @@ describe("ensureBrowserControlAuth", () => {
       generatedAuthField: "token",
     });
   });
-
   it("still auto-generates in trusted-proxy mode when only token SecretRef is set", async () => {
     const cfg: OpenClawConfig = {
       gateway: {

@@ -22,7 +22,6 @@ import {
   getCodexContextFileDisplayBasename,
   isNonEmptyString,
   normalizeCodexContextFilePath,
-  type CodexBootstrapFile,
   type CodexWorkspaceBootstrapContext,
 } from "./attempt-workspace-context.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
@@ -164,19 +163,7 @@ export function buildCodexSystemPromptReport(params: {
       nonProjectContextChars: params.developerInstructions.length,
       hash: sha256Text(params.developerInstructions),
     },
-    injectedWorkspaceFiles: buildCodexBootstrapInjectionStats({
-      bootstrapFiles: params.workspaceBootstrapContext.bootstrapFiles,
-      injectedFiles: params.workspaceBootstrapContext.promptContextFiles ?? [],
-      omitReferenceFiles: params.omitWorkspaceReferences,
-      omitPersonalProfiles: !params.parentLocalEgress,
-      developerInstructionFiles: [
-        ...(params.workspaceBootstrapContext.threadDeveloperInstructionFiles ?? []),
-        ...(params.workspaceBootstrapContext.personaFiles ?? []),
-      ],
-      memoryToolRoutedBootstrapFiles:
-        params.workspaceBootstrapContext.memoryToolRoutedBootstrapFiles ?? [],
-      memoryToolRouted: params.workspaceBootstrapContext.memoryToolRouted === true,
-    }),
+    injectedWorkspaceFiles: buildCodexBootstrapInjectionStats(params),
     skills: {
       promptChars: skillsPrompt.length,
       hash: sha256Text(skillsPrompt),
@@ -204,29 +191,22 @@ function buildCodexSkillReportEntries(
 
 function buildCodexToolReportEntry(tool: CodexDynamicToolFunctionSpec): CodexToolReportEntry {
   const summary = tool.description.trim();
+  const deferred = tool.deferLoading === true;
+  const schema = deferred ? null : tool.inputSchema;
+  let schemaChars = 0;
+  if (!deferred) {
+    try {
+      schemaChars = JSON.stringify(schema).length;
+    } catch {
+      schemaChars = 0;
+    }
+  }
+  const properties =
+    isJsonObject(schema) && isJsonObject(schema.properties) ? schema.properties : null;
   return {
     name: tool.name,
     summaryChars: summary.length,
     summaryHash: sha256Text(summary),
-    ...(tool.deferLoading === true
-      ? { schemaChars: 0, schemaHash: stableJsonHash(null), propertiesCount: null }
-      : buildCodexToolSchemaStats(tool.inputSchema)),
-  };
-}
-
-function buildCodexToolSchemaStats(
-  schema: JsonValue,
-): Pick<CodexToolReportEntry, "schemaChars" | "schemaHash" | "propertiesCount"> {
-  const schemaChars = (() => {
-    try {
-      return JSON.stringify(schema).length;
-    } catch {
-      return 0;
-    }
-  })();
-  const properties =
-    isJsonObject(schema) && isJsonObject(schema.properties) ? schema.properties : null;
-  return {
     schemaChars,
     schemaHash: stableJsonHash(schema),
     propertiesCount: properties ? Object.keys(properties).length : null,
@@ -241,26 +221,22 @@ function stableJsonHash(value: JsonValue): string {
   return sha256Text(JSON.stringify(stabilizeJsonValue(value)) ?? "null");
 }
 
-function buildCodexBootstrapInjectionStats(params: {
-  bootstrapFiles: CodexBootstrapFile[];
-  injectedFiles: EmbeddedContextFile[];
-  omitReferenceFiles?: boolean;
-  omitPersonalProfiles?: boolean;
-  developerInstructionFiles?: EmbeddedContextFile[];
-  memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
-  memoryToolRouted?: boolean;
-}): CodexSystemPromptReport["injectedWorkspaceFiles"] {
-  const injectedIndex = indexCodexContextFileContent(params.injectedFiles);
-  const developerInstructionIndex = indexCodexContextFileContent(
-    params.developerInstructionFiles ?? [],
-  );
+function buildCodexBootstrapInjectionStats(
+  params: Parameters<typeof buildCodexSystemPromptReport>[0],
+): CodexSystemPromptReport["injectedWorkspaceFiles"] {
+  const context = params.workspaceBootstrapContext;
+  const readInjected = indexCodexContextFileContent(context.promptContextFiles ?? []);
+  const readDeveloperInstruction = indexCodexContextFileContent([
+    ...(context.threadDeveloperInstructionFiles ?? []),
+    ...(context.personaFiles ?? []),
+  ]);
   const memoryToolRoutedPaths = new Set(
-    (params.memoryToolRoutedBootstrapFiles ?? [])
+    (context.memoryToolRoutedBootstrapFiles ?? [])
       .map((file) => readNonEmptyString(file.path))
       .filter(isNonEmptyString)
       .map(normalizeCodexContextFilePath),
   );
-  return params.bootstrapFiles.map((file) => {
+  return context.bootstrapFiles.map((file) => {
     const fileName = readNonEmptyString(file.name);
     const pathValue = readNonEmptyString(file.path) ?? fileName ?? "";
     const displayName = (fileName ?? getCodexContextFileDisplayBasename(pathValue)) || pathValue;
@@ -268,12 +244,11 @@ function buildCodexBootstrapInjectionStats(params: {
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
     const memoryToolRoutedFile =
       baseName === CODEX_MEMORY_CONTEXT_BASENAME &&
-      params.memoryToolRouted === true &&
+      context.memoryToolRouted === true &&
       memoryToolRoutedPaths.has(normalizeCodexContextFilePath(pathValue));
     const injected = memoryToolRoutedFile
       ? undefined
-      : (readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) ??
-        readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, fileName));
+      : (readInjected(pathValue, fileName) ?? readDeveloperInstruction(pathValue, fileName));
     if (
       !file.missing &&
       injected === undefined &&
@@ -290,10 +265,9 @@ function buildCodexBootstrapInjectionStats(params: {
       };
     }
     const omitted =
-      (params.omitPersonalProfiles && file.personalUser === true) ||
+      (!params.parentLocalEgress && file.personalUser === true) ||
       memoryToolRoutedFile ||
-      (params.omitReferenceFiles &&
-        readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) !== undefined);
+      (params.omitWorkspaceReferences && readInjected(pathValue, fileName) !== undefined);
     const injectedChars = omitted ? 0 : (injected?.length ?? 0);
     const truncated = omitted ? false : !file.missing && injectedChars < rawChars;
     return {
@@ -307,10 +281,7 @@ function buildCodexBootstrapInjectionStats(params: {
   });
 }
 
-function indexCodexContextFileContent(files: EmbeddedContextFile[]): {
-  byPath: Map<string, string>;
-  byBaseName: Map<string, string>;
-} {
+function indexCodexContextFileContent(files: EmbeddedContextFile[]) {
   const byPath = new Map<string, string>();
   const byBaseName = new Map<string, string>();
   for (const file of files) {
@@ -326,20 +297,14 @@ function indexCodexContextFileContent(files: EmbeddedContextFile[]): {
       byBaseName.set(baseName, file.content);
     }
   }
-  return { byPath, byBaseName };
-}
-
-function readCodexIndexedContextFileContent(
-  index: { byPath: Map<string, string>; byBaseName: Map<string, string> },
-  pathValue: string,
-  fileName: string | undefined,
-): string | undefined {
-  const baseName = getCodexContextFileBasename(fileName ?? pathValue);
-  return (
-    index.byPath.get(pathValue) ??
-    (fileName ? index.byPath.get(fileName) : undefined) ??
-    (baseName ? index.byBaseName.get(baseName) : undefined)
-  );
+  return (pathValue: string, fileName: string | undefined): string | undefined => {
+    const baseName = getCodexContextFileBasename(fileName ?? pathValue);
+    return (
+      byPath.get(pathValue) ??
+      (fileName ? byPath.get(fileName) : undefined) ??
+      (baseName ? byBaseName.get(baseName) : undefined)
+    );
+  };
 }
 
 function readPositiveNumber(value: unknown): number | undefined {
@@ -486,13 +451,7 @@ export function resolveCodexDeliveryHintPreservedInputRange(params: {
   }
   const promptWithoutDeliveryHintStart = prompt.length - promptWithoutDeliveryHint.length;
   const inputStart = Math.max(promptInputRange.start, promptWithoutDeliveryHintStart);
-  const inputEnd = Math.max(
-    inputStart,
-    Math.min(
-      promptInputRange.end,
-      promptWithoutDeliveryHint.length + promptWithoutDeliveryHintStart,
-    ),
-  );
+  const inputEnd = Math.max(inputStart, promptInputRange.end);
   const decoratedPromptSuffixStart = decoratedPrompt.length - promptWithoutDeliveryHint.length;
   const requestHeader = "Current user request:\n";
   const requestHeaderStart = decoratedPromptSuffixStart - requestHeader.length;

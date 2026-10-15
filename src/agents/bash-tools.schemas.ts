@@ -5,6 +5,8 @@
  * descriptions that match runtime validation.
  */
 import { Type } from "typebox";
+import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { executionTitleSchema, optionalStringEnum } from "./schema/typebox.js";
 
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
@@ -37,7 +39,7 @@ export const execSchema = Type.Object({
   ),
   yieldMs: Type.Optional(
     Type.Number({
-      description: "Milliseconds before backgrounding; default 10000.",
+      description: "Milliseconds before returning an ordinary-command handle; default 10000.",
     }),
   ),
   awaitResults: Type.Optional(
@@ -48,7 +50,8 @@ export const execSchema = Type.Object({
   ),
   background: Type.Optional(
     Type.Boolean({
-      description: "Background now; timeoutSeconds applies.",
+      description:
+        "Start an independent service now; survives request Stop. Use yieldMs for ordinary work. timeoutSeconds applies.",
     }),
   ),
   timeoutSeconds: Type.Optional(
@@ -67,7 +70,7 @@ export const execSchema = Type.Object({
     }),
   ),
   host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
-    description: "Omit/auto: inherit configured host.",
+    description: "Omit: named node or configured host. auto: configured host.",
   }),
   ask: Type.Optional(
     Type.String({
@@ -77,13 +80,30 @@ export const execSchema = Type.Object({
   ),
   node: Type.Optional(
     Type.String({
-      description: "Node id/name for host=node.",
+      description: "Node id/name; implies host=node if host is omitted. Other hosts conflict.",
     }),
   ),
 });
 
-/** Exec parameters when no process-control continuation is authorized. */
-export const execCompletionSchema = Type.Omit(execSchema, ["yieldMs", "background"]);
+/** Capture host capabilities once; direct tools and catalog hints share this schema. */
+export function createExecSchema(
+  defaults?: Pick<ExecToolDefaults, "host" | "sandbox" | "sandboxRequired">,
+) {
+  const sandboxAvailable = Boolean(defaults?.sandbox);
+  const configuredTarget = defaults?.sandboxRequired ? "sandbox" : (defaults?.host ?? "auto");
+  const hosts = EXEC_TOOL_HOST_VALUES.filter(
+    (requestedTarget) =>
+      requestedTarget === "auto" ||
+      ((requestedTarget !== "sandbox" || sandboxAvailable) &&
+        isRequestedExecTargetAllowed({ configuredTarget, requestedTarget, sandboxAvailable })),
+  );
+  return Type.Object({
+    ...execSchema.properties,
+    host: optionalStringEnum(hosts, {
+      description: `Omit: named node or configured host (${configuredTarget === "auto" ? (sandboxAvailable ? "sandbox" : "gateway") : configuredTarget}). auto: configured host.`,
+    }),
+  });
+}
 
 /** Parameters exposed by node-only exec surfaces. */
 export const nodeExecSchema = Type.Object({

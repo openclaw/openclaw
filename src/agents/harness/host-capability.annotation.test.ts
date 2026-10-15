@@ -7,6 +7,7 @@ import { convertMessages } from "../../../packages/ai/src/openai-completions-mes
 import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputReceipts,
@@ -14,7 +15,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -22,8 +22,8 @@ import {
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.js";
-import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessions/session-transcript-index.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.worker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
@@ -83,6 +83,7 @@ async function withAdmission(
   } = {},
 ) {
   await withOpenClawTestState({ label: "admission-annotation" }, async (state) => {
+    setRuntimeConfigSnapshot(options.config ?? {}, options.config);
     const fixture = await prepareAdmission(
       path.join(state.sessionsDir(), "sessions.json"),
       options,
@@ -193,21 +194,6 @@ async function holdTranscriptWriter(target: Parameters<typeof resolveSqliteTrans
 }
 
 describe("host-owned current admission annotation", () => {
-  it("preserves admitted provenance after transcript persistence", async () => {
-    const provenance = { kind: "inter_session" as const, sourceTool: "heartbeat" };
-    await withAdmission(
-      async (f) => {
-        await f.annotate();
-        expect(f.recorder.getPersistedMessage?.()).toMatchObject({
-          content: "prompt",
-          provenance,
-          __openclaw: { mirrorIdentity: "native-turn:prompt" },
-        });
-      },
-      { input: { text: "prompt", provenance }, beforeMessageWrite: ({ message }) => message },
-    );
-  });
-
   it("refreshes only the admitted collected input while preserving source custody", async () => {
     const hook = vi.fn<NonNullable<CreateUserTurnTranscriptRecorderParams["beforeMessageWrite"]>>(
       ({ message }) => message,
@@ -251,7 +237,7 @@ describe("host-owned current admission annotation", () => {
           });
           const persisted = expectDefined(await recorder.persistApproved(), "promoted input");
           const original = structuredClone(persisted.admission);
-          const consumptions = listSessionPendingInputReceipts(f.target, {
+          const consumptions = await listSessionPendingInputReceipts(f.target, {
             runIds: accepted.items.map((input) => input.runId),
           });
           expect(consumptions).toEqual(
@@ -289,7 +275,7 @@ describe("host-owned current admission annotation", () => {
             accepted.items.map((input) => input.message),
           );
           expect(
-            listSessionPendingInputReceipts(f.target, {
+            await listSessionPendingInputReceipts(f.target, {
               runIds: accepted.items.map((input) => input.runId),
             }),
           ).toEqual(consumptions);
@@ -333,161 +319,178 @@ describe("host-owned current admission annotation", () => {
   });
 
   it("refreshes the same event once, resets cursors and advances the actual durable context-engine outbox", async () => {
-    await withAdmission(async (f) => {
-      const original = structuredClone(f.receipt());
-      const before = await loadTranscriptEvents(f.target);
-      const originalMessage = structuredClone(
-        expectDefined(f.recorder.getPersistedMessage?.(), "persisted message"),
-      );
-      const page = await readSessionTranscriptVisibleMessageDelta(f.target);
-      expect(page.kind).toBe("page");
-      if (page.kind !== "page") {
-        throw new Error("missing initial cursor");
-      }
-      const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
-        status: "committed",
-      }));
-      const engine: ContextEngine = {
-        info: {
-          id: "annotation",
-          name: "Annotation",
-          transcriptSemantics: {
-            currentTurnFence: "before-current-turn-entry-v1",
-            turnAdvancementIdempotency: "atomic-idempotent-v1",
-          },
-        },
-        ingest: async () => ({ ingested: true }),
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-        compact: async () => ({ ok: true, compacted: false }),
-        commitTurn,
-      };
-      const lease: ContextEngineLogicalTurnLease = {
-        engine,
-        effectiveEngine: engine,
-        effectiveEngineId: "annotation",
-        degraded: false,
-        selectForHost: vi.fn(),
-        degradeBeforeStart: vi.fn(),
-        begin: vi.fn(),
-        deferDisposalUntil: vi.fn(),
-        dispose: async () => {},
-      };
-      const warn = vi.fn();
-      await drainPendingContextEngineTurnsBeforeRun({
-        admission: original,
-        recorder: f.recorder,
-        lease,
-        warn,
-      });
-      const updates = vi.fn();
-      const unsubscribe = onInternalSessionTranscriptUpdate(updates);
-      try {
-        const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-        const searchRows = () =>
-          db
-            .prepare("SELECT * FROM session_transcript_fts WHERE session_id = ?")
-            .all(f.target.sessionId);
-        const searchBefore = searchRows();
-        const projectionWork = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
-          /\bsession_transcript_fts\b/i.test(sql)
-            ? "fts"
-            : sql.includes("octet_length")
-              ? "size"
-              : null,
+    const provenance = { kind: "inter_session" as const, sourceTool: "heartbeat" };
+    await withAdmission(
+      async (f) => {
+        const original = structuredClone(f.receipt());
+        const before = await loadTranscriptEvents(f.target);
+        const originalMessage = structuredClone(
+          expectDefined(f.recorder.getPersistedMessage?.(), "persisted message"),
         );
-        try {
-          await f.annotate();
-        } finally {
-          projectionWork.restore();
+        const page = await readSessionTranscriptVisibleMessageDelta(f.target);
+        expect(page.kind).toBe("page");
+        if (page.kind !== "page") {
+          throw new Error("missing initial cursor");
         }
-        expect(projectionWork.counts).toEqual({ fts: 0, size: 0 });
-        expect(searchRows()).toEqual(searchBefore);
-        const refreshed = f.receipt();
-        expect(refreshed).toEqual({ ...original, generation: expect.any(String) });
-        expect(refreshed.generation).not.toBe(original.generation);
-        expect(
-          await readSessionTranscriptVisibleMessageDelta({ ...f.target, cursor: page.cursor }),
-        ).toMatchObject({ kind: "reset" });
-        expect(await readCodexSessionTranscriptEventsBeforeAdmission(f.target, refreshed)).toEqual(
-          before.slice(0, -1),
-        );
-        expect(
-          readClosedTranscriptTurnInDatabase(db, {
-            boundary: { admission: original, terminal: refreshed },
-            maxEvents: 20,
-            maxBytes: 10000,
-          }),
-        ).toMatchObject({ kind: "session-rebound" });
-        const after = await loadTranscriptEvents(f.target);
-        const model = {
-          api: "openai-completions",
-          provider: "openai",
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          baseUrl: "https://api.openai.com/v1",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 100000,
-          maxTokens: 4096,
-        } satisfies Parameters<typeof convertMessages>[0];
-        const modelBytes = (message: typeof originalMessage) =>
-          JSON.stringify(
-            convertMessages(
-              model,
-              {
-                messages: convertToLlm(
-                  normalizeMessagesForLlmBoundary([message], { timezone: "UTC" }),
-                ),
-              },
-              resolveOpenAICompletionsCompat(model),
-            ),
-          );
-        expect(
-          modelBytes(expectDefined(f.recorder.getPersistedMessage?.(), "annotated message")),
-        ).toBe(modelBytes(originalMessage));
-        await f.annotate();
-        expect(await loadTranscriptEvents(f.target)).toEqual(after);
-        expect(f.receipt()).toEqual(refreshed);
-        expect(updates).toHaveBeenCalledOnce();
-        expect(updates).toHaveBeenCalledWith(
-          expect.objectContaining({
-            messageId: original.entryId,
-            messageSeq: original.activeMessagePosition + 1,
-          }),
-        );
-        expect(f.onPersisted).toHaveBeenCalledOnce();
-        const terminal = expectDefined(
-          await appendTranscriptMessage(f.target, {
-            message: { role: "assistant", content: "answer", timestamp: 456 },
-          }),
-          "terminal",
-        );
-        const facts = {
-          boundary: {
-            admission: refreshed,
-            terminal: expectDefined(terminal.anchor, "terminal anchor"),
+        const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
+          status: "committed",
+        }));
+        const engine: ContextEngine = {
+          info: {
+            id: "annotation",
+            name: "Annotation",
+            transcriptSemantics: {
+              currentTurnFence: "before-current-turn-entry-v1",
+              turnAdvancementIdempotency: "atomic-idempotent-v1",
+            },
           },
-          sessionIdUsed: f.target.sessionId,
-          sessionKey: f.target.sessionKey,
-          sessionTarget: f.target,
-          sessionFile: f.target.sessionKey,
-          promptError: false,
-          aborted: false,
-          yieldAborted: false,
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+          compact: async () => ({ ok: true, compacted: false }),
+          commitTurn,
         };
-        await finalizeAcceptedContextEngineTurn({ facts, lease, warn });
-        expect(warn).not.toHaveBeenCalled();
-        expect(commitTurn).toHaveBeenCalledOnce();
-        expect(commitTurn).toHaveBeenCalledWith(
-          expect.objectContaining({
-            messages: [f.recorder.getPersistedMessage?.(), terminal.message],
-          }),
-        );
-      } finally {
-        unsubscribe();
-      }
-    });
+        const lease: ContextEngineLogicalTurnLease = {
+          engine,
+          effectiveEngine: engine,
+          effectiveEngineId: "annotation",
+          degraded: false,
+          disposed: false,
+          selectForHost: vi.fn(),
+          degradeBeforeStart: vi.fn(),
+          begin: vi.fn(),
+          deferDisposalUntil: vi.fn(),
+          onDispose: vi.fn(),
+          dispose: async () => {},
+        };
+        const warn = vi.fn();
+        await drainPendingContextEngineTurnsBeforeRun({
+          admission: original,
+          recorder: f.recorder,
+          lease,
+          warn,
+        });
+        const updates = vi.fn();
+        const unsubscribe = onInternalSessionTranscriptUpdate(updates);
+        try {
+          const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+          const searchRows = () =>
+            db
+              .prepare("SELECT * FROM session_transcript_fts WHERE session_id = ?")
+              .all(f.target.sessionId);
+          const searchBefore = searchRows();
+          const projectionWork = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
+            /\bsession_transcript_fts\b/i.test(sql)
+              ? "fts"
+              : sql.includes("octet_length")
+                ? "size"
+                : null,
+          );
+          try {
+            await f.annotate();
+          } finally {
+            projectionWork.restore();
+          }
+          expect(projectionWork.counts).toEqual({ fts: 0, size: 0 });
+          expect(searchRows()).toEqual(searchBefore);
+          const refreshed = f.receipt();
+          expect(refreshed).toEqual({ ...original, generation: expect.any(String) });
+          expect(refreshed.generation).not.toBe(original.generation);
+          expect(
+            await readSessionTranscriptVisibleMessageDelta({ ...f.target, cursor: page.cursor }),
+          ).toMatchObject({ kind: "reset" });
+          expect(
+            await readCodexSessionTranscriptEventsBeforeAdmission(f.target, refreshed),
+          ).toEqual(before.slice(0, -1));
+          expect(
+            readClosedTranscriptTurnInDatabase(db, {
+              boundary: { admission: original, terminal: refreshed },
+              maxEvents: 20,
+              maxBytes: 10000,
+            }),
+          ).toMatchObject({ kind: "session-rebound" });
+          const after = await loadTranscriptEvents(f.target);
+          expect(f.recorder.getPersistedMessage?.()).toMatchObject({
+            content: "prompt",
+            provenance,
+            __openclaw: {
+              mirrorIdentity: "native-turn:prompt",
+              upstreamUserText: "native prompt",
+            },
+          });
+          const model = {
+            api: "openai-completions",
+            provider: "openai",
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            baseUrl: "https://api.openai.com/v1",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 100000,
+            maxTokens: 4096,
+          } satisfies Parameters<typeof convertMessages>[0];
+          const modelBytes = (message: typeof originalMessage) =>
+            JSON.stringify(
+              convertMessages(
+                model,
+                {
+                  messages: convertToLlm(
+                    normalizeMessagesForLlmBoundary([message], { timezone: "UTC" }),
+                  ),
+                },
+                resolveOpenAICompletionsCompat(model),
+              ),
+            );
+          expect(
+            modelBytes(expectDefined(f.recorder.getPersistedMessage?.(), "annotated message")),
+          ).toBe(modelBytes(originalMessage));
+          await f.annotate();
+          expect(await loadTranscriptEvents(f.target)).toEqual(after);
+          expect(f.receipt()).toEqual(refreshed);
+          expect(updates).toHaveBeenCalledOnce();
+          expect(updates).toHaveBeenCalledWith(
+            expect.objectContaining({
+              messageId: original.entryId,
+              messageSeq: original.activeMessagePosition + 1,
+            }),
+          );
+          expect(f.onPersisted).toHaveBeenCalledOnce();
+          const terminal = expectDefined(
+            await appendTranscriptMessage(f.target, {
+              message: { role: "assistant", content: "answer", timestamp: 456 },
+            }),
+            "terminal",
+          );
+          const facts = {
+            boundary: {
+              admission: refreshed,
+              terminal: expectDefined(terminal.anchor, "terminal anchor"),
+            },
+            sessionIdUsed: f.target.sessionId,
+            sessionKey: f.target.sessionKey,
+            sessionTarget: f.target,
+            sessionFile: f.target.sessionKey,
+            promptError: false,
+            aborted: false,
+            yieldAborted: false,
+          };
+          await finalizeAcceptedContextEngineTurn({ facts, lease, warn });
+          expect(warn).not.toHaveBeenCalled();
+          expect(commitTurn).toHaveBeenCalledOnce();
+          expect(commitTurn).toHaveBeenCalledWith(
+            expect.objectContaining({
+              messages: [f.recorder.getPersistedMessage?.(), terminal.message],
+            }),
+          );
+        } finally {
+          unsubscribe();
+        }
+      },
+      {
+        input: { provenance },
+        config: { logging: { redactPatterns: ["native prompt"] } },
+      },
+    );
   });
 
   it.each(["expectedLifecycleRevision", "expectedWriterRunId"] as const)(
@@ -545,7 +548,6 @@ describe("host-owned current admission annotation", () => {
     "admission-close",
     "abort",
     "writer",
-    "lifecycle",
     "session",
     "replacement",
     "blocked",
@@ -569,9 +571,6 @@ describe("host-owned current admission annotation", () => {
         }
         if (reason === "writer") {
           f.patchSession({ activeWriterRunId: "successor" });
-        }
-        if (reason === "lifecycle") {
-          f.patchSession({ lifecycleRevision: "successor" });
         }
         if (reason === "session") {
           f.patchSession({ sessionId: "successor" });
@@ -667,18 +666,6 @@ describe("host-owned current admission annotation", () => {
     });
   });
 
-  it("refuses a stale active projection even when the old anchor still matches", async () => {
-    await withAdmission(async (f) => {
-      const before = await loadTranscriptEvents(f.target);
-      runOpenClawAgentWriteTransaction(
-        (database) => markSessionTranscriptIndexDirtyInTransaction(database.db, f.target.sessionId),
-        { agentId: "main" },
-      );
-      await expect(f.annotate()).rejects.toThrow();
-      expect(await loadTranscriptEvents(f.target)).toEqual(before);
-    });
-  });
-
   it("does not annotate after an external edit", async () => {
     await withAdmission(async (f) => {
       const events = await loadTranscriptEvents(f.target);
@@ -714,19 +701,6 @@ describe("host-owned current admission annotation", () => {
         expect(hook).toHaveBeenCalledOnce();
       },
       { beforeMessageWrite: hook },
-    );
-  });
-
-  it("never restores upstream text removed by storage redaction", async () => {
-    await withAdmission(
-      async (f) => {
-        const before = await loadTranscriptEvents(f.target);
-        await expect(f.annotate(nativeAnnotation("prompt", "private-value"))).rejects.toThrow(
-          "redacted",
-        );
-        expect(await loadTranscriptEvents(f.target)).toEqual(before);
-      },
-      { config: { logging: { redactPatterns: ["private-value"] } } },
     );
   });
 

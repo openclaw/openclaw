@@ -58,7 +58,7 @@ async function screenshot(page: Page, name: string) {
 }
 
 suite.define(() => {
-  it("renders the identity emoji in the sidebar chip and agent menu row", async () => {
+  it("renders the identity emoji in the rail and agent menu row", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -95,7 +95,7 @@ suite.define(() => {
 
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         const emojiRow = sidebar
-          .locator("wa-dropdown.sidebar-agent-menu")
+          .locator(".sidebar-agent-menu")
           .getByRole("menuitem", { name: "🚀Rocket", exact: true });
         const menuAvatar = emojiRow.locator(".identity-avatar__text");
         await expect.poll(() => menuAvatar.getAttribute("data-avatar")).toBe(emojiGrapheme);

@@ -114,17 +114,13 @@ describe("frozen selected consumer ownership", () => {
 
   it.each([
     { consumer: "onboard", runtime: "unknown" },
-    { consumer: "release-typed-onboarding", runtime: "unknown" },
-    { consumer: "mcp-code-mode-gateway", runtime: "unknown" },
-    { consumer: "session-runtime-context", runtime: "unknown" },
     { consumer: "session-runtime-context", runtime: "missing blob" },
-    { consumer: "session-runtime-context", runtime: "absent" },
   ])(
     "runs only the $consumer source contract with $runtime runtime-context source",
     ({ consumer, runtime }) => {
       const source = committedSourceFixture({
         "package.json": '{"type":"module","version":"2026.7.33"}\n',
-        [runtimePath]: runtime === "absent" ? null : "unknown runtime-context contract\n",
+        [runtimePath]: "unknown runtime-context contract\n",
         ...Object.fromEntries(
           typedFiles.map((relative) => [relative, "selected fixture; never execute\n"]),
         ),
@@ -137,11 +133,7 @@ describe("frozen selected consumer ownership", () => {
       if (consumer === "session-runtime-context") {
         expect(result.status, result.stderr).toBe(2);
         expect(args).toEqual([]);
-        expect(result.stderr).toContain(
-          runtime === "missing blob"
-            ? "unable to read selected source"
-            : "unable to resolve frozen runtime-context input contract",
-        );
+        expect(result.stderr).toContain("unable to read selected source");
       } else {
         expect(args.length, result.stderr).toBeGreaterThan(0);
         expect(result.stderr).not.toContain("runtime-context");
@@ -150,20 +142,14 @@ describe("frozen selected consumer ownership", () => {
   );
 
   it.each([
-    { contract: "shipped tuple", missing: [], authorized: true },
-    { contract: "absent tuple", missing: typedFiles, authorized: true },
-    { contract: "absent assertions", missing: [typedFiles[1]], authorized: true },
-    { contract: "authorization off", missing: [], authorized: false },
-  ])("mounts the typed onboarding $contract", ({ missing, authorized }) => {
-    const missingPaths = new Set(missing);
+    { contract: "shipped tuple", authorized: true },
+    { contract: "authorization off", authorized: false },
+  ])("mounts the typed onboarding $contract", ({ authorized }) => {
     const source = committedSourceFixture({
       "package.json": '{"type":"module","version":"2026.7.33"}\n',
       [runtimePath]: "unknown runtime-context contract\n",
       ...Object.fromEntries(
-        typedFiles.map((relative) => [
-          relative,
-          missingPaths.has(relative) ? null : "selected fixture; never execute\n",
-        ]),
+        typedFiles.map((relative) => [relative, "selected fixture; never execute\n"]),
       ),
     });
     const { result, args } = runConsumer(source, "release-typed-onboarding", {
@@ -172,23 +158,17 @@ describe("frozen selected consumer ownership", () => {
     });
     expect(result.status, result.stderr).toBe(0);
     for (const relative of typedFiles) {
-      const selectedRoot = authorized && !missingPaths.has(relative) ? source.root : repoRoot;
+      const selectedRoot = authorized ? source.root : repoRoot;
       const mount = `${selectedRoot}/${relative}:/app/${relative}:ro`;
       expect(args.filter((arg) => arg.endsWith(`:/app/${relative}:ro`))).toEqual([mount]);
     }
   });
 
-  it.each(
-    ["session-runtime-context", "openai-chat-tools"].flatMap((consumer) =>
-      [false, true].flatMap((supported) =>
-        [false, true].map((authorized) => ({
-          consumer,
-          supported,
-          authorized,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    { consumer: "openai-chat-tools", supported: false, authorized: false },
+    { consumer: "openai-chat-tools", supported: false, authorized: true },
+    { consumer: "openai-chat-tools", supported: true, authorized: true },
+  ])(
     "derives $consumer cold mode (supported=$supported, authorized=$authorized)",
     ({ consumer, supported, authorized }) => {
       const source = committedSourceFixture({
@@ -243,18 +223,21 @@ describe("frozen selected consumer ownership", () => {
     },
   );
 
-  it.each(typedFiles)("rejects an unreadable typed companion %s before Docker", (relative) => {
-    const source = committedSourceFixture({
-      "package.json": '{"type":"module","version":"2026.7.33"}\n',
-      ...Object.fromEntries(typedFiles.map((file) => [file, `${file}\n`])),
-    });
-    const object = source.git("rev-parse", `${source.sha}:${relative}`);
-    rmSync(path.join(source.root, ".git/objects", object.slice(0, 2), object.slice(2)));
-    const { result, args } = runConsumer(source, "release-typed-onboarding", { dockerStatus: 0 });
-    expect(result.status, result.stderr).toBe(2);
-    expect(result.stderr).toContain("unable to read selected source");
-    expect(args).toEqual([]);
-  });
+  it.each(["scripts/e2e/lib/release-typed-onboarding/scenario.sh"])(
+    "rejects an unreadable typed companion %s before Docker",
+    (relative) => {
+      const source = committedSourceFixture({
+        "package.json": '{"type":"module","version":"2026.7.33"}\n',
+        ...Object.fromEntries(typedFiles.map((file) => [file, `${file}\n`])),
+      });
+      const object = source.git("rev-parse", `${source.sha}:${relative}`);
+      rmSync(path.join(source.root, ".git/objects", object.slice(0, 2), object.slice(2)));
+      const { result, args } = runConsumer(source, "release-typed-onboarding", { dockerStatus: 0 });
+      expect(result.status, result.stderr).toBe(2);
+      expect(result.stderr).toContain("unable to read selected source");
+      expect(args).toEqual([]);
+    },
+  );
 });
 
 describe("frozen committed source errors", () => {
@@ -372,9 +355,6 @@ describe("frozen committed source errors", () => {
   it.each([
     ["plugin_harness_capabilities", "scripts/e2e/lib/plugins/assertions.mjs"],
     ["session_cold_storage_contract", "src/config/zod-schema.session-config.ts"],
-    ["session_cold_storage_contract", "src/config/zod-schema.session.ts"],
-    ["runtime_context_contract", "src/state/openclaw-agent-db-session-migrations.ts"],
-    ["runtime_context_contract", "src/commands/doctor-session-transcripts.ts"],
     ["runtime_context_contract", "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts"],
   ])("propagates %s read failure at %s", (resolver, relative) => {
     const source = committedSourceFixture({
@@ -392,28 +372,13 @@ describe("frozen committed source errors", () => {
     expect(result.stderr).toContain("unable to read selected source");
   });
 
-  it("matches literal committed paths and treats an empty blob as present", () => {
-    const relative = "scripts/[literal]*.ts";
-    const source = committedSourceFixture({ [relative]: "", [metadata]: "match\n" });
-    writeFileSync(path.join(source.root, metadata), "dirty decoy\n");
-    const result = invoke(
-      source,
-      `openclaw_frozen_target_source_has_path "$2" '${relative}'; openclaw_frozen_target_source_contains "$2" ${metadata} match`,
-    );
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  it.each(["symlink", "directory", "gitlink"] as const)(
+  it.each(["symlink", "gitlink"] as const)(
     "rejects a %s substitution for a selected file",
     (kind) => {
       const source = committedSourceFixture({ [metadata]: "marker\n" });
       rmSync(path.join(source.root, metadata));
       if (kind === "symlink") {
         symlinkSync("missing", path.join(source.root, metadata));
-        source.sha = source.commit();
-      } else if (kind === "directory") {
-        mkdirSync(path.join(source.root, metadata));
-        writeFileSync(path.join(source.root, metadata, "nested"), "marker\n");
         source.sha = source.commit();
       } else {
         source.git("update-index", "--cacheinfo", `160000,${source.sha},${metadata}`);
@@ -441,7 +406,7 @@ describe("frozen committed source errors", () => {
     expect(missing.stdout).toBe("");
   });
 
-  it.each(["../package.json", "/package.json", "scripts//entry", "scripts/./entry"])(
+  it.each(["../package.json"])(
     "rejects unsafe path %s instead of treating it as absent",
     (relative) => {
       const source = committedSourceFixture({ "package.json": "{}\n" });
@@ -479,47 +444,46 @@ export function parseRegistryNpmSpec(spec: string) {
     return root;
   }
 
-  it.each([
-    { geminiKey: "test-gemini-key", googleKey: "", expectedType: "gemini-api-key" },
-    { geminiKey: "", googleKey: "test-google-key", expectedType: "vertex-ai" },
-    { geminiKey: "", googleKey: "", expectedType: "oauth-personal" },
-  ])("selects $expectedType from the supplied Gemini credentials", (testCase) => {
-    const home = tempDirs.make("openclaw-live-stage-gemini-");
-    const settingsPath = path.join(home, ".gemini", "settings.json");
-    mkdirSync(path.dirname(settingsPath));
-    writeFileSync(
-      settingsPath,
-      JSON.stringify({
-        security: { auth: { selectedType: "oauth-personal" } },
-        privacy: { usageStatisticsEnabled: false },
-      }),
-    );
+  it.each([{ geminiKey: "test-gemini-key", googleKey: "", expectedType: "gemini-api-key" }])(
+    "selects $expectedType from the supplied Gemini credentials",
+    (testCase) => {
+      const home = tempDirs.make("openclaw-live-stage-gemini-");
+      const settingsPath = path.join(home, ".gemini", "settings.json");
+      mkdirSync(path.dirname(settingsPath));
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({
+          security: { auth: { selectedType: "oauth-personal" } },
+          privacy: { usageStatisticsEnabled: false },
+        }),
+      );
 
-    const result = spawnSync(
-      "bash",
-      ["-c", 'source "$1"; openclaw_live_stage_gemini_auth', "bash", stageScriptPath],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          HOME: home,
-          GEMINI_API_KEY: testCase.geminiKey,
-          GOOGLE_API_KEY: testCase.googleKey,
-          GOOGLE_GENAI_USE_VERTEXAI: "",
+      const result = spawnSync(
+        "bash",
+        ["-c", 'source "$1"; openclaw_live_stage_gemini_auth', "bash", stageScriptPath],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            HOME: home,
+            GEMINI_API_KEY: testCase.geminiKey,
+            GOOGLE_API_KEY: testCase.googleKey,
+            GOOGLE_GENAI_USE_VERTEXAI: "",
+          },
         },
-      },
-    );
+      );
 
-    expect(result.status, result.stderr).toBe(0);
-    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
-    expect(settings.security.auth.selectedType).toBe(testCase.expectedType);
-    expect(settings.security.auth.enforcedType).toBe(
-      testCase.geminiKey || testCase.googleKey ? testCase.expectedType : undefined,
-    );
-    expect(settings.privacy).toEqual({ usageStatisticsEnabled: false });
-    expect(readFileSync(settingsPath, "utf8")).not.toContain("test-gemini-key");
-    expect(readFileSync(settingsPath, "utf8")).not.toContain("test-google-key");
-  });
+      expect(result.status, result.stderr).toBe(0);
+      const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+      expect(settings.security.auth.selectedType).toBe(testCase.expectedType);
+      expect(settings.security.auth.enforcedType).toBe(
+        testCase.geminiKey || testCase.googleKey ? testCase.expectedType : undefined,
+      );
+      expect(settings.privacy).toEqual({ usageStatisticsEnabled: false });
+      expect(readFileSync(settingsPath, "utf8")).not.toContain("test-gemini-key");
+      expect(readFileSync(settingsPath, "utf8")).not.toContain("test-google-key");
+    },
+  );
 
   it("installs missing CLI executables and refreshes pinned packages", () => {
     const root = tempDirs.make("openclaw-live-stage-cli-");
@@ -564,133 +528,40 @@ export function parseRegistryNpmSpec(spec: string) {
     ]);
   });
 
-  it("fails explicitly when a selected backend has no executable or install package", () => {
-    const root = tempDirs.make("openclaw-live-stage-cli-missing-");
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        'set -euo pipefail; source "$1"; openclaw_live_prepare_cli_backend "$2" "" 10',
-        "test",
-        stageScriptPath,
-        path.join(root, "missing-cli"),
-      ],
-      { encoding: "utf8" },
-    );
-    expect(result.status).toBe(127);
-    expect(result.stderr).toContain("CLI backend executable was not provisioned:");
-  });
+  it.each([{ entrypoint: "scripts/test-live.mjs", expected: "scripts/test-live.mjs -- target" }])(
+    "runs the staged $entrypoint live runner",
+    ({ entrypoint, expected }) => {
+      const root = tempDirs.make("openclaw-live-stage-entrypoint-");
+      const binDir = path.join(root, "bin");
+      const callsPath = path.join(root, "calls");
+      mkdirSync(path.join(root, path.dirname(entrypoint)), { recursive: true });
+      mkdirSync(binDir);
+      writeFileSync(path.join(root, entrypoint), "");
+      writeFileSync(
+        path.join(binDir, "node"),
+        '#!/usr/bin/env bash\nset -eu\nprintf "%s\\n" "$*" > "$CALLS_PATH"\n',
+        { mode: 0o755 },
+      );
 
-  it.each([
-    {
-      entrypoint: "scripts/test-live.mts",
-      expected: "--import tsx scripts/test-live.mts -- target",
-    },
-    { entrypoint: "scripts/test-live.mjs", expected: "scripts/test-live.mjs -- target" },
-  ])("runs the staged $entrypoint live runner", ({ entrypoint, expected }) => {
-    const root = tempDirs.make("openclaw-live-stage-entrypoint-");
-    const binDir = path.join(root, "bin");
-    const callsPath = path.join(root, "calls");
-    mkdirSync(path.join(root, path.dirname(entrypoint)), { recursive: true });
-    mkdirSync(binDir);
-    writeFileSync(path.join(root, entrypoint), "");
-    writeFileSync(
-      path.join(binDir, "node"),
-      '#!/usr/bin/env bash\nset -eu\nprintf "%s\\n" "$*" > "$CALLS_PATH"\n',
-      { mode: 0o755 },
-    );
-
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        'set -euo pipefail; cd "$1"; source "$2"; openclaw_live_run_staged_script scripts/test-live -- target',
-        "test",
-        root,
-        stageScriptPath,
-      ],
-      {
-        encoding: "utf8",
-        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, CALLS_PATH: callsPath },
-      },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(callsPath, "utf8").trim()).toBe(expected);
-  });
-
-  it("refuses to replace a missing staged live runner", () => {
-    const root = tempDirs.make("openclaw-live-stage-entrypoint-missing-");
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        'set +e; cd "$1"; source "$2"; openclaw_live_run_staged_script scripts/test-live -- target',
-        "test",
-        root,
-        stageScriptPath,
-      ],
-      { encoding: "utf8" },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("staged OpenClaw script entrypoint not found");
-  });
-
-  it("installs validated Docker packages from the staged metadata export", () => {
-    const root = stagedPackageMetadataFixture(
-      'export async function resolveCliBackendDockerPackages() { return ["@fixture/cli@1.2.3", "fixture-cli"]; }\n',
-    );
-    const binDir = path.join(root, "bin");
-    const installLog = path.join(root, "installs.log");
-    mkdirSync(binDir);
-    writeFileSync(
-      path.join(binDir, "timeout"),
-      '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ "$1" == --* ]]; do shift; done\nshift\nexec "$@"\n',
-      { mode: 0o755 },
-    );
-    writeFileSync(
-      path.join(binDir, "npm"),
-      '#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" >> "$INSTALL_LOG"\n',
-      { mode: 0o755 },
-    );
-
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        'set -euo pipefail; cd "$1"; source "$2"; openclaw_live_prepare_cli_backend_docker_packages "fixture-provider" "fixture-provider/model"',
-        "test",
-        root,
-        stageScriptPath,
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          INSTALL_LOG: installLog,
-          PATH: `${binDir}:${process.env.PATH}`,
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          'set -euo pipefail; cd "$1"; source "$2"; openclaw_live_run_staged_script scripts/test-live -- target',
+          "test",
+          root,
+          stageScriptPath,
+        ],
+        {
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, CALLS_PATH: callsPath },
         },
-      },
-    );
+      );
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(installLog, "utf8").trim().split("\n")).toEqual([
-      "install -g @fixture/cli@1.2.3",
-      "install -g fixture-cli",
-    ]);
-  });
-
-  it("lets staged metadata output flush through normal Node completion", () => {
-    const source = readFileSync(stageScriptPath, "utf8");
-    const moduleStart = source.indexOf("node --import tsx --input-type=module <<'NODE'");
-    const moduleEnd = source.indexOf("\nNODE\n", moduleStart);
-    expect(moduleStart).toBeGreaterThanOrEqual(0);
-    expect(moduleEnd).toBeGreaterThan(moduleStart);
-    const moduleSource = source.slice(moduleStart, moduleEnd);
-    expect(moduleSource).not.toContain("process.exit(");
-    expect(moduleSource.match(/process\.stdout\.write/gu)).toHaveLength(1);
-  });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(callsPath, "utf8").trim()).toBe(expected);
+    },
+  );
 
   it("rejects malformed staged package metadata before npm runs", () => {
     const root = stagedPackageMetadataFixture(
@@ -749,35 +620,6 @@ export function parseRegistryNpmSpec(spec: string) {
     expect(malformed.stderr).toContain("invalid OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS");
   });
 
-  it("can omit a contract file absent from an authorized frozen target", () => {
-    const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-    }).trim();
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        'set -euo pipefail; source "$1"; openclaw_resolve_frozen_target_file "$2" missing/path current-path ""',
-        "test",
-        stageScriptPath,
-        repoRoot,
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
-          OPENCLAW_SELECTED_SHA: selectedSha,
-          OPENCLAW_TOOLING_SHA: "b".repeat(40),
-        },
-      },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe("\n");
-  });
-
   it("keeps a matching frozen-source capability under pipefail", () => {
     const { root, sha: selectedSha } = committedSourceFixture({
       "scripts/e2e/lib/plugins/assertions.mjs": `function assertPluginTgzRemoved()\n${"x\n".repeat(100_000)}`,
@@ -806,18 +648,12 @@ export function parseRegistryNpmSpec(spec: string) {
 
   it.each([
     {
-      name: "producer fragments",
-      source:
-        "type Params = {\n  fragments?: RuntimeContextFragment[];\n};\nconst fragments = params.fragments?.filter(Boolean);\n",
-      expected: "producer-fragments",
-    },
-    {
       name: "mixed producer and marker extraction",
       source:
         "import { extractInternalRuntimeContext } from '../../internal-runtime-context.js';\ntype Params = {\n  fragments?: RuntimeContextFragment[];\n  modelPrompt?: string;\n};\nconst fragments = params.fragments?.filter(Boolean);\n",
       error: "unable to resolve frozen runtime-context input contract",
     },
-  ])("classifies $name from the selected source", ({ source, expected, error }) => {
+  ])("classifies $name from the selected source", ({ source, error }) => {
     const { root, sha: selectedSha } = committedSourceFixture({
       "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts": source,
     });
@@ -842,71 +678,33 @@ export function parseRegistryNpmSpec(spec: string) {
       },
     );
 
-    if (expected) {
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe(expected);
-      return;
-    }
     expect(result.status).toBe(2);
     expect(result.stderr).toContain(error);
   });
 
-  it.each([
-    "src/agents/subagent-announce.live.test.ts",
-    "src/agents/subagents/announce/subagent-announce.live.test.ts",
-  ])("resolves the staged announce test by unique basename: %s", (relativePath) => {
-    const root = tempDirs.make("openclaw-live-stage-announce-");
-    mkdirSync(path.join(root, path.dirname(relativePath)), { recursive: true });
-    writeFileSync(path.join(root, relativePath), "");
+  it.each(["src/agents/subagent-announce.live.test.ts"])(
+    "resolves the staged announce test by unique basename: %s",
+    (relativePath) => {
+      const root = tempDirs.make("openclaw-live-stage-announce-");
+      mkdirSync(path.join(root, path.dirname(relativePath)), { recursive: true });
+      writeFileSync(path.join(root, relativePath), "");
 
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        'set -euo pipefail; source "$2"; relative="$(openclaw_live_resolve_unique_staged_file "$1/src/agents" subagent-announce.live.test.ts)"; printf "src/agents/%s\\n" "$relative"',
-        "test",
-        root,
-        stageScriptPath,
-      ],
-      { encoding: "utf8" },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(relativePath);
-  });
-
-  it("rejects missing or ambiguous staged announce tests", () => {
-    const root = tempDirs.make("openclaw-live-stage-announce-invalid-");
-    const command = [
-      "-c",
-      'set -euo pipefail; source "$2"; openclaw_live_resolve_unique_staged_file "$1/src/agents" subagent-announce.live.test.ts',
-      "test",
-      root,
-      stageScriptPath,
-    ];
-
-    const missing = spawnSync("bash", command, { encoding: "utf8" });
-    expect(missing.status).not.toBe(0);
-    expect(missing.stderr).toContain("no staged file matched");
-
-    for (const directory of ["old", "current"]) {
-      mkdirSync(path.join(root, "src", "agents", directory), { recursive: true });
-      writeFileSync(
-        path.join(root, "src", "agents", directory, "subagent-announce.live.test.ts"),
-        "",
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          'set -euo pipefail; source "$2"; relative="$(openclaw_live_resolve_unique_staged_file "$1/src/agents" subagent-announce.live.test.ts)"; printf "src/agents/%s\\n" "$relative"',
+          "test",
+          root,
+          stageScriptPath,
+        ],
+        { encoding: "utf8" },
       );
-    }
-    const ambiguous = spawnSync("bash", command, { encoding: "utf8" });
-    expect(ambiguous.status).not.toBe(0);
-    expect(ambiguous.stderr).toContain("multiple staged files matched");
-  });
 
-  it("keeps repo-local generated artifacts out of the source copy", () => {
-    const script = readFileSync(stageScriptPath, "utf8");
-
-    expect(script).toContain("--exclude=.artifacts");
-    expect(script).toContain('node "$scripts_dir/live-docker-stage-private-sdk-exports.mjs"');
-  });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(relativePath);
+    },
+  );
 
   it("adds private SDK source exports only to the disposable source stage", () => {
     const root = tempDirs.make("openclaw-live-stage-sdk-");

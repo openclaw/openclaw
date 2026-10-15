@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -57,7 +58,12 @@ async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
       };
     },
   });
-  expect(result.terminal.kind).toBe("ok");
+  expect(
+    result.terminal.kind,
+    result.terminal.kind === "failed"
+      ? `${result.terminal.source}: ${result.terminal.error instanceof Error ? result.terminal.error.stack : String(result.terminal.error)}`
+      : undefined,
+  ).toBe("ok");
   if (!captured) {
     throw new Error("Expected a provider submission after history and prompt preparation");
   }
@@ -65,14 +71,12 @@ async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
 }
 
 function expectSubagentCarrier(messages: unknown[], state: string) {
-  expect(messages).toContainEqual(
-    expect.objectContaining({
-      role: "custom",
-      customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-      display: false,
-      content: expect.stringContaining(state),
-    }),
-  );
+  expect(messages.at(-1)).toMatchObject({
+    role: "custom",
+    customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+    display: false,
+    content: expect.stringContaining(state),
+  });
 }
 
 describe("subagent facts through full attempt history preparation", () => {
@@ -109,6 +113,7 @@ describe("subagent facts through full attempt history preparation", () => {
     } satisfies SubagentRunRecord;
     registry.seedSubagentRunForReadTest(run);
     const queued = await captureAttempt(codeModeOverride, sessionStore);
+    expect(existsSync(storePath)).toBe(false);
     registry.seedSubagentRunForReadTest({
       ...run,
       execution: { status: "running", startedAt: Date.now() },
@@ -123,8 +128,11 @@ describe("subagent facts through full attempt history preparation", () => {
     expect(queued.systemPrompt).not.toContain("run-worker");
     expectSubagentCarrier(queued.messages, "status=queued");
     expectSubagentCarrier(running.messages, "status=running");
-    expect(empty.messages).not.toContainEqual(
-      expect.objectContaining({ customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE }),
-    );
+    expectSubagentCarrier(empty.messages, "## Temporal Context\n");
+    expect(empty.messages.at(-1)).toMatchObject({
+      content: expect.stringMatching(
+        /^## Temporal Context\nCurrent date: \d{4}-\d{2}-\d{2}\nTime zone: [^\n]+$/,
+      ),
+    });
   });
 });

@@ -7,8 +7,6 @@ import {
   type APIGatewayBotInfo,
   type APIVoiceState,
   type GatewayDispatchPayload,
-  type GatewayHeartbeat,
-  type GatewayIdentify,
   type GatewayReceivePayload,
   type GatewaySendPayload,
   type GatewayVoiceStateUpdateData,
@@ -18,7 +16,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type * as ws from "ws";
 import { Plugin, type Client } from "./client.js";
 import { canResumeAfterGatewayClose, isFatalGatewayCloseCode } from "./gateway-close-codes.js";
-import { dispatchVoiceGatewayEvent, mapGatewayDispatchData } from "./gateway-dispatch.js";
+import { mapGatewayDispatchData } from "./gateway-dispatch.js";
 import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
 import { GatewayHeartbeatTimers, GatewayReconnectTimer } from "./gateway-lifecycle.js";
 import { decodeGatewayMessage, ensureGatewayParams } from "./gateway-payload.js";
@@ -73,6 +71,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
   protected gatewayInfo?: APIGatewayBotInfo;
   public isConnected = false;
   private sessionId: string | null = null;
+  private selfUserId: string | null = null;
   private resumeGatewayUrl: string | null = null;
   private reconnectAttempts = 0;
   private consecutiveResumeFailures = 0;
@@ -149,6 +148,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     this.reconnectAttempts = 0;
     this.consecutiveResumeFailures = 0;
     this.voiceStateCache.clear();
+    this.selfUserId = null;
   }
 
   protected createWebSocket(url: string): ws.WebSocket {
@@ -240,16 +240,11 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
                 session_id: resumeState.sessionId,
                 seq: resumeState.sequence,
               },
-            } as GatewaySendPayload,
+            },
             true,
           );
         } else {
-          void this.identifyWithConcurrency(sourceSocket).catch((error: unknown) => {
-            this.emitter.emit(
-              "error",
-              error instanceof Error ? error : new Error(String(error), { cause: error }),
-            );
-          });
+          void this.identifyWithConcurrency(sourceSocket).catch(this.emitAsyncError);
         }
         break;
       }
@@ -260,12 +255,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
         this.sendHeartbeat();
         break;
       case GatewayOpcodes.Dispatch:
-        void this.handleDispatch(payload).catch((error: unknown) => {
-          this.emitter.emit(
-            "error",
-            error instanceof Error ? error : new Error(String(error), { cause: error }),
-          );
-        });
+        void this.handleDispatch(payload).catch(this.emitAsyncError);
         break;
       case GatewayOpcodes.InvalidSession:
         if (!payload.d) {
@@ -284,6 +274,13 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     }
   }
 
+  private emitAsyncError = (error: unknown): void => {
+    this.emitter.emit(
+      "error",
+      error instanceof Error ? error : new Error(String(error), { cause: error }),
+    );
+  };
+
   private startHeartbeat(intervalMs: number): void {
     this.heartbeatTimers.start({
       intervalMs,
@@ -301,7 +298,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
       return;
     }
     this.lastHeartbeatAck = false;
-    this.send({ op: GatewayOpcodes.Heartbeat, d: this.sequence } as GatewayHeartbeat, true);
+    this.send({ op: GatewayOpcodes.Heartbeat, d: this.sequence }, true);
   }
 
   private identify(): void {
@@ -313,7 +310,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
           intents: this.options.intents ?? 0,
           properties: { os: process.platform, browser: "openclaw", device: "openclaw" },
         },
-      } as GatewayIdentify,
+      },
       true,
     );
   }
@@ -357,20 +354,31 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
       return;
     }
     if (payload.t === GatewayDispatchEvents.Ready) {
-      const ready = payload.d as { session_id?: string; resume_gateway_url?: string };
+      const ready = payload.d;
+      this.selfUserId = ready.user.id;
       this.sessionId = ready.session_id ?? null;
       this.resumeGatewayUrl = ready.resume_gateway_url ?? null;
-      this.reconnectAttempts = 0;
-      this.consecutiveResumeFailures = 0;
-      this.isConnected = true;
     }
-    if (payload.t === GatewayDispatchEvents.Resumed) {
+    if (payload.t === GatewayDispatchEvents.Ready || payload.t === GatewayDispatchEvents.Resumed) {
       this.reconnectAttempts = 0;
       this.consecutiveResumeFailures = 0;
       this.isConnected = true;
     }
     this.voiceStateCache.apply(payload);
-    dispatchVoiceGatewayEvent(this.client, payload);
+    if (
+      payload.t === GatewayDispatchEvents.VoiceServerUpdate ||
+      (payload.t === GatewayDispatchEvents.VoiceStateUpdate &&
+        payload.d.user_id === this.selfUserId)
+    ) {
+      const adapter = payload.d.guild_id
+        ? this.client.getPlugin("voice")?.adapters.get(payload.d.guild_id)
+        : undefined;
+      if (payload.t === GatewayDispatchEvents.VoiceServerUpdate) {
+        adapter?.onVoiceServerUpdate(payload.d);
+      } else {
+        adapter?.onVoiceStateUpdate(payload.d);
+      }
+    }
     // MESSAGE_CREATE is the durable-ingress raw-envelope boundary. Its listener
     // maps structures only after the queue claim; other events retain eager mapping.
     const data =
@@ -382,6 +390,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
 
   private resetSessionState(): void {
     this.sessionId = null;
+    this.selfUserId = null;
     this.resumeGatewayUrl = null;
     this.sequence = null;
     this.consecutiveResumeFailures = 0;
@@ -449,7 +458,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
   }
 
   updateVoiceState(data: GatewayVoiceStateUpdateData): void {
-    this.send({ op: GatewayOpcodes.VoiceStateUpdate, d: data } as GatewaySendPayload, true);
+    this.send({ op: GatewayOpcodes.VoiceStateUpdate, d: data }, true);
   }
 
   getRateLimitStatus() {

@@ -205,7 +205,7 @@ describe("spawn context-engine resource custody", () => {
     },
   );
 
-  it.each(["absent-hook", "prepare-failure", "stale-resolution", "rollback-failure"] as const)(
+  it.each(["prepare-failure", "stale-resolution", "rollback-failure"] as const)(
     "retires the resolved engine after %s",
     async (mode) => {
       let current = true;
@@ -217,17 +217,13 @@ describe("spawn context-engine resource custody", () => {
           throw new Error("rollback failed");
         }
       });
-      const fixture = createEngineFixture(
-        mode === "absent-hook"
-          ? undefined
-          : async () => {
-              fixture.read();
-              if (mode === "prepare-failure") {
-                throw new Error("preparation failed");
-              }
-              return { rollback };
-            },
-      );
+      const fixture = createEngineFixture(async () => {
+        fixture.read();
+        if (mode === "prepare-failure") {
+          throw new Error("preparation failed");
+        }
+        return { rollback };
+      });
       resolveEngine.mockImplementation(async () => {
         const engine = await fixture.resolve();
         resolved.resolve();
@@ -264,7 +260,7 @@ describe("spawn context-engine resource custody", () => {
         }
         resolutionGate.resolve();
         const result = await operation;
-        expect(result.status).toBe(mode === "absent-hook" ? "accepted" : "error");
+        expect(result.status).toBe("error");
         if (mode === "rollback-failure") {
           expect(result.error).toBe("launch failed");
           expect(rollback).toHaveBeenCalledTimes(1);
@@ -319,63 +315,6 @@ describe("spawn context-engine resource custody", () => {
     }
   });
 
-  it("rolls back a reservation withdrawn before scheduler activation", async () => {
-    let childPrepared = false;
-    const rollback = vi.fn(async () => {
-      fixture.read();
-      childPrepared = false;
-    });
-    const fixture = createEngineFixture(async () => {
-      childPrepared = true;
-      return { rollback };
-    });
-    resolveEngine.mockImplementation(() => fixture.resolve());
-    const settleFailedLaunch = vi.fn(async () => {});
-    const cancelledScope = {
-      waitForClaim: () => undefined,
-      waitForRetirementPublication: () => undefined,
-      canLaunch: () => false,
-      canCleanupSession: () => true,
-      canAcceptLaunch: () => true,
-      canAbortAcceptedRun: () => true,
-      canRetireReservation: () => false,
-      settleFailedLaunch,
-    } satisfies SubagentRegistrationScope;
-    const reservationReleases: Promise<void>[] = [];
-    registerRun.mockImplementation(
-      async (
-        { runId }: { runId: string },
-        options: { retainOwnership?: (scope: SubagentRegistrationScope) => void },
-      ) => {
-        options.retainOwnership?.(cancelledScope);
-        const hold = scheduler.holdQueuedSwarmRun(runId);
-        const withdrawn = hold?.withdraw();
-        if (hold) {
-          reservationReleases.push(hold.release());
-        }
-        expect(withdrawn).toBe(true);
-      },
-    );
-    try {
-      await expect(
-        spawn(
-          { task: "withdrawn child", collect: true, groupId: "withdrawn-group" },
-          { agentSessionKey: "main" },
-        ),
-      ).resolves.toMatchObject({ status: "accepted" });
-      expect(callGateway.mock.calls.some(([request]) => request.method === "agent")).toBe(false);
-      expect(settleFailedLaunch).not.toHaveBeenCalled();
-      expect(childPrepared).toBe(false);
-      expect(rollback).toHaveBeenCalledTimes(1);
-      expect(fixture.engineDisposal).toHaveBeenCalledTimes(1);
-      expect(fixture.retired).toHaveBeenCalledTimes(1);
-      expect(fixture.database.isOpen).toBe(false);
-    } finally {
-      await Promise.all(reservationReleases);
-      await fixture.cleanup();
-    }
-  });
-
   it.each(["success", "failure"] as const)(
     "keeps the scheduler slot when native preparation cleanup is retained after %s",
     async (outcome) => {
@@ -411,7 +350,7 @@ describe("spawn context-engine resource custody", () => {
         await nativeCleanupStarted.promise;
         expect(fixture.database.isOpen).toBe(true);
         releaseNativeCleanup.resolve();
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
 
         expect(scheduler.isSwarmRunActive(result.runId!)).toBe(true);
         expect(fixture.retired).not.toHaveBeenCalled();

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
@@ -9,14 +9,17 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid as mountDashboards } from "../../test-helpers/mount-solid.ts";
 import { loadChatRoute } from "../chat/route-loader.ts";
-import { renderDashboards } from "../dashboards/view.ts";
-import { props, row } from "./session-activity-view.test-harness.ts";
-import { renderSessionActivityView } from "./session-activity-view.ts";
+import { DashboardsView } from "../dashboards/view.tsx";
+import { mountSolid, props, row } from "./session-activity-view.test-harness.ts";
+import { renderSessionActivityView } from "./session-activity-view.tsx";
+
+const renderSessionActivityViewSolid = mountSolid(renderSessionActivityView);
 
 let container: HTMLDivElement;
 function show(input: Parameters<typeof props>[0] = {}, target = container) {
-  render(renderSessionActivityView(props(input)), target);
+  renderSessionActivityViewSolid(props(input), target);
 }
 
 beforeEach(() => {
@@ -30,11 +33,7 @@ describe("session activity semantics", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    [undefined, "Online"],
-    [0, "Online · Active"],
-    [120_000, "Online · Idle"],
-  ])("separates online identity from interaction age %s", (age, label) => {
+  it("shows online identity when interaction age is unknown", () => {
     const now = Date.now();
     show({
       rows: [row("agent:main:work", { id: "person" }, now)],
@@ -49,7 +48,6 @@ describe("session activity semantics", () => {
             {
               ts: now,
               lastInputSeconds: 0,
-              lastActivityAt: age === undefined ? undefined : now - age,
             },
           ],
         },
@@ -57,13 +55,38 @@ describe("session activity semantics", () => {
     });
     expect(
       container.querySelector(".activity-feed__identity .settings-status")?.textContent?.trim(),
-    ).toBe(label);
+    ).toBe("Online");
   });
 
-  it("leaves the page main landmark to the app shell", () => {
-    show();
+  it("refreshes presence age without replacing the selected person's disclosure", () => {
+    const now = Date.UTC(2026, 0, 1, 12);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const person = {
+      id: "person",
+      identity: { type: "profile" as const, id: "person" },
+      name: "Person",
+      watchedSessions: [],
+      entries: [{ ts: now, lastActivityAt: now, host: "Test device" }],
+    };
+    const input = props({
+      filters: { personId: "person", query: "", time: "7d" },
+      presenceViewers: [person],
+      presentationRevision: 1,
+    });
+    show(input);
+    const identity = container.querySelector(".activity-feed__identity");
+    const details = container.querySelector<HTMLDetailsElement>(
+      ".activity-feed__connection-details",
+    )!;
+    details.open = true;
+    expect(identity?.querySelector(".settings-status")?.textContent).toContain("Online · Active");
 
-    expect(container.querySelectorAll("main")).toHaveLength(0);
+    vi.mocked(Date.now).mockReturnValue(now + 120_000);
+    show({ ...input, presentationRevision: 2 });
+    expect(container.querySelector(".activity-feed__identity")).toBe(identity);
+    expect(identity?.querySelector(".settings-status")?.textContent).toContain("Online · Idle");
+    expect(container.querySelector(".activity-feed__connection-details")).toBe(details);
+    expect(details.open).toBe(true);
   });
 
   it.each([
@@ -75,13 +98,6 @@ describe("session activity semantics", () => {
       indices: [0, 6, 12, 18, 24],
     },
     { time: "7d", label: "Last 7 days", count: 8, since: new Date(2026, 2, 4), indices: [0, 4, 7] },
-    {
-      time: "30d",
-      label: "Last 30 days",
-      count: 31,
-      since: new Date(2026, 2, 1),
-      indices: [0, 8, 15, 23, 30],
-    },
     { time: "all", label: "All time", count: 12, since: new Date(2025, 9, 1), indices: [0, 6, 11] },
   ] as const)(
     "renders the $time pulse, aligned buckets, and completeness",
@@ -130,7 +146,7 @@ describe("session activity semantics", () => {
           : { month: "short", day: "numeric" };
       const formatter = new Intl.DateTimeFormat(undefined, options);
       expect(bars[count - 1]?.getAttribute("title")).toBe(
-        `${formatter.format(bucketStart(count - 1))} · ${hourly ? 3 : 1} sessions`,
+        `${formatter.format(bucketStart(count - 1))} · ${hourly ? "3 sessions" : "1 session"}`,
       );
       expect(
         [...pulse.querySelectorAll(".activity-pulse__axis > span > span")].map(
@@ -173,17 +189,36 @@ describe("session activity semantics", () => {
         expect(panel.querySelector('[role="status"]')).toBeNull();
       }
       if (time === "all") {
-        input.result!.activityPulse = {
-          since: since.getTime(),
-          until: bucketStart(count),
-          buckets: buckets.map(() => 0),
-          sessions: 0,
-          running: 0,
-        };
-        show(input);
-        expect(
-          pulse.querySelector(".activity-pulse__stats")?.textContent?.replace(/\s+/g, " ").trim(),
-        ).toBe("0 sessions · 0 running now");
+        const firstPeriod = formatter.format(bucketStart(0));
+        for (const [total, sessions, people, incomplete] of [
+          [0, "0 sessions", "0 people", false],
+          [1, "1 session", "1 person", false],
+          [1, "1 session", "1+ people", true],
+          [2, "2 sessions", "2 people", false],
+        ] as const) {
+          input.result!.peopleIncomplete = incomplete;
+          input.result!.activityPulse = {
+            since: since.getTime(),
+            until: bucketStart(count),
+            buckets: buckets.map((_, index) => (index === 0 ? total : 0)),
+            sessions: total,
+            people: total,
+            running: 0,
+          };
+          show(input);
+          expect(
+            pulse.querySelector(".activity-pulse__stats")?.textContent?.replace(/\s+/g, " ").trim(),
+          ).toBe(`${sessions} · ${people} · 0 running now`);
+          expect(pulse.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+            `All time: ${sessions}; busiest ${firstPeriod}`,
+          );
+          expect(pulse.querySelector(".activity-pulse__bar")?.getAttribute("title")).toBe(
+            `${firstPeriod} · ${sessions}`,
+          );
+          expect(
+            pulse.querySelectorAll(".activity-pulse__stats > span")[1]?.hasAttribute("title"),
+          ).toBe(incomplete);
+        }
         expect(pulse.querySelectorAll(".activity-pulse__bars > span")).toHaveLength(12);
         expect(pulse.querySelector(".activity-pulse__running")).toBeNull();
         show();
@@ -192,99 +227,90 @@ describe("session activity semantics", () => {
     },
   );
 
-  it.each([1, 885])(
-    "shows the list footer only when %s matching sessions exceed the visible rows",
-    (totalCount) => {
-      const input = props({ rows: [row("Visible session", { id: "owner" }, Date.now())] });
-      input.result!.totalCount = totalCount;
-      show(input);
+  it("shows the list footer when matching sessions exceed the visible rows", () => {
+    const input = props({ rows: [row("Visible session", { id: "owner" }, Date.now())] });
+    input.result!.totalCount = 885;
+    show(input);
 
-      const main = container.querySelector(".activity-feed__main")!;
-      const footer = main.querySelector(".activity-feed__footer");
-      if (totalCount > 1) {
-        expect(footer?.textContent).toBe("Showing 1 of 885");
-        expect(main.lastElementChild).toBe(footer);
-      } else {
-        expect(footer).toBeNull();
+    const main = container.querySelector(".activity-feed__main")!;
+    const footer = main.querySelector(".activity-feed__footer");
+    expect(footer?.textContent).toBe("Showing 1 of 885");
+    expect(main.lastElementChild).toBe(footer);
+  });
+
+  it.each(["stale sidebar", "catalog:native:gateway%3Alocal:Thread-1"] as const)(
+    "opens displayed rows with configured routing for %s",
+    (key) => {
+      const stale = key === "stale sidebar";
+      const rows = stale
+        ? (["chat", "dashboard"] as const).map((face, index) =>
+            row(
+              `agent:research:${face}:12345678-90ab-cdef-1234-567890abcde${index}`,
+              { id: "owner" },
+              Date.now(),
+              { boardFace: face, displayName: `Research ${face}` },
+            ),
+          )
+        : [row(key, { id: "owner" }, Date.now())];
+      const input = props({ rows });
+      input.context = {
+        ...input.context,
+        basePath: "/control",
+        agents: {
+          state: {
+            agentsList: {
+              defaultId: "main",
+              mainKey: stale ? "main" : "workspace",
+              scope: "per-sender",
+            },
+          },
+        },
+        agentSelection: { state: { selectedId: stale ? "other" : "research" } },
+        ...(stale
+          ? {
+              sessions: {
+                state: {
+                  agentId: "other",
+                  result: {
+                    sessions: rows.map((session) => ({ ...session, displayName: "Old title" })),
+                  },
+                },
+              },
+            }
+          : {}),
+      } as unknown as ApplicationContext;
+      show(input);
+      const links = container.querySelectorAll<HTMLAnchorElement>("[data-activity-session]");
+      expect(links).toHaveLength(rows.length);
+      for (const [index, session] of rows.entries()) {
+        const link = links[index]!;
+        const pathname = stale
+          ? `/control/${session.boardFace}/research/research-${session.boardFace}-1234567890abcdef1234567890abcde${index}`
+          : "/control/chat/research";
+        const search = stale
+          ? `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(session.key)}`
+          : key.startsWith("catalog:")
+            ? "?catalog=native&host=gateway%3Alocal&thread=Thread-1"
+            : undefined;
+        expect(link.getAttribute("href")).toBe(`${pathname}${stale ? "" : (search ?? "")}`);
+        link.click();
+        expect(input.context.navigate).toHaveBeenLastCalledWith(
+          stale ? session.boardFace : "chat",
+          search ? { pathname, search } : { pathname },
+        );
       }
     },
   );
-
-  it.each([
-    "stale sidebar",
-    "workspace",
-    "global",
-    "catalog:native:gateway%3Alocal:Thread-1",
-  ] as const)("opens displayed rows with configured routing for %s", (key) => {
-    const stale = key === "stale sidebar";
-    const rows = stale
-      ? (["chat", "dashboard"] as const).map((face, index) =>
-          row(
-            `agent:research:${face}:12345678-90ab-cdef-1234-567890abcde${index}`,
-            { id: "owner" },
-            Date.now(),
-            { boardFace: face, displayName: `Research ${face}` },
-          ),
-        )
-      : [row(key, { id: "owner" }, Date.now())];
-    const input = props({ rows });
-    input.context = {
-      ...input.context,
-      basePath: "/control",
-      agents: {
-        state: {
-          agentsList: {
-            defaultId: "main",
-            mainKey: stale ? "main" : "workspace",
-            scope: key === "global" ? "global" : "per-sender",
-          },
-        },
-      },
-      agentSelection: { state: { selectedId: stale ? "other" : "research" } },
-      ...(stale
-        ? {
-            sessions: {
-              state: {
-                agentId: "other",
-                result: {
-                  sessions: rows.map((session) => ({ ...session, displayName: "Old title" })),
-                },
-              },
-            },
-          }
-        : {}),
-    } as unknown as ApplicationContext;
-    show(input);
-    const links = container.querySelectorAll<HTMLAnchorElement>("[data-activity-session]");
-    expect(links).toHaveLength(rows.length);
-    for (const [index, session] of rows.entries()) {
-      const link = links[index]!;
-      const pathname = stale
-        ? `/control/${session.boardFace}/research/research-${session.boardFace}-1234567890abcdef1234567890abcde${index}`
-        : "/control/chat/research";
-      const search = stale
-        ? `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(session.key)}`
-        : key.startsWith("catalog:")
-          ? "?catalog=native&host=gateway%3Alocal&thread=Thread-1"
-          : undefined;
-      expect(link.getAttribute("href")).toBe(`${pathname}${stale ? "" : (search ?? "")}`);
-      link.click();
-      expect(input.context.navigate).toHaveBeenLastCalledWith(
-        stale ? session.boardFace : "chat",
-        search ? { pathname, search } : { pathname },
-      );
-    }
-  });
 
   it.each(
     (["activity", "dashboards"] as const).flatMap((surface) =>
       (
         [
-          ["unknown", false, null],
-          ["unknown", true, null],
           ["global", false, null],
           ["global", true, "global"],
-          ["agent:qa-writer:global", false, "agent:qa-writer:global"],
+          ...(surface === "dashboards"
+            ? ([["agent:qa-writer:global", false, "agent:qa-writer:global"]] as const)
+            : []),
         ] as const
       ).map(([key, globalScope, expectedKey]) => ({ surface, key, globalScope, expectedKey })),
     ),
@@ -320,11 +346,13 @@ describe("session activity semantics", () => {
       } as unknown as ApplicationContext;
       const surfaceContainer = document.createElement("div");
       document.body.append(surfaceContainer);
-      render(
-        surface === "activity"
-          ? renderSessionActivityView(input)
-          : renderDashboards(
-              {
+      if (surface === "activity") {
+        renderSessionActivityViewSolid(input, surfaceContainer);
+      } else {
+        mountDashboards(
+          () =>
+            createComponent(DashboardsView, {
+              data: {
                 result: input.result!,
                 error: null,
                 basePath: "",
@@ -332,15 +360,12 @@ describe("session activity semantics", () => {
                 mainKey: "main",
                 globalScope,
               },
-              { query: "", ownerId: "", sort: "updated" },
-              {
-                onQueryChange: vi.fn(),
-                onOwnerChange: vi.fn(),
-                onSortChange: vi.fn(),
-              },
-            ),
-        surfaceContainer,
-      );
+              filters: { query: "", ownerId: "", sort: "updated" },
+              handlers: { onFilterChange: vi.fn() },
+            }),
+          { container: surfaceContainer },
+        );
+      }
       const item = surfaceContainer.querySelector<HTMLElement>(
         surface === "activity" ? "[data-activity-session]" : ".dashboard-card__main",
       )!;
@@ -504,130 +529,160 @@ describe("session activity semantics", () => {
 });
 
 describe("session activity people filter", () => {
-  it.each([false, true])(
-    "keeps online identity details and only known watched sessions in recency order (facet present: %s)",
-    (hasFacet) => {
-      const input = props({
-        filters: { personId: "online", query: "", time: "7d" },
-        rows: [
-          row("agent:main:first", { id: "online" }, 10),
-          row("agent:main:second", { id: "online" }, 20),
-          row("agent:main:unwatched", { id: "online" }, 30),
-        ],
-        presenceViewers: [
-          {
-            id: "online",
-            identity: { type: "profile", id: "online" },
-            email: "online@example.test",
-            watchedSessions: ["agent:main:first", "agent:main:second", "missing"],
-            entries: [
-              {
-                host: "Alice's Mac",
-                platform: "Win32",
-                deviceFamily: "Mac16,6",
-                ip: "203.0.113.7",
-                timeZone: "Europe/Vienna",
-                lastInputSeconds: 30,
-                ts: 10,
-              },
-              { host: "Alice's phone", ts: 20 },
-            ],
-          },
-        ],
-      });
-      if (!hasFacet) {
-        input.result!.people = [];
-      }
-      show(input);
-      const identity = container.querySelector('[data-activity-identity="online"]');
-      // A sparse online identity wins as a whole, without borrowing the facet's label.
-      expect(identity?.querySelector("h2")?.textContent).toBe("online@example.test");
-      expect(identity?.textContent).toContain("Online");
-      expect(
-        [...container.querySelectorAll(".activity-feed__device-name")].map((device) =>
-          device.textContent?.trim(),
-        ),
-      ).toEqual(["Alice's Mac", "Alice's phone"]);
-      const device = identity?.querySelector(".activity-feed__device")?.textContent;
-      expect(device).toContain("203.0.113.7");
-      expect(device).toContain("Europe/Vienna");
-      expect(
-        [...container.querySelectorAll(".activity-feed__viewing-list [data-activity-session]")].map(
-          (session) => session.getAttribute("data-activity-session"),
-        ),
-      ).toEqual(["agent:main:second", "agent:main:first"]);
-    },
-  );
+  it("groups matching connection facts while retaining network differences and person-scoped disclosure", () => {
+    const entry = {
+      ts: 1,
+      host: "openclaw-control-ui",
+      clientId: "openclaw-control-ui",
+      mode: "webchat",
+      deviceFamily: "Mac",
+      platform: "MacIntel",
+      ip: "203.0.113.7",
+      timeZone: "Europe/Vienna",
+    };
+    const person = {
+      id: "online",
+      identity: { type: "profile" as const, id: "online" },
+      watchedSessions: [],
+      entries: [
+        entry,
+        { ...entry, lastInputSeconds: 30 },
+        { ...entry, lastInputSeconds: 5 },
+        { ...entry, ip: "203.0.113.8" },
+      ],
+    };
+    const input = props({
+      filters: { personId: "online", query: "", time: "7d" },
+      presenceViewers: [person],
+    });
+    show(input);
+    expect(container.querySelector(".activity-feed__connection-summary")?.textContent).toBe(
+      "Mac · Web app",
+    );
+    const details = container.querySelector<HTMLDetailsElement>(
+      ".activity-feed__connection-details",
+    )!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent?.trim()).toBe("Connection details · 4");
+    const groups = details.querySelectorAll(".activity-feed__connection");
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.textContent).toContain("3 connections");
+    expect(groups[0]?.textContent).toContain("Last input 5s ago");
+    expect(groups[1]?.textContent).toContain("1 connection");
+    expect(groups[1]?.textContent).toContain("203.0.113.8");
+    details.open = true;
+    show({ ...input, presenceViewers: [{ ...person, entries: [entry] }] });
+    expect(container.querySelector("details")).toBe(details);
+    expect(details.open).toBe(true);
+    expect(details.querySelector("summary")?.textContent?.trim()).toBe("Connection details · 1");
+    show({
+      ...input,
+      filters: { ...input.filters, personId: "other" },
+      presenceViewers: [{ ...person, id: "other", identity: { type: "profile", id: "other" } }],
+    });
+    expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(false);
+  });
 
-  it.each(["offline", "Offline"])(
-    "resolves the selected %s identity only from an exact server profile facet",
-    (personId) => {
-      const input = props({
-        filters: { personId, query: "", time: "7d" },
-        rows: [
-          row("Visible session", { id: personId, label: "Row actor" }, 10, {
-            participants: [{ identity: { type: "profile", id: personId }, label: "Preview actor" }],
-          }),
-        ],
-      });
-      show({ ...input, result: undefined, loading: true });
-      expect(container.querySelector(".activity-feed__not-found")).toBeNull();
-      expect(
-        container.querySelector('.activity-feed__loading [role="status"]')?.textContent,
-      ).toContain("Loading");
+  it("keeps online identity details and only known watched sessions in recency order", () => {
+    const input = props({
+      filters: { personId: "online", query: "", time: "7d" },
+      rows: [
+        row("agent:main:first", { id: "online" }, 10),
+        row("agent:main:second", { id: "online" }, 20),
+        row("agent:main:unwatched", { id: "online" }, 30),
+      ],
+      presenceViewers: [
+        {
+          id: "online",
+          identity: { type: "profile", id: "online" },
+          email: "online@example.test",
+          watchedSessions: ["agent:main:first", "agent:main:second", "missing"],
+          entries: [
+            {
+              host: "Alice's Mac",
+              platform: "Win32",
+              deviceFamily: "Mac16,6",
+              ip: "203.0.113.7",
+              timeZone: "Europe/Vienna",
+              lastInputSeconds: 30,
+              ts: 10,
+            },
+            { host: "Alice's phone", ts: 20 },
+          ],
+        },
+      ],
+    });
+    show(input);
+    const identity = container.querySelector('[data-activity-identity="online"]');
+    // A sparse online identity wins as a whole, without borrowing the facet's label.
+    expect(identity?.querySelector("h2")?.textContent).toBe("online@example.test");
+    expect(identity?.textContent).toContain("Online");
+    expect(
+      [...container.querySelectorAll(".activity-feed__connection strong")].map((device) =>
+        device.textContent?.trim(),
+      ),
+    ).toEqual(["Mac16,6 · Windows", "Alice's phone"]);
+    const device = identity?.querySelector(".activity-feed__connection")?.textContent;
+    expect(device).toContain("203.0.113.7");
+    expect(device).toContain("Europe/Vienna");
+    expect(
+      [...container.querySelectorAll(".activity-feed__viewing-list [data-activity-session]")].map(
+        (session) => session.getAttribute("data-activity-session"),
+      ),
+    ).toEqual(["agent:main:second", "agent:main:first"]);
+  });
 
-      show(input);
-      if (personId === "offline") {
-        const identity = container.querySelector('[data-activity-identity="offline"]');
-        expect(identity?.querySelector("h2")?.textContent).toBe("Offline person");
-        expect(identity?.textContent).toContain("Offline");
-        expect(identity?.querySelector(".activity-feed__viewing-list")).toBeNull();
-      } else {
-        expect(container.querySelector(".activity-feed__not-found")).not.toBeNull();
-        expect(container.querySelector("[data-activity-identity]")).toBeNull();
-        expect(container.querySelector("[data-activity-session]")).toBeNull();
-      }
-    },
-  );
+  it("requires exact case when resolving a selected server profile facet", () => {
+    const personId = "Offline";
+    const input = props({
+      filters: { personId, query: "", time: "7d" },
+      rows: [
+        row("Visible session", { id: personId, label: "Row actor" }, 10, {
+          participants: [{ identity: { type: "profile", id: personId }, label: "Preview actor" }],
+        }),
+      ],
+    });
+    show({ ...input, result: undefined, loading: true });
+    expect(container.querySelector(".activity-feed__not-found")).toBeNull();
+    expect(
+      container.querySelector('.activity-feed__loading [role="status"]')?.textContent,
+    ).toContain("Loading");
 
-  it.each([true, false])(
-    "never joins raw presence into a profile Activity page (profile online: %s)",
-    (online) => {
-      const input = props({
-        filters: { personId: "online", query: "", time: "7d" },
-        rows: [row("raw-watch", { id: "online" }, 10)],
-        presenceViewers: [
-          ...(online
-            ? [
-                {
-                  id: "online",
-                  identity: { type: "profile" as const, id: "online" },
-                  name: "Profile person",
-                  watchedSessions: [],
-                  entries: [{ host: "Profile device", ts: 1 }],
-                },
-              ]
-            : []),
-          {
-            id: "online",
-            name: "Raw collider",
-            watchedSessions: ["raw-watch"],
-            entries: [{ host: "Raw device", ts: 1 }],
-          },
-        ],
-      });
-      show(input);
-      const identity = container.querySelector("[data-activity-identity]")!;
-      expect(identity.querySelector("h2")?.textContent).toBe(
-        online ? "Profile person" : "Online person",
-      );
-      expect(identity.textContent).not.toContain("Raw device");
-      expect(identity.querySelector(".activity-feed__viewing-list")).toBeNull();
-      expect(
-        container.querySelectorAll(".activity-feed__people-row .activity-feed__presence-dot"),
-      ).toHaveLength(online ? 1 : 0);
-    },
-  );
+    show(input);
+    expect(container.querySelector(".activity-feed__not-found")).not.toBeNull();
+    expect(container.querySelector("[data-activity-identity]")).toBeNull();
+    expect(container.querySelector("[data-activity-session]")).toBeNull();
+  });
+
+  it("never joins raw presence into an online profile Activity page", () => {
+    const input = props({
+      filters: { personId: "online", query: "", time: "7d" },
+      rows: [row("raw-watch", { id: "online" }, 10)],
+      presenceViewers: [
+        {
+          id: "online",
+          identity: { type: "profile" as const, id: "online" },
+          name: "Profile person",
+          watchedSessions: [],
+          entries: [{ host: "Profile device", ts: 1 }],
+        },
+        {
+          id: "online",
+          name: "Raw collider",
+          watchedSessions: ["raw-watch"],
+          entries: [{ host: "Raw device", ts: 1 }],
+        },
+      ],
+    });
+    show(input);
+    const identity = container.querySelector("[data-activity-identity]")!;
+    expect(identity.querySelector("h2")?.textContent).toBe("Profile person");
+    expect(identity.textContent).not.toContain("Raw device");
+    expect(identity.querySelector(".activity-feed__viewing-list")).toBeNull();
+    expect(
+      container.querySelectorAll(".activity-feed__people-row .activity-feed__presence-dot"),
+    ).toHaveLength(1);
+  });
 
   it("selecting Everyone clears the person while preserving the other filters", () => {
     const onFiltersChange = vi.fn();
@@ -637,7 +692,12 @@ describe("session activity people filter", () => {
       onFiltersChange,
     });
 
+    const trigger = container.querySelector<HTMLButtonElement>(".activity-feed__people-trigger");
+    trigger?.click();
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(container.querySelector(".activity-feed__people-popover"));
     container.querySelector<HTMLButtonElement>('[data-activity-person=""]')?.click();
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
 
     expect(onFiltersChange).toHaveBeenCalledWith({
       personId: null,

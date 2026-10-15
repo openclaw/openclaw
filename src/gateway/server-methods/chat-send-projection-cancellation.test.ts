@@ -2,6 +2,8 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import { observeReplyDelivery } from "../../agents/reply-completion.js";
+import { getRuntimeConfig } from "../../config/io.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -18,7 +20,7 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 
 vi.mock("node:worker_threads", async () =>
@@ -33,12 +35,14 @@ it.each(["reply-observation", "commentary-media"] as const)(
   "cancels %s projection waiting without cancelling the shared rebuild or losing the answer",
   async (scenario) => {
     await withOpenClawTestState({ label: "chat-projection-cancel" }, async () => {
+      setRuntimeConfigSnapshot({});
       const runId = "projection-run";
       const scope = {
         agentId: "main",
         sessionId: "projection-session",
         sessionKey: "agent:main:projection",
-        storePath: loadSessionEntry("agent:main:projection", { agentId: "main" }).storePath,
+        storePath: (await loadSessionEntryAsync("agent:main:projection", { agentId: "main" }))
+          .storePath,
       };
       const entry = { sessionId: scope.sessionId, lifecycleRevision: "initial", updatedAt: 1 };
       await replaceSessionEntry(scope, entry);
@@ -50,6 +54,7 @@ it.each(["reply-observation", "commentary-media"] as const)(
       const controller = new AbortController();
       const warn = vi.fn();
       const dispatch = createChatSendReplyDispatch({
+        getRuntimeConfig,
         accountId: undefined,
         isAgentRunStarted: () => true,
         isRunCurrent: () => true,

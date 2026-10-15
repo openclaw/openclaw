@@ -30,6 +30,7 @@ export type ChatMetadataSessionEntry = Partial<
 export type ChatMetadataReadParams = {
   agentId: string;
   includeModels?: boolean;
+  ifRevision?: string;
   sessionKey?: string;
   storePath?: string;
   requesterProfileId?: string;
@@ -48,10 +49,14 @@ export type ChatMetadataReadParams = {
 };
 
 export type ChatMetadataResult = {
+  revision?: string;
+  unchanged?: true;
   commands?: unknown[];
   models?: ModelChoice[];
   modelSelectionPolicy?: ModelsListResult["modelSelectionPolicy"];
   swarmEnabled: boolean;
   runtimeSelectionLocked?: boolean;
+  /** Current required worker-inference policy, not placement readiness or send authority. */
+  requiredWorkerInferenceProfileId?: string;
   accountSelection?: ChatAccountSelection;
 };

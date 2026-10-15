@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -44,6 +45,7 @@ it("filters irrelevant removals but preserves indexable files and possible direc
   const onChange = vi.fn(() => changed.resolve());
   const onUnavailable = vi.fn();
   watcher = new MemoryFileWatcher({
+    runInBackgroundContext: AsyncLocalStorage.snapshot(),
     workspaceDir,
     agentId: "main",
     settings: {

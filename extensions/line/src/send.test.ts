@@ -1,7 +1,10 @@
+import http from "node:http";
 import { HTTPFetchError } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const realGlobalFetch = globalThis.fetch.bind(globalThis);
 
 const {
   pushMessageMock,
@@ -153,6 +156,7 @@ describe("LINE send helpers", () => {
         primaryPlatformMessageId: messageId,
         raw,
         sentAt: fixedSentAt,
+        sourceResults: messageIds.map((id) => ({ channel: "line", messageId: id })),
         threadId: chatId,
       },
     };
@@ -304,7 +308,11 @@ describe("LINE send helpers", () => {
     };
 
     await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
-    await sendModule.replyMessageLine("reply-token", [message] as never, { cfg: LINE_TEST_CFG });
+    await sendModule.replyMessageLine("reply-token", [message] as never, {
+      cfg: LINE_TEST_CFG,
+      verbose: true,
+    });
+    expect(logVerboseMock).toHaveBeenCalledWith("line: replied with 1 messages");
 
     const pushed = pushMessageMock.mock.calls[0]?.[0] as {
       messages: Array<{ contents: Record<string, unknown> }>;
@@ -503,43 +511,6 @@ describe("LINE send helpers", () => {
     expect(result).toEqual(expectedMediaSendResult("U123", ["push-first", "push-second"], 2));
   });
 
-  it("replies when reply token is provided", async () => {
-    const text = "⚠️ 🛠️ `search repos (agent)` failed";
-    replyMessageMock.mockResolvedValueOnce({
-      sentMessages: [{ id: "reply-first" }, { id: "reply-second" }],
-    });
-    await sendModule.replyMessageLine(
-      "reply-token",
-      [
-        {
-          type: "image",
-          originalContentUrl: "https://example.com/media.jpg",
-          previewImageUrl: "https://example.com/media.jpg",
-        },
-        { type: "text", text },
-      ],
-      { cfg: LINE_TEST_CFG, verbose: true },
-    );
-
-    expect(replyMessageMock).toHaveBeenCalledTimes(1);
-    expect(pushMessageMock).not.toHaveBeenCalled();
-    expect(replyMessageMock).toHaveBeenCalledWith({
-      replyToken: "reply-token",
-      messages: [
-        {
-          type: "image",
-          originalContentUrl: "https://example.com/media.jpg",
-          previewImageUrl: "https://example.com/media.jpg",
-        },
-        {
-          type: "text",
-          text,
-        },
-      ],
-    });
-    expect(logVerboseMock).toHaveBeenCalledWith("line: replied with 2 messages");
-  });
-
   it("preserves all accepted reply ids when activity recording fails", async () => {
     replyMessageMock.mockResolvedValueOnce({
       sentMessages: [{ id: "713452345678901234" }, { id: "713452345678901235" }],
@@ -642,19 +613,6 @@ describe("LINE send helpers", () => {
         [{ type: "text", text: "answering you" }],
       ]);
     }
-  });
-
-  it("does not resend a rejected send that carried no quote", async () => {
-    lineFetchMock.mockResolvedValueOnce(
-      new Response("invalid payload", { status: 400, statusText: "Bad Request" }),
-    );
-
-    await expect(
-      sendModule.pushMessagesLine("U123", [{ type: "text", text: "Hello" }], {
-        cfg: LINE_TEST_CFG,
-      }),
-    ).rejects.toBeInstanceOf(HTTPFetchError);
-    expect(lineFetchMock).toHaveBeenCalledOnce();
   });
 
   it("does not misclassify network SyntaxErrors as provider acceptance", async () => {
@@ -880,6 +838,53 @@ describe("LINE send helpers", () => {
     expect((caught as HTTPFetchError).body).not.toContain("tail");
     expect(textSpy).not.toHaveBeenCalled();
     expect(tracked.wasCanceled()).toBe(true);
+  });
+
+  it("masks a reflected Authorization token through a real HTTP reflector", async () => {
+    const token = "line-channel-access-token-xyz0123456789abcdef";
+    resolveLineChannelAccessTokenMock.mockReturnValue(token);
+    const server = http.createServer((req, res) => {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end(
+        `proxy failure reflected Authorization: ${req.headers.authorization}; request rejected`,
+      );
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    try {
+      // The production send boundary targets the fixed LINE API host; route only the
+      // destination to the loopback reflector while the real fetch stack and the
+      // production response handling run unchanged.
+      lineFetchMock.mockImplementationOnce(
+        async (url: string | URL | Request, init?: RequestInit) => {
+          const target = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+          return realGlobalFetch(
+            target.replace("https://api.line.me", `http://127.0.0.1:${address.port}`),
+            init,
+          );
+        },
+      );
+
+      const caught = await captureError(() =>
+        sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+      );
+
+      expect(caught).toBeInstanceOf(HTTPFetchError);
+      const body = (caught as HTTPFetchError).body;
+      expect(body).toContain("proxy failure");
+      expect(body).toContain("request rejected");
+      expect(body).not.toContain(token);
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 
   it("preserves reply rejection status when the LINE error body cannot be read", async () => {

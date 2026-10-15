@@ -1,5 +1,4 @@
 import { listAgentEntries } from "../agents/agent-scope-config.js";
-// Resolves filesystem policy for exec and sandbox tool use.
 import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";

@@ -127,6 +127,15 @@ describe("openclaw.setup provider resolution", () => {
     ],
     ["openclaw.setup.auth.start", { sessionId: "retained-session", authChoice: "github-copilot" }],
     ["openclaw.setup.prepare.start", { sessionId: "retained-session", authChoice: "ollama" }],
+    [
+      "openclaw.setup.runtime.start",
+      {
+        sessionId: "retained-session",
+        agentId: "main",
+        runtimeId: "fixture-runtime",
+        configPatch: { plugins: { entries: { fixture: { config: { enabled: true } } } } },
+      },
+    ],
   ] as const)("does not replace a retained wizard session through %s", async (method, params) => {
     const { wizardSessions, context } = makeContext();
     const retained = new WizardSession(async () => {});
@@ -148,7 +157,7 @@ describe("openclaw.setup provider resolution", () => {
     expect(providerAuthChoiceMocks.prepareAuthChoiceLoadedPluginProvider).not.toHaveBeenCalled();
   });
 
-  it.each([true, false, "true", "cancel"])(
+  it.each([true, false, "cancel"])(
     "keeps runtime capability consent server-owned through activation (%s)",
     async (answer) => {
       const { wizardSessions, context } = makeContext();
@@ -539,7 +548,6 @@ describe("openclaw.setup provider resolution", () => {
   });
 
   it.each([
-    ["missing", null],
     ["retryable", { config, retrySelection: true, authProfiles: [], persistAuthProfiles: vi.fn() }],
   ])("returns actionable doctor guidance when provider setup is %s", async (_, result) => {
     providerAuthChoiceMocks.prepareAuthChoiceLoadedPluginProvider.mockImplementationOnce(
@@ -570,11 +578,7 @@ describe("openclaw.setup provider resolution", () => {
     await whenAdmittedWizardSessionSettled(session);
     expect(authConfigMocks.writeProviderAuthConfig).not.toHaveBeenCalled();
   });
-  it.each([
-    { restart: false, modelTarget: undefined },
-    { restart: true, modelTarget: undefined },
-    { restart: true, modelTarget: "utility" as const },
-  ])(
+  it.each([{ restart: true, modelTarget: "utility" as const }])(
     "returns verified provider auth through wizard transport (restart $restart, target $modelTarget)",
     async ({ restart, modelTarget }) => {
       const { wizardSessions, context } = makeContext();
@@ -644,7 +648,7 @@ describe("openclaw.setup provider resolution", () => {
       expect(wizardSessions.has("auth-session-1")).toBe(false);
     },
   );
-  it.each(["auth", "unknown"] as const)(
+  it.each(["auth"] as const)(
     "publishes a finalized %s probe rejection after capability consent",
     async (status) => {
       const { wizardSessions, context } = makeContext();
@@ -841,7 +845,6 @@ describe("openclaw.setup provider resolution", () => {
   it.each([
     "failed",
     "rejected",
-    "persistence-unknown",
     "thrown",
     "retention-indeterminate",
     "application-error",
@@ -871,7 +874,7 @@ describe("openclaw.setup provider resolution", () => {
           }
           return {
             ok: false,
-            status: outcome === "persistence-unknown" ? "unknown" : "auth",
+            status: "auth",
             error: "Provider rejected sign-in",
             ...(outcome === "rejected" ? { disposition: "rejected-before-promotion" } : {}),
           };

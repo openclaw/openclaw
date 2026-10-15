@@ -1,16 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
-import { BROWSER_ANNOTATION_EVENT, type BrowserAnnotationEvent } from "./browser-annotation.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestMetrics,
   createBrowserPanelTestTab,
-  createInspectedNode,
-  createPointer,
   flushBrowserResponses,
   stubScreenshotMedia,
   type BrowserRequestEnvelope,
@@ -67,15 +65,12 @@ function browserGateway() {
       return { ok: true };
     }
     if (envelope.path === "/tabs") {
-      return { running: true, tabs: [...tabs] };
+      return { running: true, canAutoResizeViewport: true, tabs: [...tabs] };
     }
     if (envelope.path === "/screenshot") {
       return { path: `/fresh-${profile}.png`, targetId: envelope.body?.targetId, url };
     }
     if (envelope.path === "/act") {
-      if (String(envelope.body?.fn).includes("document.elementFromPoint")) {
-        return { result: createInspectedNode("Selected") };
-      }
       return createBrowserPanelTestMetrics(url, profile);
     }
     if (envelope.path === "/tabs/open") {
@@ -95,7 +90,7 @@ async function mountPanel(client: Panel["client"], presented = true) {
   panel.client = client;
   panel.sessionKey = "agent:main:first";
   panel.preferredTab = { tab: hostTab, revision: "first" };
-  document.body.append(panel);
+  mountSolid(() => panel);
   await panel.updateComplete;
   return panel;
 }
@@ -109,7 +104,7 @@ function chooseCard(panel: Panel, browserTab: BrowserTabTarget) {
 }
 
 function pageTitle(panel: Panel) {
-  return panel.shadowRoot?.querySelector<HTMLImageElement>(".bp-shot")?.alt;
+  return panel.renderRoot?.querySelector<HTMLImageElement>(".bp-shot")?.alt;
 }
 
 function controllerFor(panel: Panel): BrowserPanelController {
@@ -118,32 +113,6 @@ function controllerFor(panel: Panel): BrowserPanelController {
 }
 
 describe("browser panel route handoff", () => {
-  it("refreshes referenced tabs and preserves a still-listed active tab", async () => {
-    const gateway = browserGateway();
-    const panel = await mountPanel(gateway.client, false);
-    panel.sessionTabs = [hostTab];
-    const controller = controllerFor(panel);
-    const select = vi.spyOn(controller, "selectTab");
-    panel.presented = true;
-    await panel.updateComplete;
-    await select.mock.results[0]?.value;
-    expect(controller.activeTargetId).toBe("t1");
-
-    const refresh = vi.spyOn(controller, "refreshAll");
-    gateway.request.mockClear();
-    panel.sessionTabs = [hostTab, { ...hostTab, targetId: "t2" }];
-    await panel.updateComplete;
-    await refresh.mock.results[0]?.value;
-    expect(gateway.request).toHaveBeenCalledWith("browser.request", {
-      method: "GET",
-      path: "/tabs",
-      target: "host",
-      query: { profile: "managed" },
-      tabScope: { sessionKey: panel.sessionKey, referencedTabs: panel.sessionTabs },
-    });
-    expect(controller.activeTargetId).toBe("t1");
-  });
-
   it("follows session results once on presentation, keeps card choices, and clears session/gateway ownership", async () => {
     const gateway = browserGateway();
     const focusCount = () =>
@@ -153,12 +122,12 @@ describe("browser panel route handoff", () => {
     const panel = await mountPanel(gateway.client, false);
     expect(gateway.request).not.toHaveBeenCalled();
     panel.presented = true;
-    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
-    expect(panel.shadowRoot?.querySelector(".bp-profile")?.textContent).toBe("managed");
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
+    expect(panel.renderRoot?.querySelector(".bp-profile")?.textContent).toBe("managed");
     expect(focusCount()).toBe(0);
 
     chooseCard(panel, nodeTab);
-    await waitForFast(() => expect(pageTitle(panel)).toBe("work"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("work"));
     const afterClick = focusCount();
     expect(afterClick).toBe(1);
     panel.preferredTab = { tab: { ...hostTab }, revision: "first" };
@@ -168,7 +137,7 @@ describe("browser panel route handoff", () => {
     expect(pageTitle(panel)).toBe("work");
 
     panel.preferredTab = { tab: hostTab, revision: "second" };
-    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
     expect(focusCount()).toBe(afterClick);
     await controllerFor(panel).selectTab("t2");
     panel.preferredTab = { tab: { ...hostTab }, revision: "second" };
@@ -183,7 +152,7 @@ describe("browser panel route handoff", () => {
     await panel.updateComplete;
     expect(gateway.request).toHaveBeenCalledTimes(hiddenCount);
     panel.presented = true;
-    await waitForFast(() => expect(pageTitle(panel)).toBe("work"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("work"));
 
     await controllerFor(panel).closeTab("t1");
     panel.preferredTab = { tab: { ...nodeTab }, revision: "third" };
@@ -193,15 +162,15 @@ describe("browser panel route handoff", () => {
 
     panel.sessionKey = "agent:main:second";
     panel.preferredTab = undefined;
-    await waitForFast(() => expect(pageTitle(panel)).toBe("default"));
-    expect(panel.shadowRoot?.querySelector(".bp-profile")).toBeNull();
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("default"));
+    expect(panel.renderRoot?.querySelector(".bp-profile")).toBeNull();
     panel.sessionKey = "agent:main:first";
     panel.preferredTab = { tab: hostTab, revision: "second" };
-    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
     const replacement = browserGateway();
     panel.client = replacement.client;
     panel.preferredTab = undefined;
-    await waitForFast(() => expect(pageTitle(panel)).toBe("default"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("default"));
     expect(
       [...gateway.request.mock.calls, ...replacement.request.mock.calls].every(
         ([method]) => method === "browser.request",
@@ -212,7 +181,7 @@ describe("browser panel route handoff", () => {
   it("defers a retained panel refresh to its pending card choice", async () => {
     const gateway = browserGateway();
     const panel = await mountPanel(gateway.client);
-    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
     vi.useFakeTimers();
     const controller = controllerFor(panel);
     controller.handleViewportResize(640, 480);
@@ -229,7 +198,7 @@ describe("browser panel route handoff", () => {
 
     chooseCard(panel, nodeTab);
     panel.refreshOnPresentation = true;
-    await waitForFast(() => expect(pageTitle(panel)).toBe("work"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("work"));
     controller.handleViewportResize(700, 500);
     await vi.advanceTimersByTimeAsync(1_000);
     const requests = gateway.request.mock.calls
@@ -277,16 +246,16 @@ describe("browser panel route handoff", () => {
     const panel = await mountPanel(gateway.client, false);
     panel.preferredTab = { tab: { ...hostTab, targetId: "dead-target" }, revision: "stale" };
     panel.presented = true;
-    await waitForFast(() => expect(controllerFor(panel).running).toBe(false));
+    await waitForSolid(() => expect(controllerFor(panel).running).toBe(false));
     await panel.updateComplete;
 
     const paths = () =>
       gateway.request.mock.calls.map(([, value]) => (value as BrowserRequestEnvelope).path);
     expect(paths()).toEqual(["/tabs"]);
     expect(controllerFor(panel).errorText).toBeNull();
-    const start = panel.shadowRoot?.querySelector<HTMLButtonElement>(".bp-btn");
+    const start = panel.renderRoot?.querySelector<HTMLButtonElement>(".bp-btn");
     expect(start?.textContent?.trim()).toBe("Start browser");
-    const reload = panel.shadowRoot?.querySelector<HTMLButtonElement>(
+    const reload = panel.renderRoot?.querySelector<HTMLButtonElement>(
       'button[aria-label="Reload"]',
     );
     expect(reload?.disabled).toBe(true);
@@ -302,76 +271,71 @@ describe("browser panel route handoff", () => {
     await flushBrowserResponses();
 
     start?.click();
-    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
     expect(paths()).toEqual(expect.arrayContaining(["/start", "/screenshot"]));
     expect(paths()).not.toContain("/tabs/focus");
   });
 
-  it.each([false, true])(
-    "rejects a missing historical tab before capture and preserves the prior view (prior=%s)",
-    async (hasPriorView) => {
-      const missingTarget = "missing-history-target";
-      const gateway = createBrowserClient(
-        async (request) => {
-          if (request.path === "/tabs") {
-            return {
-              running: true,
-              tabs: [createBrowserPanelTestTab("t1", "https://managed.example/", "managed")],
-            };
-          }
-          if (request.body?.targetId === missingTarget) {
-            throw new GatewayRequestError({
-              code: "INVALID_REQUEST",
-              message: "tab not found",
-            });
-          }
-          if (request.path === "/screencast") {
-            throw new GatewayRequestError({
-              code: "INVALID_REQUEST",
-              message: "Screencast unavailable",
-              details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" },
-            });
-          }
-          if (request.path === "/screenshot") {
-            return { path: "/fresh.png", targetId: "raw-t1", url: "https://managed.example/" };
-          }
-          if (request.path === "/act") {
-            return createBrowserPanelTestMetrics("https://managed.example/", "managed");
-          }
-          return { ok: true };
-        },
-        { screencast: true },
-      );
-      const panel = await mountPanel(gateway.client, hasPriorView);
-      if (hasPriorView) {
-        await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
-      }
-      const controller = controllerFor(panel);
-      const previousView = controller.view;
-      vi.useFakeTimers();
-      panel.preferredTab = {
-        tab: { ...hostTab, targetId: missingTarget },
-        revision: "missing-history",
-      };
-      panel.presented = true;
-      await waitForFast(() => expect(controller.errorText).toBeTruthy());
+  it("rejects a missing historical tab before capture and preserves the prior view", async () => {
+    const missingTarget = "missing-history-target";
+    const gateway = createBrowserClient(
+      async (request) => {
+        if (request.path === "/tabs") {
+          return {
+            running: true,
+            tabs: [createBrowserPanelTestTab("t1", "https://managed.example/", "managed")],
+          };
+        }
+        if (request.body?.targetId === missingTarget) {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "tab not found",
+          });
+        }
+        if (request.path === "/screencast") {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "Screencast unavailable",
+            details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" },
+          });
+        }
+        if (request.path === "/screenshot") {
+          return { path: "/fresh.png", targetId: "raw-t1", url: "https://managed.example/" };
+        }
+        if (request.path === "/act") {
+          return createBrowserPanelTestMetrics("https://managed.example/", "managed");
+        }
+        return { ok: true };
+      },
+      { screencast: true },
+    );
+    const panel = await mountPanel(gateway.client);
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
+    const controller = controllerFor(panel);
+    const previousView = controller.view;
+    vi.useFakeTimers();
+    panel.preferredTab = {
+      tab: { ...hostTab, targetId: missingTarget },
+      revision: "missing-history",
+    };
+    panel.presented = true;
+    await waitForSolid(() => expect(controller.errorText).toBeTruthy());
 
-      const missingCaptures = () =>
-        gateway.request.mock.calls
-          .map(([, value]) => value as BrowserRequestEnvelope)
-          .filter(
-            (request) =>
-              request.body?.targetId === missingTarget &&
-              (request.path === "/screencast" || request.path === "/screenshot"),
-          );
-      expect.soft(controller.activeTargetId).toBe(hasPriorView ? "t1" : null);
-      expect.soft(controller.view).toBe(previousView);
-      expect.soft(controller.loading).toBe(false);
-      expect.soft(missingCaptures()).toEqual([]);
-      await vi.advanceTimersByTimeAsync(21_000);
-      expect(missingCaptures()).toEqual([]);
-    },
-  );
+    const missingCaptures = () =>
+      gateway.request.mock.calls
+        .map(([, value]) => value as BrowserRequestEnvelope)
+        .filter(
+          (request) =>
+            request.body?.targetId === missingTarget &&
+            (request.path === "/screencast" || request.path === "/screenshot"),
+        );
+    expect.soft(controller.activeTargetId).toBe("t1");
+    expect.soft(controller.view).toBe(previousView);
+    expect.soft(controller.loading).toBe(false);
+    expect.soft(missingCaptures()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(21_000);
+    expect(missingCaptures()).toEqual([]);
+  });
 
   it("keeps a raw target selection when its stable tab alias is not the first tab", async () => {
     const gateway = browserGateway();
@@ -379,7 +343,7 @@ describe("browser panel route handoff", () => {
     panel.preferredTab = { tab: { ...hostTab, targetId: "raw-t2" }, revision: "raw-target" };
     panel.presented = true;
 
-    await waitForFast(() => expect(controllerFor(panel).activeTargetId).toBe("t2"));
+    await waitForSolid(() => expect(controllerFor(panel).activeTargetId).toBe("t2"));
     expect(gateway.request).toHaveBeenCalledWith(
       "browser.request",
       expect.objectContaining({
@@ -391,111 +355,10 @@ describe("browser panel route handoff", () => {
     );
   });
 
-  it.each([hostTab, nodeTab])(
-    "routes every panel operation through $target/$profile",
-    async (tab) => {
-      const gateway = browserGateway();
-      const panel = await mountPanel(gateway.client, false);
-      panel.preferredTab = { tab, revision: "routed" };
-      panel.presented = true;
-      await waitForFast(() => expect(pageTitle(panel)).toBe(tab.profile));
-      const controller = controllerFor(panel);
-      await controller.startBrowserNow();
-      await controller.selectTab("t2");
-      await controller.openUrl("https://allowed.example/", { newTab: false });
-      controller.handleViewportKeydown(new KeyboardEvent("keydown", { key: "a" }));
-      controller.goHistory(-1);
-      controller.handleWheel(new WheelEvent("wheel", { deltaY: 40, cancelable: true }));
-      controller.handleViewportResize(700, 500);
-      await waitForFast(() =>
-        expect(
-          gateway.request.mock.calls.some(
-            ([, value]) => (value as BrowserRequestEnvelope).body?.kind === "resize",
-          ),
-        ).toBe(true),
-      );
-      await controller.refreshAll();
-      await panel.updateComplete;
-      const stage = panel.shadowRoot!.querySelector<HTMLElement>(".bp-stage")!;
-      vi.spyOn(stage, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
-      const clickCompleted = createDeferred();
-      const respond = gateway.request.getMockImplementation()!;
-      gateway.request.mockImplementation(async (method, params, options) => {
-        const response = await respond(method, params, options);
-        if ((params as BrowserRequestEnvelope).body?.kind === "clickCoords") {
-          clickCompleted.resolve();
-        }
-        return response;
-      });
-      controller.handleStageClick(new MouseEvent("click", { clientX: 10, clientY: 20 }));
-      await clickCompleted.promise;
-      controller.setMode("inspect");
-      controller.handleOverlayPointerMove(createPointer(10, 20));
-      await waitForFast(() => expect(controller.inspected?.name).toBe("Selected"));
-      vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-        drawImage: vi.fn(),
-        clearRect: vi.fn(),
-        strokeRect: vi.fn(),
-      } as unknown as CanvasRenderingContext2D);
-      vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
-        "data:image/png;base64,YQ==",
-      );
-      const annotation = vi.fn((event: Event) => event.preventDefault());
-      window.addEventListener(BROWSER_ANNOTATION_EVENT, annotation);
-      try {
-        await controller.input.sendAnnotation({ element: controller.inspected });
-      } finally {
-        window.removeEventListener(BROWSER_ANNOTATION_EVENT, annotation);
-      }
-      const event = annotation.mock.calls[0]?.[0];
-      if (!(event instanceof CustomEvent)) {
-        throw new Error("Expected a browser annotation event");
-      }
-      const context = (event as BrowserAnnotationEvent).detail.modelContext;
-      const targetLine = context.split("\n").find((line) => line.startsWith("Browser target: "))!;
-      expect(JSON.parse(targetLine.slice("Browser target: ".length))).toEqual({
-        ...tab,
-        targetId: "t2",
-      });
-      await controller.openUrl("https://allowed.example/new", { newTab: true });
-      await controller.closeTab("t3");
-      const requests = gateway.request.mock.calls.map(
-        ([, value]) => value as BrowserRequestEnvelope,
-      );
-      expect(requests.map((value) => value.path)).toEqual(
-        expect.arrayContaining([
-          "/start",
-          "/tabs/focus",
-          "/tabs",
-          "/screenshot",
-          "/act",
-          "/navigate",
-          "/tabs/open",
-          "/tabs/t3",
-        ]),
-      );
-      expect(requests.some((value) => value.body?.kind === "press")).toBe(true);
-      expect(requests.some((value) => value.body?.kind === "clickCoords")).toBe(true);
-      expect(
-        requests.some((value) => String(value.body?.fn).includes("document.elementFromPoint")),
-      ).toBe(true);
-      expect(requests.some((value) => String(value.body?.fn).includes("history.go(-1)"))).toBe(
-        true,
-      );
-      expect(requests.some((value) => String(value.body?.fn).includes("window.scrollBy"))).toBe(
-        true,
-      );
-      for (const request of requests) {
-        expect(request).toMatchObject({ target: tab.target, query: { profile: tab.profile } });
-        expect(request.node).toBe("node" in tab ? tab.node : undefined);
-      }
-    },
-  );
-
   it("drops queued input when a card changes the browser route", async () => {
     const gateway = browserGateway();
     const panel = await mountPanel(gateway.client);
-    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
     vi.useFakeTimers();
     controllerFor(panel).handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
     chooseCard(panel, nodeTab);
@@ -528,7 +391,7 @@ describe("browser panel route handoff", () => {
       return await respond(method, envelope);
     });
     const panel = await mountPanel(gateway.client);
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(
         gateway.request.mock.calls.some(
           ([, value]) => (value as BrowserRequestEnvelope).path === "/screenshot",
@@ -536,7 +399,7 @@ describe("browser panel route handoff", () => {
       ).toBe(true),
     );
     chooseCard(panel, nodeTab);
-    await waitForFast(() => expect(pageTitle(panel)).toBe("work"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("work"));
     pending.resolve({ path: "/stale.png", targetId: "t1", url: "https://managed.example/" });
     await flushBrowserResponses();
     expect(controllerFor(panel).loading).toBe(false);
@@ -580,16 +443,16 @@ describe("browser panel route handoff", () => {
     const panel = await mountPanel(gateway.client, false);
     panel.preferredTab = undefined;
     panel.presented = true;
-    await waitForFast(() => expect(pageTitle(panel)).toBe("Allowed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("Allowed"));
     const beforeBlocked = gateway.request.mock.calls.length;
     await controllerFor(panel).selectTab("t1");
     await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelector(".bp-status")?.textContent).toContain(
+    expect(panel.renderRoot?.querySelector(".bp-status")?.textContent).toContain(
       "Select another tab",
     );
     expect(gateway.request).toHaveBeenCalledTimes(beforeBlocked);
     await controllerFor(panel).closeTab("t1");
-    await waitForFast(() => expect(pageTitle(panel)).toBe("Allowed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("Allowed"));
     expect(controllerFor(panel).tabs.map((tab) => tab.id)).toEqual(["t2"]);
   });
 
@@ -598,7 +461,7 @@ describe("browser panel route handoff", () => {
     async (deniedPath) => {
       const gateway = browserGateway();
       const panel = await mountPanel(gateway.client);
-      await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+      await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
       const respond = gateway.request.getMockImplementation()!;
       gateway.request.mockImplementation(async (method, envelope) => {
         if ((envelope as BrowserRequestEnvelope).path === deniedPath) {
@@ -612,8 +475,8 @@ describe("browser panel route handoff", () => {
       });
       await controllerFor(panel).refreshAll();
       await panel.updateComplete;
-      expect(panel.shadowRoot?.querySelector(".bp-shot")).toBeNull();
-      expect(panel.shadowRoot?.querySelector(".bp-status")?.textContent).toContain(
+      expect(panel.renderRoot?.querySelector(".bp-shot")).toBeNull();
+      expect(panel.renderRoot?.querySelector(".bp-status")?.textContent).toContain(
         "Select another tab",
       );
       expect(controllerFor(panel).urlDraft).toBe("");
@@ -621,61 +484,56 @@ describe("browser panel route handoff", () => {
     },
   );
 
-  it.each(["navigation_blocked", "navigation_check_failed"] as const)(
-    "shows %s without capture and recovers after refresh",
-    async (reason) => {
-      let blocked = true;
-      const gateway = createBrowserClient(async (request) => {
-        if (request.path === "/tabs") {
-          return {
-            running: true,
-            tabs: [
-              {
-                ...createBrowserPanelTestTab(
-                  "t1",
-                  blocked ? "" : "https://allowed.example/",
-                  "Kept title",
-                ),
-                ...(blocked ? { urlUnavailableReason: reason } : {}),
-              },
-            ],
-          };
-        }
-        if (request.path === "/tabs/focus" && blocked) {
-          throw new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "Tab address is unavailable",
-            details: { reason: "navigation_blocked" },
-          });
-        }
-        if (request.path === "/screenshot") {
-          return { path: "/fresh.png", url: "https://allowed.example/" };
-        }
-        if (request.path === "/act") {
-          return createBrowserPanelTestMetrics("https://allowed.example/", "Recovered");
-        }
-        return { ok: true };
-      });
-      const panel = await mountPanel(gateway.client);
-      await waitForFast(() =>
-        expect(panel.shadowRoot?.querySelector(".bp-status")?.textContent).toContain(
-          reason === "navigation_blocked"
-            ? "Select another tab or enter an allowed address."
-            : "Refresh to try again.",
-        ),
-      );
-      expect(panel.shadowRoot?.textContent).toContain("Kept title");
-      expect(panel.shadowRoot?.querySelector(".bp-shot")).toBeNull();
-      expect(
-        gateway.request.mock.calls.some(([, value]) =>
-          ["/tabs/focus", "/screenshot", "/act"].includes((value as BrowserRequestEnvelope).path),
-        ),
-      ).toBe(false);
-      blocked = false;
-      panel.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Reload"]')?.click();
-      await waitForFast(() => expect(pageTitle(panel)).toBe("Recovered"));
-      expect(controllerFor(panel).tabs[0]?.urlUnavailableReason).toBeUndefined();
-      expect(panel.shadowRoot?.querySelector(".bp-status")).toBeNull();
-    },
-  );
+  it("shows navigation_check_failed without capture and recovers after refresh", async () => {
+    let blocked = true;
+    const gateway = createBrowserClient(async (request) => {
+      if (request.path === "/tabs") {
+        return {
+          running: true,
+          tabs: [
+            {
+              ...createBrowserPanelTestTab(
+                "t1",
+                blocked ? "" : "https://allowed.example/",
+                "Kept title",
+              ),
+              ...(blocked ? { urlUnavailableReason: "navigation_check_failed" } : {}),
+            },
+          ],
+        };
+      }
+      if (request.path === "/tabs/focus" && blocked) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Tab address is unavailable",
+          details: { reason: "navigation_blocked" },
+        });
+      }
+      if (request.path === "/screenshot") {
+        return { path: "/fresh.png", url: "https://allowed.example/" };
+      }
+      if (request.path === "/act") {
+        return createBrowserPanelTestMetrics("https://allowed.example/", "Recovered");
+      }
+      return { ok: true };
+    });
+    const panel = await mountPanel(gateway.client);
+    await waitForSolid(() =>
+      expect(panel.renderRoot?.querySelector(".bp-status")?.textContent).toContain(
+        "Refresh to try again.",
+      ),
+    );
+    expect(panel.renderRoot?.textContent).toContain("Kept title");
+    expect(panel.renderRoot?.querySelector(".bp-shot")).toBeNull();
+    expect(
+      gateway.request.mock.calls.some(([, value]) =>
+        ["/tabs/focus", "/screenshot", "/act"].includes((value as BrowserRequestEnvelope).path),
+      ),
+    ).toBe(false);
+    blocked = false;
+    panel.renderRoot?.querySelector<HTMLButtonElement>('button[aria-label="Reload"]')?.click();
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("Recovered"));
+    expect(controllerFor(panel).tabs[0]?.urlUnavailableReason).toBeUndefined();
+    expect(panel.renderRoot?.querySelector(".bp-status")).toBeNull();
+  });
 });

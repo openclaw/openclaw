@@ -17,7 +17,10 @@ import {
 import { replaceSessionOwnerInTransaction } from "../config/sessions/session-accessor.sqlite-owner.js";
 import { collectSessionStateIdsForEntry } from "../config/sessions/session-accessor.sqlite-references.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
+import {
+  readStoredCanonicalSessionMainKey,
+  setCanonicalSqliteSessionMainKey,
+} from "../config/sessions/session-canonical-key.js";
 import { preserveCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import { serializeJsonlLines } from "../config/sessions/transcript-jsonl.js";
@@ -27,6 +30,8 @@ import {
   projectExistingAgentDatabaseTargets,
   resolveTargetSqliteOptions,
 } from "../infra/session-sqlite-migration-readers.js";
+import { normalizeMainKey } from "../routing/session-key.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
@@ -128,7 +133,12 @@ function hydrateCanonicalSessionCandidates(
   const byStore = new Map<string, CanonicalSessionCandidateFact[]>();
   for (const fact of facts) {
     const key = `${fact.agentId}\0${fact.storePath}`;
-    byStore.set(key, [...(byStore.get(key) ?? []), fact]);
+    const grouped = byStore.get(key);
+    if (grouped) {
+      grouped.push(fact);
+    } else {
+      byStore.set(key, [fact]);
+    }
   }
   for (const group of byStore.values()) {
     const first = group[0]!;
@@ -381,7 +391,7 @@ async function repairCanonicalSessionGroup(
   }
 
   const destinationStore = byDatabase.get(destination.sqlitePath) ?? [];
-  const preArchivedDirectories: string[] = [];
+  const archivedDirectories = new Set<string>();
   if (winner.sqlitePath !== destination.sqlitePath) {
     const generationIds = new Set([
       ...listSessionGenerationIdsForCanonicalRepair({
@@ -431,9 +441,7 @@ async function repairCanonicalSessionGroup(
         reason: "deleted",
         sessionId,
       });
-      if (!preArchivedDirectories.includes(archiveDirectory)) {
-        preArchivedDirectories.push(archiveDirectory);
-      }
+      archivedDirectories.add(archiveDirectory);
     }
   }
   setCanonicalSqliteSessionMainKey(
@@ -468,10 +476,9 @@ async function repairCanonicalSessionGroup(
     storePath: destination.storePath,
     upserts: [{ entry: selected.entry, sessionKey: winner.canonicalKey }],
   });
-  const archivedDirectories = new Set([
-    ...preArchivedDirectories,
-    ...winnerResult.archivedTranscriptDirectories,
-  ]);
+  for (const directory of winnerResult.archivedTranscriptDirectories) {
+    archivedDirectories.add(directory);
+  }
 
   for (const [sqlitePath, storeCandidates] of byDatabase) {
     if (sqlitePath === destination.sqlitePath) {
@@ -517,10 +524,14 @@ export async function repairCanonicalSessionKeys(params: {
   let repairedGroups = 0;
   if (params.apply) {
     for (const store of stores) {
-      setCanonicalSqliteSessionMainKey(
-        openOpenClawAgentDatabase(resolveTargetSqliteOptions(store, env)),
-        params.cfg.session?.mainKey,
-      );
+      const options = resolveTargetSqliteOptions(store, env);
+      const stored = withOpenClawAgentDatabaseReadOnly(readStoredCanonicalSessionMainKey, options);
+      if (!stored.found || stored.value !== normalizeMainKey(params.cfg.session?.mainKey)) {
+        setCanonicalSqliteSessionMainKey(
+          openOpenClawAgentDatabase(options),
+          params.cfg.session?.mainKey,
+        );
+      }
     }
   }
   let repairGroups = collectCanonicalSessionRepairGroups({ cfg: params.cfg, env }, stores);
@@ -546,40 +557,36 @@ export async function repairCanonicalSessionKeys(params: {
         cfg: params.cfg,
         env,
       });
-      if (!singleDatabaseGroup) {
-        for (const directory of await repairCanonicalSessionGroup(candidates, {
-          cfg: params.cfg,
-          env,
-        })) {
-          archivedTranscriptDirectories.add(directory);
+      const batch = singleDatabaseGroup ? [singleDatabaseGroup] : [];
+      if (singleDatabaseGroup) {
+        // Keep commits bounded and preserve the original order around cross-store moves, while
+        // collapsing the repeated whole-store projections for the common same-database path.
+        for (const nextCandidates of hydratedGroups.slice(1)) {
+          const nextSingleDatabaseGroup = resolveSingleDatabaseCanonicalRepairGroup(
+            nextCandidates,
+            {
+              cfg: params.cfg,
+              env,
+            },
+          );
+          if (
+            !nextSingleDatabaseGroup ||
+            nextSingleDatabaseGroup.selected.destination.sqlitePath !==
+              singleDatabaseGroup.selected.destination.sqlitePath
+          ) {
+            break;
+          }
+          batch.push(nextSingleDatabaseGroup);
         }
-        repairBatches += 1;
-        repairedGroups += 1;
-        repairGroups = collectCanonicalSessionRepairGroups({ cfg: params.cfg, env }, stores);
-        continue;
       }
-      const batch = [singleDatabaseGroup];
-      // Keep commits bounded and preserve the original order around cross-store moves, while
-      // collapsing the repeated whole-store projections for the common same-database path.
-      for (const nextCandidates of hydratedGroups.slice(1)) {
-        const nextSingleDatabaseGroup = resolveSingleDatabaseCanonicalRepairGroup(nextCandidates, {
-          cfg: params.cfg,
-          env,
-        });
-        if (
-          !nextSingleDatabaseGroup ||
-          nextSingleDatabaseGroup.selected.destination.sqlitePath !==
-            singleDatabaseGroup.selected.destination.sqlitePath
-        ) {
-          break;
-        }
-        batch.push(nextSingleDatabaseGroup);
-      }
-      for (const directory of await repairCanonicalSessionGroupsInSingleDatabase(batch)) {
+      const directories = singleDatabaseGroup
+        ? await repairCanonicalSessionGroupsInSingleDatabase(batch)
+        : await repairCanonicalSessionGroup(candidates, { cfg: params.cfg, env });
+      for (const directory of directories) {
         archivedTranscriptDirectories.add(directory);
       }
       repairBatches += 1;
-      repairedGroups += batch.length;
+      repairedGroups += singleDatabaseGroup ? batch.length : 1;
       repairGroups = collectCanonicalSessionRepairGroups({ cfg: params.cfg, env }, stores);
     }
   }

@@ -6,6 +6,7 @@ import { createVitestCacheWarmGroups } from "../../scripts/lib/ci-node-test-plan
 import { BUN_UI_TEST_ENV } from "../../scripts/lib/ci-test-runtime.mts";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 vi.mock(import("../../scripts/lib/managed-child-process.mts"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -56,6 +57,10 @@ describe("protected Vitest cache collection", () => {
   it.each(["linux", "linux-hosted"])(
     "preserves Node and compatible Bun seeds before final UI pruning after a failure (%s)",
     async (platform) => {
+      const fixtureEnv = testRunnerFixtureEnv();
+      for (const name of ["CI", "GITHUB_ACTIONS", "OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE"]) {
+        vi.stubEnv(name, fixtureEnv[name]);
+      }
       const root = tempDirs.make("openclaw-cache-warm-test-");
       const cacheRoot = join(root, "transforms");
       const compileRoot = join(root, "compile");
@@ -64,6 +69,7 @@ describe("protected Vitest cache collection", () => {
       );
       const ui = groups.find((group) => group.shard_name === "cache-warm:ui-package")!;
       for (const [name, value] of Object.entries({
+        CI: "true",
         CACHE_WARM_PLATFORM: platform,
         NODE_OPTIONS: "--max-old-space-size=8192",
         NODE_COMPILE_CACHE: compileRoot,
@@ -114,7 +120,6 @@ describe("protected Vitest cache collection", () => {
           expect(env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY).toBe("1");
           return await runShardPlans(resolveShardPlans(env), {
             env,
-            continueOnFailure: env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1",
             scratchDir: root,
             runChild: async (childArgs, childEnv) => {
               expect(childArgs).toContain("--testNamePattern=(?!)");
@@ -127,8 +132,9 @@ describe("protected Vitest cache collection", () => {
                   files: JSON.parse(readFileSync(childEnv.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8")),
                 });
                 expect(childEnv.NODE_OPTIONS).toBe("--max-old-space-size=8192");
+                // Exit 1 is an ordinary test failure; infrastructure exits stop shard admission.
                 return childEnv.OPENCLAW_VITEST_RUNTIME === "node" && nonUiCollections.length === 1
-                  ? 19
+                  ? 1
                   : 0;
               }
               return 0;
@@ -140,7 +146,7 @@ describe("protected Vitest cache collection", () => {
           expect(args).toContain("--testNamePattern=(?!)");
           expect(env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
         }
-        return invocations.length === 1 ? 19 : 0;
+        return invocations.length === 1 ? 1 : 0;
       });
       vi.resetModules();
       await import("../../scripts/ci-warm-vitest-caches.mts");
@@ -148,7 +154,7 @@ describe("protected Vitest cache collection", () => {
       expect(createVitestCacheWarmGroups).toHaveBeenLastCalledWith(
         platform === "linux-hosted" ? "hybrid-hosted" : "full",
       );
-      expect(process.exitCode).toBe(19);
+      expect(process.exitCode).toBe(1);
       expect(uiCollections.map(({ env }) => env.OPENCLAW_VITEST_RUNTIME)).toEqual(["bun", "node"]);
       for (const collection of uiCollections) {
         expect(collection.files).toEqual(ui.includePatterns);

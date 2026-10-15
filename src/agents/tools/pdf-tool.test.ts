@@ -1,18 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as operatorInvocation from "../../gateway/operator-invocation-authority.js";
+import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import * as pdfExtract from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import * as authProfileRuntime from "../auth-profiles/store-runtime.js";
+import * as modelResolution from "../embedded-agent-runner/model.js";
 import * as modelAuth from "../model-auth.js";
+import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import * as preparedRuntime from "../prepared-model-runtime.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { createContainerWorkspaceSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import * as pdfNative from "./pdf-native-providers.js";
 import { createPdfTool } from "./pdf-tool.js";
 import * as pdfModelConfig from "./pdf-tool.model-config.js";
@@ -21,6 +28,7 @@ import {
   FAKE_PDF_MEDIA,
   resetPdfToolAuthEnv,
   withPreparedRuntimeFacts,
+  withTempPdfAgentDir,
 } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
@@ -43,6 +51,13 @@ beforeEach(() => {
   agentDir = tempDirs.make("openclaw-pdf-");
   resetPdfToolAuthEnv();
   completeMock.mockReset();
+  // PDF orchestration uses synthetic credentials; both async readers share that empty store.
+  const authStore = { version: 1, profiles: {} };
+  vi.spyOn(authProfileRuntime, "ensureAuthProfileStoreAsync").mockResolvedValue(authStore);
+  vi.spyOn(
+    authProfileRuntime,
+    "ensureAuthProfileStoreWithoutExternalProfilesAsync",
+  ).mockResolvedValue(authStore);
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -104,18 +119,6 @@ it("resolves deferred model config before loading PDFs", async () => {
   );
   expect(resolve).toHaveBeenCalledOnce();
   expect(load).not.toHaveBeenCalled();
-});
-
-it("passes the validated byte budget to PDF loading", async () => {
-  const { pdf, loadSpy } = await native();
-  await pdf.execute("pdf", { pdf: "/tmp/doc.pdf", maxBytesMb: "0.5" });
-  expect(loadSpy).toHaveBeenCalledWith(
-    "/tmp/doc.pdf",
-    expect.objectContaining({ maxBytes: 524_288 }),
-  );
-  expect(modelAuth.getApiKeyForModelCore).toHaveBeenCalledWith(
-    expect.objectContaining({ secretSentinels: true }),
-  );
 });
 
 it("sends workspace-relative PDF bytes directly to a native provider", async () => {
@@ -190,13 +193,17 @@ it("passes web_fetch SSRF policy to remote PDF loading", async () => {
       tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
     },
   });
-  await pdf.execute("pdf", { pdf: "http://198.18.0.153/doc.pdf" });
+  await pdf.execute("pdf", { pdf: "http://198.18.0.153/doc.pdf", maxBytesMb: "0.5" });
   expect(loadSpy).toHaveBeenCalledWith(
     "http://198.18.0.153/doc.pdf",
     expect.objectContaining({
+      maxBytes: 524_288,
       readIdleTimeoutMs: 120_000,
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     }),
+  );
+  expect(modelAuth.getApiKeyForModelCore).toHaveBeenCalledWith(
+    expect.objectContaining({ secretSentinels: true }),
   );
 });
 
@@ -231,10 +238,11 @@ it("selects later pages and reports partial extraction to both models", async ()
   const result = await pdf.execute("pdf", {
     pdf: "/tmp/doc.pdf",
     pages: "21-23",
+    password: " secret ",
     prompt: "summarize",
   });
   expect(extract).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ pageNumbers: [21, 22], maxPages: 2 }),
+    expect.objectContaining({ pageNumbers: [21, 22], maxPages: 2, password: " secret " }),
   );
   const notice = "[Partial document: requested page selection limited to 2 pages.]";
   expect(contextText()).toContain(notice);
@@ -339,12 +347,6 @@ it.each(["bedrock-converse-stream", "openai-completions"])(
   },
 );
 
-it("preserves password whitespace during extraction", async () => {
-  const { pdf, extract } = await extraction();
-  await pdf.execute("pdf", { pdf: "/tmp/doc.pdf", password: " secret " });
-  expect(extract).toHaveBeenCalledWith(expect.objectContaining({ password: " secret " }));
-});
-
 it("reports omitted images for a text-only model and supplies Codex instructions", async () => {
   const { pdf, extract } = await extraction("openai-chatgpt-responses", pdfConfig(FALLBACK));
   extract.mockResolvedValue({
@@ -441,4 +443,208 @@ it("uses the committed runtime generation for native PDF model selection", async
     await work.drain();
   }
   expect(release).toHaveBeenCalledOnce();
+});
+
+describe("PDF tool prepared-runtime cancellation", () => {
+  afterEach(() => {
+    completeMock.mockReset();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { source: "admitted", scenario: "denied override" },
+    { source: "direct", scenario: "permitted fallback" },
+    { source: "admitted", scenario: "retired after extraction" },
+    { source: "admitted", scenario: "mutated override" },
+    { source: "admitted", scenario: "mutated path" },
+  ] as const)(
+    "preserves $source requester model policy for $scenario",
+    async ({ source, scenario }) => {
+      await withTempPdfAgentDir(async (runtimeAgentDir) => {
+        const { loadSpy } = await stubPdfToolInfra(runtimeAgentDir, {
+          provider: "test-provider",
+          api: "openai-completions",
+          input: ["text"],
+        });
+        const cfg: OpenClawConfig = {
+          plugins: { enabled: false },
+          agents: {
+            entries: { main: {} },
+            defaults: {
+              model: "test-provider/allowed",
+              models: { "test-provider/blocked": { alias: "blocked-alias" } },
+              pdfModel: { primary: "test-provider/blocked", fallbacks: ["test-provider/allowed"] },
+            },
+          },
+        };
+        let active = true;
+        let sourceHolds = 0;
+        const authority = createAdmittedRunOperatorAuthority({
+          profileId: "pdf-reader",
+          scopes: ["operator.write"],
+          retain: () => {
+            sourceHolds += 1;
+            return () => {
+              sourceHolds -= 1;
+            };
+          },
+          assertCurrent: () => {
+            if (!active) {
+              throw new Error("requester retired");
+            }
+          },
+          modelPolicy: prepareOperatorModelPolicy({
+            cfg,
+            policy: { sourceAgent: "main" },
+            manifestPlugins: [],
+          }),
+        });
+        vi.spyOn(pdfExtract, "extractPdfContent").mockImplementation(async () => {
+          active = scenario !== "retired after extraction";
+          return { text: "Synthetic document text", images: [] };
+        });
+        completeMock.mockResolvedValue({
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Allowed PDF answer." }],
+        });
+        const pdfTool = (await import("./pdf-tool.js")).createPdfTool({
+          config: cfg,
+          agentDir: runtimeAgentDir,
+        });
+        if (!pdfTool) {
+          throw new Error("expected PDF tool");
+        }
+        const runWithRequester = <T>(run: () => Promise<T>) =>
+          source === "direct"
+            ? withOperatorToolGatewayAuthority(
+                { scopes: ["operator.write"], operatorRunAuthority: authority },
+                run,
+              )
+            : withGatewayToolCallerIdentity(
+                { agentId: "main", sessionKey: "agent:main:reader", operatorAuthority: authority },
+                run,
+              );
+        const changedDuringCapture = scenario === "mutated override" || scenario === "mutated path";
+        const captureStarted = createDeferredCore();
+        const resumeCapture = createDeferredCore();
+        const capture = operatorInvocation.captureAmbientGatewayOperatorAuthority;
+        const captureSpy = changedDuringCapture
+          ? vi
+              .spyOn(operatorInvocation, "captureAmbientGatewayOperatorAuthority")
+              .mockImplementation(async (params) => {
+                const retained = await capture(params);
+                captureStarted.resolve();
+                await resumeCapture.promise;
+                return retained;
+              })
+          : undefined;
+        const args = {
+          pdfs: ["/tmp/synthetic.pdf"],
+          prompt: "Answer using this PDF.",
+          model:
+            scenario === "denied override" || scenario === "mutated override"
+              ? "blocked-alias"
+              : undefined,
+        };
+        const work = new AsyncWorkScope();
+        try {
+          const execution = work.track(() =>
+            runWithRequester(() => pdfTool.execute("policy", args)),
+          );
+          if (changedDuringCapture) {
+            await Promise.race([captureStarted.promise, execution]);
+            args.model = scenario === "mutated override" ? undefined : "blocked-alias";
+            args.pdfs[0] = "/tmp/replacement.pdf";
+            resumeCapture.resolve();
+          }
+          if (scenario === "permitted fallback" || scenario === "mutated path") {
+            await expect(execution).resolves.toMatchObject({
+              content: [{ type: "text", text: "Allowed PDF answer." }],
+            });
+            expect(completeMock).toHaveBeenCalledOnce();
+          } else {
+            await expect(execution).rejects.toThrow();
+            expect(completeMock).not.toHaveBeenCalled();
+          }
+          if (scenario === "mutated path") {
+            expect(loadSpy).toHaveBeenCalledExactlyOnceWith(
+              "/tmp/synthetic.pdf",
+              expect.any(Object),
+            );
+          }
+          if (scenario === "denied override" || scenario === "mutated override") {
+            expect(loadSpy).not.toHaveBeenCalled();
+            expect(preparedRuntime.acquireAgentRunPreparedModelRuntime).not.toHaveBeenCalled();
+          }
+        } finally {
+          resumeCapture.resolve();
+          await work.drain();
+          captureSpy?.mockRestore();
+        }
+        expect(sourceHolds).toBe(0);
+      });
+    },
+  );
+
+  it.each(["runtime acquisition", "model resolution"])(
+    "forwards cancellation to %s before provider work starts",
+    async (stage) => {
+      await withTempPdfAgentDir(async (runtimeAgentDir) => {
+        await stubPdfToolInfra(runtimeAgentDir, { provider: "openai" });
+        const cfg = {
+          agents: { defaults: { pdfModel: { primary: "openai/gpt-5.4-mini" } } },
+        } as OpenClawConfig;
+        const cancelled = new Error("PDF runtime cancelled");
+        const started = createDeferredCore<AbortSignal | undefined>();
+        const pending = createDeferredCore<never>();
+        const waitForCancellation = (abortSignal?: AbortSignal) => {
+          started.resolve(abortSignal);
+          abortSignal?.addEventListener("abort", () => pending.reject(cancelled), { once: true });
+          return pending.promise;
+        };
+        if (stage === "runtime acquisition") {
+          vi.mocked(preparedRuntime.acquireAgentRunPreparedModelRuntime).mockImplementationOnce(
+            (_input, options) => waitForCancellation(options?.abortSignal),
+          );
+        } else {
+          vi.spyOn(modelResolution, "resolveModelAsync").mockImplementationOnce(
+            (_provider, _model, _agentDir, _cfg, options) =>
+              waitForCancellation(options?.abortSignal),
+          );
+        }
+        const pdfTool = (await import("./pdf-tool.js")).createPdfTool({
+          config: cfg,
+          agentDir: runtimeAgentDir,
+        });
+        if (!pdfTool) {
+          throw new Error("expected PDF tool");
+        }
+        const controller = new AbortController();
+        const execution = pdfTool.execute(
+          "t1",
+          { prompt: "summarize", pdf: "/tmp/a.pdf" },
+          controller.signal,
+        );
+        const assertion =
+          stage === "runtime acquisition"
+            ? expect(execution).rejects.toMatchObject({
+                name: "AbortError",
+                message: cancelled.message,
+                cause: cancelled,
+              })
+            : expect(execution).rejects.toBe(cancelled);
+        try {
+          expect(await started.promise).toBe(controller.signal);
+          controller.abort(cancelled);
+          await assertion;
+          expect(completeMock).not.toHaveBeenCalled();
+        } finally {
+          controller.abort(cancelled);
+          pending.reject(cancelled);
+          await assertion;
+        }
+      });
+    },
+  );
 });

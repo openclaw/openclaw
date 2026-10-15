@@ -76,6 +76,7 @@ describe("reportChannelRoomJoin", () => {
 
     await expect(reportChannelRoomJoin(params)).resolves.toEqual({ kind: "posted" });
     expect(runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
+    expect(runCronIsolatedAgentTurn.mock.calls[0]?.[0].trigger).toBe("event");
     expect(runCronIsolatedAgentTurn.mock.calls[0]?.[0].job.delivery).toEqual({
       mode: "announce",
       channel: "slack",

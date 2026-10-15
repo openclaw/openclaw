@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { GatewayAgentRow } from "../../api/types.ts";
 import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
@@ -15,6 +16,114 @@ const REMOTE_PROJECT = {
 };
 
 describe("DraftPlaceState repository selection", () => {
+  it.each([
+    { source: "registered", redacted: false, current: false, savedWorktree: false },
+    { source: "registered", redacted: true, current: false, savedWorktree: false },
+    { source: "workspace", redacted: true, current: true, savedWorktree: true },
+  ] as const)(
+    "restores a permitted checkout using project eligibility ($source, redacted=$redacted)",
+    async ({ source, redacted, current, savedWorktree }) => {
+      const f = createRepositoryFixture({
+        models: ["first", "selected"].map((id) => ({
+          id,
+          provider: "example",
+          name: id,
+          available: true,
+          reasoning: true,
+          thinkingLevels: [{ id: "high", label: "High" }],
+        })),
+      });
+      onTestFinished(() => f.state.modelControl.reset());
+      const eligibility = createDeferred<{ current: boolean; worktree: boolean }>();
+      const settled = createDeferred();
+      const projectId = source === "workspace" ? "workspace:main" : "registered";
+      const project = {
+        id: projectId,
+        displayName: "Selected Project",
+        source,
+        ...(redacted ? {} : { repoRoot: "/project" }),
+      };
+      vi.spyOn(f.browser, "projects", "get").mockReturnValue([project]);
+      vi.spyOn(f.browser, "projectsReady", "get").mockReturnValue(true);
+      f.readPreference.mockReturnValue({ projectId, worktree: savedWorktree });
+      f.request.mockImplementation(async (method) =>
+        method === "projects.checkoutOptions"
+          ? eligibility.promise
+          : { repositoryStatus: "git", branches: [] },
+      );
+      f.requestUpdate.mockImplementation(() => {
+        if (f.state.worktree && f.state.worktreeAvailable()) {
+          settled.resolve();
+        }
+      });
+      f.state.adoptAgentDefaults();
+      f.state.restorePreferenceSelections();
+      await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
+      f.state.modelControl.selectModel("example/selected");
+      f.state.modelControl.thinkingLevel = "high";
+      expect(f.state.folderSubmissionBlocked()).toBe(true);
+      eligibility.resolve({ current, worktree: true });
+      await settled.promise;
+      expect(f.state.worktree).toBe(true);
+      expect(f.state.folderSubmissionBlocked()).toBe(false);
+      expect(f.state.currentCheckoutUnavailableReason).toBe(
+        current ? undefined : "Use an isolated worktree for this project and agent",
+      );
+      if (!current) {
+        f.state.selectWorktree(false);
+        expect(f.state.worktree).toBe(true);
+      }
+      expect(
+        buildSelectedSessionCreateParams(f.state, {
+          message: "Keep my prompt",
+          visibility: "normal",
+        }),
+      ).toMatchObject({
+        projectId,
+        worktree: true,
+        message: "Keep my prompt",
+        model: "example/selected",
+        thinkingLevel: "high",
+      });
+    },
+  );
+
+  it("preserves a valid checkout choice and retires an older project's eligibility", async () => {
+    const f = createRepositoryFixture();
+    const old = createDeferred<{ current: boolean; worktree: boolean }>();
+    const settled = createDeferred();
+    const projects = ["old", "current"].map((id) => ({
+      id,
+      displayName: id,
+      source: "registered" as const,
+    }));
+    vi.spyOn(f.browser, "projects", "get").mockReturnValue(projects);
+    f.readPreference.mockReturnValue({ worktree: false });
+    f.state.adoptAgentDefaults();
+    f.request.mockImplementation((_method, params) =>
+      params?.projectId === "old"
+        ? old.promise
+        : Promise.resolve({ current: true, worktree: true }),
+    );
+    f.requestUpdate.mockImplementation(() => {
+      if (f.browser.projectId === "current" && !f.state.folderSubmissionBlocked()) {
+        settled.resolve();
+      }
+    });
+    f.state.selectProjectId("old");
+    f.state.selectProjectId("current");
+    await settled.promise;
+    expect(f.state.worktree).toBe(false);
+    expect(f.state.currentCheckoutUnavailableReason).toBeUndefined();
+    old.resolve({ current: false, worktree: true });
+    await old.promise;
+    expect(f.browser.projectId).toBe("current");
+    expect(f.state.worktree).toBe(false);
+    f.state.selectWorktree(true);
+    f.state.selectProjectId("current");
+    expect(f.state.worktree).toBe(true);
+  });
+
   it.each(["restored", "selected"])(
     "retires an active %s remote repository after the catalog host changes",
     (selection) => {
@@ -337,7 +446,7 @@ describe("DraftPlaceState repository selection", () => {
       const { state, browser } = createRepositoryFixture();
       onTestFinished(() => browser.disconnect());
       state.selectRemoteProject(REMOTE_PROJECT);
-      browser.onPopoverShow("where");
+      browser.popoverCallbacks("where").onPopoverShow();
       browser.changeEnvironmentQuery("runner");
 
       state.selectDevice("", true);
@@ -345,7 +454,7 @@ describe("DraftPlaceState repository selection", () => {
       expect(browser.popoverOpen("where")).toBe(false);
       expect(browser.environmentQuery).toBe("runner");
 
-      browser.onPopoverShow("where");
+      browser.popoverCallbacks("where").onPopoverShow();
       expect(browser.environmentQuery).toBe("");
       if (destination === "cloud") {
         state.selectCloudProfile("aws");
@@ -507,7 +616,7 @@ describe("DraftPlaceState repository selection", () => {
   );
 
   it.each([false, true])(
-    "preserves saved isolation for an unverified workspace until explicitly cleared (project selected: %s)",
+    "preserves saved isolation while the workspace is unavailable (project selected: %s)",
     async (projectSelected) => {
       const { state, browser } = createRepositoryFixture({ workspaceGit: true, unavailable: true });
       if (projectSelected) {
@@ -530,9 +639,10 @@ describe("DraftPlaceState repository selection", () => {
       expect(state.checkoutVisible).toBe(true);
       expect(state.placementPreferenceReady).toBe(true);
       expect(state.preferenceSelection().worktree).toBe(true);
+      expect(state.folderSubmissionBlocked()).toBe(projectSelected);
       state.selectWorktree(false);
-      expect(state.worktree).toBe(false);
-      expect(state.preferenceSelection().worktree).toBe(false);
+      expect(state.worktree).toBe(projectSelected);
+      expect(state.preferenceSelection().worktree).toBe(projectSelected);
     },
   );
 
@@ -877,5 +987,82 @@ describe("DraftPlaceState cloud machine selection", () => {
     expect(state.cloudSelection.machineClass).toBe("fast");
     expect(state.worktree).toBe(true);
     expect(persistPreference).not.toHaveBeenCalled();
+  });
+});
+
+describe("device folder selection", () => {
+  const workerRuntime: NonNullable<GatewayAgentRow["agentRuntime"]> = {
+    id: "openclaw",
+    cloudPlacementExecutionMode: "worker-turn",
+    devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+    source: "model",
+  };
+
+  function folderFixture() {
+    const f = createRepositoryFixture();
+    f.context.agents.state.agentsList!.agents[0]!.agentRuntime = workerRuntime;
+    return f;
+  }
+
+  it.each(["remote-exec", undefined] as const)(
+    "does not offer or select an existing folder for execution mode %s",
+    (mode) => {
+      const f = folderFixture();
+      f.context.agents.state.agentsList!.agents[0]!.agentRuntime = {
+        ...workerRuntime,
+        cloudPlacementExecutionMode: mode,
+      };
+      f.gateway.environments![0]!.workerHost = { deviceFolders: true };
+      f.state.adoptAgentDefaults();
+      f.state.selectDevice("desktop");
+      expect(f.state.devicePlacement().ready).toBe(true);
+      expect(f.state.deviceFolderAvailable).toBe(false);
+      f.state.selectDeviceFolder();
+      expect(f.state.deviceFolder).toBeUndefined();
+    },
+  );
+
+  it("requires an explicit capable device and keeps its path out of Gateway discovery", () => {
+    const f = folderFixture();
+    f.state.adoptAgentDefaults();
+    f.state.selectDevice("desktop");
+    expect(f.state.deviceFolderAvailable).toBe(false);
+    f.state.selectDeviceFolder();
+    expect(f.state.deviceFolder).toBeUndefined();
+    f.gateway.environments![0]!.workerHost = { deviceFolders: true };
+    expect(f.state.deviceFolderAvailable).toBe(true);
+    f.state.selectDeviceFolder();
+    expect(f.state.folderSubmissionBlocked()).toBe(true);
+    f.request.mockClear();
+    f.persistPreference.mockClear();
+    f.state.setDeviceFolderPath("relative");
+    expect(f.state.folderSubmissionBlocked()).toBe(true);
+    f.state.setDeviceFolderPath("/srv/existing project");
+    expect(f.state.folderSubmissionBlocked()).toBe(false);
+    expect(f.state.worktree).toBe(false);
+    expect(f.state.checkoutVisible).toBe(false);
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.persistPreference).not.toHaveBeenCalled();
+    expect(
+      buildSelectedSessionCreateParams(f.state, { message: "hello", visibility: "normal" }),
+    ).toMatchObject({ deviceFolder: { deviceId: "desktop", path: "/srv/existing project" } });
+    f.state.selectDevice("", true);
+    expect(f.state.deviceFolderAvailable).toBe(false);
+    expect(f.state.deviceFolder).toBeUndefined();
+  });
+
+  it("blocks a selected device folder when current capability is withdrawn", () => {
+    const f = folderFixture();
+    f.gateway.environments![0]!.workerHost = { deviceFolders: true };
+    f.state.adoptAgentDefaults();
+    f.state.selectDevice("desktop");
+    f.state.selectDeviceFolder();
+    f.state.setDeviceFolderPath("/srv/project");
+    f.gateway.environments![0]!.workerHost = { deviceFolders: false };
+    expect(f.state.folderSubmissionBlocked()).toBe(true);
+    expect(f.state.deviceFolder).toEqual({ deviceId: "desktop", path: "/srv/project" });
+    f.state.selectNewWorkspace();
+    expect(f.state.deviceFolder).toBeUndefined();
+    expect(f.state.freshWorkspace).toBe(true);
   });
 });

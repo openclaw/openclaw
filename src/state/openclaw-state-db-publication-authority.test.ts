@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -32,7 +32,7 @@ const migrationPaths = ["runtime open", "doctor repair"] as const;
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
-function readSnapshot(db: DatabaseSync) {
+function readSnapshot(db: EngineConnection) {
   return {
     version: db.prepare("PRAGMA user_version").get(),
     metadata: db.prepare("SELECT * FROM schema_meta").all(),
@@ -180,10 +180,17 @@ describe("GitHub publication requester authority schema migration", () => {
       const { options, databasePath, before } = createV17PublicationState({ deferred });
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
         { kind: "github-publication-requester-authority-v18", path: databasePath },
+        { kind: "predicate-columns-v21", path: databasePath },
+        { kind: "portable-identity-columns-v22", path: databasePath },
+        { kind: "meeting-transcript-start-time", path: databasePath },
+        { kind: "task-run-indexes-v24", path: databasePath },
       ]);
       if (via === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: ["Added original requester authority to GitHub publication receipts (v18)"],
+          changes: [
+            "Added original requester authority to GitHub publication receipts (v18)",
+            "Replaced retained task indexes with ordered cron history indexes (v24)",
+          ],
           warnings: [],
         });
       }

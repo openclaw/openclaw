@@ -5,6 +5,7 @@ import {
   MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import { admitSqliteSchema, tableExists } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
@@ -13,6 +14,7 @@ export function inspectMemoryIndexPresenceInWorker(databasePath: string): boolea
   let db: DatabaseSync | undefined;
   try {
     db = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    admitSqliteSchema(db);
     const builtInMemoryTableSets = [
       {
         meta: MEMORY_INDEX_META_TABLE,
@@ -21,23 +23,9 @@ export function inspectMemoryIndexPresenceInWorker(databasePath: string): boolea
       },
       { meta: "meta", sources: "files", chunks: "chunks" },
     ] as const;
-    const builtInMemoryTables = builtInMemoryTableSets.flatMap(({ meta, sources, chunks }) => [
-      meta,
-      sources,
-      chunks,
-    ]);
-    const tableNames = new Set(
-      db
-        .prepare(
-          `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${builtInMemoryTables.map(() => "?").join(", ")})`,
-        )
-        .all(...builtInMemoryTables)
-        .map((row) => row.name)
-        .filter((name): name is string => typeof name === "string"),
-    );
     for (const tables of builtInMemoryTableSets) {
       if (
-        tableNames.has(tables.meta) &&
+        tableExists(db, tables.meta) &&
         db
           .prepare(`SELECT 1 AS ok FROM ${tables.meta} WHERE key = ? LIMIT 1`)
           .get(MEMORY_INDEX_META_KEY)
@@ -46,7 +34,7 @@ export function inspectMemoryIndexPresenceInWorker(databasePath: string): boolea
       }
       for (const tableName of [tables.sources, tables.chunks]) {
         if (
-          tableNames.has(tableName) &&
+          tableExists(db, tableName) &&
           db.prepare(`SELECT 1 AS ok FROM ${tableName} LIMIT 1`).get()
         ) {
           return true;

@@ -125,10 +125,7 @@ export function resolveTwilioStatusCallbackUrl(publicWebhookUrl: string): string
   // Delivery state is committed before acknowledgement. Retry both a missing
   // response and a resulting 5xx or the observation can disappear silently.
   const callbackUrl = `${baseUrl}#${overrides.toString().replaceAll("%2C", ",")}`;
-  if (
-    callbackUrl.length > SMS_STATUS_CALLBACK_MAX_LENGTH ||
-    !parseSmsPublicWebhookUrl(callbackUrl)
-  ) {
+  if (callbackUrl.length > SMS_STATUS_CALLBACK_MAX_LENGTH) {
     return "";
   }
   return callbackUrl;

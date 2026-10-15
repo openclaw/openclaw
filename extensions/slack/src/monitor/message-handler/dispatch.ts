@@ -89,21 +89,18 @@ async function dispatchSlackMessageWithSetup(
   turnAdoptionLifecycle: PreparedSlackMessage["turnAdoptionLifecycle"],
 ) {
   const { prepared } = setup;
+  const { account, ctx, message, route } = prepared;
   const {
-    account,
     cfg,
-    ctx,
     disableBlockStreaming,
     hasSlackCustomIdentity,
     hasRepliedRef,
-    message,
     messageSentHookContext,
     messageSentHookTarget,
     onModelSelected,
     previewStreamingEnabled,
     replyPipeline,
     replyPlan,
-    route,
     runtime,
     slackClient,
     slackStreaming,

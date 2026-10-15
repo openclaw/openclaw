@@ -7,7 +7,12 @@ import type { GatewayServer } from "./server.js";
 type GatewayFixtureState =
   | { phase: "open" | "closing" | "closed" }
   | { phase: "retained"; error: unknown };
-type GatewayFixtureOwner = { state: GatewayFixtureState };
+type GatewayFixtureOwner = {
+  state: GatewayFixtureState;
+  acquisition: Promise<void>;
+  close?: GatewayServer["close"];
+  closing?: Promise<void>;
+};
 
 // Module reset and another Gateway's normal close must not erase retained owners.
 // This singleton deliberately has no production lifecycle reset callback.
@@ -55,8 +60,28 @@ export const gatewayFixtureLifetime = {
     return registry.owners.get(server)?.state.phase === "closed" && !closingOwner();
   },
 
+  async settlePendingWork(): Promise<void> {
+    await Promise.allSettled([...registry.active].map((owner) => owner.acquisition));
+    await Promise.allSettled(
+      [...registry.active].flatMap((owner) => (owner.closing ? [owner.closing] : [])),
+    );
+    this.assertAdmission();
+  },
+
+  async closeAll(): Promise<void> {
+    await this.settlePendingWork();
+    await Promise.allSettled(
+      [...registry.active].flatMap((owner) => (owner.close ? [owner.close()] : [])),
+    );
+    this.assertReleased();
+  },
+
   async ownServer(start: () => Promise<GatewayServer>, ownerRoot?: string): Promise<GatewayServer> {
-    const owner: GatewayFixtureOwner = { state: { phase: "open" } };
+    const acquired = createDeferredCore();
+    const owner: GatewayFixtureOwner = {
+      state: { phase: "open" },
+      acquisition: acquired.promise,
+    };
     const lifetime = createFixtureLifetime(ownerRoot);
     const closed = createDeferredCore();
     // Startup owns state before it can yield or fail without returning a close handle.
@@ -65,6 +90,7 @@ export const gatewayFixtureLifetime = {
       void lifetime.track(closed.promise, true);
     } catch (error) {
       owner.state = { phase: "retained", error };
+      acquired.resolve();
       throw error;
     }
 
@@ -86,6 +112,7 @@ export const gatewayFixtureLifetime = {
       } catch (cleanupError) {
         owner.state = { phase: "retained", error: cleanupError };
       }
+      acquired.resolve();
       throw error;
     }
     const originalClose = server.close.bind(server);
@@ -97,6 +124,7 @@ export const gatewayFixtureLifetime = {
       }
       const result = createDeferredCore();
       closePromise = result.promise;
+      owner.closing = closePromise;
       owner.state = { phase: "closing" };
       // Invoke the native close synchronously, after publishing the shared promise.
       const closing = (async () => {
@@ -124,6 +152,8 @@ export const gatewayFixtureLifetime = {
       );
       return closePromise;
     };
+    owner.close = server.close;
+    acquired.resolve();
     return server;
   },
 };

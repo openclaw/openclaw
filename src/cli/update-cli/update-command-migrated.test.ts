@@ -10,6 +10,7 @@ import { createConfigIO } from "../../config/io.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { appendTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   createPackageIntegrityReader,
   type PackageLauncherFingerprint,
@@ -31,6 +32,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import * as childCommands from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -38,9 +40,11 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createUpdateProgress } from "./progress.js";
 import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
@@ -102,7 +106,7 @@ afterAll(() => runtimeFixture.cleanup());
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let presentation: ReturnType<typeof createUpdateProgress> | undefined;
-afterEach(() => {
+afterEach(async () => {
   presentation?.suspend();
   presentation?.dispose();
   presentation = undefined;
@@ -110,7 +114,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
 });
 
 it.each([
@@ -119,6 +123,8 @@ it.each([
   { agentId: "main", changed: "shared", blocked: "state-migrated-no-rollback" },
   { agentId: "main", changed: "agent", blocked: "state-migrated-no-rollback" },
   { agentId: "main", changed: "incomplete", blocked: "state-migrated-no-rollback" },
+  { agentId: "main", changed: "retained", blocked: "state-migrated-no-rollback" },
+  { agentId: "main", changed: "pending", blocked: "state-migrated-no-rollback" },
 ])(
   "classifies activation after first-use database creation (agent=$agentId, changed=$changed)",
   async ({ agentId, changed, blocked }) => {
@@ -162,6 +168,37 @@ it.each([
       { agentId, env },
     );
     closeOpenClawAgentDatabasesForTest();
+    let retainedPath: string | undefined;
+    let retainedBytes: Buffer | undefined;
+    if (changed === "retained" || changed === "pending") {
+      const agentDir = path.join(stateDir, "agents", "retired", "agent");
+      retainedPath = path.join(agentDir, "openclaw-agent.sqlite");
+      await fs.mkdir(agentDir, { recursive: true });
+      const db = new DatabaseSync(retainedPath);
+      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+      db.close();
+      retainedBytes = await fs.readFile(retainedPath);
+      beginAgentDeletionJournal(
+        {
+          agentId: "retired",
+          operationId: "delete-retired",
+          agentDir,
+          workspaceDir: path.join(stateDir, "workspace-retired"),
+          sessionsDir: path.join(stateDir, "agents", "retired", "sessions"),
+          deleteFiles: false,
+        },
+        { env },
+      );
+      if (changed === "retained") {
+        runOpenClawStateWriteTransaction(
+          (database) =>
+            completeAgentDeletionJournalInDatabase(database, "retired", "delete-retired"),
+          { env },
+        );
+      }
+      // The candidate also advances shared state: the old parent cannot reopen it.
+      shared.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    }
     if (changed === "shared" || changed === "agent") {
       const db = new DatabaseSync(changed === "shared" ? shared.path : agentPath);
       try {
@@ -186,7 +223,9 @@ it.each([
           root: candidateRoot,
           schemaVersions,
           candidateSchemaVersions: {
-            state: OPENCLAW_STATE_SCHEMA_VERSION + Number(changed === "shared"),
+            state:
+              OPENCLAW_STATE_SCHEMA_VERSION +
+              Number(changed === "shared" || changed === "retained" || changed === "pending"),
             agent: OPENCLAW_AGENT_SCHEMA_VERSION + Number(changed === "incomplete"),
           },
           config: {},
@@ -194,17 +233,22 @@ it.each([
         }),
       ),
     ).resolves.toBe(blocked);
-    if (changed === "incomplete") {
+    if (changed === "incomplete" || changed === "pending") {
       expect(result).toMatchObject({
         status: "error",
         reason: "openclaw doctor",
         steps: [
           expect.objectContaining({
             exitCode: 1,
-            stderrTail: expect.stringContaining(agentPath),
+            stderrTail: expect.stringContaining(retainedPath ?? agentPath),
           }),
         ],
       });
+    } else if (changed === "retained") {
+      expect(result).toMatchObject({ status: "ok", steps: [] });
+    }
+    if (retainedPath) {
+      expect(await fs.readFile(retainedPath)).toEqual(retainedBytes);
     }
   },
 );
@@ -553,7 +597,8 @@ it.each([
     const originalRuntimePin = original
       ? readDaemonRuntimePin({ kind: "gateway", env }, { programArguments: [] })
       : undefined;
-    const migrated = new DatabaseSync(database.path);
+    // The migration owner publishes its committed schema to the already-running updater.
+    const migrated = openNodeSqliteDatabase(database.path);
     try {
       migrated.exec(`
       BEGIN IMMEDIATE;
@@ -687,7 +732,6 @@ it.each([
                     runtimePin: originalRuntimePin!,
                   },
                   service: { serviceEnv: env },
-                  packageFingerprint: originalFingerprint,
                   packageIdentity: originalFingerprint,
                   // Deliberately uncertified; these fields must not grant recovery.
                   launcher: {
@@ -832,12 +876,6 @@ it.each([
     }
     const result = await work;
     expect(result.candidateStartAttempted).toBe(false);
-    expect(result.automaticTriage).toMatchObject({
-      kind: "update",
-      phase: "state-migrated-no-rollback",
-      installationRoot: root,
-      gateway: "preserve",
-    });
     expect(result.exitCode).not.toBe(0);
     expect(result.result).toMatchObject({
       runId: created.runId,

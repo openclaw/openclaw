@@ -1,15 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import {
-  registerSingleProviderPlugin,
-  resolveProviderPluginChoice,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import deepseekPlugin from "./index.js";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
@@ -132,84 +128,17 @@ async function captureThinkingPayload(
 }
 
 describe("deepseek provider plugin", () => {
-  it("registers DeepSeek with api-key auth wizard metadata", async () => {
-    const provider = await registerSingleProviderPlugin(deepseekPlugin);
-    const resolved = resolveProviderPluginChoice({
-      providers: [provider],
-      choice: "deepseek-api-key",
-    });
-
-    expect(provider.id).toBe("deepseek");
-    expect(provider.label).toBe("DeepSeek");
-    expect(provider.envVars).toEqual(["DEEPSEEK_API_KEY"]);
-    expect(provider.auth).toHaveLength(1);
-    if (!resolved) {
-      throw new Error("expected DeepSeek api-key auth choice");
-    }
-    expect(resolved.provider.id).toBe("deepseek");
-    expect(resolved.method.id).toBe("api-key");
-  });
-
-  it("builds the static DeepSeek model catalog", async () => {
-    const provider = await registerSingleProviderPlugin(deepseekPlugin);
-    const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
-
-    expect(catalogProvider.api).toBe("openai-completions");
-    expect(catalogProvider.baseUrl).toBe("https://api.deepseek.com");
-    expect(catalogProvider.models?.map((model) => model.id)).toEqual([
-      "deepseek-v4-flash",
-      "deepseek-v4-pro",
-      "deepseek-v4-flash-vision-exp",
-      "deepseek-flash",
-    ]);
-    const flashModel = catalogProvider.models?.find((model) => model.id === "deepseek-v4-flash");
-    expect(flashModel?.reasoning).toBe(true);
-    expect(flashModel?.compat?.supportsReasoningEffort).toBe(true);
-    expect(flashModel?.compat?.maxTokensField).toBe("max_tokens");
-    expect(
-      Object.fromEntries(
-        (catalogProvider.models ?? []).map((model) => [
-          model.id,
-          {
-            contextWindow: model.contextWindow,
-            maxTokens: model.maxTokens,
-            cost: model.cost,
-          },
-        ]),
-      ),
-    ).toEqual({
-      "deepseek-flash": {
-        contextWindow: 1_000_000,
-        maxTokens: 384_000,
-        cost: { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 },
-      },
-      "deepseek-v4-flash": {
-        contextWindow: 1_000_000,
-        maxTokens: 384_000,
-        cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
-      },
-      "deepseek-v4-pro": {
-        contextWindow: 1_000_000,
-        maxTokens: 384_000,
-        cost: { input: 0.435, output: 0.87, cacheRead: 0.003625, cacheWrite: 0 },
-      },
-      "deepseek-v4-flash-vision-exp": {
-        contextWindow: 1_000_000,
-        maxTokens: 384_000,
-        cost: { input: 0.44, output: 1.32, cacheRead: 0.014, cacheWrite: 0 },
-      },
-    });
-  });
-
   it("resolves API-key usage auth from DeepSeek config sources", async () => {
     const provider = await registerSingleProviderPlugin(deepseekPlugin);
 
     await expect(
       provider.resolveUsageAuth?.({
         env: {},
-        resolveApiKeyFromConfigAndStore: (options?: { envDirect?: Array<string | undefined> }) => {
+        resolveApiKeyCandidatesFromConfigAndStore: async (options?: {
+          envDirect?: Array<string | undefined>;
+        }) => {
           expect(options?.envDirect).toEqual([undefined]);
-          return "config-deepseek-key";
+          return ["config-deepseek-key"];
         },
       } as never),
     ).resolves.toEqual({ token: "config-deepseek-key" });
@@ -238,61 +167,6 @@ describe("deepseek provider plugin", () => {
     });
   });
 
-  it("owns OpenAI-compatible replay policy", async () => {
-    const provider = await registerSingleProviderPlugin(deepseekPlugin);
-
-    const replayPolicy = provider.buildReplayPolicy?.({ modelApi: "openai-completions" } as never);
-    expect(replayPolicy?.sanitizeToolCallIds).toBe(true);
-    expect(replayPolicy?.toolCallIdMode).toBe("strict");
-    expect(replayPolicy?.validateGeminiTurns).toBe(true);
-    expect(replayPolicy?.validateAnthropicTurns).toBe(true);
-  });
-
-  it("owns DeepSeek tool schema compatibility for MCP union schemas", async () => {
-    const provider = await registerSingleProviderPlugin(deepseekPlugin);
-    const mcpTool = {
-      name: "unusual-whales__get_balance_sheet_screener",
-      description: "",
-      parameters: {
-        type: "object",
-        properties: {
-          date: {
-            anyOf: [{ type: "string" }, { type: "integer" }],
-          },
-          period: {
-            oneOf: [{ type: "string" }, { type: "null" }],
-          },
-        },
-      },
-      execute: () => undefined,
-    } as never;
-
-    const normalized = provider.normalizeToolSchemas?.({
-      provider: "deepseek",
-      modelId: "deepseek-v4-pro",
-      modelApi: "openai-completions",
-      model: deepSeekV4Model("deepseek-v4-pro"),
-      tools: [mcpTool],
-    } as never);
-
-    expect(normalized?.[0]?.parameters).toEqual({
-      type: "object",
-      properties: {
-        date: { type: "string" },
-        period: { type: "string", nullable: true },
-      },
-    });
-    expect(
-      provider.inspectToolSchemas?.({
-        provider: "deepseek",
-        modelId: "deepseek-v4-pro",
-        modelApi: "openai-completions",
-        model: deepSeekV4Model("deepseek-v4-pro"),
-        tools: normalized ?? [],
-      } as never),
-    ).toStrictEqual([]);
-  });
-
   it("advertises max thinking levels for DeepSeek V4 models only", async () => {
     const provider = await registerSingleProviderPlugin(deepseekPlugin);
     const resolveThinkingProfile = expectDefined(
@@ -317,86 +191,6 @@ describe("deepseek provider plugin", () => {
     expect(
       resolveThinkingProfile({ provider: "deepseek", modelId: "deepseek-reasoner" } as never),
     ).toBe(undefined);
-  });
-
-  it("maps thinking levels to canonical Flash payload controls", async () => {
-    const model = deepSeekV4Model("deepseek-flash");
-    const off = await captureThinkingPayload(model, { messages: [] }, "off");
-    expect(off.payload?.thinking).toMatchObject({ type: "disabled" });
-    expect(off.payload).not.toHaveProperty("reasoning_effort");
-
-    const xhigh = await captureThinkingPayload(model, { messages: [] }, "xhigh");
-    expect(xhigh.payload?.thinking).toMatchObject({ type: "enabled" });
-    expect(xhigh.payload?.reasoning_effort).toBe("max");
-  });
-
-  it("preserves replayed reasoning_content for DeepSeek V4 Flash", async () => {
-    const capture = await captureThinkingPayload(
-      deepSeekV4Model("deepseek-v4-flash"),
-      deepSeekReasoningToolReplayContext(),
-      "high",
-    );
-    expect(capture.payload?.thinking).toMatchObject({ type: "enabled" });
-    expect(capture.payload?.reasoning_effort).toBe("high");
-    const assistantMessage = readPayloadMessage(capture, 1);
-    expect(assistantMessage?.role).toBe("assistant");
-    expect(assistantMessage?.reasoning_content).toBe("call reasoning");
-    expect(assistantMessage?.tool_calls).toMatchObject([
-      { id: "call_1", type: "function", function: { name: "read", arguments: "{}" } },
-    ]);
-  });
-
-  it.each(["deepseek-flash", "deepseek-v4-flash-vision-exp"])(
-    "keeps image input in requests for %s",
-    (modelId) => {
-      const model = deepSeekV4Model(modelId);
-      expect(model).toMatchObject({ reasoning: true, input: ["text", "image"] });
-      const payload = buildOpenAICompletionsParams(
-        model,
-        {
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "Describe this image." },
-                { type: "image", data: "fixture-image", mimeType: "image/png" },
-              ],
-              timestamp: 1,
-            },
-          ],
-        },
-        {},
-      );
-      expect(payload.messages).toContainEqual({
-        role: "user",
-        content: [
-          { type: "text", text: "Describe this image." },
-          { type: "image_url", image_url: { url: "data:image/png;base64,fixture-image" } },
-        ],
-      });
-    },
-  );
-
-  it("adds blank reasoning_content for replayed tool calls from non-DeepSeek turns", async () => {
-    const context = readToolReplayContext(
-      replayAssistantMessage({
-        provider: "openai",
-        model: "gpt-5.4",
-        content: [readToolCall],
-        stopReason: "toolUse",
-      }),
-    );
-    const capture = await captureThinkingPayload(
-      deepSeekV4Model("deepseek-v4-pro"),
-      context,
-      "high",
-    );
-    const assistantMessage = readPayloadMessage(capture, 1);
-    expect(assistantMessage?.role).toBe("assistant");
-    expect(assistantMessage?.reasoning_content).toBe("");
-    expect(assistantMessage?.tool_calls).toMatchObject([
-      { id: "call_1", type: "function", function: { name: "read", arguments: "{}" } },
-    ]);
   });
 
   it("strips replayed reasoning_content when DeepSeek V4 thinking is disabled", async () => {

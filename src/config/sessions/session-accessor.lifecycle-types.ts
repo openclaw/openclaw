@@ -1,9 +1,9 @@
-import type { SubagentRunsDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { SqliteSessionGenerationClaim } from "./session-accessor.sqlite-generation.types.js";
+import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -58,13 +58,20 @@ export type ResetSessionEntryLifecycleMutation = Omit<
   "archivedTranscripts"
 >;
 
+export type SessionResetCommitContext = SessionEntryCommitContext & {
+  source: { agentId: string; path: string };
+};
+
 export type ResetSessionEntryLifecycleParams = {
   /** Revalidate caller authority before preparation and synchronous reset commit. */
   commitGuard?: () => void;
   /** Preserve legacy rotation archival unless the caller appended an in-log boundary. */
   archivePreviousTranscript?: boolean;
   /** Runs after the persisted entry changes and any requested archival completes. */
-  afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
+  afterEntryMutation?: (
+    mutation: ResetSessionEntryLifecycleMutation,
+    context: SessionResetCommitContext,
+  ) => Promise<void> | void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;
   /** Builds the persisted replacement entry from the current backend row. */
@@ -91,8 +98,6 @@ export type DeleteSessionEntryLifecycleResult = {
 export type DeleteSessionEntryLifecycleParams = {
   /** Captured host state source; never part of the cloneable deletion plan. */
   env?: NodeJS.ProcessEnv;
-  /** Internal durable comparison paired with the caller's live descendant guard. */
-  descendantRunBasis?: SubagentRunsDurableBasis;
   /**
    * Revalidate caller and external lifecycle owners at each synchronous deletion boundary.
    * Must not write the deleting agent database: its Worker may hold the transaction lock.
@@ -139,6 +144,8 @@ type SessionEntryLifecycleRemovalBase = {
   archiveRemovedTranscript?: boolean;
   /** Omit removal when the transcript changed after the caller's positive classification. */
   expectedTranscriptSnapshot?: SessionStateDeleteSnapshot;
+  /** Memory cleanup rechecks message absence at the actor deletion boundary. */
+  requiresMissingTranscript?: true;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
   expectedUpdatedAt?: number;
@@ -161,6 +168,8 @@ export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
 
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;
+  /** Snapshot these related rows and the current entry's stored parent for the builder. */
+  relatedSessionKeys?: readonly string[];
   /** Apply this upsert only when the named removal was projected in the same mutation. */
   requiresRemovalSessionKey?: string;
   /** Authoritative route observation for this write; omitted writes preserve valid evidence. */
@@ -174,6 +183,7 @@ export type SessionEntryLifecycleUpsert = {
   | {
       buildEntry: (context: {
         currentEntry?: SessionEntry;
+        readEntry: (sessionKey: string) => SessionEntry | undefined;
         sessionKey: string;
       }) => Promise<SessionEntry | null | undefined> | SessionEntry | null | undefined;
       entry?: never;

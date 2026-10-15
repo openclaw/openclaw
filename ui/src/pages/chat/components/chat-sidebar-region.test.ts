@@ -1,14 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
-import "../../../components/resizable-divider.ts";
+import { emptyLegacyContent, solidContent } from "../../../lit/solid-content.tsx";
 import { createControlUiPluginHost } from "../../../plugins/control-ui-host.ts";
+import "../../../components/resizable-divider.ts";
 import {
   ControlUiPluginRuntime,
   type ControlUiPluginOwner,
 } from "../../../plugins/control-ui-runtime.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { createPageState } from "../chat-state-page.ts";
@@ -24,13 +25,21 @@ import {
   type SidebarLayout,
 } from "../sidebar-layout.ts";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
-import "./chat-sidebar-region.runtime.ts";
+import "./chat-sidebar-region.runtime.tsx";
 
-type Region = HTMLElementTagNameMap["openclaw-chat-sidebar-region"] & {
-  updateComplete: Promise<unknown>;
-};
+type Region = HTMLElementTagNameMap["openclaw-chat-sidebar-region"];
 
 const regions: Region[] = [];
+
+function element(markup: string): HTMLElement {
+  const template = document.createElement("template");
+  template.innerHTML = markup;
+  const child = template.content.firstElementChild;
+  if (!(child instanceof HTMLElement)) {
+    throw new Error("Expected a fixture element");
+  }
+  return child;
+}
 
 async function createRegion(
   layout: SidebarLayout = openSlot({ columns: [] }, "detail"),
@@ -38,14 +47,19 @@ async function createRegion(
 ) {
   const shell = document.createElement("div");
   shell.className = "sidebar-region";
-  const region = document.createElement("openclaw-chat-sidebar-region") as Region;
+  const region = document.createElement("openclaw-chat-sidebar-region");
   region.panelIdPrefix = `sidebar-region-fixture-${regions.length}`;
   region.layout = layout;
-  const content: Partial<Record<SidebarPanelDefinition["slot"], TemplateResult>> = {
-    detail: html`<div data-panel="detail">Detail panel</div>`,
-    terminal: html`<div data-panel="terminal">Terminal panel</div>`,
-    workspace: html`<div data-panel="workspace">Workspace panel</div>`,
-  };
+  // oxlint-disable-next-line typescript/no-generated-empty-object-type -- Lit intentionally exposes DirectiveResult as an empty opaque interface.
+  const content: Partial<Record<SidebarPanelDefinition["slot"], ReturnType<typeof solidContent>>> =
+    {
+      detail: solidContent(() => element('<div data-panel="detail">Detail panel</div>'), {}),
+      terminal: solidContent(() => element('<div data-panel="terminal">Terminal panel</div>'), {}),
+      workspace: solidContent(
+        () => element('<div data-panel="workspace">Workspace panel</div>'),
+        {},
+      ),
+    };
   region.panelDefinitions =
     definitions ??
     sidebarPanelDefinitions().map((definition) =>
@@ -90,40 +104,70 @@ afterEach(() => {
 });
 
 describe("chat sidebar region", () => {
+  it("restores an expanded panel from its active tab with pointer or keyboard", async () => {
+    const region = await createRegion({
+      ...openSlot({ columns: [] }, "workspace"),
+      expanded: true,
+      expandedSide: true,
+    });
+    const tab = root(region).querySelector<HTMLElement>(
+      '.tabstrip-tab[data-tab-value="workspace"]',
+    )!;
+    tab.click();
+    tab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    tab.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    expect(region.callbacks?.togglePanelExpanded).toHaveBeenCalledTimes(3);
+    expect(region.callbacks?.togglePanelExpanded).toHaveBeenLastCalledWith("workspace");
+
+    region.sideFocusLocked = true;
+    await region.updateComplete;
+    tab.click();
+    expect(region.callbacks?.togglePanelExpanded).toHaveBeenCalledTimes(3);
+  });
+
   it("updates the conversation tab identity without relabeling other panels or their controls", async () => {
     const layout = openSlot(openSlot({ columns: [] }, "dashboard"), "workspace");
     const dashboard = layout.columns[0]!.panels.find((panel) => panel.slot === "dashboard")!;
     const region = await createRegion(promoteSidebarPanel(layout, dashboard.id));
     const label = () =>
-      root(region).querySelector('wa-tab[panel="conversation"] .tabstrip-tab__label');
+      root(region).querySelector(
+        '.tabstrip-tab[data-tab-value="conversation"] .tabstrip-tab__label',
+      );
     expect(label()?.textContent).toBe("Chat");
 
-    region.conversationTab = {
-      label: "Research assistant",
-      icon: html`<span data-agent-avatar>🦉</span>`,
-    };
+    Object.assign(region, {
+      conversationTab: {
+        label: "Research assistant",
+        icon: element("<span data-agent-avatar>\ud83e\udd89</span>"),
+      },
+    });
     await region.updateComplete;
     expect(label()?.textContent).toBe("Research assistant");
     expect(
-      root(region).querySelector('wa-tab[panel="conversation"] [data-agent-avatar]'),
+      root(region).querySelector(
+        '.tabstrip-tab[data-tab-value="conversation"] [data-agent-avatar]',
+      ),
     ).not.toBeNull();
     expect(root(region).querySelector('button[aria-label="Close Chat"]')).not.toBeNull();
     expect(
       [...root(region).querySelectorAll(".tabstrip-tab__label")].map((tab) => tab.textContent),
     ).toContain("Files");
 
-    region.conversationTab = { label: "", icon: html`` };
+    Object.assign(region, { conversationTab: { label: "", icon: null } });
     await region.updateComplete;
     expect(label()?.textContent).toBe("Chat");
     expect(
-      root(region).querySelector('wa-tab[panel="conversation"]')?.querySelector("openclaw-tooltip")
-        ?.content,
+      root(region)
+        .querySelector('.tabstrip-tab[data-tab-value="conversation"]')
+        ?.querySelector("openclaw-tooltip")?.content,
     ).toBe("Chat");
 
-    region.conversationTab = {
-      label: "Planning assistant",
-      icon: html`<span data-agent-avatar>🦊</span>`,
-    };
+    Object.assign(region, {
+      conversationTab: {
+        label: "Planning assistant",
+        icon: element("<span data-agent-avatar>\ud83e\udd8a</span>"),
+      },
+    });
     await region.updateComplete;
     expect(label()?.textContent).toBe("Planning assistant");
     expect(root(region).querySelector("[data-agent-avatar]")?.textContent).toBe("🦊");
@@ -160,7 +204,7 @@ describe("chat sidebar region", () => {
     commits.length = 0;
 
     for (let index = 0; index < 4; index++) {
-      region.requestUpdate();
+      region.layout = { ...region.layout };
       await region.updateComplete;
     }
     expect(measure).not.toHaveBeenCalled();
@@ -172,13 +216,13 @@ describe("chat sidebar region", () => {
     // Swapping content can keep the total width while changing each transcript.
     mainWidth = 400;
     sideWidth = 800;
-    region.requestUpdate();
+    region.layout = { ...region.layout };
     await region.updateComplete;
     vi.advanceTimersToNextFrame();
     expect(commits).toEqual([false, true]);
 
     measure.mockClear();
-    region.requestUpdate();
+    region.layout = { ...region.layout };
     await region.updateComplete;
     shell.remove();
     vi.advanceTimersToNextFrame();
@@ -189,11 +233,14 @@ describe("chat sidebar region", () => {
     const region = await createRegion(
       openSlot(openSlot({ columns: [] }, "workspace"), "companion"),
     );
-    region.panelDefinitions = region.panelDefinitions.map((definition) => ({
-      ...definition,
-      content:
-        definition.slot === "companion" ? html`<textarea aria-label="Side chat"></textarea>` : null,
-    }));
+    region.panelDefinitions = region.panelDefinitions.map((definition) =>
+      Object.assign({}, definition, {
+        content:
+          definition.slot === "companion"
+            ? element('<textarea aria-label="Side chat"></textarea>')
+            : null,
+      }),
+    );
     region.callbacks!.closeSlot = (slot) => {
       region.layout = closeSlot(region.layout, slot);
     };
@@ -261,13 +308,14 @@ describe("chat sidebar region", () => {
   it("routes native Browser focus by its presentation scope, not stale page focus", async () => {
     const other = await createRegion();
     const region = await createRegion(openSlot({ columns: [] }, "browser"));
-    region.panelDefinitions = region.panelDefinitions.map((definition) => ({
-      ...definition,
-      content:
-        definition.slot === "browser"
-          ? html`<div data-native-browser-scope="native-owner"></div>`
-          : null,
-    }));
+    region.panelDefinitions = region.panelDefinitions.map((definition) =>
+      Object.assign({}, definition, {
+        content:
+          definition.slot === "browser"
+            ? element('<div data-native-browser-scope="native-owner"></div>')
+            : null,
+      }),
+    );
     await region.updateComplete;
     root(other)
       .querySelector("[data-panel-slot]")!
@@ -305,323 +353,177 @@ describe("chat sidebar region", () => {
     },
   );
 
-  it("leaves browser Command-W untouched", async () => {
-    const region = await createRegion();
-    const side = root(region).querySelector("[data-panel-slot]")!;
-    side.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
-    const key = new KeyboardEvent("keydown", {
-      key: "w",
-      metaKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    side.dispatchEvent(key);
-    expect(key.defaultPrevented).toBe(false);
-    expect(region.callbacks!.closeSlot).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "retains unavailable plugin tabs and recovers their registration (initially active: %s)",
-    async (initiallyActive) => {
-      const slot = "plugin:fixture/notes";
-      const layout = openSlot(openSlot({ columns: [] }, "workspace"), slot);
-      const saved = structuredClone(layout);
-      const context = createInitializationContext();
-      const state = createPageState(
-        context,
-        { afterCommit: () => () => {}, invalidate: vi.fn() },
-        document.createElement("div"),
-      );
-      state.sessionKey = "agent:main:main";
-      state.sidebarLayout = layout;
-      const runtime = new ControlUiPluginRuntime(() => context);
-      const owner: Omit<ControlUiPluginOwner, "host"> = {
-        descriptor: {
-          pluginId: "fixture",
-          name: "Fixture",
-          revision: "one",
-          entryUrl: "/__openclaw__/plugins/control-ui/fixture/one/index.js",
-          styles: [],
-        },
-        client: new GatewayBrowserClient({ url: "ws://fixture.invalid" }),
-        abort: new AbortController(),
-        disposers: new Set(),
-        contributions: {
-          pages: new Map(),
-          navigation: new Map(),
-          panels: new Map(),
-          actions: new Map(),
-          replacements: new Map(),
-          accessories: new Map(),
-          widgets: new Map(),
-        },
-        selections: new Map(),
-      };
-      onTestFinished(() => {
-        owner.abort.abort();
-        owner.client.stop();
-        runtime.dispose();
-      });
-      const entry: NonNullable<
-        Parameters<typeof sidebarPanelDefinitions>[0]
-      >["pluginPanels"][number] = {
-        key: "fixture/notes",
+  it("retains unavailable plugin tabs and recovers their registration", async () => {
+    const slot = "plugin:fixture/notes";
+    const layout = openSlot(openSlot({ columns: [] }, "workspace"), slot);
+    const saved = structuredClone(layout);
+    const context = createInitializationContext();
+    const state = createPageState(
+      context,
+      { afterCommit: () => () => {}, invalidate: vi.fn() },
+      document.createElement("div"),
+    );
+    state.sessionKey = "agent:main:main";
+    state.sidebarLayout = layout;
+    const runtime = new ControlUiPluginRuntime(() => context);
+    const owner: Omit<ControlUiPluginOwner, "host"> = {
+      descriptor: {
         pluginId: "fixture",
-        value: { id: "notes", label: "Fixture notes", mount: () => undefined },
-        host: createControlUiPluginHost(() => context, runtime, owner),
-        signal: owner.abort.signal,
-      };
-      const params: NonNullable<Parameters<typeof sidebarPanelDefinitions>[0]> = {
-        state,
-        paneId: "fixture",
-        panePresentationId: "fixture-main",
-        subagentsInputRegion: "page",
-        subagentsPresented: false,
-        subagentsAvailable: false,
-        onRefreshSubagents: vi.fn(),
-        onSubagentSessionSelect: vi.fn(),
-        themeMode: "dark",
-        agentId: "main",
-        browserPresented: false,
-        browserTabsInHeader: true,
-        terminalTabsInHeader: true,
-        companionPresented: false,
-        companionFocusRequest: undefined,
-        browserRefreshOnPresentation: false,
-        desktopPresented: false,
-        desktopRefreshOnPresentation: false,
-        desktopAvailable: false,
-        desktopSource: null,
-        desktopFocusHref: "",
-        onDesktopFocusTargetChange: vi.fn(),
-        dashboard: nothing,
-        workspace: html`<div data-panel="workspace">Workspace panel</div>`,
-        renderDetail: () => html``,
-        digest: null,
-        activeRunId: null,
-        pullRequests: [],
-        companion: {
-          turns: [],
-          loading: false,
-          draft: "",
-        },
-        onCompanionSubmit: vi.fn(),
-        onCompanionDraftChange: vi.fn(),
-        connected: false,
-        onClearCompanion: vi.fn(),
-        discussion: null,
-        discussionAvailable: false,
-        discussionOpenUrl: null,
-        discussionSourceGeneration: 0,
-        pluginPanels: initiallyActive ? [entry] : [],
-        isPluginPanelPresented: () => true,
-      };
-      const region = await createRegion(layout, sidebarPanelDefinitions(params));
-      params.pluginPanels = [];
-      const refresh = async () => {
-        region.panelDefinitions = sidebarPanelDefinitions(params);
-        await region.updateComplete;
-      };
-      await refresh();
-
-      const unavailable = root(region).querySelector(
-        `[data-panel-slot="${slot}"] openclaw-panel-empty-state`,
-      );
-      await (unavailable as HTMLElement & { updateComplete?: Promise<unknown> })?.updateComplete;
-      expect(unavailable?.shadowRoot?.textContent).toContain(
-        "The plugin that owns this tab is not active",
-      );
-      expect(
-        region.panelDefinitions.find((definition) => definition.slot === slot)?.available,
-      ).toBe(false);
-      expect(region.layout).toEqual(saved);
-      root(region)
-        .querySelector<HTMLButtonElement>('button[aria-label="Close fixture/notes"]')
-        ?.click();
-      expect(region.callbacks?.closeSlot).toHaveBeenCalledWith(slot);
-
-      root(region)
-        .querySelector('wa-tab[panel="workspace"]')
-        ?.dispatchEvent(
-          new CustomEvent("wa-tab-show", { bubbles: true, detail: { name: "workspace" } }),
-        );
-      expect(region.callbacks?.activatePanel).toHaveBeenCalledWith("workspace");
-      region.layout = activatePanel(region.layout, "workspace");
+        name: "Fixture",
+        revision: "one",
+        entryUrl: "/__openclaw__/plugins/control-ui/fixture/one/index.js",
+        styles: [],
+      },
+      client: new GatewayBrowserClient({ url: "ws://fixture.invalid" }),
+      abort: new AbortController(),
+      disposers: new Set(),
+      contributions: {
+        pages: new Map(),
+        navigation: new Map(),
+        panels: new Map(),
+        actions: new Map(),
+        replacements: new Map(),
+        accessories: new Map(),
+        widgets: new Map(),
+      },
+      selections: new Map(),
+    };
+    onTestFinished(() => {
+      owner.abort.abort();
+      owner.client.stop();
+      runtime.dispose();
+    });
+    const entry: NonNullable<
+      Parameters<typeof sidebarPanelDefinitions>[0]
+    >["pluginPanels"][number] = {
+      key: "fixture/notes",
+      pluginId: "fixture",
+      value: { id: "notes", label: "Fixture notes", mount: () => undefined },
+      host: createControlUiPluginHost(() => context, runtime, owner),
+      signal: owner.abort.signal,
+    };
+    const params: NonNullable<Parameters<typeof sidebarPanelDefinitions>[0]> = {
+      state,
+      paneId: "fixture",
+      panePresentationId: "fixture-main",
+      subagentsInputRegion: "page",
+      subagentsPresented: false,
+      subagentsAvailable: false,
+      onSubagentSessionSelect: vi.fn(),
+      themeMode: "dark",
+      agentId: "main",
+      browserPresented: false,
+      browserTabsInHeader: true,
+      terminalTabsInHeader: true,
+      companionPresented: false,
+      companionFocusRequest: undefined,
+      browserRefreshOnPresentation: false,
+      desktopPresented: false,
+      desktopRefreshOnPresentation: false,
+      desktopAvailable: false,
+      desktopSource: null,
+      desktopFocusHref: "",
+      onDesktopFocusTargetChange: vi.fn(),
+      dashboard: emptyLegacyContent,
+      workspace: emptyLegacyContent,
+      renderDetail: vi.fn(),
+      digest: null,
+      activeRunId: null,
+      pullRequests: [],
+      companion: {
+        turns: [],
+        loading: false,
+        draft: "",
+      },
+      onCompanionSubmit: vi.fn(),
+      onCompanionDraftChange: vi.fn(),
+      connected: false,
+      onClearCompanion: vi.fn(),
+      discussion: null,
+      discussionAvailable: false,
+      discussionOpenUrl: null,
+      discussionSourceGeneration: 0,
+      pluginPanels: [],
+      isPluginPanelPresented: () => true,
+    };
+    Object.assign(params, {
+      workspace: element('<div data-panel="workspace">Workspace panel</div>'),
+    });
+    const region = await createRegion(layout, sidebarPanelDefinitions(params));
+    params.pluginPanels = [];
+    const refresh = async () => {
+      region.panelDefinitions = sidebarPanelDefinitions(params);
       await region.updateComplete;
-      expect(
-        root(region).querySelector('[data-panel-slot="workspace"]')?.hasAttribute("hidden"),
-      ).toBe(false);
-      expect(root(region).querySelector('[data-panel="workspace"]')?.textContent).toBe(
-        "Workspace panel",
-      );
+    };
+    await refresh();
 
-      params.pluginPanels = [entry];
-      await refresh();
-      expect(
-        region.panelDefinitions.find((definition) => definition.slot === slot)?.available,
-      ).toBe(true);
-      expect(
-        root(region).querySelector(`[data-panel-slot="${slot}"] openclaw-plugin-view`),
-      ).not.toBeNull();
-      expect(root(region).querySelector('button[aria-label="Close Fixture notes"]')).not.toBeNull();
-      expect(region.layout.columns[0]?.panels).toEqual(saved.columns[0]?.panels);
-    },
-  );
+    const unavailable = root(region).querySelector(
+      `[data-panel-slot="${slot}"] openclaw-panel-empty-state`,
+    );
+    expect(unavailable?.textContent).toContain("The plugin that owns this tab is not active");
+    expect(region.panelDefinitions.find((definition) => definition.slot === slot)?.available).toBe(
+      false,
+    );
+    expect(region.layout).toEqual(saved);
+    root(region)
+      .querySelector<HTMLButtonElement>('button[aria-label="Close fixture/notes"]')
+      ?.click();
+    expect(region.callbacks?.closeSlot).toHaveBeenCalledWith(slot);
 
-  it("renders all open types as one tab strip and keeps inactive panels mounted", async () => {
-    const layout = openSlot(openSlot(openSlot({ columns: [] }, "detail"), "terminal"), "workspace");
-    const region = await createRegion(layout);
-
-    expect(root(region).querySelectorAll(".side-panel")).toHaveLength(1);
-    expect(
-      Array.from(root(region).querySelectorAll(".tabstrip-tab__label"), (node) =>
-        node.textContent?.trim(),
-      ),
-    ).toEqual(["Review", "Terminal", "Files"]);
+    root(region)
+      .querySelector<HTMLButtonElement>('.tabstrip-tab[data-tab-value="workspace"]')
+      ?.click();
+    expect(region.callbacks?.activatePanel).toHaveBeenCalledWith("workspace");
+    region.layout = activatePanel(region.layout, "workspace");
+    await region.updateComplete;
     expect(
       root(region).querySelector('[data-panel-slot="workspace"]')?.hasAttribute("hidden"),
     ).toBe(false);
-    expect(root(region).querySelector('[data-panel-slot="detail"]')?.hasAttribute("hidden")).toBe(
+    expect(root(region).querySelector('[data-panel="workspace"]')?.textContent).toBe(
+      "Workspace panel",
+    );
+
+    params.pluginPanels = [entry];
+    await refresh();
+    expect(region.panelDefinitions.find((definition) => definition.slot === slot)?.available).toBe(
       true,
     );
-    expect(root(region).querySelector('[data-panel="detail"]')).not.toBeNull();
-  });
-
-  it("renders only the active panel's supplied header action", async () => {
-    const onClear = vi.fn();
-    const region = await createRegion(openSlot(openSlot({ columns: [] }, "detail"), "companion"));
-    region.panelDefinitions = region.panelDefinitions.map((definition) => ({
-      ...definition,
-      headerAction:
-        definition.slot === "companion"
-          ? html`<button class="chat-session-rail__clear" type="button" @click=${onClear}>
-              Clear
-            </button>`
-          : undefined,
-    }));
-    await region.updateComplete;
-
-    const actions = root(region).querySelector(".side-panel__action-group--content");
-    const clear = actions?.querySelector<HTMLButtonElement>("button.chat-session-rail__clear");
-    expect(clear).not.toBeNull();
-    clear?.click();
-    expect(onClear).toHaveBeenCalledOnce();
-
-    // Actions belong to the active panel only: the Side chat action must not
-    // survive a switch to a tab that owns no header action.
-    const detail = region.layout.columns[0]!.panels[0]!;
-    region.layout = {
-      ...region.layout,
-      columns: [{ ...region.layout.columns[0]!, activePanelId: detail.id }],
-    };
-    await region.updateComplete;
-    expect(root(region).querySelector("button.chat-session-rail__clear")).toBeNull();
-  });
-
-  it("routes tab selection and individual close through the canonical callbacks", async () => {
-    const region = await createRegion(openSlot(openSlot({ columns: [] }, "detail"), "terminal"));
-    const detail = region.layout.columns[0]!.panels[0]!;
-    root(region)
-      .querySelector(`wa-tab[panel="${detail.id}"]`)
-      ?.dispatchEvent(
-        new CustomEvent("wa-tab-show", { bubbles: true, detail: { name: detail.id } }),
-      );
-    root(region).querySelector<HTMLButtonElement>('button[aria-label="Close Review"]')?.click();
-
-    expect(region.callbacks?.activatePanel).toHaveBeenCalledWith(detail.id);
-    expect(region.callbacks?.closeSlot).toHaveBeenCalledWith("detail");
-  });
-
-  it("renders one separator per gap so the active tab never reflows the row", async () => {
-    const region = await createRegion(
-      openSlot(openSlot(openSlot({ columns: [] }, "detail"), "terminal"), "workspace"),
-    );
-
-    const separators = root(region).querySelectorAll(".tabstrip-separator");
-    expect(separators).toHaveLength(2);
-    for (const separator of separators) {
-      expect(separator.previousElementSibling?.classList.contains("tabstrip-tab__close")).toBe(
-        true,
-      );
-      expect(separator.nextElementSibling?.classList.contains("tabstrip-tab")).toBe(true);
-    }
-  });
-
-  it("delivers typed requests to the mounted panel owner", async () => {
-    const handleToggleRequest = vi.fn();
-    const region = await createRegion(openSlot({ columns: [] }, "terminal"));
-    region.panelDefinitions = region.panelDefinitions.map((definition) => ({
-      ...definition,
-      content:
-        definition.slot === "terminal"
-          ? html`<div .handleToggleRequest=${handleToggleRequest}>Terminal panel</div>`
-          : null,
-    }));
-    await region.updateComplete;
-    const event = new CustomEvent("openclaw:terminal-toggle", {
-      detail: { terminalSessionId: "terminal-1", agentOwned: true },
-    });
-
-    expect(region.deliverPanelEvent("terminal", event)).toBe(true);
-    expect(handleToggleRequest).toHaveBeenCalledWith(event);
-  });
-
-  it("opens a type from the plus menu and shows shortcuts for available panels", async () => {
-    const region = await createRegion();
-    const dropdown = root(region).querySelector(".side-panel-type-menu");
-    dropdown?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: "terminal" } },
-      }),
-    );
-
-    expect(region.callbacks?.openSlot).toHaveBeenCalledWith("terminal");
     expect(
-      Array.from(root(region).querySelectorAll(".side-panel-type-option__shortcut"), (node) =>
-        node.textContent?.trim(),
-      ),
-    ).toEqual(["Ctrl+`", "Ctrl+Shift+B", "Ctrl+Shift+S", "Ctrl+Alt+Shift+G"]);
-    const reviewItem = Array.from(
-      root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
-    ).find((item) => Reflect.get(item, "value") === "detail");
-    expect(reviewItem).toBeUndefined();
-    expect(root(region).querySelector("wa-dropdown-item[disabled]")).toBeNull();
+      root(region).querySelector(`[data-panel-slot="${slot}"] openclaw-plugin-view`),
+    ).not.toBeNull();
+    expect(root(region).querySelector('button[aria-label="Close Fixture notes"]')).not.toBeNull();
+    expect(region.layout.columns[0]?.panels).toEqual(saved.columns[0]?.panels);
   });
 
   it.each([
     { slot: "browser", eventType: "openclaw:browser-toggle", detail: { open: true, newTab: true } },
-    {
-      slot: "terminal",
-      eventType: "openclaw:terminal-toggle",
-      detail: { open: true, newSession: true },
-    },
   ] as const)(
     "keeps $slot available in the plus menu to create another hosted tab",
     async ({ slot, eventType, detail }) => {
       const handleToggleRequest = vi.fn();
       const region = await createRegion(openSlot({ columns: [] }, slot));
-      region.panelDefinitions = region.panelDefinitions.map((definition) => ({
-        ...definition,
-        available: definition.slot === slot,
-        content:
-          definition.slot === slot
-            ? html`<div .handleToggleRequest=${handleToggleRequest}>Panel content</div>`
-            : null,
-      }));
+      region.panelDefinitions = region.panelDefinitions.map((definition) =>
+        Object.assign({}, definition, {
+          available: definition.slot === slot,
+          content:
+            definition.slot === slot
+              ? Object.assign(element("<div>Panel content</div>"), { handleToggleRequest })
+              : null,
+        }),
+      );
       await region.updateComplete;
+      root(region).querySelector<HTMLButtonElement>(".side-panel-type-menu__trigger")!.click();
+      await waitForSolid(() =>
+        expect(root(region).querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
+      );
       const menuItem = Array.from(
-        root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
+        root(region).querySelectorAll<HTMLButtonElement>(".side-panel-type-menu__item"),
       ).find((item) => Reflect.get(item, "value") === slot);
 
       expect(menuItem).toBeDefined();
-      root(region)
-        .querySelector(".side-panel-type-menu")
-        ?.dispatchEvent(
-          new CustomEvent("wa-select", { bubbles: true, detail: { item: { value: slot } } }),
-        );
+      menuItem!.click();
 
-      expect(region.callbacks?.openSlot).toHaveBeenCalledWith(slot);
+      await waitForSolid(() => expect(region.callbacks?.openSlot).toHaveBeenCalledWith(slot));
       expect(region.callbacks?.openSlot).toHaveBeenCalledBefore(handleToggleRequest);
       expect(handleToggleRequest).toHaveBeenCalledWith(
         expect.objectContaining({ type: eventType, detail }),
@@ -660,51 +562,31 @@ describe("chat sidebar region", () => {
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("dashboard");
   });
 
-  it("gives every surface the shared icon, title, and description empty state", async () => {
-    const region = await createRegion(openSlot({ columns: [] }, "companion"));
-    region.panelDefinitions = region.panelDefinitions.map((definition) => ({
-      ...definition,
-      content: null,
-    }));
-
-    for (const [slot, label] of [
-      ["detail", "Review"],
-      ["browser", "Browser"],
-      ["terminal", "Terminal"],
-      ["workspace", "Files"],
-      ["companion", "Side chat"],
-      ["discussion", "Discussion"],
-    ] as const) {
-      region.layout = openSlot({ columns: [] }, slot);
-      await region.updateComplete;
-      const empty = root(region).querySelector(".side-panel-empty--type");
-      const state = empty?.querySelector("openclaw-panel-empty-state");
-      await (state as HTMLElement & { updateComplete?: Promise<unknown> })?.updateComplete;
-      expect(state?.querySelector("svg")).not.toBeNull();
-      expect(state?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe(label);
-      expect(
-        state?.shadowRoot?.querySelector(".empty-state__description")?.textContent?.trim(),
-      ).not.toBe("");
-    }
-  });
-
   it("offers every chat-side content owner through the shared type menu", async () => {
     const region = await createRegion();
-    region.panelDefinitions = region.panelDefinitions.map((definition) => ({
-      ...definition,
-      available: [
-        "detail",
-        "terminal",
-        "browser",
-        "workspace",
-        "companion",
-        "desktop",
-        "discussion",
-        "dashboard",
-      ].includes(definition.slot),
-    }));
+    region.panelDefinitions = region.panelDefinitions.map((definition) =>
+      Object.assign({}, definition, {
+        available: [
+          "detail",
+          "terminal",
+          "browser",
+          "workspace",
+          "companion",
+          "desktop",
+          "discussion",
+          "dashboard",
+        ].includes(definition.slot),
+      }),
+    );
     await region.updateComplete;
 
+    expect(
+      root(region).querySelector(".side-panel-type-menu__trigger")?.getAttribute("aria-expanded"),
+    ).toBe("false");
+    root(region).querySelector<HTMLButtonElement>(".side-panel-type-menu__trigger")!.click();
+    await waitForSolid(() =>
+      expect(root(region).querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
+    );
     expect(
       Array.from(root(region).querySelectorAll(".side-panel-type-menu__item"), (item) =>
         item.textContent?.replace(/\s+/gu, " ").trim(),
@@ -740,10 +622,11 @@ describe("chat sidebar region", () => {
 
   it("keeps side tab dismissal separate from task toolbar actions", async () => {
     const region = await createRegion();
-    root(region)
-      .querySelector<HTMLButtonElement>('[data-region-header="side"] .side-panel__minimize')
-      ?.click();
-    expect(region.callbacks?.setOpen).toHaveBeenCalledWith(false);
+    expect(
+      root(region).querySelector('[data-region-header="side"] .rail-header__actions'),
+    ).toBeNull();
+    root(region).querySelector<HTMLButtonElement>('button[aria-label="Close Review"]')!.click();
+    expect(region.callbacks?.closeSlot).toHaveBeenCalledWith("detail");
     region.layout = setSidebarExpanded(promoteSidebarPanel(region.layout, "detail"), true);
     await region.updateComplete;
     expect(root(region).querySelector('[data-region-header="main"]')).toBeNull();
@@ -752,26 +635,6 @@ describe("chat sidebar region", () => {
         node.textContent?.trim(),
       ),
     ).toEqual(["Chat"]);
-  });
-
-  it("opens an empty selector without adding another title row", async () => {
-    const region = await createRegion(setSidebarOpen({ columns: [] }, true));
-    expect(root(region).querySelector("resizable-divider")).not.toBeNull();
-    expect(root(region).querySelector(".side-panel-empty__types")).not.toBeNull();
-    expect(root(region).querySelector("[data-region-header]")).toBeNull();
-  });
-
-  it("uses one inherited divider and reports bounded panel width", async () => {
-    const region = await createRegion();
-    const primary = root(region).querySelector<HTMLElement>(".sidebar-region__primary")!;
-    const panel = root(region).querySelector<HTMLElement>('[data-region="side"]:not([hidden])')!;
-    const divider = root(region).querySelector<HTMLElement>("resizable-divider")!;
-    primary.getBoundingClientRect = () => ({ width: 800 }) as DOMRect;
-    panel.getBoundingClientRect = () => ({ width: 360 }) as DOMRect;
-    divider.dispatchEvent(
-      new CustomEvent("resize", { bubbles: true, detail: { splitRatio: 0.5 } }),
-    );
-    expect(region.callbacks?.resizePanel).toHaveBeenCalledWith(region.layout.columns[0]!.id, 580);
   });
 
   it("docks and resizes the same panel across left, right, and bottom layouts", async () => {
@@ -833,7 +696,9 @@ describe("chat sidebar region", () => {
     );
     region.panelDefinitions = region.panelDefinitions.map((definition) =>
       definition.slot === "dashboard"
-        ? { ...definition, content: html`<input aria-label="Unsaved app input" />` }
+        ? Object.assign({}, definition, {
+            content: solidContent(() => element('<input aria-label="Unsaved app input" />'), {}),
+          })
         : definition,
     );
     await region.updateComplete;

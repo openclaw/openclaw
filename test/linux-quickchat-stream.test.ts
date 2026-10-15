@@ -25,30 +25,25 @@ const browserBindingsStart = quickchatSource.indexOf("const tauri = window");
 assert.notEqual(browserBindingsStart, -1, "quickchat pure-helper boundary");
 
 type QuickChatHelpers = {
-  assembleChatDelta: (state: unknown, payload: unknown) => unknown;
-  chatMessageText: (message: unknown) => string;
   chatMessageWidgets: (message: unknown) => unknown[];
   resolveInlineWidgetUrl: (surface: unknown, target: unknown) => string | null;
 };
 
 const context: { helpers?: QuickChatHelpers } & Record<string, unknown> = { URL, TextEncoder };
 vm.runInNewContext(
-  `${quickchatSource.slice(0, browserBindingsStart)}\nthis.helpers = { assembleChatDelta, chatMessageText, chatMessageWidgets, resolveInlineWidgetUrl };`,
+  `${quickchatSource.slice(0, browserBindingsStart)}\nthis.helpers = { chatMessageWidgets, resolveInlineWidgetUrl };`,
   context,
 );
-const { assembleChatDelta, chatMessageText, chatMessageWidgets, resolveInlineWidgetUrl } =
-  context.helpers as {
-    assembleChatDelta: (state: unknown, payload: unknown) => { text: string; runId?: string };
-    chatMessageText: (message: unknown) => string;
-    chatMessageWidgets: (message: unknown) => Array<{
-      key: string;
-      title: string;
-      target: string;
-      preferredHeight: number;
-      sandbox: string;
-    }>;
-    resolveInlineWidgetUrl: (surface: unknown, target: unknown) => string | null;
-  };
+const { chatMessageWidgets, resolveInlineWidgetUrl } = context.helpers as {
+  chatMessageWidgets: (message: unknown) => Array<{
+    key: string;
+    title: string;
+    target: string;
+    preferredHeight: number;
+    sandbox: string;
+  }>;
+  resolveInlineWidgetUrl: (surface: unknown, target: unknown) => string | null;
+};
 
 function canvasMessage(role: string, url: string) {
   return {
@@ -72,6 +67,7 @@ function createFakeElement(tagName = "div") {
   const classes = new Set();
   const children: any[] = [];
   const styles = new Map<string, string>();
+  const listeners = new Map<string, (event: unknown) => void>();
   return {
     tagName: tagName.toUpperCase(),
     children,
@@ -112,7 +108,12 @@ function createFakeElement(tagName = "div") {
     title: "",
     referrerPolicy: "",
     contentWindow: tagName === "iframe" ? {} : null,
-    addEventListener() {},
+    addEventListener(name: string, callback: (event: unknown) => void) {
+      listeners.set(name, callback);
+    },
+    dispatchEvent(event: { type: string }) {
+      listeners.get(event.type)?.(event);
+    },
     append(...nodes: any[]) {
       children.push(...nodes);
     },
@@ -142,7 +143,9 @@ function createFakeElement(tagName = "div") {
   };
 }
 
-function createQuickChatHarness(): Record<string, any> {
+function createQuickChatHarness(
+  options: { initialize?: boolean; deferRegistration?: boolean; deferReady?: boolean } = {},
+): Record<string, any> {
   const browserBindingsEnd = quickchatSource.indexOf("elements.input.addEventListener");
   assert.notEqual(browserBindingsEnd, -1, "quickchat browser binding boundary");
   const elements = new Map();
@@ -151,6 +154,12 @@ function createQuickChatHarness(): Record<string, any> {
     reject: (error: Error) => void;
   }> = [];
   const calls: Array<{ method: string; args: Record<string, any> }> = [];
+  const nativeListeners = new Map<string, (event: unknown) => void>();
+  const documentListeners = new Map<string, (event: unknown) => void>();
+  const registration = Promise.withResolvers<void>();
+  const ready = Promise.withResolvers<boolean>();
+  let nativeReady = !options.initialize;
+  let nativeVisible = true;
   const refreshes: Array<{
     resolve: (value: unknown) => void;
     reject: (error: Error) => void;
@@ -210,6 +219,18 @@ function createQuickChatHarness(): Record<string, any> {
           },
         ) {
           calls.push({ method, args: args ?? {} });
+          if (method === "quickchat_ready") {
+            return (options.deferReady ? ready.promise : Promise.resolve(true)).then((show) => {
+              nativeReady = true;
+              return show;
+            });
+          }
+          if (method === "quickchat_activate" || method === "quickchat_hide") {
+            if (nativeReady) {
+              nativeVisible = method === "quickchat_activate";
+            }
+            return Promise.resolve(nativeReady);
+          }
           if (method === "quickchat_send") {
             return new Promise((resolve, reject) => {
               sends.push({ resolve, reject });
@@ -254,7 +275,15 @@ function createQuickChatHarness(): Record<string, any> {
           return Promise.resolve(true);
         },
       },
-      event: { listen: async () => () => {} },
+      event: {
+        listen: async (name: string, callback: (event: unknown) => void) => {
+          nativeListeners.set(name, callback);
+          if (name === "quickchat:shown" && options.deferRegistration) {
+            await registration.promise;
+          }
+          return () => nativeListeners.delete(name);
+        },
+      },
     },
     addEventListener(name: string, callback: () => void) {
       windowListeners.set(name, callback);
@@ -282,6 +311,9 @@ function createQuickChatHarness(): Record<string, any> {
     documentElement: createFakeElement("html"),
     createElement: (tagName: string) => createFakeElement(tagName),
     createTextNode: (text: string) => ({ textContent: text }),
+    addEventListener(name: string, callback: (event: unknown) => void) {
+      documentListeners.set(name, callback);
+    },
     querySelector(selector: string) {
       if (!elements.has(selector)) {
         elements.set(selector, createFakeElement());
@@ -315,13 +347,13 @@ function createQuickChatHarness(): Record<string, any> {
     URL,
     TextEncoder,
   };
-  vm.runInNewContext(
-    `${quickchatSource.slice(0, browserBindingsEnd)}
+  const initialized = vm.runInNewContext(
+    `${options.initialize ? "(async () => {" : ""}
+${quickchatSource.slice(0, browserBindingsEnd)}
 this.harness = {
   send,
   prepareSend(payload) { prepareChatSend({gatewayGeneration: 1, ...payload}); },
   handleChatEvent(payload) { handleChatEvent({gatewayGeneration: 1, ...payload}); },
-  nextVisibilityOperation,
   requestHide,
   clearReply,
   toggleReply,
@@ -348,7 +380,8 @@ this.harness = {
   allowCanvasSurfaceRetry() { canvasSurfaceRetryAt = 0; },
   flushSurfaceRefresh() { return canvasSurfaceRefreshPromise ?? Promise.resolve(); },
   flushWidgets() { return widgetSyncPromise; },
-};`,
+};
+${options.initialize ? `${quickchatSource.slice(browserBindingsEnd)}\n})()` : ""}`,
     browserContext,
   );
   return {
@@ -366,6 +399,37 @@ this.harness = {
     sendCount: () => sends.length,
     calls,
     drain,
+    initialized: () => initialized,
+    releaseRegistration: () => registration.resolve(),
+    rejectRegistration: () => registration.reject(new Error("Native registration failed.")),
+    resolveReady: (show = true) => ready.resolve(show),
+    rejectReady: () => ready.reject(new Error("Native admission failed.")),
+    nativeVisible: () => nativeVisible,
+    emitNative: (name: string) => {
+      const listener = nativeListeners.get(name);
+      assert.ok(listener, `native ${name} listener registered`);
+      listener({});
+    },
+    pressEscape: () => {
+      let stopped = false;
+      const event = {
+        type: "keydown",
+        key: "Escape",
+        keyCode: 27,
+        defaultPrevented: false,
+        isComposing: false,
+        preventDefault() {
+          this.defaultPrevented = true;
+        },
+        stopPropagation() {
+          stopped = true;
+        },
+      };
+      documentListeners.get("keydown")?.(event);
+      if (!stopped) {
+        elements.get("#message").dispatchEvent(event);
+      }
+    },
     flushWidgets: async () => {
       await drain();
       await browserContext.harness.flushWidgets();
@@ -421,12 +485,105 @@ this.harness = {
   };
 }
 
-test("visibility operations share one monotonic sequence", () => {
-  const harness = createQuickChatHarness();
-  assert.equal(harness.nextVisibilityOperation(), 1);
-  assert.equal(harness.nextVisibilityOperation(), 2);
-  assert.equal(harness.nextVisibilityOperation(), 3);
-});
+for (const fireBeforeReady of [false, true]) {
+  test(`startup preserves Escape when its timer fires ${fireBeforeReady ? "before" : "after"} native admission`, async () => {
+    const harness = createQuickChatHarness({
+      initialize: true,
+      deferRegistration: true,
+      deferReady: true,
+    });
+    harness.pressEscape();
+    if (fireBeforeReady) {
+      await harness.advanceTime(45);
+    }
+    harness.releaseRegistration();
+    await harness.drain();
+    assert.ok(harness.calls.some(({ method }: { method: string }) => method === "quickchat_ready"));
+    harness.resolveReady();
+    await harness.initialized();
+    await harness.advanceTime(45);
+    assert.equal(harness.nativeVisible(), false, `early timer=${fireBeforeReady}`);
+    assert.deepEqual(
+      harness.calls
+        .filter(({ method }: { method: string }) =>
+          ["quickchat_activate", "quickchat_hide"].includes(method),
+        )
+        .map(({ method, args }: { method: string; args: { generation: number } }) => [
+          method,
+          args.generation,
+        ]),
+      [["quickchat_hide", 1]],
+    );
+  });
+}
+
+for (const showLast of [false, true]) {
+  test(`native admission applies only the latest queued ${showLast ? "show" : "hide"} intent`, async () => {
+    const harness = createQuickChatHarness({ initialize: true, deferReady: true });
+    await harness.drain();
+    harness.emitNative("quickchat:shown");
+    harness.emitNative("quickchat:hide-requested");
+    await harness.advanceTime(45);
+    if (showLast) {
+      harness.emitNative("quickchat:shown");
+    }
+    harness.resolveReady();
+    await harness.initialized();
+    await harness.drain();
+    assert.equal(harness.nativeVisible(), showLast);
+    assert.deepEqual(
+      harness.calls
+        .filter(({ method }: { method: string }) =>
+          ["quickchat_activate", "quickchat_hide"].includes(method),
+        )
+        .map(({ method, args }: { method: string; args: { generation: number } }) => [
+          method,
+          args.generation,
+        ]),
+      [[showLast ? "quickchat_activate" : "quickchat_hide", showLast ? 3 : 2]],
+    );
+  });
+}
+
+for (const failedStage of ["registration", "admission"] as const) {
+  test(`startup ${failedStage} failure settles queued visibility without bypassing native checks`, async () => {
+    const harness = createQuickChatHarness({
+      initialize: true,
+      deferRegistration: true,
+      deferReady: true,
+    });
+    harness.pressEscape();
+    await harness.advanceTime(45);
+    if (failedStage === "registration") {
+      harness.rejectRegistration();
+    } else {
+      harness.releaseRegistration();
+      await harness.drain();
+      harness.rejectReady();
+    }
+    await harness.initialized();
+    await harness.drain();
+    assert.equal(harness.nativeVisible(), true);
+    assert.equal(harness.error(), "Gateway unreachable — retrying");
+    assert.equal(
+      harness.calls.filter(({ method }: { method: string }) => method === "quickchat_hide").length,
+      0,
+    );
+
+    harness.pressEscape();
+    await harness.advanceTime(45);
+    assert.equal(
+      harness.calls.filter(({ method }: { method: string }) => method === "quickchat_hide").length,
+      1,
+      "a later request reaches native admission instead of waiting on failed startup",
+    );
+    assert.equal(
+      harness.nativeVisible(),
+      true,
+      "the unadmitted native session still rejects hiding",
+    );
+  });
+}
 
 test("gateway state updates and clears the Quick Chat user accent", () => {
   const harness = createQuickChatHarness();
@@ -453,85 +610,6 @@ test("widget child webviews inherit no Quick Chat Tauri capability", () => {
     capability?.webviews?.some((label) => label.startsWith("quickchat-widget-")),
     false,
   );
-});
-
-test("message snapshots take precedence over replacement deltas", () => {
-  assert.equal(
-    assembleChatDelta("stale", {
-      deltaText: "replacement",
-      replace: true,
-      message: { content: [{ type: "text", text: "snapshot" }] },
-    }),
-    "snapshot",
-  );
-});
-
-test("the first delta seeds from its message snapshot", () => {
-  assert.equal(
-    assembleChatDelta(null, {
-      deltaText: "lo",
-      message: { content: [{ type: "text", text: "Hello" }] },
-    }),
-    "Hello",
-  );
-  assert.equal(assembleChatDelta(null, { deltaText: "unanchored suffix" }), null);
-  assert.equal(assembleChatDelta(null, { deltaText: "replacement", replace: true }), "replacement");
-});
-
-test("matching deltas append and mismatched snapshots self-heal", () => {
-  assert.equal(
-    assembleChatDelta("Hello", {
-      deltaText: "!",
-      message: { content: [{ type: "text", text: "Hello!" }] },
-    }),
-    "Hello!",
-  );
-  assert.equal(
-    assembleChatDelta("Hellx", {
-      deltaText: "!",
-      message: { content: [{ type: "text", text: "Hello!" }] },
-    }),
-    "Hello!",
-  );
-});
-
-test("snapshot-only terminal frames replace the assembled text", () => {
-  assert.equal(
-    assembleChatDelta("partial", {
-      message: { content: [{ type: "text", text: "complete" }] },
-    }),
-    "complete",
-  );
-});
-
-test("snapshot extraction joins every text block", () => {
-  assert.equal(
-    chatMessageText({
-      content: [
-        { type: "text", text: "first" },
-        { type: "image", url: "data:image/png;base64,AA==" },
-        { type: "text", text: "second" },
-      ],
-    }),
-    "first\n\nsecond",
-  );
-});
-
-test("snapshot extraction skips a leading non-text block", () => {
-  assert.equal(
-    chatMessageText({
-      content: [
-        { type: "thinking", thinking: "hidden" },
-        { type: "text", text: "visible" },
-      ],
-    }),
-    "visible",
-  );
-});
-
-test("snapshot extraction falls back through string content and top-level text", () => {
-  assert.equal(chatMessageText({ content: "string content", text: "top-level" }), "string content");
-  assert.equal(chatMessageText({ content: [], text: "top-level" }), "top-level");
 });
 
 test("canvas previews are accepted only for safe assistant widgets", () => {
@@ -1367,129 +1445,6 @@ for (const outcome of ["retained", "evicted", "repaired", "recovered"] as const)
   });
 }
 
-test("final assistant canvas previews sync into isolated native webviews", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.setMessage("show status");
-  const sending = harness.send(false);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "widget-run" });
-  await sending;
-
-  harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "widget-run",
-    state: "final",
-    message: {
-      role: "assistant",
-      content: [
-        {
-          type: "canvas",
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            sandbox: "strict",
-            title: "Status",
-            url: "/__openclaw__/canvas/documents/status/index.html",
-          },
-        },
-      ],
-    },
-  });
-
-  await harness.flushWidgets();
-  const [layout] = harness.syncedWidgets();
-  assert.deepEqual(
-    { ...layout },
-    {
-      key: "/__openclaw__/canvas/documents/status/index.html",
-      url: "https://gateway.example/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/status/index.html",
-      sandbox: "strict",
-      x: 52,
-      y: 174,
-      width: 540,
-      height: 160,
-      visible: true,
-    },
-  );
-  assert.equal(harness.syncedHasWidgets(), true);
-  assert.equal(harness.syncedExpanded(), true);
-  assert.equal(harness.syncedGeneration(), 1);
-});
-
-test("expired Canvas capability refreshes before a new widget loads", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.expireCanvasSurface();
-  harness.setMessage("show status");
-  const sending = harness.send(false);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "refresh-run" });
-  await sending;
-  harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "refresh-run",
-    state: "final",
-    message: canvasMessage("assistant", "/__openclaw__/canvas/documents/status/index.html"),
-  });
-
-  await harness.flushSurfaceRefresh();
-  await harness.flushWidgets();
-  assert.equal(harness.widgetSurfaceRefreshCount(), 1);
-  assert.equal(
-    harness.syncedWidgets()[0]?.url,
-    "https://gateway.example/__openclaw__/cap/refreshed-capability/__openclaw__/canvas/documents/status/index.html",
-  );
-});
-
-test("transient Canvas refresh failures remain retryable", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.expireCanvasSurface();
-  harness.setWidgetSurfaceRefreshFails(true);
-  harness.setMessage("show status");
-  const sending = harness.send(false);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "retry-run" });
-  await sending;
-  const widgetBlock = (id: string) => ({
-    type: "canvas",
-    preview: {
-      kind: "canvas",
-      surface: "assistant_message",
-      render: "url",
-      sandbox: "scripts",
-      url: `/__openclaw__/canvas/documents/${id}/index.html`,
-    },
-  });
-
-  harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "retry-run",
-    state: "delta",
-    message: { role: "assistant", content: [widgetBlock("first")] },
-  });
-  await harness.flushSurfaceRefresh();
-  await harness.flushWidgets();
-  assert.equal(harness.widgetSurfaceRefreshCount(), 1);
-  assert.deepEqual([...harness.syncedWidgets()], []);
-
-  harness.setWidgetSurfaceRefreshFails(false);
-  harness.allowCanvasSurfaceRetry();
-  harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "retry-run",
-    state: "delta",
-    message: { role: "assistant", content: [widgetBlock("second")] },
-  });
-  await harness.flushSurfaceRefresh();
-  await harness.flushWidgets();
-  assert.equal(harness.widgetSurfaceRefreshCount(), 2);
-  assert.match(harness.syncedWidgets()[0]?.url ?? "", /refreshed-capability/u);
-});
-
 test("unchanged gateway state does not renew a failed Canvas capability", async () => {
   const harness = createQuickChatHarness();
   const surface = "https://gateway.example/__openclaw__/cap/fixture-capability";
@@ -1524,30 +1479,6 @@ test("unchanged gateway state does not renew a failed Canvas capability", async 
   });
   await harness.flushSurfaceRefresh();
   assert.equal(harness.widgetSurfaceRefreshCount(), 2);
-});
-
-test("clearing the widget reply restores semantic text-only layout", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.setMessage("show status");
-  const sending = harness.send(false);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "widget-run" });
-  await sending;
-  harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "widget-run",
-    state: "delta",
-    message: canvasMessage("assistant", "/__openclaw__/canvas/documents/status/index.html"),
-  });
-  await harness.flushWidgets();
-  assert.equal(harness.syncedHasWidgets(), true);
-
-  harness.clearReply();
-  await harness.flushWidgets();
-  assert.equal(harness.syncedHasWidgets(), false);
-  assert.equal(harness.syncedExpanded(), false);
-  assert.deepEqual([...harness.syncedWidgets()], []);
 });
 
 test("adding a widget preserves the existing native webview identity", async () => {

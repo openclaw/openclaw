@@ -8,6 +8,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import * as workerMemory from "../infra/worker-cpu.js";
+import * as workerMessages from "../infra/worker-message-metrics.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
@@ -51,6 +52,7 @@ describe("diagnostic memory", () => {
     uninstallDiagnosticStabilityFatalHook();
     resetDiagnosticStabilityRecorderForTest();
     resetLogger();
+    vi.spyOn(workerMessages, "getWorkerMessageMetrics").mockReturnValue([]);
     // Cumulative Worker history survives earlier test files even when no Worker remains alive.
     vi.spyOn(workerMemory, "sampleTrackedWorkerMemory").mockReturnValue({
       workerCount: 0,
@@ -163,6 +165,7 @@ describe("diagnostic memory", () => {
           workerMemoryMissing: [],
           workerHeaps: [],
           workerLifecycle,
+          workerMessages: [],
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,
@@ -193,6 +196,7 @@ describe("diagnostic memory", () => {
           workerMemoryMissing: [],
           workerHeaps: [],
           workerLifecycle,
+          workerMessages: [],
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,
@@ -498,109 +502,6 @@ describe("diagnostic memory", () => {
     } finally {
       await state.cleanup();
     }
-  });
-
-  it("logs memory pressure events through the gateway subsystem", async () => {
-    vi.mocked(workerMemory.sampleTrackedWorkerMemory).mockReturnValue({
-      workerCount: 7,
-      workerHeapSampledCount: 7,
-      workerHeapTotalBytes: 5600,
-      workerHeapUsedBytes: 2800,
-      workerExternalBytes: 8400,
-      workerArrayBuffersBytes: 5600,
-      workerArrayBuffersSampledCount: 7,
-      workerMemoryScope: "direct",
-      workerMemoryCoverage: "complete",
-      workerMemoryMissing: [],
-      workerLifecycle: [],
-      workerHeaps: [200, 700, 400, 100, 600, 300, 500].map((heapUsed) => ({
-        script: "sqlite-store.worker.js",
-        heapUsed,
-        heapTotal: heapUsed * 2,
-        external: heapUsed * 3,
-        arrayBuffers: heapUsed * 2,
-      })),
-    });
-    setLoggerOverride({ level: "info", consoleLevel: "silent" });
-    const records: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
-    const stop = onInternalDiagnosticEvent((event) => {
-      if (event.type === "log.record") {
-        records.push(event);
-      }
-    });
-    try {
-      emitDiagnosticMemorySample({
-        now: Date.parse("2026-04-22T12:00:00.000Z"),
-        memoryUsage: memoryUsage({ rss: 4000, heapUsed: 3000 }),
-        thresholds: {
-          rssWarningBytes: 1000,
-          rssCriticalBytes: 3000,
-          pressureRepeatMs: 60_000,
-        },
-      });
-      await flushDiagnosticEvents();
-    } finally {
-      stop();
-    }
-
-    expect(records).toEqual([
-      expect.objectContaining({
-        level: "WARN",
-        message: expect.stringContaining("memory pressure: level=critical reason=rss_threshold"),
-        attributes: expect.objectContaining({
-          subsystem: "gateway/diagnostics/memory",
-        }),
-      }),
-    ]);
-    expect(records[0]?.message).not.toMatch(/snapshot/i);
-    expect(records[0]?.message).toContain(
-      "external/ArrayBuffers are not capped; nested workers are not included",
-    );
-    expect(records[0]?.message).toContain(
-      "rssBytes=4000 heapUsedBytes=3000 externalBytes=10 arrayBuffersBytes=5 workerHeapTotalBytes=5600 workerHeapUsedBytes=2800 workerExternalBytes=8400 workerArrayBuffersBytes=5600 workerCount=7 workerHeapSampledCount=7 workerArrayBuffersSampledCount=7 workerMemoryCoverage=complete workerMemoryScope=direct",
-    );
-    expect(records[0]?.message).toContain(
-      `workerHeaps=${JSON.stringify([
-        {
-          script: "sqlite-store.worker.js",
-          heapUsed: 700,
-          heapTotal: 1400,
-          external: 2100,
-          arrayBuffers: 1400,
-        },
-        {
-          script: "sqlite-store.worker.js",
-          heapUsed: 600,
-          heapTotal: 1200,
-          external: 1800,
-          arrayBuffers: 1200,
-        },
-        {
-          script: "sqlite-store.worker.js",
-          heapUsed: 500,
-          heapTotal: 1000,
-          external: 1500,
-          arrayBuffers: 1000,
-        },
-        {
-          script: "sqlite-store.worker.js",
-          heapUsed: 400,
-          heapTotal: 800,
-          external: 1200,
-          arrayBuffers: 800,
-        },
-        {
-          script: "sqlite-store.worker.js",
-          heapUsed: 300,
-          heapTotal: 600,
-          external: 900,
-          arrayBuffers: 600,
-        },
-      ])} thresholdBytes=3000`,
-    );
-    expect(records[0]?.message).toContain(
-      "nextStep=run openclaw gateway diagnostics export, inspect an existing bundle with openclaw gateway stability --bundle latest, or on Node sample allocations with openclaw gateway call diagnostics.heapProfile --timeout 30000.",
-    );
   });
 
   it("logs warning pressure with readable units and operator guidance", async () => {

@@ -1,5 +1,3 @@
-// Hook install service installs hook packages from archives and local sources.
-
 import path from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -26,7 +24,6 @@ import { parseHookFrontmatter } from "./frontmatter.js";
 // malformed hook package from OOMing the install path.
 const HOOK_MD_MAX_BYTES = 1024 * 1024;
 
-/** Logger contract used by hook install and update operations. */
 type HookInstallLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
@@ -169,7 +166,6 @@ function validateHookId(hookId: string): string | null {
   return null;
 }
 
-/** Resolve the canonical local install directory for one hook pack id. */
 export function resolveHookInstallDir(hookId: string, hooksDir?: string): string {
   const hooksBase = hooksDir ? resolveUserPath(hooksDir) : path.join(CONFIG_DIR, "hooks");
   const hookIdError = validateHookId(hookId);
@@ -502,7 +498,6 @@ async function installHookFromDir(
   });
 }
 
-/** Install hooks from an archive after extracting and validating the archive root. */
 async function installHooksFromArchive(
   params: HookArchiveInstallParams,
 ): Promise<InstallHooksResult> {
@@ -542,7 +537,6 @@ async function installHooksFromArchive(
   });
 }
 
-/** Download, verify, and install an npm hook pack tarball. */
 export async function installHooksFromNpmSpec(
   params: {
     spec: string;
@@ -585,7 +579,6 @@ export async function installHooksFromNpmSpec(
   });
 }
 
-/** Install a hook pack or single hook from a local directory/archive path. */
 export async function installHooksFromPath(
   params: HookPathInstallParams,
 ): Promise<InstallHooksResult> {

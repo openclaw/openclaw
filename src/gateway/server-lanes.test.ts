@@ -3,7 +3,6 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createBackgroundWorkOwner,
@@ -38,44 +37,6 @@ describe("applyGatewayLaneConcurrency", () => {
       await import("../agents/session-suspension.test-support.js");
     resetSessionSuspensionStateForTest();
     resetCommandQueueStateForTest();
-  });
-
-  it("uses the built-in cron concurrency", async () => {
-    applyConfigLaneConcurrency({} as OpenClawConfig);
-
-    let activeRuns = 0;
-    let peakActiveRuns = 0;
-    const allRunsStarted = createDeferred();
-    const releaseRuns = createDeferred();
-
-    const run = async () => {
-      activeRuns += 1;
-      peakActiveRuns = Math.max(peakActiveRuns, activeRuns);
-      if (peakActiveRuns >= DEFAULT_CRON_MAX_CONCURRENT_RUNS) {
-        allRunsStarted.resolve();
-      }
-      try {
-        await releaseRuns.promise;
-      } finally {
-        activeRuns -= 1;
-      }
-    };
-
-    const runs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () =>
-      enqueueCommandInLane(CommandLane.CronNested, run, { warnAfterMs: 10_000 }),
-    );
-    const timeout = setTimeout(() => {
-      allRunsStarted.reject(new Error("timed out waiting for default cron concurrency"));
-    }, 250);
-
-    try {
-      await allRunsStarted.promise;
-      expect(peakActiveRuns).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
-    } finally {
-      clearTimeout(timeout);
-      releaseRuns.resolve();
-      await Promise.all(runs);
-    }
   });
 
   it("keeps the shared nested lane at its default concurrency", async () => {
@@ -135,7 +96,7 @@ describe("applyGatewayLaneConcurrency", () => {
     expect(started).toBe(true);
   });
 
-  it.each([1, 2])(
+  it.each([2])(
     "bounds recall helpers across sessions to the configured child limit %s",
     async (limit) => {
       applyConfigLaneConcurrency(

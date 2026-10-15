@@ -87,6 +87,28 @@ function createInput(
 }
 
 describe("dreaming cron Doctor selection", () => {
+  it("defers unavailable cron inspection without changing rows, then repairs on retry", async () => {
+    const job = makeJob("pending");
+    const { input, inventory, repairCronJobs } = createInput([job]);
+    const before = structuredClone(inventory);
+    input.context.inspectCronJobs = async () => {
+      throw new Error("SQLite snapshot allocation and cleanup failed");
+    };
+    expect(await dreamingCronMigration.detectLegacyState(input)).toEqual({
+      preview: [expect.stringContaining("Dreaming cron inspection remains pending")],
+    });
+    expect(await dreamingCronMigration.migrateLegacyState(input)).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("openclaw doctor --fix")],
+      warningDisposition: "recoverable",
+    });
+    expect(repairCronJobs).not.toHaveBeenCalled();
+    expect(inventory).toEqual(before);
+    input.context.inspectCronJobs = async () => inventory;
+    await dreamingCronMigration.migrateLegacyState(input);
+    expect(repairCronJobs).toHaveBeenCalledExactlyOnceWith(inventory, [adopted(job)]);
+  });
+
   it.each([
     {
       label: "owner tag with an edited name",

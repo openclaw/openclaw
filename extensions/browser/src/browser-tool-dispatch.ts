@@ -100,23 +100,25 @@ export async function executeBrowserTabAction(context: {
     await touchTab(readStringValue(asNullableRecord(result)?.targetId) ?? targetId);
     return jsonResult(result);
   };
-  const actionOptions = { input: params, baseUrl, profile, proxyRequest, signal };
+  const target = proxyRequest ?? baseUrl;
+  const actionOptions = { input: params, target, profile, signal };
   const clientOptions = { profile, timeoutMs: toolTimeoutMs, signal };
   switch (action) {
     case "tabs":
       return await executeTabsAction({
-        baseUrl,
+        target,
         profile,
         timeoutMs: toolTimeoutMs,
-        proxyRequest,
         targetId: context.boundTargetId,
         signal,
       });
     case "open": {
       const targetUrl = readTargetUrlParam(params);
       const label = normalizeOptionalString(params.label);
-      const opened = await browserOpenTab(proxyRequest ?? baseUrl, targetUrl, {
+      const opened = await browserOpenTab(target, targetUrl, {
         ...clientOptions,
+        timeoutMs: requestedTimeoutMs,
+        requestTimeoutMs: requestedTimeoutMs === undefined ? toolTimeoutMs : undefined,
         label,
       });
       const closeOpenedTab = async (targetId: string, openedProfile?: string) => {
@@ -143,14 +145,14 @@ export async function executeBrowserTabAction(context: {
       const targetId = readStringParam(params, "targetId", {
         required: true,
       });
-      const result = await browserFocusTab(proxyRequest ?? baseUrl, targetId, clientOptions);
+      const result = await browserFocusTab(target, targetId, clientOptions);
       return await trackedTabResult(result, targetId);
     }
     case "close": {
       const targetId = readStringParam(params, "targetId");
       const result = targetId
-        ? await browserCloseTab(proxyRequest ?? baseUrl, targetId, clientOptions)
-        : await browserAct(proxyRequest ?? baseUrl, { kind: "close" }, clientOptions);
+        ? await browserCloseTab(target, targetId, clientOptions)
+        : await browserAct(target, { kind: "close" }, clientOptions);
       await sessionTabs.untrack(readStringValue(asNullableRecord(result)?.targetId) ?? targetId);
       return jsonResult(result);
     }
@@ -169,7 +171,7 @@ export async function executeBrowserTabAction(context: {
     case "navigate": {
       const targetUrl = readTargetUrlParam(params);
       const targetId = readStringParam(params, "targetId");
-      const result = await browserNavigate(proxyRequest ?? baseUrl, {
+      const result = await browserNavigate(target, {
         url: targetUrl,
         targetId,
         timeoutMs: requestedTimeoutMs,
@@ -190,9 +192,8 @@ export async function executeBrowserTabAction(context: {
       return await appendNavigatedPageState({
         result: formatted,
         targetId: navigatedTargetId,
-        baseUrl,
+        target,
         profile,
-        proxyRequest,
         signal,
       });
     }
@@ -219,7 +220,7 @@ export async function executeBrowserTabAction(context: {
     }
     case "pdf": {
       const targetId = normalizeOptionalString(params.targetId);
-      const result = await browserPdfSave(proxyRequest ?? baseUrl, { targetId, profile, signal });
+      const result = await browserPdfSave(target, { targetId, profile, signal });
       await touchTab(readStringValue(result.targetId) ?? targetId);
       return textResult(`FILE:${result.path}`, result);
     }
@@ -244,7 +245,7 @@ export async function executeBrowserTabAction(context: {
       const element = readStringParam(params, "element");
       const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
       return await trackedTabResult(
-        await browserArmFileChooser(proxyRequest ?? baseUrl, {
+        await browserArmFileChooser(target, {
           paths: resolvedResult.paths,
           ref,
           inputRef,
@@ -264,7 +265,7 @@ export async function executeBrowserTabAction(context: {
       const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
       const request = { accept, promptText, dialogId, targetId, timeoutMs };
       return await trackedTabResult(
-        await browserArmDialog(proxyRequest ?? baseUrl, { ...request, profile, signal }),
+        await browserArmDialog(target, { ...request, profile, signal }),
         targetId,
       );
     }

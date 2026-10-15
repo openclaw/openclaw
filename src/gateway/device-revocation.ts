@@ -8,6 +8,7 @@ type SourceDependencies = Readonly<{
   authPolicyGeneration?: string;
   sharedGenerationOwner?: object;
   sharedGeneration?: string;
+  authorityOwner?: object;
 }>;
 
 type SourceIdentity = {
@@ -57,6 +58,7 @@ function retainSourceIdentity({ client, ...dependencies }: SourceDependencies) {
       entry.dependencies.context === dependencies.context &&
       entry.dependencies.authPolicyGeneration === dependencies.authPolicyGeneration &&
       entry.dependencies.sharedGenerationOwner === dependencies.sharedGenerationOwner &&
+      entry.dependencies.authorityOwner === dependencies.authorityOwner &&
       entry.dependencies.sharedGeneration === dependencies.sharedGeneration,
   );
   if (!source) {
@@ -188,7 +190,7 @@ export function captureGatewayDeviceRevocation(
 /** Carry the original capture through a composed commit guard without changing its contract. */
 export function bindGatewayDeviceRevocation<T extends () => unknown>(
   guard: T,
-  isCurrent: CurrentCaller | undefined,
+  isCurrent: (() => unknown) | undefined,
 ): T {
   const capture = isCurrent ? captures.get(isCurrent) : undefined;
   if (capture) {
@@ -230,6 +232,18 @@ export function readAcceptedGatewayDeviceSourceAuthority(
 ): CurrentCaller | undefined {
   const capture = guard ? captures.get(guard) : undefined;
   return capture?.state.sourceAccepted ? capture.isSourceCurrent : undefined;
+}
+
+/** Prepared grants consume owned facts; opaque transport callbacks keep their native fence. */
+export function hasPreparedGatewayDeviceAuthority(
+  client: { invalidated?: boolean } | null | undefined,
+  guard: (() => unknown) | undefined,
+): boolean {
+  const accepted = readAcceptedGatewayDeviceSourceAuthority(guard);
+  return (
+    (accepted ? accepted() : !client?.invalidated) &&
+    readGatewayDeviceRevocationGuard(guard)?.() !== false
+  );
 }
 
 /** Only a producer-proven dependency cohort can share queued-input custody. */

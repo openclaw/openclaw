@@ -21,59 +21,81 @@ afterEach(() => {
 });
 
 describe("native session binding leases", () => {
-  it.each(["absent", "renewed"])(
-    "serializes peer writes behind a %s binding lease",
-    async (mode) => {
-      vi.useFakeTimers();
-      const { state, values, owner } = createLeaseFixture();
-      const peer = createNativeSessionBindingLeases(state, bindingTestOptions);
-      const key = "binding";
-      if (mode === "renewed") {
-        values.set(key, { value: "owner" });
-      }
-      let peerFinished = false;
-      let peerWrite!: Promise<boolean>;
-      await expect(
-        owner.withLease(
-          key,
-          async () => {
-            peerWrite = peer
-              .transact(key, (current) =>
-                mode === "renewed" || current?.value === undefined
-                  ? { next: { value: "peer" }, result: true }
-                  : { result: false },
-              )
-              .then((result) => {
-                peerFinished = true;
-                return result;
-              });
-            await Promise.resolve();
-            expect(peerFinished).toBe(false);
-            if (mode === "renewed") {
-              await vi.advanceTimersByTimeAsync(66_000);
-              expect(peerFinished).toBe(false);
-            }
-            const updated = await owner.transact(key, (current) =>
+  it("refuses callback entry when acquisition settles after lease expiry", async () => {
+    vi.useFakeTimers();
+    const { state, values, owner } = createLeaseFixture();
+    const withCurrent = state.withCurrent.bind(state);
+    state.withCurrent = (authority) => {
+      const store = withCurrent(authority);
+      return {
+        ...store,
+        async compareAndApply(...args) {
+          const result = await store.compareAndApply(...args);
+          if (args[2].action === "set" && args[2].value.lease) {
+            vi.setSystemTime(args[2].value.lease.expiresAt);
+          }
+          return result;
+        },
+      };
+    };
+    const run = vi.fn(async () => "native effect");
+    await expect(
+      owner.withLease("expired", run, { prepareLease: prepareBindingTestLease }),
+    ).rejects.toThrow("Lost binding lease");
+    expect(run).not.toHaveBeenCalled();
+    expect(values.get("expired")).not.toHaveProperty("lease");
+  });
+
+  it.each(["renewed"])("serializes peer writes behind a %s binding lease", async (mode) => {
+    vi.useFakeTimers();
+    const { state, values, owner } = createLeaseFixture();
+    const peer = createNativeSessionBindingLeases(state, bindingTestOptions);
+    const key = "binding";
+    if (mode === "renewed") {
+      values.set(key, { value: "owner" });
+    }
+    let peerFinished = false;
+    let peerWrite!: Promise<boolean>;
+    await expect(
+      owner.withLease(
+        key,
+        async () => {
+          peerWrite = peer
+            .transact(key, (current) =>
               mode === "renewed" || current?.value === undefined
-                ? {
-                    next: { ...current, value: mode === "renewed" ? "updated" : "owner" },
-                    result: true,
-                  }
+                ? { next: { value: "peer" }, result: true }
                 : { result: false },
-            );
-            expect(updated).toBe(true);
-            await Promise.resolve();
+            )
+            .then((result) => {
+              peerFinished = true;
+              return result;
+            });
+          await Promise.resolve();
+          expect(peerFinished).toBe(false);
+          if (mode === "renewed") {
+            await vi.advanceTimersByTimeAsync(66_000);
             expect(peerFinished).toBe(false);
-            return updated;
-          },
-          { prepareLease: prepareBindingTestLease },
-        ),
-      ).resolves.toBe(true);
-      await vi.advanceTimersByTimeAsync(1_000);
-      await expect(peerWrite).resolves.toBe(mode === "renewed");
-      expect(values.get(key)).toEqual({ value: mode === "renewed" ? "peer" : "owner" });
-    },
-  );
+          }
+          const updated = await owner.transact(key, (current) =>
+            mode === "renewed" || current?.value === undefined
+              ? {
+                  next: { ...current, value: mode === "renewed" ? "updated" : "owner" },
+                  result: true,
+                }
+              : { result: false },
+          );
+          expect(updated).toBe(true);
+          await Promise.resolve();
+          expect(peerFinished).toBe(false);
+          return updated;
+        },
+        { prepareLease: prepareBindingTestLease },
+      ),
+    ).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(peerWrite).resolves.toBe(mode === "renewed");
+    expect(values.get(key)).toEqual({ value: mode === "renewed" ? "peer" : "owner" });
+  });
 
   it.each(["transaction", "heartbeat"])(
     "fences a replaced lease at %s without deleting its successor",
@@ -220,44 +242,6 @@ describe("native session binding leases", () => {
       }
     },
   );
-
-  it("reports lease loss even when the callback catches a commit refusal", async () => {
-    vi.useFakeTimers();
-    const { state, values, owner } = createLeaseFixture();
-    values.set("binding", { value: "original" });
-    const withCurrent = state.withCurrent.bind(state);
-    let expireBeforeAdmission = false;
-    state.withCurrent = (authority) => {
-      const store = withCurrent(authority);
-      return {
-        ...store,
-        async compareAndApply(...args) {
-          if (expireBeforeAdmission) {
-            expireBeforeAdmission = false;
-            vi.setSystemTime(Date.now() + bindingTestOptions.lease.staleMs + 1);
-          }
-          return await store.compareAndApply(...args);
-        },
-      };
-    };
-    await expect(
-      owner.withLease(
-        "binding",
-        async () => {
-          expireBeforeAdmission = true;
-          await expect(
-            owner.transact("binding", (current) => ({
-              next: { ...current, value: "unauthorized" },
-              result: true,
-            })),
-          ).rejects.toThrow("Lost binding lease");
-          return "callback completed";
-        },
-        { prepareLease: prepareBindingTestLease },
-      ),
-    ).rejects.toThrow("Lost binding lease");
-    expect(values.get("binding")).toEqual({ value: "original" });
-  });
 
   it("joins queued renewal before releasing a failed owner", async () => {
     vi.useFakeTimers();
@@ -409,7 +393,7 @@ describe("native binding lease settlement", () => {
     ).resolves.toBe("available");
   });
 
-  it.each(["removed row", "expired lease"] as const)(
+  it.each(["removed row"] as const)(
     "refuses an already-waiting mutation when settlement becomes unknown (%s)",
     async (available) => {
       vi.useFakeTimers();

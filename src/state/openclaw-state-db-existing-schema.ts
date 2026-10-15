@@ -1,11 +1,16 @@
 import type { DatabaseSync } from "node:sqlite";
-import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   createSqliteTableContractReader,
   readSqliteSchemaCookie,
 } from "../infra/sqlite-schema-contract.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import {
+  getStateRuntimeSchemaAdmission,
+  getStateSchemaVersionAdmission,
+  publishStateRuntimeSchemaAdmission,
+} from "./openclaw-state-db-admission.js";
 import type { OpenClawStateIntegrityAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -19,19 +24,23 @@ import {
 import { classifySqliteTableReadError } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertSupportedStateSchemaVersion,
-  readStateSchemaMigrationVersion,
+  readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
-const validatedSchemas = new WeakMap<DatabaseSync, { cookie: number; unregister: () => void }>();
-
-/** Recheck mutable metadata within the caller's admission transaction. */
-export function assertExistingOpenClawStateRuntimeMetadata(
+/** Metadata is validated with the physical database's first runtime admission. */
+function assertExistingOpenClawStateRuntimeMetadata(
   database: DatabaseSync,
   pathname: string,
 ): number {
+  if (getStateRuntimeSchemaAdmission(database)) {
+    const version = getStateSchemaVersionAdmission(database)?.userVersion;
+    if (version !== undefined) {
+      return version;
+    }
+  }
   const version = assertSupportedStateSchemaVersion(database, pathname);
-  if (readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+  if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new Error(
       `Existing shared-state database ${pathname} requires schema migration by its owning installation; run openclaw doctor --fix there before using it.`,
     );
@@ -62,15 +71,29 @@ export function assertExistingOpenClawStateRuntimeMetadata(
   return version;
 }
 
-/** Prove the existing runtime contract without certifying this release's repairs. */
+/** Validate an existing runtime schema without applying repairs. */
 export function assertExistingOpenClawStateRuntimeSchema(
   database: DatabaseSync,
   pathname: string,
   integrity?: OpenClawStateIntegrityAdmission,
   integrityPolicy?: OpenClawStateIntegrityPolicy,
 ): void {
+  const admitted = getStateRuntimeSchemaAdmission(database)
+    ? getAdmittedSqliteSchemaFacts(database)
+    : undefined;
+  if (admitted) {
+    // Every warm handle must retain revocation custody for the integrity proof it borrows.
+    assertOpenClawStateRuntimeIntegrity(
+      database,
+      pathname,
+      admitted,
+      integrity,
+      integrityPolicy,
+    )?.();
+    return;
+  }
   let publishIntegrity: (() => void) | undefined;
-  const schemaCookie = runSqliteDeferredTransactionSync(
+  runSqliteDeferredTransactionSync(
     database,
     () => {
       const userVersion = assertExistingOpenClawStateRuntimeMetadata(database, pathname);
@@ -80,36 +103,19 @@ export function assertExistingOpenClawStateRuntimeSchema(
           `Existing shared-state database ${pathname} schema version is unavailable.`,
         );
       }
-      const cached = validatedSchemas.get(database);
-      if (cached?.cookie !== currentCookie) {
-        cached?.unregister();
-        validatedSchemas.delete(database);
-      }
-      if (cached?.cookie !== currentCookie || integrityPolicy === "require-proof") {
-        publishIntegrity = assertOpenClawStateRuntimeIntegrity(
-          database,
-          pathname,
-          { schemaVersion: currentCookie, userVersion },
-          integrity,
-          integrityPolicy,
-        );
-      }
-      if (cached?.cookie !== currentCookie) {
-        const readTable = createSqliteTableContractReader(database);
-        assertCurrentStateRuntimeSchema(database, pathname, readTable);
-        assertNoLegacyStateRuntimeRepair(database, pathname);
-      }
-      return currentCookie;
+      publishIntegrity = assertOpenClawStateRuntimeIntegrity(
+        database,
+        pathname,
+        { schemaVersion: currentCookie, userVersion },
+        integrity,
+        integrityPolicy,
+      );
+      const readTable = createSqliteTableContractReader(database);
+      assertCurrentStateRuntimeSchema(database, pathname, readTable);
+      assertNoLegacyStateRuntimeRepair(database, pathname);
     },
     { operationLabel: "state.admission.existing-schema" },
   );
   publishIntegrity?.();
-  // Transactional DDL can roll back and reuse its cookie for another schema.
-  if (!database.isTransaction && validatedSchemas.get(database)?.cookie !== schemaCookie) {
-    const unregister = registerNodeSqliteDisposeCallback(database, () => {
-      validatedSchemas.delete(database);
-      unregister();
-    });
-    validatedSchemas.set(database, { cookie: schemaCookie, unregister });
-  }
+  publishStateRuntimeSchemaAdmission(database, true);
 }

@@ -42,9 +42,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -87,10 +84,7 @@ internal fun GatewayAdditionDialog(
   var cameraAllowed by remember {
     mutableStateOf(context.hasPermission(Manifest.permission.CAMERA))
   }
-  val scanner =
-    remember(request) {
-      BarcodeScanning.getClient(BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
-    }
+  val scanner = remember(request) { createSetupBarcodeScanner() }
   val handoff by viewModel.gatewayConnectionHandoff.collectAsState()
   val gateways by viewModel.pairedGateways.collectAsState()
 

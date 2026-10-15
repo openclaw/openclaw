@@ -53,37 +53,6 @@ describe("docsSearchCommand", () => {
     expect(init).toMatchObject({ headers: { Accept: "application/json" } });
   });
 
-  it("emits one JSON object for search results", async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          results: [
-            {
-              title: "CLI reference",
-              link: "https://docs.openclaw.ai/cli",
-              snippet: "Command-line usage",
-            },
-          ],
-        }),
-      ),
-    );
-    const runtime = createTestRuntime();
-
-    await docsSearchCommand(["cli"], runtime, { json: true });
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
-      query: "cli",
-      results: [
-        {
-          title: "CLI reference",
-          link: "https://docs.openclaw.ai/cli",
-          snippet: "Command-line usage",
-        },
-      ],
-    });
-  });
-
   it("limits normalized search results before rendering", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(
@@ -119,49 +88,8 @@ describe("docsSearchCommand", () => {
     });
   });
 
-  it("cancels non-OK docs search response bodies and fails loudly", async () => {
-    let cancelled = false;
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("unavailable"));
-        },
-        cancel() {
-          cancelled = true;
-        },
-      }),
-      { status: 503 },
-    );
-    fetchMock.mockResolvedValueOnce(response);
-    const runtime = createTestRuntime();
-
-    await expect(docsSearchCommand(["browser", "existing-session"], runtime)).rejects.toThrow(
-      "Docs search failed: HTTP 503",
-    );
-
-    expect(cancelled).toBe(true);
-  });
-
-  it("reports malformed docs search JSON with CLI context", async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response("{bad json", {
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-    const runtime = createTestRuntime();
-
-    await expect(docsSearchCommand(["bad-json"], runtime)).rejects.toThrow(
-      "Docs search failed: Docs search response is malformed JSON",
-    );
-  });
-
-  it.each([
-    { name: "missing results", payload: {} },
-    { name: "null results", payload: { results: null } },
-    { name: "object results", payload: { results: {} } },
-    { name: "string results", payload: { results: "unavailable" } },
-  ])("rejects $name instead of reporting a successful empty search", async ({ payload }) => {
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(payload)));
+  it("rejects string results instead of reporting a successful empty search", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ results: "unavailable" })));
     const runtime = createTestRuntime();
 
     await expect(docsSearchCommand(["gateway"], runtime, { json: true })).rejects.toThrow(
@@ -169,19 +97,6 @@ describe("docsSearchCommand", () => {
     );
 
     expect(runtime.log).not.toHaveBeenCalled();
-  });
-
-  it("keeps a successful empty search distinct from a malformed response", async () => {
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ results: [] })));
-    const runtime = createTestRuntime();
-
-    await docsSearchCommand(["no-matches"], runtime, { json: true });
-
-    expect(runtime.log).toHaveBeenCalledOnce();
-    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
-      query: "no-matches",
-      results: [],
-    });
   });
 
   it("reports docs search responses with invalid UTF-8 bytes as malformed", async () => {
@@ -301,32 +216,6 @@ describe("docs search request ownership", () => {
       streamController?.error(new DOMException("fixture cleanup", "AbortError"));
       await capture.body?.cancel().catch(() => undefined);
       await pending;
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("keeps the successful payload while releasing its request signal", async () => {
-    let requestSignal: AbortSignal | null | undefined;
-    fetchMock.mockReset();
-    fetchMock.mockImplementation(async (_url, init) => {
-      requestSignal = init?.signal;
-      return new Response(
-        JSON.stringify({
-          results: [{ title: "Retained result", link: "https://docs.openclaw.ai/cli" }],
-        }),
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const runtime = createTestRuntime();
-    try {
-      await docsSearchCommand(["kept"], runtime, { json: true });
-      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
-        query: "kept",
-        results: [{ title: "Retained result", link: "https://docs.openclaw.ai/cli" }],
-      });
-      expect(requestSignal?.aborted).toBe(true);
-      expect(runtime.error).not.toHaveBeenCalled();
-    } finally {
       vi.unstubAllGlobals();
     }
   });

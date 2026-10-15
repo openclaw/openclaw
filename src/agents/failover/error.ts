@@ -11,6 +11,8 @@ import type { FailoverReason } from "./signal.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
+export const CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE = "cli_partial_output_rejected";
+
 export type CliTimeoutContext = {
   mode: "overall" | "no-output";
   timeoutSeconds: number;
@@ -27,6 +29,7 @@ export type FallbackAttemptRecord = {
   reason: FailoverReason;
   status?: number;
   error?: string;
+  rateLimitRetriesExhausted?: number;
 };
 
 /** Structured error used to carry model fallback/failover metadata across layers. */
@@ -39,6 +42,8 @@ export class FailoverError extends Error {
   readonly status?: number;
   readonly code?: string;
   readonly rawError?: string;
+  /** Controller-owned count exhaustion; zero means retries were disabled. Not a provider fact. */
+  readonly rateLimitRetriesExhausted?: number;
   // Preserve the provider fact before the message becomes user-facing copy.
   readonly requestSizeCeiling: boolean;
   readonly authProfileFailure?: { allInCooldown: boolean };
@@ -66,6 +71,7 @@ export class FailoverError extends Error {
     this.status = params.status;
     this.code = params.code;
     this.rawError = params.rawError;
+    this.rateLimitRetriesExhausted = params.rateLimitRetriesExhausted;
     this.requestSizeCeiling = isProviderRequestSizeCeilingError(params.rawError ?? message);
     this.authProfileFailure = params.authProfileFailure;
     this.sessionId = params.sessionId;
@@ -104,6 +110,17 @@ export function findErrorProperty<T>(
   return (
     findErrorProperty(candidate.error, reader, seen) ??
     findErrorProperty(candidate.cause, reader, seen)
+  );
+}
+
+/** Preserve the producer's output decision through cancellation and cleanup wrappers. */
+export function isCliPartialOutputRejected(error: unknown): boolean {
+  return (
+    findErrorProperty(error, (candidate) =>
+      isFailoverError(candidate) && candidate.code === CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE
+        ? true
+        : undefined,
+    ) === true
   );
 }
 
@@ -149,7 +166,7 @@ export function readDirectErrorMessage(err: unknown): string | undefined {
   return readStringField(asOptionalObjectRecord(err), "message") || undefined;
 }
 
-export function getErrorMessage(err: unknown): string {
+function getErrorMessage(err: unknown): string {
   return findErrorProperty(err, readDirectErrorMessage) ?? "";
 }
 
@@ -169,10 +186,7 @@ export function isTimeoutError(err: unknown): boolean {
   if (hasTimeoutHint(err)) {
     return true;
   }
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  if (readErrorName(err) !== "AbortError") {
+  if (!err || typeof err !== "object" || readErrorName(err) !== "AbortError") {
     return false;
   }
   const message = getErrorMessage(err);

@@ -1,5 +1,29 @@
 [
   {
+    "source": "MCP Events",
+    "target": "MCP Events"
+  },
+  {
+    "source": "Mcp Events plugin reference",
+    "target": "MCP Events 插件参考"
+  },
+  {
+    "source": "MCP connections",
+    "target": "MCP 连接"
+  },
+  {
+    "source": "Plugin service runtime",
+    "target": "插件服务运行时"
+  },
+  {
+    "source": "Migrate synchronous SQLite APIs",
+    "target": "迁移同步 SQLite API"
+  },
+  {
+    "source": "Async SQLite migration",
+    "target": "异步 SQLite 迁移"
+  },
+  {
     "source": "X / Twitter",
     "target": "X / Twitter"
   },
@@ -726,6 +750,10 @@
   {
     "source": "Moonshot AI",
     "target": "Moonshot AI"
+  },
+  {
+    "source": "Neon AI Gateway",
+    "target": "Neon AI Gateway"
   },
   {
     "source": "Mistral",
@@ -4012,6 +4040,10 @@
     "target": "标准场景覆盖"
   },
   {
+    "source": "Scenario coverage",
+    "target": "场景覆盖"
+  },
+  {
     "source": "Channel QA reference",
     "target": "通道 QA 参考"
   },
@@ -5030,5 +5062,33 @@
   {
     "source": "Worker-local inference",
     "target": "工作器本地推理"
+  },
+  {
+    "source": "Recommended models",
+    "target": "推荐模型"
+  },
+  {
+    "source": "MCP Relay",
+    "target": "MCP Relay"
+  },
+  {
+    "source": "Mcp Relay plugin reference",
+    "target": "MCP Relay 插件参考"
+  },
+  {
+    "source": "mcp-relay",
+    "target": "mcp-relay"
+  },
+  {
+    "source": "Remote Control UI ingress",
+    "target": "远程 Control UI 入口"
+  },
+  {
+    "source": "Cloud environment file",
+    "target": "云环境文件"
+  },
+  {
+    "source": "Standalone builds",
+    "target": "独立可执行文件构建"
   }
 ]

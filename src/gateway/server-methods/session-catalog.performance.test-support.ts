@@ -3,15 +3,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { vi } from "vitest";
+import { Value } from "typebox/value";
 import { WebSocketServer } from "ws";
 import type {
+  SessionCatalog,
   SessionsCatalogListParams,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { SessionsCatalogHostEventSchema } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import * as maintenance from "../../config/sessions/session-accessor.sqlite-maintenance.js";
+import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -26,7 +28,7 @@ import {
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { createPluginServiceScheduler } from "../../plugins/service-scheduler.js";
 import type { OpenClawPluginDefinition } from "../../plugins/types.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
@@ -47,10 +49,12 @@ import type { createCatalogIoCounters } from "./session-catalog.performance-coun
 import type { GatewayClient } from "./types.js";
 
 const logger = { info() {}, warn() {}, error() {}, debug() {} };
+const SETUP_LIST_MAX_ATTEMPTS = 3;
 
 export async function createComposedCatalogFixture(
   state: OpenClawTestState,
   counters: ReturnType<typeof createCatalogIoCounters>,
+  options: { beforeNativeListResponse?: () => Promise<void> } = {},
 ) {
   const agentDir = state.agentDir("main");
   await fs.mkdir(path.join(agentDir, "codex-home"), { recursive: true });
@@ -137,7 +141,22 @@ export async function createComposedCatalogFixture(
         );
         return;
       }
-      socket.send(JSON.stringify({ id: request.id, result }));
+      const respond = () => socket.send(JSON.stringify({ id: request.id, result }));
+      if (request.method === "thread/list" && options.beforeNativeListResponse) {
+        void options.beforeNativeListResponse().then(respond, (error: unknown) => {
+          socket.send(
+            JSON.stringify({
+              id: request.id,
+              error: {
+                code: -32603,
+                message: error instanceof Error ? error.message : "Synthetic native list failed",
+              },
+            }),
+          );
+        });
+      } else {
+        respond();
+      }
     }),
   );
   await once(server, "listening");
@@ -270,6 +289,7 @@ export async function createComposedCatalogFixture(
     await service.start(serviceContext);
     const connection = new AbortController();
     let sequence = 0;
+    const listPublications = new Map<string, (catalog: SessionCatalog) => void>();
     const client = {
       connectionSignal: connection.signal,
       connId: "composed-catalog",
@@ -279,7 +299,14 @@ export async function createComposedCatalogFixture(
       getRuntimeConfig: () => config,
       logGateway: createSubsystemLogger("catalog-benchmark"),
       broadcast: () => {},
-      broadcastToConnIds: () => {},
+      broadcastToConnIds: (event, payload) => {
+        if (
+          event === "sessions.catalog.host" &&
+          Value.Check(SessionsCatalogHostEventSchema, payload)
+        ) {
+          listPublications.get(payload.progressId)?.(payload.catalog);
+        }
+      },
       nodeSendToSession: () => {},
       registerToolEventRecipient: () => {},
     });
@@ -324,9 +351,7 @@ export async function createComposedCatalogFixture(
         ...params,
         hostIds: ["gateway:local"],
       })) as SessionsCatalogListResult;
-    const list = async (params: Partial<SessionsCatalogListParams> = {}) => {
-      const result = await requestList(params);
-      const catalog = result.catalogs.find((value) => value.id === "codex");
+    const readHost = (catalog: SessionCatalog | undefined) => {
       if (!catalog || catalog.error) {
         throw new Error(catalog?.error?.message ?? "Missing Codex catalog");
       }
@@ -339,7 +364,51 @@ export async function createComposedCatalogFixture(
       }
       return host;
     };
-    const setupMaintenance = { started: 0, completed: 0 };
+    const readSingleList = async (params: Partial<SessionsCatalogListParams> = {}) => {
+      const work = new AsyncWorkScope();
+      const progressId = `catalog-list-${++sequence}`;
+      let published: SessionCatalog | undefined;
+      listPublications.set(progressId, (catalog) => {
+        if (catalog.id === "codex" && catalog.hosts.every((host) => !host.pending)) {
+          published = catalog;
+        }
+      });
+      try {
+        const result = await work.track(() => requestList({ ...params, progressId }));
+        // Warm responses can precede refresh publication; count that work in the same sample.
+        return await work.runWhenIdle(() => {
+          const current = result.catalogs.find((value) => value.id === "codex");
+          return current?.error?.code === "catalog_pending" ? (published ?? current) : current;
+        });
+      } finally {
+        listPublications.delete(progressId);
+        await work.drain();
+      }
+    };
+    const list = async (params: Partial<SessionsCatalogListParams> = {}) =>
+      readHost(await readSingleList(params));
+    const setupList = async (params: Partial<SessionsCatalogListParams> = {}) => {
+      for (let attempt = 1; ; attempt++) {
+        const catalog = await readSingleList(params);
+        const host = catalog?.hosts[0];
+        if (
+          attempt < SETUP_LIST_MAX_ATTEMPTS &&
+          !catalog?.error &&
+          catalog?.hosts.length === 1 &&
+          host?.hostId === "gateway:local" &&
+          host.error?.code === "APP_SERVER_UNAVAILABLE" &&
+          host.error.message === "Codex session catalog is still loading. Retry shortly."
+        ) {
+          // Foreground cold-list expiry does not stop index-owned hydration. Retry only
+          // fixture setup; measured list() calls retain the original single-request boundary.
+          await nextTurn();
+          continue;
+        }
+        return readHost(catalog);
+      }
+    };
+    const setupMaintenance = { completed: 0 };
+    let maintenanceReady: ReturnType<typeof observeSessionMaintenanceCompletion> | undefined;
     return {
       api,
       projection,
@@ -347,43 +416,28 @@ export async function createComposedCatalogFixture(
       requests,
       requestList,
       list,
+      setupList,
       setupMaintenance,
       async continueSession(hostId: string, threadId: string, sourceHomeId?: string) {
-        const finalize =
-          maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
-        const completed = createDeferredCore<Awaited<ReturnType<typeof finalize>>>();
-        const observer = vi
-          .spyOn(maintenance, "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort")
-          .mockImplementation((scope, plans, options) => {
-            const result = finalize(scope, plans, options);
-            // Creation also finalizes an empty plan; only the readiness patch's
-            // automatic owner supplies isCurrent. Join it before the next adoption.
-            if (scope.agentId === "main" && scope.path === databasePath && options?.isCurrent) {
-              setupMaintenance.started++;
-              void result.then((value) => {
-                setupMaintenance.completed++;
-                completed.resolve(value);
-              }, completed.reject);
-            }
-            return result;
-          });
-        try {
-          const [result] = await Promise.all([
-            call("sessions.catalog.continue", {
-              catalogId: "codex",
-              agentId: "main",
-              hostId,
-              threadId,
-              sourceHomeId,
-            }),
-            completed.promise,
-          ]);
-          // Let the maintenance owner finish its post-finalizer continuation.
-          await nextTurn();
-          return result;
-        } finally {
-          observer.mockRestore();
-        }
+        // Fresh adoptions reuse the first acknowledged maintenance deadline; subsequent
+        // no-op writes need not schedule another pass for the fixture to observe.
+        const completed = (maintenanceReady ??= observeSessionMaintenanceCompletion(databasePath, {
+          automatic: true,
+        })).then(() => {
+          setupMaintenance.completed++;
+        });
+        const [result] = await Promise.all([
+          call("sessions.catalog.continue", {
+            catalogId: "codex",
+            agentId: "main",
+            hostId,
+            threadId,
+            sourceHomeId,
+          }),
+          completed,
+        ]);
+        await nextTurn();
+        return result;
       },
       async close() {
         connection.abort();

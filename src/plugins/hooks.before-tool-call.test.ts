@@ -36,7 +36,8 @@ describe("before_tool_call isolation and approval", () => {
       {
         priority: 50,
         pluginId: "late",
-        handler: () => {
+        handler: (value) => {
+          value.params.cwd = "/unapproved";
           params.command = "mutated";
           return {
             params: { command: "late override" },
@@ -45,11 +46,14 @@ describe("before_tool_call isolation and approval", () => {
         },
       },
       {
-        handler: () => ({
-          block: true,
-          blockReason: "blocked",
-          params: { command: "blocked override" },
-        }),
+        handler: (value) => {
+          expect(value.params).toEqual({ command: "safe" });
+          return {
+            block: true,
+            blockReason: "blocked",
+            params: { command: "blocked override" },
+          };
+        },
       },
       { handler: skipped },
     ]);
@@ -59,24 +63,8 @@ describe("before_tool_call isolation and approval", () => {
       blockReason: "blocked",
       requireApproval: { ...approval, pluginId: "policy" },
     });
+    expect(event.params).toEqual({ command: "safe" });
     expect(skipped).not.toHaveBeenCalled();
-  });
-
-  it("isolates direct event mutations from the caller and later handlers", async () => {
-    const original = { toolName: "bash", params: { command: "safe" } };
-    const observer = vi.fn<Handler>(() => ({}));
-    await toolRunner([
-      { handler: () => ({ requireApproval: approval }) },
-      {
-        handler: (value) => {
-          value.params.cwd = "/unapproved";
-          return {};
-        },
-      },
-      { handler: observer },
-    ]).runBeforeToolCall(original, ctx);
-    expect(original.params).toEqual({ command: "safe" });
-    expect(observer.mock.calls[0]?.[0].params).toEqual({ command: "safe" });
   });
 
   it.each([
@@ -84,6 +72,19 @@ describe("before_tool_call isolation and approval", () => {
     {
       name: "shared WebAssembly memory",
       params: { memory: new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true }) },
+    },
+    { name: "shared buffer", params: { buffer: new SharedArrayBuffer(4) } },
+    { name: "shared view", params: { view: new DataView(new SharedArrayBuffer(4)) } },
+    { name: "shared map key", params: { map: new Map([[new SharedArrayBuffer(4), "value"]]) } },
+    { name: "shared map value", params: { map: new Map([["key", new SharedArrayBuffer(4)]]) } },
+    { name: "shared set entry", params: { set: new Set([new SharedArrayBuffer(4)]) } },
+    {
+      name: "shared memory returned by a getter",
+      params: {
+        get buffer() {
+          return new SharedArrayBuffer(4);
+        },
+      },
     },
   ])("fails closed before invoking a handler for $name", async ({ params }) => {
     const handler = vi.fn<Handler>(() => ({}));
@@ -94,6 +95,21 @@ describe("before_tool_call isolation and approval", () => {
       ),
     ).rejects.toThrow("before_tool_call mutable input isolation failed");
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("ignores shared memory in properties that do not cross the clone boundary", async () => {
+    const params = { command: "safe" };
+    Object.defineProperty(params, "privateBuffer", { value: new SharedArrayBuffer(4) });
+    const handler = vi.fn<Handler>((value) => {
+      expect(Reflect.ownKeys(value.params)).toEqual(["command"]);
+      value.params.command = "local edit";
+    });
+    await toolRunner([{ handler }], { catchErrors: false }).runBeforeToolCall(
+      { toolName: "bash", params },
+      ctx,
+    );
+    expect(handler).toHaveBeenCalledOnce();
+    expect(params.command).toBe("safe");
   });
 
   it("clones collections without invoking overridden iterators", async () => {

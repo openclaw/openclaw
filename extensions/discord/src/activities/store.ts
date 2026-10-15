@@ -59,34 +59,16 @@ function requireAtomicComparison<T>(
 export function openDiscordActivityStores(
   openKeyedStore: PluginRuntime["state"]["openKeyedStore"],
 ): DiscordActivityStores {
+  const openStore = <T>(namespace: string, maxEntries: number, defaultTtlMs: number) =>
+    openKeyedStore<T>({ namespace, maxEntries, overflowPolicy: "evict-oldest", defaultTtlMs });
   return {
     widgets: requireAtomicComparison(
-      openKeyedStore<DiscordActivityWidget>({
-        namespace: "activities-widgets",
-        maxEntries: 64,
-        overflowPolicy: "evict-oldest",
-        defaultTtlMs: WIDGET_TTL_MS,
-      }),
+      openStore<DiscordActivityWidget>("activities-widgets", 64, WIDGET_TTL_MS),
     ),
-    sessions: openKeyedStore<DiscordActivitySession>({
-      namespace: "activities-sessions",
-      maxEntries: 256,
-      overflowPolicy: "evict-oldest",
-      defaultTtlMs: SESSION_TTL_MS,
-    }),
-    docTokens: openKeyedStore<DiscordActivityDocToken>({
-      namespace: "activities-doc-tokens",
-      maxEntries: 256,
-      overflowPolicy: "evict-oldest",
-      defaultTtlMs: DOC_TOKEN_TTL_MS,
-    }),
+    sessions: openStore<DiscordActivitySession>("activities-sessions", 256, SESSION_TTL_MS),
+    docTokens: openStore<DiscordActivityDocToken>("activities-doc-tokens", 256, DOC_TOKEN_TTL_MS),
     launches: requireAtomicComparison(
-      openKeyedStore<DiscordActivityPendingLaunch>({
-        namespace: "activities-launches",
-        maxEntries: 256,
-        overflowPolicy: "evict-oldest",
-        defaultTtlMs: PENDING_LAUNCH_TTL_MS,
-      }),
+      openStore<DiscordActivityPendingLaunch>("activities-launches", 256, PENDING_LAUNCH_TTL_MS),
     ),
   };
 }
@@ -108,16 +90,6 @@ async function applyActivityStoreIntent<T>(
     }
     observed = result.current;
   }
-}
-
-function pendingLaunchForWidget(
-  existing: DiscordActivityPendingLaunch | undefined,
-  widgetId: string,
-  createdAt: number,
-): DiscordActivityPendingLaunch {
-  return existing && (existing.state === "ambiguous" || existing.widgetId !== widgetId)
-    ? { state: "ambiguous", createdAt }
-    : { state: "single", widgetId, createdAt };
 }
 
 export class DiscordActivityStore {
@@ -222,7 +194,9 @@ export class DiscordActivityStore {
     await applyActivityStoreIntent(this.stores.launches, key, (existing) => ({
       operation: "update",
       action: "set",
-      value: pendingLaunchForWidget(existing, widgetId, createdAt),
+      value: (existing && (existing.state === "ambiguous" || existing.widgetId !== widgetId)
+        ? { state: "ambiguous", createdAt }
+        : { state: "single", widgetId, createdAt }) satisfies DiscordActivityPendingLaunch,
     }));
   }
 

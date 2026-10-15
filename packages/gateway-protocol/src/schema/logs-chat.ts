@@ -52,6 +52,7 @@ export const ChatHistoryParamsSchema = closedObject({
   messageId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
+  toolResultMaxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
 });
 
 /** Resolve a short chat link and fetch its first page under the same discovery policy. */
@@ -63,6 +64,7 @@ export const ChatStartupParamsSchema = Type.Union([
     agentId: NonEmptyString,
     limit: ChatHistoryParamsSchema.properties.limit,
     maxBytes: ChatHistoryParamsSchema.properties.maxBytes,
+    toolResultMaxChars: ChatHistoryParamsSchema.properties.toolResultMaxChars,
   }),
 ]);
 
@@ -191,6 +193,12 @@ export const ChatMetadataParamsSchema = Object.assign(
           "Include model and account selection metadata (default true). Set false when reading models.list separately.",
       }),
     ),
+    ifRevision: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description: "For includeModels:false, omit unchanged commands.",
+      }),
+    ),
     authProfileId: Type.Optional(
       Type.String({
         minLength: 1,
@@ -209,6 +217,20 @@ export const ChatMetadataParamsSchema = Object.assign(
   }),
   { not: { required: ["sessionKey", "authProfileId"] } },
 );
+
+/** Transient composer prediction anchored to a completed session run. */
+export const ChatPredictParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  runId: NonEmptyString,
+});
+
+/** Transient composer text only; null means there is no suggestion. */
+export const ChatPredictResultSchema = closedObject({
+  text: Type.Union([Type.String({ maxLength: 500 }), Type.Null()]),
+});
+
+export type ChatPredictParams = Static<typeof ChatPredictParamsSchema>;
+export type ChatPredictResult = Static<typeof ChatPredictResultSchema>;
 
 /** Batched purpose-title request for tool calls rendered in the Control UI. */
 export const ChatToolTitlesParamsSchema = closedObject({
@@ -421,7 +443,14 @@ export const ChatStatusEventSchema = closedObject({
     closedObject({
       attempt: Type.Integer({ minimum: 1, maximum: 10 }),
       maxAttempts: Type.Integer({ minimum: 1, maximum: 10 }),
-      reason: Type.Literal("rate_limit"),
+      reason: Type.Union([
+        Type.Literal("rate_limit"),
+        Type.Literal("overloaded"),
+        Type.Literal("server_error"),
+        Type.Literal("timeout"),
+        Type.Literal("output_limit"),
+      ]),
+      retryAt: Type.Optional(Type.Number({ minimum: 0 })),
     }),
   ),
 });

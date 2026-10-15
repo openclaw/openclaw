@@ -3,16 +3,13 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 type SoftResetParseResult = { matched: false } | { matched: true; tail: string };
 
 export function parseSoftResetCommand(commandBodyNormalized: string): SoftResetParseResult {
-  const normalized = normalizeLowercaseStringOrEmpty(commandBodyNormalized);
-  const resetMatch = normalized.match(/^\/reset(?:\s|$)/);
-  if (!resetMatch) {
-    return { matched: false };
+  let rest = commandBodyNormalized;
+  for (const pattern of [/^\/reset(?:\s|$)/, /^soft(?:\s|$)/]) {
+    const match = normalizeLowercaseStringOrEmpty(rest).match(pattern);
+    if (!match) {
+      return { matched: false };
+    }
+    rest = rest.slice(match[0].length).trimStart();
   }
-  const rest = commandBodyNormalized.slice(resetMatch[0].length).trimStart();
-  const restLower = normalizeLowercaseStringOrEmpty(rest);
-  const softMatch = restLower.match(/^soft(?:\s|$)/);
-  if (!softMatch) {
-    return { matched: false };
-  }
-  return { matched: true, tail: rest.slice(softMatch[0].length).trimStart() };
+  return { matched: true, tail: rest };
 }

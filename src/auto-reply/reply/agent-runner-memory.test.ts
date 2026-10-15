@@ -30,6 +30,10 @@ import { withSessionCompactionPersistenceAsync } from "../../agents/sessions/ses
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptEvent,
@@ -40,7 +44,8 @@ import {
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import { readActiveTranscriptStats } from "../../config/sessions/session-accessor.sqlite-history.test-support.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import * as transcriptAccounting from "../../config/sessions/session-transcript-accounting.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -53,6 +58,7 @@ import {
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { refreshSessionEntryFromStore } from "./agent-runner-core.js";
 import {
   runMemoryFlushIfNeeded as runMemoryFlushIfNeededRaw,
   runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw,
@@ -71,7 +77,9 @@ import {
   withTestModelContextTokens,
   writeTestSessionStore,
 } from "./agent-runner.test-fixtures.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import { waitForReplyRunSuccessorAdmission, type ReplyOperation } from "./reply-run-registry.js";
+import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
+import { admitReplyTurn } from "./reply-turn-admission.js";
 import { createSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
 import { createMockReplyOperation } from "./test-helpers.js";
 
@@ -130,10 +138,9 @@ type MemoryFlushTestParams = Parameters<typeof runMemoryFlushIfNeededRaw>[0] & {
 
 async function runMemoryFlushIfNeeded(params: MemoryFlushTestParams) {
   const { modelContextTokens, ...runParams } = params;
-  return await runMemoryFlushIfNeededRaw({
-    ...runParams,
-    cfg: withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens }),
-  });
+  const cfg = withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens });
+  setRuntimeConfigSnapshot(cfg);
+  return await runMemoryFlushIfNeededRaw({ ...runParams, cfg });
 }
 
 type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNeededRaw>[0] & {
@@ -142,10 +149,9 @@ type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNee
 
 async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParams) {
   const { modelContextTokens, ...runParams } = params;
-  return await runSessionCompactionIfNeededRaw({
-    ...runParams,
-    cfg: withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens }),
-  });
+  const cfg = withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens });
+  setRuntimeConfigSnapshot(cfg);
+  return await runSessionCompactionIfNeededRaw({ ...runParams, cfg });
 }
 
 function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
@@ -421,8 +427,7 @@ describe("runMemoryFlushIfNeeded", () => {
       const previous = params.sessionStore[sessionKey] as SessionEntry;
       const nextEntry: SessionEntry = {
         ...previous,
-        compactionCount: (previous.compactionCount ?? 0) + Math.max(0, params.amount ?? 1),
-        transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
+        ...projectCompactionAccountingPatch(previous, params),
       };
       params.sessionStore[sessionKey] = nextEntry;
       if (typeof params.storePath === "string") {
@@ -433,6 +438,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   afterEach(async () => {
+    clearRuntimeConfigSnapshot();
     cliBackendsTesting.resetDepsForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearMemoryPluginState();
@@ -452,7 +458,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
-      assertCurrent: vi.fn(),
+      assertCurrent: vi.fn<() => void>(),
       retain: () => releaseOperatorAuthority,
     });
     runEmbeddedAgentMock
@@ -717,27 +723,6 @@ describe("runMemoryFlushIfNeeded", () => {
     }
   });
 
-  it("honors a time-refreshed null plan before preparing or registering a run", async () => {
-    const resolver = vi
-      .fn<MemoryFlushPlanResolver>()
-      .mockImplementationOnce(createMemoryFlushPlan)
-      .mockReturnValueOnce(null);
-    registerMemoryFlushPlanResolverForTest(resolver);
-    const sessionEntry = createFlushSessionEntry();
-
-    const result = await runDefaultMemoryFlush(sessionEntry, {
-      followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
-      defaultModel: "anthropic/claude-opus-4-7",
-    });
-
-    expect(result).toEqual({ sessionEntry, outcome: "skipped" });
-    await expect(fs.stat(path.join(rootDir, "memory/2023-11-14.md"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect(registerAgentRunContextMock).not.toHaveBeenCalled();
-    expect(runEmbeddedAgentEntryMock).not.toHaveBeenCalled();
-  });
-
   it("marks flush as completed after MAX_FLUSH_FAILURES to break retry loop", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionEntry = createFlushSessionEntry({
@@ -883,8 +868,7 @@ describe("runMemoryFlushIfNeeded", () => {
       modelSelectionLocked: true,
     });
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
+    expect(onCompactionNotice.mock.calls.map(([phase]) => phase)).toEqual(["start", "skipped"]);
 
     onCompactionNotice.mockClear();
     compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
@@ -895,8 +879,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await expect(run({ onCompactionNotice })).rejects.toThrow(
       "Preflight compaction required but failed: no real conversation messages",
     );
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
+    expect(onCompactionNotice.mock.calls.map(([phase]) => phase)).toEqual(["start", "incomplete"]);
   });
 
   it("passes persisted session policy and runtime policy key to preflight compaction", async () => {
@@ -1093,6 +1076,60 @@ describe("runMemoryFlushIfNeeded", () => {
     } finally {
       release.resolve();
       await Promise.allSettled([pending]);
+    }
+  });
+
+  it("refreshes the retained reply reader after preflight accepts a successor", async () => {
+    const scope = sessionScope("agent:main:preflight-successor", "preflight-successor.sqlite");
+    const sessionEntry = createFlushSessionEntry({
+      lifecycleRevision: "preflight-lifecycle",
+      totalTokens: 90_000,
+    });
+    await upsertSessionEntryCore(scope, sessionEntry);
+    const admitted = await admitReplyTurn({ ...scope, kind: "visible", resetTriggered: false });
+    if (admitted.status !== "owned") {
+      throw new Error("Fixture requires retained reply admission");
+    }
+    incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
+      const accepted = await acceptCompactionSuccessor({
+        currentTarget: scope,
+        expectedEntry: {
+          sessionId: sessionEntry.sessionId,
+          lifecycleRevision: sessionEntry.lifecycleRevision,
+          activeWriterRunId: sessionEntry.activeWriterRunId,
+        },
+        assertActive: () => admitted.operation.abortSignal.throwIfAborted(),
+        result: {
+          ok: true,
+          compacted: true,
+          result: { sessionId: "preflight-successor", tokensBefore: 90_000, tokensAfter: 42 },
+        },
+        onCommitted: host.onCommitted,
+      });
+      return {
+        ok: true,
+        compacted: true,
+        result: { sessionId: accepted.sessionId, tokensAfter: 42 },
+      };
+    });
+    try {
+      const compacted = await runDefaultPreflight(sessionEntry, {
+        ...scope,
+        replyOperation: admitted.operation,
+        ...createCompactionLifecycle(admitted.operation),
+      });
+      expect(compacted?.sessionId).toBe("preflight-successor");
+      await expect(
+        refreshSessionEntryFromStore({
+          ...scope,
+          expectedGeneration: compacted,
+          reader: getReplyOperationSessionReader(admitted.operation),
+        }),
+      ).resolves.toMatchObject({ sessionId: "preflight-successor" });
+    } finally {
+      admitted.operation.complete();
+      await waitForReplyRunSuccessorAdmission(scope.sessionKey, null);
     }
   });
 
@@ -2126,7 +2163,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("emits preflight compaction notices around a successful budget compaction", async () => {
+  it("reports bounded context when server compaction leaves oversized history", async () => {
     await writeTranscript([
       { type: "message", message: { role: "user", content: "x".repeat(5_000) } },
     ]);
@@ -2152,12 +2189,10 @@ describe("runMemoryFlushIfNeeded", () => {
       onCompactionNotice,
     });
 
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(
-      2,
-      "end",
-      "🧹 Server-side compaction complete (8.6k → 736)",
-    );
+    expect(onCompactionNotice.mock.calls.map(([phase]) => phase)).toEqual([
+      "start",
+      "context_bounded",
+    ]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

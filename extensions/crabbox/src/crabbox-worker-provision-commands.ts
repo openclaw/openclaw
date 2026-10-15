@@ -11,6 +11,7 @@ import {
   leaseRunArgs,
   runCrabboxCommand,
   runCrabboxCommandWithCoordinatorRetry,
+  sanitizeCrabboxNotice,
   type CrabboxCommandRunner,
   type LeaseCommandContext,
 } from "./crabbox-worker-command.js";
@@ -21,6 +22,7 @@ import {
 import { withCrabboxWorkerEnvProfile } from "./crabbox-worker-env-profile.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import { buildCrabboxAllocationArgs, type parseCrabboxProfile } from "./crabbox-worker-profile.js";
+import { runCrabboxSetupEgress } from "./crabbox-worker-setup-egress.js";
 import {
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
   CRABBOX_MACHINE0_READY_WAIT_TIMEOUT,
@@ -63,6 +65,7 @@ type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
 // resources, and Machine0 maps both DELETING and DELETED to `deleted`. Always stop explicitly.
 const NON_RUNNABLE_STATES = new Set([
   "archived",
+  "cleanup",
   "deleted",
   "deleting",
   "destroyed",
@@ -112,6 +115,10 @@ export async function inspectWithContext(
     let inspect: ParsedInspect;
     try {
       inspect = parseInspectJson(result.stdout);
+      const notice = sanitizeCrabboxNotice(result.stderr);
+      if (notice) {
+        inspect.lifetime = { ...inspect.lifetime, policyNotice: notice };
+      }
     } catch (error) {
       throw new WorkerProviderError(
         error instanceof Error ? error.message : "Crabbox inspect returned invalid output",
@@ -125,11 +132,16 @@ export async function inspectWithContext(
   if (isUnrecognizedLease(result, params.id, "inspect")) {
     return undefined;
   }
-  throw crabboxCommandError(action, result);
+  // An inspect response may contain connection material, even on a failed
+  // command. Diagnostics must never echo that JSON back to the caller.
+  throw crabboxCommandError(action, {
+    ...result,
+    stdout: /^\s*[[{]/u.test(result.stdout) ? "" : result.stdout,
+  });
 }
 
 export function remainingProvisionTimeout(deadline: number, maximum: number): number {
-  const remaining = deadline - Date.now();
+  const remaining = deadline - performance.now();
   if (remaining <= 0) {
     throw new Error("Crabbox provision exceeded its provider deadline");
   }
@@ -159,7 +171,7 @@ export async function runProvisionWarmup(
   // Crabbox internal/cli/run.go rejects this capability before Warmup/Acquire.
   if (isFixedLeaseIdUnsupported(result, params.provider)) {
     throw new WorkerProviderError(
-      `Crabbox backend ${params.provider} does not support fixed idempotent lease IDs. OpenClaw cloud workers need a Crabbox backend with fixed lease ID support.`,
+      `Crabbox backend ${params.provider} does not support fixed lease IDs that are safe to reuse. OpenClaw cloud workers need a Crabbox backend with fixed lease ID support.`,
     );
   }
   const error = crabboxCommandError("warmup", result);
@@ -257,6 +269,7 @@ export async function runProvisionSetup(
     setup: string;
     timeoutMs?: number;
     forwardedEnv?: Record<string, string>;
+    assertCurrent?: () => void;
   },
 ): Promise<void> {
   try {
@@ -266,24 +279,41 @@ export async function runProvisionSetup(
       params.phase === "node enrollment setup"
         ? runCrabboxCommandWithCoordinatorRetry
         : runCrabboxCommand;
-    const result = await withCrabboxWorkerEnvProfile(
-      params.forwardedEnv,
-      (names, profilePath, childEnv) =>
-        run({
-          action: params.phase,
-          args: leaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
-          binary: params.binary,
-          env: childEnv,
-          input: params.setup,
-          runCommand: params.runCommand,
-          signal: params.signal,
-          sleep: params.sleep,
-          timeoutMs: remainingProvisionTimeout(
-            params.deadline,
-            params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
-          ),
-        }),
-    );
+    const result =
+      params.phase === "profile setup" && Object.keys(params.profile.setupSecrets ?? {}).length
+        ? await runCrabboxSetupEgress({
+            ...params,
+            id: params.inspect.id,
+            secrets: params.profile.setupSecrets ?? {},
+            createScript: () => params.setup,
+            assertCurrent: () => {
+              params.signal?.throwIfAborted();
+              if (!params.assertCurrent) {
+                throw new Error("Setup secrets require current provisioning authority");
+              }
+              params.assertCurrent();
+            },
+            timeoutMs: remainingProvisionTimeout(
+              params.deadline,
+              params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
+            ),
+          })
+        : await withCrabboxWorkerEnvProfile(params.forwardedEnv, (names, profilePath, childEnv) =>
+            run({
+              action: params.phase,
+              args: leaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
+              binary: params.binary,
+              env: childEnv,
+              input: params.setup,
+              runCommand: params.runCommand,
+              signal: params.signal,
+              sleep: params.sleep,
+              timeoutMs: remainingProvisionTimeout(
+                params.deadline,
+                params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
+              ),
+            }),
+          );
     crabboxCommandOutput(params.phase, result);
   } catch (error) {
     params.signal?.throwIfAborted();

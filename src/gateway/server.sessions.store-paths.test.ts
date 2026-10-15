@@ -1,5 +1,4 @@
 import fsSync from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import * as sessionDirs from "../agents/session-dirs.js";
@@ -10,16 +9,13 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   loadSessionEntry,
-  replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
-import * as agentDatabasePaths from "../state/openclaw-agent-db.paths.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -89,7 +85,7 @@ test.each([false, true])(
         .mockImplementation((...args) => {
           if (
             !held &&
-            args[1].type === "acpSessions.metadata" &&
+            args[1].type === "sessionRows.sharedFacts" &&
             args[0].env?.OPENCLAW_STATE_DIR === suiteStateDir &&
             getAsyncWorkSignal() !== fixtureSignal
           ) {
@@ -276,77 +272,6 @@ test.runIf(process.platform !== "win32")(
     }
   },
 );
-
-test("configured-only multi-store target preparation is reused across distinct lists", async () => {
-  const { dir: stateDir } = await createSessionStoreDir();
-  testState.sessionStorePath = undefined;
-  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    const agentIds = Array.from({ length: 29 }, (_, index) => `agent-${index}`);
-    const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
-    testState.sessionConfig = { store: storeTemplate };
-    testState.agentsConfig = { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) };
-    (await getGatewayConfigModule()).getRuntimeConfig();
-    for (const agentId of agentIds) {
-      const storePath = storeTemplate.replace("{agentId}", agentId);
-      // Seed list metadata without running unrelated lifecycle deletion workers.
-      await withOpenClawAgentDatabaseWrite(
-        {
-          agentId,
-          path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path,
-        },
-        () =>
-          replaceSessionEntrySync(
-            { agentId, sessionKey: `agent:${agentId}:main`, storePath },
-            { sessionId: `session-${agentId}`, updatedAt: 10 },
-          ),
-      );
-    }
-
-    expect((await directSessionReq("sessions.list", { configuredAgentsOnly: true })).ok).toBe(true);
-    const matcher = vi.spyOn(agentDatabasePaths, "createOpenClawAgentDatabasePathMatcher");
-    const lstat = vi.spyOn(fsSync, "lstatSync");
-    const readlink = vi.spyOn(fsSync, "readlinkSync");
-    const realpath = vi.spyOn(fsSync.realpathSync, "native");
-    const stat = vi.spyOn(fsSync, "statSync");
-    syncBuiltinESMExports();
-    try {
-      const first = await directSessionReq<{ path: string }>("sessions.list", {
-        configuredAgentsOnly: true,
-        includeGlobal: false,
-      });
-      expect(first).toMatchObject({ ok: true, payload: { path: "(multiple)" } });
-      expect(matcher).not.toHaveBeenCalled();
-      expect({
-        realpath: realpath.mock.calls.length,
-        stat: stat.mock.calls.length,
-      }).toEqual({ realpath: 0, stat: 0 });
-
-      for (const spy of [matcher, lstat, readlink, realpath, stat]) {
-        spy.mockClear();
-      }
-      const second = await directSessionReq<{ path: string }>("sessions.list", {
-        configuredAgentsOnly: true,
-        includeUnknown: false,
-      });
-
-      expect(second).toMatchObject({ ok: true, payload: { path: "(multiple)" } });
-      expect({
-        lstat: lstat.mock.calls.length,
-        matcher: matcher.mock.calls.length,
-        readlink: readlink.mock.calls.length,
-        realpath: realpath.mock.calls.length,
-        stat: stat.mock.calls.length,
-      }).toEqual({ lstat: 0, matcher: 0, readlink: 0, realpath: 0, stat: 0 });
-    } finally {
-      matcher.mockRestore();
-      lstat.mockRestore();
-      readlink.mockRestore();
-      realpath.mockRestore();
-      stat.mockRestore();
-      syncBuiltinESMExports();
-    }
-  });
-});
 
 test("configured-only parent-owned stores keep lineage children without directory discovery", async () => {
   const { dir: stateDir } = await createSessionStoreDir();

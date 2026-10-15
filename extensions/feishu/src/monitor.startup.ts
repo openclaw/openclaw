@@ -76,7 +76,7 @@ export async function fetchBotIdentityForMonitor(
   if (result.ok) {
     const log = options.runtime?.log ?? console.log;
     log(
-      `feishu[${account.accountId}]: bot info probe returned identity for a different app; ignoring stale result`,
+      `feishu[${account.accountId}]: bot info check returned identity for a different app; ignoring stale result`,
     );
   }
 
@@ -88,7 +88,7 @@ export async function fetchBotIdentityForMonitor(
   if (probeError.includes("timeout") || probeError.includes("timed out")) {
     const error = options.runtime?.error ?? console.error;
     error(
-      `feishu[${account.accountId}]: bot info probe timed out after ${timeoutMs}ms; continuing startup`,
+      `feishu[${account.accountId}]: bot info check timed out after ${timeoutMs}ms; continuing startup`,
     );
   }
   if (options.allowCachedFallback === false) {
@@ -103,7 +103,7 @@ export async function fetchBotIdentityForMonitor(
       return {};
     }
     options.runtime?.log?.(
-      `feishu[${account.accountId}]: using cached provider-verified bot identity while the fresh probe is unavailable`,
+      `feishu[${account.accountId}]: using cached provider-verified bot identity while the fresh check is unavailable`,
     );
     return { botOpenId: cached.botOpenId, botName: cached.botName, source: "cache" };
   } catch {

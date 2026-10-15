@@ -90,25 +90,17 @@ export function buildToolSearchRunPlan(params: {
       (controlName) => !explicitControlAllowlistNames.has(normalizeToolPolicyName(controlName)),
     ),
   );
-  const explicitlyAllowedClientTool = hasExplicitlyAllowedClientTool({
-    clientTools: params.clientTools,
-    explicitAllowlistSources: params.explicitAllowlistSources,
-  });
+  const explicitlyAllowedClientTool = hasExplicitlyAllowedClientTool(params);
   const emptyAllowlistVisibleToolNames = params.deferredToolsCallable
     ? collectAllowedToolNames({ tools: params.visibleTools })
     : visibleAllowedToolNames;
   // The guard needs presence, not catalog-sized synthetic names. Auto-added
   // controls alone must not conceal an explicit allowlist that matched nothing.
-  let hasCallableTools =
+  const hasCallableTools =
     params.catalogToolCount > 0 ||
     ((params.clientToolsCataloged || params.deferredToolsCallable === true) &&
-      explicitlyAllowedClientTool);
-  for (const toolName of emptyAllowlistVisibleToolNames) {
-    if (!autoAddedControlNames.has(toolName)) {
-      hasCallableTools = true;
-      break;
-    }
-  }
+      explicitlyAllowedClientTool) ||
+    [...emptyAllowlistVisibleToolNames].some((toolName) => !autoAddedControlNames.has(toolName));
   return {
     visibleAllowedToolNames,
     replayAllowedToolNames,

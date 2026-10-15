@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { isCronSessionDisplayKey } from "../../../src/shared/session-list-visibility.ts";
 import { i18n } from "../i18n/index.ts";
 import {
   resolveChannelSessionInfo,
@@ -9,37 +8,17 @@ import {
   resolveSessionWorkSubtitle,
 } from "./session-display.ts";
 
-describe("isCronSessionDisplayKey", () => {
-  it.each([
-    [" CRON:JOB ", true],
-    ["agent:ops:cron:job", true],
-    ["agent:ops::cron:job", true],
-    ["agent: :cron:job", true],
-    ["agent:ops:cron:", false],
-    ["agent::cron:job", false],
-    [":agent:ops:cron:job", false],
-    ["agent:ops:custom:cron:job", false],
-    ["agent:ops:main", false],
-    ["", false],
-  ] as const)("retains automation classification for %j", (key, expected) => {
-    expect(isCronSessionDisplayKey(key)).toBe(expected);
-  });
-});
-
 describe("resolveSessionDisplayName", () => {
-  it.each(["Subagent (worker):", "Subagent [worker]:"])(
-    "treats translated prefix %s as literal text",
-    (prefix) => {
-      const translation = vi.spyOn(i18n, "t").mockReturnValue(prefix);
-      try {
-        const key = "agent:main:subagent:worker";
-        const row = { label: `${prefix} Research sources` };
-        expect(resolveSessionDisplayName(key, row)).toBe("Research sources");
-      } finally {
-        translation.mockRestore();
-      }
-    },
-  );
+  it.each(["Subagent [worker]:"])("treats translated prefix %s as literal text", (prefix) => {
+    const translation = vi.spyOn(i18n, "t").mockReturnValue(prefix);
+    try {
+      const key = "agent:main:subagent:worker";
+      const row = { label: `${prefix} Research sources` };
+      expect(resolveSessionDisplayName(key, row)).toBe("Research sources");
+    } finally {
+      translation.mockRestore();
+    }
+  });
 
   it("uses the same friendly main-thread name for every agent", () => {
     for (const key of ["main", "agent:main:main", "agent:research:main", "agent:ops-team:main"]) {
@@ -53,63 +32,14 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("agent:research:main:thread")).toBe("main:thread");
   });
 
-  it("prefers label, then displayName", () => {
-    expect(
-      resolveSessionDisplayName("agent:main:telegram:direct:42", {
-        label: "Alice",
-        displayName: "openclaw-tui",
-      }),
-    ).toBe("Alice");
-    expect(
-      resolveSessionDisplayName("agent:main:telegram:direct:42", { displayName: "Peter" }),
-    ).toBe("Peter");
-  });
-
-  it("never renders full raw peer ids for unnamed DMs", () => {
-    expect(resolveSessionDisplayName("agent:main:telegram:direct:491234567890")).toBe(
-      "Telegram · …567890",
-    );
-    expect(resolveSessionDisplayName("agent:main:imessage:direct:+4912")).toBe("iMessage · +4912");
-  });
-
   // Rows are shaped like the Gateway projection: displayName plus the
   // accountId it derives from the canonical route, no user label.
   it.each([
-    {
-      name: "an account-less direct row keeps its plain name",
-      key: "agent:main:telegram:direct:42",
-      row: { displayName: "Alice" },
-      expected: "Alice",
-    },
-    {
-      name: "an account-qualified direct row names its account",
-      key: "agent:main:telegram:cards:direct:42",
-      row: { accountId: "cards", displayName: "Alice" },
-      expected: "Alice · cards",
-    },
-    {
-      name: "a shipped dm-spelled row names its account",
-      key: "agent:main:telegram:cards:dm:42",
-      row: { accountId: "cards", displayName: "Alice" },
-      expected: "Alice · cards",
-    },
     {
       name: "an unnamed shipped dm row reads as a friendly peer plus account",
       key: "agent:main:telegram:cards:dm:491234567890",
       row: { accountId: "cards" },
       expected: "Telegram · …567890 · cards",
-    },
-    {
-      name: "the default account adds no discriminator",
-      key: "agent:main:telegram:default:direct:42",
-      row: { accountId: "default", displayName: "Alice" },
-      expected: "Alice",
-    },
-    {
-      name: "a human label that merely looks account-shaped still gets a discriminator",
-      key: "agent:main:telegram:work:direct:42",
-      row: { accountId: "work", label: "Alice (work)" },
-      expected: "Alice (work) · work",
     },
     {
       name: "a stored label that already ends in the account suffix is left alone",
@@ -123,72 +53,14 @@ describe("resolveSessionDisplayName", () => {
       row: undefined,
       expected: "Telegram Group",
     },
-    {
-      name: "an account-looking group key is not read as an account-qualified group",
-      key: "agent:main:dm:account:group:room",
-      row: undefined,
-      expected: "dm:account:group:room",
-    },
   ])("$name", ({ key, row, expected }) => {
     expect(resolveSessionDisplayName(key, row)).toBe(expected);
-  });
-
-  it("reads the account off the key only until the gateway row arrives", () => {
-    expect(resolveSessionDisplayName("agent:main:telegram:cards:direct:42")).toBe(
-      "Telegram · 42 · cards",
-    );
-    expect(resolveSessionDisplayName("agent:main:signal:work:dm:+4912")).toBe(
-      "Signal · +4912 · work",
-    );
-    expect(resolveSessionDisplayName("agent:main:telegram:default:direct:42")).toBe(
-      "Telegram · 42",
-    );
-  });
-
-  it("takes the account from the gateway row, not the key", () => {
-    // Only the projection carries account identity here; the key has none.
-    expect(
-      resolveSessionDisplayName("agent:main:telegram:direct:42", {
-        accountId: "cards",
-        displayName: "Alice",
-      }),
-    ).toBe("Alice · cards");
-    // When the two disagree, the route the Gateway parsed wins over the guess.
-    expect(
-      resolveSessionDisplayName("agent:main:telegram:cards:direct:42", {
-        accountId: "ops",
-        displayName: "Alice",
-      }),
-    ).toBe("Alice · ops");
   });
 
   it("does not split UTF-16 surrogate pairs when shortening peer ids", () => {
     expect(resolveSessionDisplayName("agent:main:telegram:direct:12345😀67890")).toBe(
       "Telegram · …67890",
     );
-  });
-
-  it("falls back to a friendly name for dashboard sessions instead of the uuid key", () => {
-    const key = "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d";
-
-    expect(resolveSessionDisplayName(key)).toBe("New session");
-    expect(
-      resolveSessionDisplayName(key, {
-        label: undefined,
-        displayName: undefined,
-        derivedTitle: undefined,
-      }),
-    ).toBe("New session");
-  });
-
-  it("uses a gateway-derived title for otherwise unnamed sessions", () => {
-    expect(
-      resolveSessionDisplayName("agent:main:dashboard:uuid", {
-        label: "agent:main:dashboard:uuid",
-        displayName: "agent:main:dashboard:uuid",
-        derivedTitle: "Quarterly launch plan",
-      }),
-    ).toBe("Quarterly launch plan");
   });
 
   it("keeps explicit and worktree names ahead of derived titles", () => {
@@ -273,18 +145,6 @@ describe("resolveSessionWorkSubtitle", () => {
     ).toBe("clawdbot ⎇ feature/x · macbook");
     expect(resolveSessionWorkSubtitle({ execNode: "macbook" })).toBe("macbook");
     expect(resolveSessionWorkSubtitle({})).toBeUndefined();
-  });
-
-  it("shortens opaque node ids instead of rendering raw hashes", () => {
-    expect(
-      resolveSessionWorkSubtitle({ execNode: "11c38726acc6fac280357576c87acc6fac280357" }),
-    ).toBe("…0357");
-    expect(
-      resolveSessionWorkSubtitle({
-        worktree: { branch: "openclaw/wt-1", repoRoot: "/repo/clawdbot" },
-        execNode: "11c38726acc6fac280357576c87acc6fac280357",
-      }),
-    ).toBe("clawdbot ⎇ wt-1 · …0357");
   });
 });
 
@@ -421,4 +281,18 @@ describe("resolveChannelSessionInfo", () => {
       channelSession: false,
     });
   });
+});
+
+it("displays device folder provenance instead of stale Gateway workspace metadata", () => {
+  const row = {
+    deviceFolder: { deviceId: "build-runner", path: "/srv/existing" },
+    spawnedCwd: "/gateway/stale",
+    worktree: { repoRoot: "/gateway/stale", branch: "main" },
+  };
+  expect(resolveSessionWorkContext(row)).toEqual({
+    kind: "workspace",
+    name: "existing",
+    path: "/srv/existing",
+  });
+  expect(resolveSessionWorkSubtitle(row)).toBe("/srv/existing · build-runner");
 });

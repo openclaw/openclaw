@@ -1,3 +1,5 @@
+import activeMemoryPresentation from "../../../../extensions/active-memory/control-ui.presentation.json" with { type: "json" };
+import memoryWikiPresentation from "../../../../extensions/memory-wiki/control-ui.presentation.json" with { type: "json" };
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
@@ -392,74 +394,44 @@ const enSettings = {
     },
   },
   cloudWorkersPage: {
-    pool: {
-      tab: "Pool",
-      title: "Ready pool",
-      description:
-        "Workers preparing for upcoming sessions and spares already running. Refreshes every 10 seconds while this view is visible.",
+    environments: {
+      docs: "Docs",
+      devcontainer: "Dev Container",
+      detected: "Detected",
+      phases: {
+        onCreate: "onCreateCommand",
+        updateContent: "updateContentCommand",
+        detectedInstall: "Install dependencies",
+      },
+      machines: "Machines",
+      repositories: "Repositories",
       ready: "Ready",
-      preparing: "Preparing",
-      releasing: "Releasing",
+      building: "Building",
+      coldOnly: "Cold only",
       attention: "Needs attention",
-      expired: "Expired",
-      unavailable: "Unavailable",
-      unknownProject: "Unknown project",
-      reserve: "Automatic reserve",
-      build: "On-demand build",
-      age: "Age: {age}",
-      expiresAt: "Expires {time}",
-      expiredAt: "Expired {time}",
-      offline: "Connect to the Gateway to view the ready pool.",
-      adminRequired: "Administrator access is required to view the ready pool.",
-      refreshFailed: "Could not refresh the pool: {error}.",
-      lastUpdated: "Showing the last update from {time}.",
-      capacity: "{used} of {limit} reserve slots in use",
-      disabledCapacity: "Unused workers awaiting release: {count}",
-      capacityHelp:
-        "Preparing workers and pending cleanup count toward the limit. Unused running workers incur machine charges.",
-      disabled:
-        "The pool is disabled. Unused workers are being released; active sessions continue.",
-      inventoryUnavailable: "Pool inventory unavailable",
-      target: "Ready workers per eligible project: {count}",
-      empty:
-        "No unassigned prepared workers. Eligible sessions prepare a reserve after activation; Profiles controls the target and pool limit.",
+      snapshot: "Snapshot",
+      setup: "Setup",
+      machine: "Machine",
+      advanced: "Advanced",
+      retention: "Snapshot retention",
+      machineImages: "Machine images",
+      change: "Change",
+      built: "Built {age}",
+      actions: "Environment actions",
+      pinPrevious: "Pin previous",
+      unpinPrevious: "Unpin previous",
+      pool: "{count} ready workers · Pool cap",
+      poolCap: "Pool cap",
+      localOnly: "Rebuild requires a Gateway-local repository.",
+      identityUnavailable: "A repository identity is required to change its default machine.",
+      adminRequired: "Connect with administrator access to view cloud environments.",
+      empty: "The first cloud session for a repository prepares it and saves a snapshot.",
     },
     snapshots: {
-      title: "Snapshots",
-      viewLabel: "Cloud worker view",
-      unavailable:
-        "Snapshots are available when the Crabbox worker provider is enabled and the Gateway advertises them.",
-      adminRequired: "Administrator access is required to inspect and manage snapshots.",
-      empty: "No snapshots are recorded locally.",
-      profileEmpty: "No snapshots are recorded for this profile.",
-      images: "Images",
-      building: "Building",
-      held: "Held by sessions",
-      attention: "Needs attention",
-      unlabeledProfile: "Unlabeled profile",
-      machineImage: "Machine image",
-      projectImage: "Project image",
-      warmOn: "Warm images on",
-      warmOff: "Warm images off",
-      available: "Available",
-      retiring: "Retiring",
-      retirementPending: "Checkpoint deletion pending",
       retirementHint:
         "Checkpoint {checkpoint} is awaiting deletion. Cleanup retries during the next warm-image capture or worker teardown. Inspect openclaw crabbox warm-images --json and resolve provider deletion errors if it remains pending.",
-      scrubbing: "Building: scrubbing",
-      creating: "Building: creating",
       uncertain: "Paused: uncertain",
-      noImage: "No image",
-      coldOnly: "Cold only",
-      captureUnsupportedHint:
-        "Workers use an existing compatible snapshot when one is available and otherwise provision cold. Each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on this profile to stop capture attempts.",
-      pending: "Pending",
-      created: "Created {age}",
       lastUsed: "Last used {age}",
-      allocations: "Allocations: {count}",
-      runtime: "Runtime: {digest}",
-      baseCommit: "Commit: {commit}",
-      pinned: "Pinned",
       pin: "Pin",
       unpin: "Unpin",
       delete: "Delete",
@@ -470,15 +442,10 @@ const enSettings = {
       deleteHeld: "Outstanding allocations still hold this snapshot.",
       deleteCapturing: "Wait for the active capture to finish before deleting this snapshot.",
       deletionRetiring: "Snapshot deletion is pending. Maintenance will retry provider cleanup.",
-      captureOrRetirement: "Wait for the active capture or checkpoint deletion to finish.",
-      previous: "Previous",
       rollback: "Roll back",
       rollbackTitle: "Roll back snapshot",
       rollbackMessage:
         "Restore this previous checkpoint as the current image. The current image becomes the previous generation, or is retired when the retention policy keeps no previous generation unless it is pinned. Existing allocations keep their recorded checkpoint.",
-      retentionPolicy: "Retention policy",
-      retentionHelp:
-        "Pinned checkpoints are exempt from age refresh, unused expiry, and capacity eviction. A runtime or recipe change still starts new workers cold until a compatible capture publishes.",
       refreshAfter: "Refresh after",
       refreshAfterHelp: "Default: 24h. Use whole minutes, hours, or days; minimum 1h.",
       refreshAfterInvalid:
@@ -491,20 +458,10 @@ const enSettings = {
       keepNone: "None (default)",
       keepOne: "Keep one",
       savePolicy: "Save retention policy",
-      policyApplies: "Policy changes apply without restarting the Gateway.",
       policySaved: "Retention policy saved.",
       policySaveFailed: "Could not save retention policy. Refresh the config and try again.",
-      buildSnapshot: "Build snapshot",
       rebuild: "Rebuild",
-      profile: "Profile",
-      repository: "Repository",
-      chooseProfile: "Choose a profile",
-      chooseRepository: "Choose a repository",
       selectBuildInputs: "Choose an enabled profile and a local repository.",
-      buildHelp:
-        "Prepare the repository's committed HEAD and run its committed setup recipe without starting a session.",
-      noRepositories:
-        "No local repositories were found. Add a local project from New Session, then reopen this dialog.",
       buildStarted: "Build started",
       buildReused: "Reusing the build already in progress",
       capacity:
@@ -512,7 +469,7 @@ const enSettings = {
       invalidProject:
         "The repository must be an accessible local Git checkout root with a HEAD commit. Select another repository or fix the checkout, then try again.",
       invalidProfile:
-        "This profile is unavailable or does not support project preparation. Refresh and select an eligible profile.",
+        "This machine is unavailable or does not support project preparation. Choose another machine or check its configuration, then rebuild.",
       cancelBuild: "Cancel build",
       cancelBuildMessage:
         "Stop this snapshot build and destroy its worker? OpenClaw waits for provider work and cleanup to finish.",
@@ -522,7 +479,6 @@ const enSettings = {
       dismissBuildMessage:
         "Request cleanup for this failed build and hide it from this view. The Gateway keeps the failed record until its retention window ends, so it can reappear after a reload.",
       buildDismissed: "Failed build dismissed",
-      buildAge: "Age: {age}",
       buildStates: {
         requested: "Requested",
         provisioning: "Provisioning",
@@ -536,21 +492,15 @@ const enSettings = {
         failed: "Failed",
         orphaned: "Orphaned",
       },
-      refresh: "Refresh",
       recover: "Recover",
       recoverTitle: "Recover paused capture",
       recoverMessage:
         "Clear this capture reservation after manual provider cleanup. Recovery preserves recorded images and allocation choices. It does not stop workers or delete provider artifacts.",
       acknowledgement: "I stopped the owning capture and worker and reconciled provider artifacts",
       recovered: "Capture reservation cleared. The next eligible worker can capture again.",
-      recoveryChanged: "The Gateway connection changed. Refresh snapshots and try recovery again.",
-      migration: "Needs migration",
-      migrationHint:
-        "Run openclaw doctor --fix and follow its provider-cleanup recovery instructions before provisioning workers.",
+      recoveryChanged:
+        "The Gateway connection changed. Select the repository and try recovery again.",
     },
-    intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
-    sectionTitle: "Profiles",
-    sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
     empty: "No cloud worker profiles are configured.",
     addProfile: "Add profile",
     editProfile: "Edit profile",
@@ -560,7 +510,7 @@ const enSettings = {
       "Delete profile {profile}? Repository defaults that use this profile will also be removed. New cloud sessions will no longer use it.",
     advertised: "Advertised",
     unavailable: "Unavailable",
-    profileSaved: "Profile saved. Build a snapshot from the Snapshots view.",
+    profileSaved: "Profile saved.",
     settingsSaved: "Saved. Changes apply without restarting the Gateway.",
     adminRequired: "Administrator access is required to manage cloud worker profiles.",
     catalogFailed: "Could not load advertised profiles: {error}. Check the gateway and retry.",
@@ -573,20 +523,9 @@ const enSettings = {
     desktopFact: "Desktop: {value}",
     providerList: "View supported backends",
     advanced: "Advanced",
-    preparedPool: "Prepared pool",
     preparedPoolHelp:
       "Maximum unassigned workers across projects and profiles. Leave empty for the default of 4; zero drains unused reserves and stops refill. Reserves incur running-machine charges.",
     savePool: "Save pool",
-    repositories: "Repositories",
-    repositoriesHelp:
-      "Choose the default cloud worker profile for each repository. Explicit session profile choices take precedence.",
-    repositoriesEmpty: "No repository defaults are configured.",
-    addRepository: "Add repository",
-    editRepository: "Edit repository",
-    saveRepository: "Save repository",
-    repositoryIdentity: "Repository identity",
-    repositoryIdentityHelp:
-      "Enter host/owner/repo or a Git remote URL. Saved identities use lowercase and omit the trailing .git.",
     repositoryProfile: "Default profile",
     selectProfile: "Choose a profile",
     warmImage: { auto: "Auto", on: "On", off: "Off" },
@@ -610,7 +549,8 @@ const enSettings = {
       idleTimeoutHelp: "Stop an unused worker after this positive Go duration.",
       idleTimeoutPlaceholder: "45m",
       setup: "Setup command",
-      setupHelp: "Optional idempotent shell command run before OpenClaw is installed.",
+      setupHelp:
+        "Optional shell command run before OpenClaw is installed; it must be safe to repeat.",
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
       desktopHelp:
@@ -651,9 +591,6 @@ const enSettings = {
       setupEnv:
         "Enter at most 16 unique POSIX environment variable names. CRABBOX_ENV_ALLOW is reserved.",
       repository: "Enter a valid repository identity, such as github.com/acme/app.",
-      repositoryExists: "This repository already has a default. Edit its existing mapping.",
-      repositoryMissing:
-        "This repository mapping changed or was removed. Reload the config and try again.",
       repositoryProfile:
         "Choose an existing cloud worker profile. Add a profile first if none are configured.",
       preparedPool: "Enter a non-negative whole number or leave the field empty.",
@@ -683,9 +620,15 @@ const enSettings = {
       noProviders: "No providers are available to connect.",
       discover: "On this Gateway",
       description: "Save credentials for this agent. Choose the active model separately.",
+      nativeDescription:
+        "Sign in and enable this provider for this agent without changing the active model.",
+      nativeDone: "Provider enabled. The active model has not changed.",
       setupDescription:
         "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
       done: "Provider credentials saved.",
+      statusRefreshFailed: "Sign-in saved, but refreshing status failed. Retry",
+      startChat: "Start a new chat with {model}",
+      modelReady: "{model} is ready for your agent.",
       missingSelection:
         "The account selected for {model} is no longer available. Connect or choose an account to use with this model.",
       chooseAccount: "Choose account",
@@ -713,6 +656,7 @@ const enSettings = {
     status: {
       ok: "Signed in",
       ready: "Ready",
+      checking: "Checking models…",
       expiring: "Expiring",
       expired: "Expired",
       missing: "Not signed in",
@@ -780,7 +724,7 @@ const enSettings = {
       test: "Test connection",
       testing: "Testing…",
       unavailable: "Connection testing requires a newer gateway.",
-      latency: "{ms} ms",
+      latency: "Request round-trip: {ms} ms",
       status: {
         ok: "Connected",
         auth: "Authentication failed",
@@ -796,6 +740,8 @@ const enSettings = {
     readiness: {
       title: "AI setup",
       heading: "Connect a verified AI model",
+      readyHeading: "AI models available",
+      readyDescription: "Choose a default model below, or connect another provider.",
       signedInNoModels:
         "You're signed in, but this account exposes no usable models. Choose another provider or account to continue.",
       notConfigured: "Choose a provider and verify the model OpenClaw will use.",
@@ -837,6 +783,9 @@ const enSettings = {
       disabled: "Disabled",
       fallback: "Fallback Model",
       noFallback: "No fallback model",
+      clearFallbacks: "No fallback model (remove all {count})",
+      moreFallbackOne: "1 more fallback after this one",
+      moreFallbacks: "{count} more fallbacks after this one",
       selectModel: "Select a model",
       noModels: "Configure a chat provider to select a primary, utility, or fallback model.",
       discoveringMore: "Discovering more models…",
@@ -877,6 +826,9 @@ const enSettings = {
       checking: "Checking…",
       empty: "No supported coding apps are available.",
       note: "Update installed agents from Control UI",
+      enabled: "{name} is enabled.",
+      sessionExpired:
+        "This setup session ended. Close this dialog and check the installed agent status.",
     },
     readOnly: {
       disconnected: "Connect to the gateway to change model settings.",
@@ -1152,6 +1104,10 @@ const enSettings = {
           title: "Accessibility",
           hint: "Control UI elements when an action requires it.",
         },
+        eventPosting: {
+          title: "Event Posting",
+          hint: "Send keyboard and pointer input when a computer action requires it.",
+        },
         screenRecording: {
           title: "Screen Recording",
           hint: "Capture the screen for context or screenshots.",
@@ -1391,14 +1347,63 @@ const enSettings = {
       theme: "Theme",
       chooseTheme: "Choosing a different theme resets its fonts and accent colors.",
       themeUnavailable: "{id} is unavailable. Using Claw until the theme becomes available again.",
+      background: {
+        title: "Background",
+        hint: "Choose the artwork behind your workspace. This changes only your view.",
+        source: "Artwork",
+        presentation: "Style",
+        faded: "Faded",
+        fadedHint: "Fades into a quiet reading area.",
+        "full-bleed": "Full bleed",
+        "full-bleedHint": "Edge-to-edge artwork with text contrast protected.",
+        placementOffHint: "Both pages are off. Adjust the preview above, then enable a page here.",
+        noneHint: "None keeps both pages plain without removing your saved image or choices.",
+        visibilityZeroHint: "At 0%, the artwork is hidden. Increase visibility to show it again.",
+        none: "None",
+        theme: "Theme artwork",
+        custom: "Custom image",
+        themeChoice: "Theme",
+        customChoice: "Image",
+        choose: "Choose image…",
+        replace: "Replace…",
+        remove: "Remove",
+        imageAlt: "Your background image",
+        formats: "JPEG, PNG, WebP · up to 8 MiB",
+        newSession: "New session page",
+        sessions: "Conversations",
+        visibility: "Image visibility",
+        visibilityHint: "Adjust to preview. Esc to dismiss.",
+
+        browserOnly: "Saved in this browser. Connect with a personal profile to upload an image.",
+        profileRequired: "Connect with a personal profile to save a custom image.",
+        readOnly: "Image uploads require permission to edit your profile.",
+        uploading: "Preparing your image…",
+        removing: "Removing your image…",
+        saved: "Background image saved.",
+        saveFailed: "Could not save your background. Check your connection and try again.",
+        removed: "Background image removed.",
+        unavailable:
+          "Your background image could not be loaded. Choose another image or try again.",
+        invalidFile: "Choose a JPEG, PNG, or WebP image within the upload size limit.",
+        conflict: "Your background changed elsewhere. Check the current selection and try again.",
+        private: "Only your view · saved to your profile.",
+      },
       typography: "Typography",
       fonts: {
         ui: "Interface",
         chat: "Chat prose",
+        terminal: "Terminal font",
+        terminalDefault: "JetBrains Mono + Nerd Font symbols",
+        terminalHint:
+          "Bundled JetBrains Mono + Nerd Font symbols by default. To override, enter a monospace font installed on this computer. Missing fonts use the default; saved in this browser.",
+        terminalLigatures:
+          "The terminal currently renders characters individually; programming ligatures are not supported.",
+        terminalInvalid: "Enter one font family name, without quotes, commas, or CSS declarations.",
+        terminalReset: "Use default",
         themeDefault: "Theme default",
         themeFace: "{theme} · {face}",
         system: "System",
-        previewCaption: "OpenClaw · A little clarity goes a long way",
+        brandedPreviewCaption: "{brand} · A little clarity goes a long way",
         previewProse:
           "Good typography makes room for the conversation. Choose a face that feels comfortable to read.",
         previewCode: 'const greeting = "Hello, world!";',
@@ -1448,6 +1453,23 @@ const enSettings = {
       inlineHintBefore: "Click",
       inlineHintAfter:
         "to add one browser-local tweakcn theme. In tweakcn, use Share and paste the copied link here.",
+      tabIcon: {
+        title: "Browser tab icon",
+        source: "Source",
+        sourceLabel: "Browser tab icon source",
+        default: "Default",
+        agent: "Agent avatar",
+        shape: "Shape",
+        shapeLabel: "Agent avatar shape",
+        square: "Square",
+        rounded: "Rounded corners",
+        circle: "Circle",
+        lobsterdex: "Lobsterdex",
+        lobster: "Lobster",
+        empty: "No lobsters unlocked in this browser yet.",
+        localCollection: "Unlocked in this browser. Your collection is not synced.",
+        unavailable: "This lobster is not unlocked in this browser. Using Default until it is.",
+      },
       textSize: "Text size",
     },
     chatPrefs: {
@@ -1459,7 +1481,7 @@ const enSettings = {
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
       showTaskProgress: "Show task progress cards",
       showTaskProgressHint:
-        "Show task progress in the chat composer. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
+        "Show task progress in chat Details and embedded composers. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
       openLinksExternally: "Open links outside OpenClaw",
       openLinksExternallyHint: "Use your browser instead of the OpenClaw built-in browser.",
       openLinksExternallyStorage: "Saved in this browser only.",
@@ -1671,10 +1693,10 @@ const enSettings = {
       description:
         "These plugins layer on top of the engine instead of competing for the slot, so any combination can run at once.",
       activeMemory: {
-        title: "Active memory",
+        title: activeMemoryPresentation.memoryAddon.label,
       },
       memoryWiki: {
-        title: "Memory wiki",
+        title: memoryWikiPresentation.memoryAddon.label,
       },
       toggleAriaLabel: "Enable or disable {plugin}",
       changeFailed: "Could not update {plugin}",

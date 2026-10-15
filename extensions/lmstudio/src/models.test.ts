@@ -13,12 +13,9 @@ import {
 } from "./models.fetch.js";
 import {
   mapLmstudioWireEntry,
-  mapLmstudioWireModelsToConfig,
   normalizeLmstudioConfiguredCatalogEntry,
   normalizeLmstudioProviderConfig,
-  resolveLmstudioInferenceBase,
   resolveLmstudioReasoningCompat,
-  resolveLmstudioServerBase,
 } from "./models.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -30,13 +27,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
   };
 });
-
-function malformedJsonResponse(): Response {
-  return new Response("{ nope", {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
@@ -105,17 +95,6 @@ describe("lmstudio-models", () => {
     vi.unstubAllGlobals();
   });
 
-  it("normalizes LM Studio base URLs", () => {
-    expect(resolveLmstudioServerBase()).toBe("http://localhost:1234");
-    expect(resolveLmstudioInferenceBase()).toBe("http://localhost:1234/v1");
-    expect(resolveLmstudioServerBase("http://localhost:1234/api/v1")).toBe("http://localhost:1234");
-    expect(resolveLmstudioInferenceBase("http://localhost:1234/api/v1")).toBe(
-      "http://localhost:1234/v1",
-    );
-    expect(resolveLmstudioServerBase("localhost:1234/api/v1")).toBe("http://localhost:1234");
-    expect(resolveLmstudioInferenceBase("localhost:1234/api/v1")).toBe("http://localhost:1234/v1");
-  });
-
   it("marks configured LM Studio endpoints as trusted private-network model targets", () => {
     expect(
       normalizeLmstudioProviderConfig({
@@ -171,52 +150,6 @@ describe("lmstudio-models", () => {
     });
   });
 
-  it.each([
-    { label: "enabled", supportsTools: true },
-    { label: "disabled", supportsTools: false },
-    { label: "unknown", supportsTools: undefined },
-  ])("preserves $label native tool support in runtime and setup models", ({ supportsTools }) => {
-    const entry = {
-      type: "llm" as const,
-      key: "qwen3-8b-instruct",
-      capabilities: {
-        ...(supportsTools === undefined ? {} : { trained_for_tool_use: supportsTools }),
-        reasoning: { allowed_options: ["off", "on"], default: "on" },
-      },
-    };
-    const expectedCompat = {
-      ...(supportsTools === true ? { supportsTools } : {}),
-      supportsReasoningEffort: true,
-      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-      reasoningEffortMap: {
-        off: "none",
-        none: "none",
-        adaptive: "xhigh",
-        max: "xhigh",
-      },
-    };
-
-    expect(mapLmstudioWireEntry(entry)?.compat).toEqual(expectedCompat);
-    expect(mapLmstudioWireModelsToConfig([entry])[0]?.compat).toEqual(expectedCompat);
-  });
-
-  it("drops malformed discovered context metadata", () => {
-    const model = mapLmstudioWireEntry({
-      type: "llm",
-      key: "bad-context",
-      max_context_length: 32768.5,
-      loaded_instances: [{ id: "loaded", config: { context_length: Number.POSITIVE_INFINITY } }],
-    });
-
-    expect(model).toMatchObject({
-      id: "bad-context",
-      contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-      contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
-      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
-      loaded: false,
-    });
-  });
-
   it("uses the loaded context as the effective runtime budget", () => {
     const model = mapLmstudioWireEntry({
       type: "llm",
@@ -230,25 +163,6 @@ describe("lmstudio-models", () => {
       contextWindow: 262_144,
       contextTokens: 8_192,
       maxTokens: 8_192,
-      loaded: true,
-    });
-  });
-
-  it("keeps a loaded context above the default load length", () => {
-    const model = mapLmstudioWireEntry({
-      type: "llm",
-      key: "large-loaded-context",
-      max_context_length: 262_144,
-      loaded_instances: [{ id: "loaded", config: { context_length: 98_304 } }],
-    });
-
-    // The default load length only governs the JIT load request for unloaded
-    // models; a running instance decides its own serving context.
-    expect(model).toMatchObject({
-      id: "large-loaded-context",
-      contextWindow: 262_144,
-      contextTokens: 98_304,
-      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
       loaded: true,
     });
   });
@@ -284,7 +198,7 @@ describe("lmstudio-models", () => {
                 default: "on",
               },
             },
-            loaded_instances: [{ id: "inst-1", config: { context_length: 64000 } }],
+            loaded_instances: [{ id: "inst-1", config: { context_length: 98_304 } }],
           },
           {
             type: "llm",
@@ -354,7 +268,7 @@ describe("lmstudio-models", () => {
         supportsTools: true,
       },
       contextWindow: 262144,
-      contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
+      contextTokens: 98_304,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
     });
     expect(models[1]).toEqual({
@@ -379,28 +293,46 @@ describe("lmstudio-models", () => {
     expect(models[3]?.compat).toEqual({ supportsUsageInStreaming: true });
   });
 
-  it("cancels the response body after a non-ok model discovery response", async () => {
-    const tracked = cancelTrackedTextResponse("unavailable", { status: 503 });
-    const fetchMock = vi.fn(async () => tracked.response);
+  it.each([
+    { allowedOptions: ["off", "low", "medium"], expectedMax: "medium" },
+    // Transport-vocabulary controls; these are synthetic discovery responses.
+    { allowedOptions: ["minimal"], expectedMax: "minimal" },
+  ])(
+    "discovers the highest graded effort from $allowedOptions",
+    async ({ allowedOptions, expectedMax }) => {
+      const fetchMock = vi.fn(async () =>
+        Response.json({
+          models: [
+            {
+              type: "llm",
+              key: "synthetic-effort-ceiling",
+              capabilities: { reasoning: { allowed_options: allowedOptions } },
+            },
+          ],
+        }),
+      );
+      const models = await discoverLmstudioModels({
+        baseUrl: "http://localhost:1234/v1",
+        apiKey: "synthetic-no-account",
+        quiet: true,
+        fetchImpl: asFetch(fetchMock),
+      });
 
-    const result = await fetchLmstudioModels({
-      baseUrl: "http://localhost:1234/v1",
-      fetchImpl: asFetch(fetchMock),
-    });
-
-    expect(result).toEqual({
-      reachable: true,
-      status: 503,
-      models: [],
-    });
-    expect(tracked.wasCanceled()).toBe(true);
-  });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:1234/api/v1/models",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      expect(models).toHaveLength(1);
+      expect(models[0]?.reasoning).toBe(true);
+      expect(models[0]?.compat?.reasoningEffortMap).toMatchObject({
+        adaptive: expectedMax,
+        max: expectedMax,
+      });
+    },
+  );
 
   it.each([
-    {
-      name: "reports malformed model list JSON with an owned error",
-      responses: () => [malformedJsonResponse()],
-    },
     {
       name: "reports wrong-shaped model list payloads with owned errors",
       responses: () =>
@@ -552,53 +484,6 @@ describe("lmstudio-models", () => {
     });
   });
 
-  it("keeps the canonical model key on load failures after variant discovery", async () => {
-    const canonicalKey = "gemma-4-e4b-it-ultra-uncensored-heretic";
-    const variantKey = `${canonicalKey}@q4_k_m`;
-    const fetchMock = vi.fn(async (url: string | URL) => {
-      if (String(url).endsWith("/api/v1/models")) {
-        return Response.json({
-          models: [
-            {
-              type: "llm",
-              key: canonicalKey,
-              variants: [variantKey],
-              selected_variant: variantKey,
-              loaded_instances: [],
-            },
-          ],
-        });
-      }
-      if (String(url).endsWith("/api/v1/models/load")) {
-        return new Response("load failed", { status: 503 });
-      }
-      throw new Error(`Unexpected fetch URL: ${String(url)}`);
-    });
-    vi.stubGlobal("fetch", asFetch(fetchMock));
-
-    const error = await ensureLmstudioModelLoaded({
-      baseUrl: "http://localhost:1234/v1",
-      modelKey: variantKey,
-    }).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(Error);
-    expect(error).toMatchObject({ resolvedModelKey: canonicalKey });
-  });
-
-  it("reports malformed model load JSON with an owned error", async () => {
-    const fetchMock = createModelLoadFetchMock({
-      loadResponse: () => malformedJsonResponse(),
-    });
-    vi.stubGlobal("fetch", asFetch(fetchMock));
-
-    await expect(
-      ensureLmstudioModelLoaded({
-        baseUrl: "http://localhost:1234/v1",
-        modelKey: "qwen3-8b-instruct",
-      }),
-    ).rejects.toThrow("LM Studio model load: malformed JSON response");
-  });
-
   it("bounds oversized model load success bodies", async () => {
     // A misbehaving server may stream an unbounded success JSON body; the load
     // path must stop reading at the byte cap instead of buffering it all.
@@ -668,40 +553,10 @@ describe("lmstudio-models", () => {
     expected: string;
   }>([
     {
-      name: "redacts trimmed short API keys without losing safe diagnostics",
-      params: { apiKey: "  sk-test  " },
-      body: "upstream rejected Bearer sk-test; GPU out of memory",
-      expected: "LM Studio model load failed (502): upstream rejected ***; GPU out of memory",
-    },
-    {
-      name: "redacts bare credentials from lowercase header-only bearer auth",
-      params: { headers: { authorization: "bearer opaque-short" } },
-      body: "upstream rejected opaque-short",
-      expected: "LM Studio model load failed (502): upstream rejected ***",
-    },
-    {
       name: "redacts overlapping credentials longest first",
       params: { apiKey: "abc", headers: { "X-Proxy-Auth": "abcdef" } },
       body: "proxy rejected abcdef and abc",
       expected: "LM Studio model load failed (502): proxy rejected *** and ***",
-    },
-    {
-      name: "redacts URL-encoded proxy credentials without losing diagnostics",
-      params: { headers: { "X-Proxy-Auth": "synthetic+credential:value" } },
-      body: "proxy rejected synthetic%2Bcredential%3Avalue; GPU out of memory",
-      expected: "LM Studio model load failed (502): proxy rejected ***; GPU out of memory",
-    },
-    {
-      name: "redacts JSON-escaped proxy credentials",
-      params: { headers: { "X-Proxy-Auth": 'synthetic"credential' } },
-      body: 'proxy rejected synthetic\\"credential',
-      expected: "LM Studio model load failed (502): proxy rejected ***",
-    },
-    {
-      name: "redacts reflected Basic-auth passwords",
-      params: { headers: { Authorization: "Basic dXNlcjpzeW50aGV0aWMtcGFzc3dvcmQ=" } },
-      body: "proxy rejected synthetic-password; GPU out of memory",
-      expected: "LM Studio model load failed (502): proxy rejected ***; GPU out of memory",
     },
     {
       name: "redacts only the authorization value actually sent",

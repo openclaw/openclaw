@@ -1,30 +1,36 @@
 // #143821: prompt-build hook context must carry the turn's typed input provenance so
 // plugins can distinguish inter-session deliveries from human messages.
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import type { PluginHookBeforePromptBuildResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  createSubagentRunRecord,
+  markPendingFinalDelivery,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import { testing as announceTesting } from "../../subagents/announce/subagent-announce-output.test-support.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../../subagents/registry/subagent-lifecycle-events.js";
 import {
   createLifecycleControllerFixture,
   installLifecycleWorkerAckFixture,
 } from "../../subagents/registry/subagent-registry-lifecycle-controller.test-support.js";
-import { markPendingFinalDelivery } from "../../subagents/registry/subagent-registry-lifecycle-delivery.js";
 import { mutateSubagentRuns } from "../../subagents/registry/subagent-registry-persistence.js";
 import { createSubagentRegistryPublicApi } from "../../subagents/registry/subagent-registry-public-api.js";
 import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
-import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 vi.mock("../../../plugins/host-hook-state.js", () => ({
@@ -50,6 +56,7 @@ vi.mock("../../subagents/registry/subagent-registry-terminal-effects.js", () => 
 registerAgentSessionLoopTestLifecycle();
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   vi.restoreAllMocks();
   steeringMocks.lease.mockReset().mockResolvedValue(undefined);
 });
@@ -57,6 +64,7 @@ beforeEach(() => {
 afterEach(() => {
   announceTesting.setDepsForTest();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
 });
 
 async function assembleWithCapturedHookCtx(
@@ -73,8 +81,10 @@ async function assembleWithCapturedHookCtx(
     requiresToolAuthority?: true;
   } = {},
 ) {
+  const config = attemptOverrides?.config ?? {};
+  setRuntimeConfigSnapshot(config);
   const { session, sessionManager, modelRegistry } = await createTestSession();
-  const admission = prepareSystemAgentRunAdmission({}, runId, "main", "provenance-hook-test");
+  const admission = prepareSystemAgentRunAdmission(config, runId, "main", "provenance-hook-test");
   onTestFinished(() => {
     admission.close();
     forgetPromptBuildDrainCacheForRun(runId);
@@ -84,7 +94,7 @@ async function assembleWithCapturedHookCtx(
     authStorage: modelRegistry.authStorage,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry,
-    config: {},
+    config,
     model: testModel,
     modelId: testModel.id,
     provider: testModel.provider,
@@ -217,12 +227,14 @@ describe("prompt-build hook context input provenance", () => {
 });
 
 it("injects complete lifecycle results into requester prompts and acknowledges one whole item", async () => {
+  setRuntimeConfigSnapshot({});
   const requesterSessionKey = "agent:main:steering-requester";
   const answers = [`${"<result>".repeat(2_100)}required first tail`, "later child result"];
   const children: SubagentRunRecord[] = answers.map((_answer, index) =>
     createSubagentRunRecord({
       runId: `child-run-${index}`,
       childSessionKey: `agent:main:subagent:steering-${index}`,
+      childSessionIdentity: { sessionId: `child-session-${index}` },
       requesterSessionKey,
       requesterDisplayKey: "main",
       task: "Return the complete findings",

@@ -103,7 +103,6 @@ describe("node workspace credential revocation", () => {
           environmentId: record.environmentId,
           ownerEpoch: record.ownerEpoch,
           sessionId: "session-publication",
-          generation: 1,
           localPath,
           isAuthorized: () => true,
         });
@@ -226,7 +225,6 @@ describe("node workspace credential revocation", () => {
         environmentId: record.environmentId,
         ownerEpoch: record.ownerEpoch,
         sessionId: "session-transfer",
-        generation: 1,
         localPath,
         isAuthorized: () => true,
         signal: ownerSignal.signal,

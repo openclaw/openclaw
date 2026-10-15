@@ -39,12 +39,14 @@ type PortalToolOutcome =
 export function formatPortalResult(
   outcome: PortalToolOutcome,
 ): AgentToolResult<PortalSummary | PortalListResult | PortalCloseResult> {
+  const loopbackWarning =
+    "Loopback-only portal: access is local to the Gateway host, even when the app runs on a worker. For a remote viewer, configure private portal ingress or a reachable direct listener; local use is still valid.";
   const text =
     outcome.action === "open"
-      ? `Portal route allocated at ${outcome.result.url}. Pass PUBLIC_URL=${outcome.result.publicUrl} and PORT=${outcome.result.port} when starting the dev server. Open it in the Control UI Portals page to verify browser access and application rendering; allocation does not prove either. Remote access requires private portal ingress or a reachable direct listener.`
+      ? `${outcome.result.exposure?.kind === "loopback-only" ? `${loopbackWarning} ` : ""}Portal route allocated at ${outcome.result.url}. Pass PUBLIC_URL=${outcome.result.publicUrl} and PORT=${outcome.result.port} when starting the dev server on the selected environment. Browser access and application rendering remain unverified from the requesting viewer; allocation or a worker/Gateway browser test is not delivery proof. Use the returned URLs unchanged.`
       : outcome.action === "list"
-        ? `${outcome.result.portals.length} active portal${outcome.result.portals.length === 1 ? "" : "s"}. The operator can see them in the Control UI Portals page.`
-        : `Portal ${outcome.id} closed. The Control UI Portals page has been updated.`;
+        ? `${outcome.result.portals.some((portal) => portal.exposure?.kind === "loopback-only") ? `${loopbackWarning} ` : ""}${outcome.result.portals.length} active portal${outcome.result.portals.length === 1 ? "" : "s"}. Inspect each portal's exposure facts; browser access and application rendering remain unverified from the requesting viewer. The Control UI Portals page lists the routes.`
+        : `Portal ${outcome.id}: ${outcome.result.closed ? "closed" : "not closed"}.`;
   const result = jsonResult(outcome.result);
   return { ...result, content: [{ type: "text", text }, ...result.content] };
 }
@@ -90,20 +92,18 @@ export function createAvailablePortalTools(
             ? { environmentId }
             : {};
         if (action === "list") {
-          if (target) {
-            const result = await callGateway<PortalListResult>("portal.session.list", environment);
-            target.assertCurrent();
-            return formatPortalResult({ action: "list", result });
-          }
           // portal.list redacts the bearer URL for read-scope callers. Least-privilege
           // resolution would make every list call read-scope, hiding the URL from a
           // caller that can mint the same portal through action=open; ask with the
           // write authority this tool already requires so the listing stays usable.
-          const result = await callGatewayRequest<PortalListResult>({
-            method: "portal.list",
-            params: environment,
-            scopes: [PORTAL_URL_SCOPE],
-          });
+          const result = target
+            ? await callGateway<PortalListResult>("portal.session.list", environment)
+            : await callGatewayRequest<PortalListResult>({
+                method: "portal.list",
+                params: environment,
+                scopes: [PORTAL_URL_SCOPE],
+              });
+          target?.assertCurrent();
           return formatPortalResult({ action: "list", result });
         }
         if (action === "close") {

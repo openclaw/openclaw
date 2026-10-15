@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
 import {
   catalogPage,
   createGateway,
@@ -9,10 +10,66 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import { settleRoster } from "./roster.test-support.ts";
 
 describe("AppSidebar session catalog ownership", () => {
+  it("ignores excluded catalog activity while admitting visible rows, errors, and pagination", async () => {
+    const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
+    const bob = { type: "human", id: "profile-bob", label: "Bob" } as const;
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    sessions.sessions.state.result!.owners = [ada, bob];
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      sessions.sessions,
+    );
+    const page = catalogPage([{ threadId: "own-thread", name: "Own session" }]);
+    const catalog = page.catalogs[0]!;
+    catalog.hosts[0]!.sessions[0]!.createdActor = ada;
+    const excluded = catalogPage([{ threadId: "other-thread", name: "Excluded session" }])
+      .catalogs[0]!.hosts[0]!;
+    excluded.hostId = "gateway:other";
+    excluded.sessions[0]!.createdActor = bob;
+    catalog.hosts.push(excluded);
+    const publish = async () => {
+      sidebar.sessionData.sessionCatalogs = structuredClone(page.catalogs);
+      sidebar.sessionData.requestSessionDataUpdate();
+      await settleRoster(sidebar);
+    };
+    await publish();
+    sidebar.setSessionOwnerFilter(ada.id);
+    await settleRoster(sidebar);
+    expect(sidebar.textContent).toContain("Own session");
+    expect(sidebar.textContent).not.toContain("Excluded session");
+    const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
+
+    excluded.sessions[0]!.name = "Excluded latest title";
+    excluded.sessions[0]!.updatedAt = Date.now();
+    await publish();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(sidebar.textContent).not.toContain("Excluded latest title");
+
+    catalog.hosts[0]!.sessions[0]!.name = "Own latest title";
+    await publish();
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(sidebar.textContent).toContain("Own latest title");
+
+    excluded.error = { code: "UNAVAILABLE", message: "Another host is unavailable" };
+    await publish();
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(
+      sidebar
+        .querySelector('[data-session-section="catalog:codex"] .sidebar-session-group-toggle')
+        ?.getAttribute("aria-label"),
+    ).toContain("Another host is unavailable");
+
+    excluded.nextCursor = "next-owner-filtered-page";
+    await publish();
+    expect(prepare).toHaveBeenCalledTimes(3);
+    expect(sidebar.querySelector(".sidebar-session-catalog-load-more")).not.toBeNull();
+  });
+
   it.each([false, true])(
     "omits the lone Other header when owner filtering hides every catalog row (adopted: %s)",
     async (adopted) => {
@@ -43,7 +100,7 @@ describe("AppSidebar session catalog ownership", () => {
       page.catalogs[0]!.error = { code: "UNAVAILABLE", message: "Another host is unavailable" };
       sidebar.sessionData.sessionCatalogs = page.catalogs;
       sidebar.sessionData.requestSessionDataUpdate();
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       const header = () =>
         sidebar.querySelector('[data-session-section="ungrouped"] .sidebar-recent-sessions__head');
       expect(header()).not.toBeNull();
@@ -122,7 +179,6 @@ describe("AppSidebar session catalog ownership", () => {
         expect(sidebar.textContent).toContain("Retired page");
         expect(sidebar.querySelector(".sidebar-session-catalog-new")).not.toBeNull();
         expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(1);
-        expect(sidebar.sessionData.sessionCatalogRevisions.size).toBe(1);
 
         gateway.publish({ phase: "reconnecting", hello: null });
         await sidebar.updateComplete;
@@ -143,7 +199,6 @@ describe("AppSidebar session catalog ownership", () => {
         expect(sidebar.sessionData.sessionCatalogAgentId).toBeNull();
         expect(sidebar.sessionData.sessionCatalogs).toEqual([]);
         expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(0);
-        expect(sidebar.sessionData.sessionCatalogRevisions.size).toBe(0);
         expect(sidebar.textContent).not.toContain("Retired session");
         expect(sidebar.textContent).not.toContain("Retired page");
         expect(sidebar.querySelector(".sidebar-session-catalog-new")).toBeNull();

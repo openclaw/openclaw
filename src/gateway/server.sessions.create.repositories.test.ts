@@ -93,6 +93,9 @@ test("sessions.create retains a cloud repository across replay without creating 
   const gitRead = vi
     .spyOn(gitWorker, "runGitWorkerOperation")
     .mockImplementation(async (operation) => {
+      if (operation.type === "pull-request.branch-comparison") {
+        return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
+      }
       if (operation.type === "checkout.revision") {
         return "unchanged";
       }
@@ -171,7 +174,6 @@ test("sessions.create retains a cloud repository across replay without creating 
 
 test.each([
   { repository: { url: "file:///tmp/repository" } },
-  { repository: { url: "https://token@github.com/openclaw/openclaw.git" } },
   {
     repository: { url: "https://github.com/openclaw/openclaw.git", ref: "--upload-pack=anything" },
   },

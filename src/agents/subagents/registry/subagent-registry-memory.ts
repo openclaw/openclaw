@@ -5,10 +5,12 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+} from "./subagent-child-owner-match.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
@@ -61,13 +63,77 @@ export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(rec
   return record;
 }
 
+class SubagentRunIndex extends Map<string, Map<string, SubagentRunRecord>> {
+  private readonly latest = new Map<string, SubagentRunRecord>();
+
+  constructor(private readonly keyFor: (entry: SubagentRunRecord) => string | undefined) {
+    super();
+  }
+
+  update(runId: string, entry: SubagentRunRecord, operation: "add" | "remove"): void {
+    const key = this.keyFor(entry);
+    if (!key) {
+      return;
+    }
+    const indexedRuns = this.get(key);
+    if (operation === "remove") {
+      if (indexedRuns?.get(runId) !== entry) {
+        return;
+      }
+      indexedRuns.delete(runId);
+      if (indexedRuns.size === 0) {
+        this.delete(key);
+        this.latest.delete(key);
+      } else if (this.latest.get(key) === entry) {
+        for (const remaining of indexedRuns.values()) {
+          this.latest.set(key, remaining);
+        }
+      }
+    } else {
+      if (indexedRuns) {
+        indexedRuns.set(runId, entry);
+      } else {
+        this.set(key, new Map([[runId, entry]]));
+      }
+      this.latest.set(key, entry);
+    }
+  }
+
+  getLatest(key: string): SubagentRunRecord | undefined {
+    return this.latest.get(key);
+  }
+
+  override clear(): void {
+    super.clear();
+    this.latest.clear();
+  }
+}
+
 // Preflight consults the collector lookup on every Gateway agent request, so it
 // must stay O(1) regardless of retained collector records. The map subclass
 // maintains the index whenever the row owner publishes a new immutable value.
-const collectorRunIdByChildSessionKey = new Map<string, string>();
-const runsByChildSessionKey = new Map<string, Map<string, SubagentRunRecord>>();
-const runsByRequesterSessionKey = new Map<string, Map<string, SubagentRunRecord>>();
-const runsByCollectorGroupKey = new Map<string, Map<string, SubagentRunRecord>>();
+const collectorsByChildSessionOwner = new SubagentRunIndex((entry) =>
+  entry.collect === true ? childSessionOwnerKey(entry) : undefined,
+);
+const childSessionCandidatesByKey = new SubagentRunIndex((entry) => entry.childSessionKey);
+const runsByChildSessionOwner = new SubagentRunIndex(childSessionOwnerKey);
+const runsByRequesterSessionKey = new SubagentRunIndex((entry) => entry.requesterSessionKey);
+const runsByCollectorGroupKey = new SubagentRunIndex(collectorGroupKey);
+const runIndexes = [
+  collectorsByChildSessionOwner,
+  childSessionCandidatesByKey,
+  runsByChildSessionOwner,
+  runsByRequesterSessionKey,
+  runsByCollectorGroupKey,
+];
+
+function childSessionOwnerKey(entry: {
+  childSessionKey: string;
+  childAgentId?: string;
+}): string | undefined {
+  const owner = resolveSubagentChildAgentId(entry);
+  return owner ? JSON.stringify([owner, entry.childSessionKey]) : undefined;
+}
 
 function collectorGroupKey(entry: SubagentRunRecord): string | undefined {
   if (entry.collect !== true || !entry.groupId) {
@@ -77,42 +143,6 @@ function collectorGroupKey(entry: SubagentRunRecord): string | undefined {
     entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
     entry.groupId,
   ]);
-}
-
-function removeIndexedSubagentRun(
-  index: Map<string, Map<string, SubagentRunRecord>>,
-  key: string | undefined,
-  runId: string,
-  entry: SubagentRunRecord,
-) {
-  if (!key) {
-    return;
-  }
-  const indexedRuns = index.get(key);
-  if (indexedRuns?.get(runId) !== entry) {
-    return;
-  }
-  indexedRuns.delete(runId);
-  if (indexedRuns.size === 0) {
-    index.delete(key);
-  }
-}
-
-function indexSubagentRun(
-  index: Map<string, Map<string, SubagentRunRecord>>,
-  key: string | undefined,
-  runId: string,
-  entry: SubagentRunRecord,
-) {
-  if (!key) {
-    return;
-  }
-  const indexedRuns = index.get(key);
-  if (indexedRuns) {
-    indexedRuns.set(runId, entry);
-  } else {
-    index.set(key, new Map([[runId, entry]]));
-  }
 }
 
 type SubagentRetirementScope = {
@@ -310,11 +340,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   /** Committed replacement transfers custody without reviving a retired source. */
   transferCompletionAuthority(previous: SubagentRunRecord, next: SubagentRunRecord): void {
     transferFollowupCohort(previous, next);
-    if (this.retiredCompletionEntries.has(getSubagentRunRuntimeKey(previous))) {
-      this.retiredCompletionEntries.add(getSubagentRunRuntimeKey(next));
-    }
-    if (this.operatorCompletionEntries.has(getSubagentRunRuntimeKey(previous))) {
-      this.operatorCompletionEntries.add(getSubagentRunRuntimeKey(next));
+    for (const entries of [this.retiredCompletionEntries, this.operatorCompletionEntries]) {
+      if (entries.has(getSubagentRunRuntimeKey(previous))) {
+        entries.add(getSubagentRunRuntimeKey(next));
+      }
     }
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(previous));
     if (!custody) {
@@ -531,20 +560,14 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       this.publishRuntimeOwner(prev, entry);
     }
     if (prev) {
-      removeIndexedSubagentRun(runsByChildSessionKey, prev.childSessionKey, runId, prev);
-      removeIndexedSubagentRun(runsByRequesterSessionKey, prev.requesterSessionKey, runId, prev);
-      removeIndexedSubagentRun(runsByCollectorGroupKey, collectorGroupKey(prev), runId, prev);
-      if (prev.collect === true && prev.childSessionKey) {
-        collectorRunIdByChildSessionKey.delete(prev.childSessionKey);
+      for (const index of runIndexes) {
+        index.update(runId, prev, "remove");
       }
     }
     super.set(runId, entry);
     this.readLookup.set(runId, entry);
-    indexSubagentRun(runsByChildSessionKey, entry.childSessionKey, runId, entry);
-    indexSubagentRun(runsByRequesterSessionKey, entry.requesterSessionKey, runId, entry);
-    indexSubagentRun(runsByCollectorGroupKey, collectorGroupKey(entry), runId, entry);
-    if (entry.collect === true && entry.childSessionKey) {
-      collectorRunIdByChildSessionKey.set(entry.childSessionKey, runId);
+    for (const index of runIndexes) {
+      index.update(runId, entry, "add");
     }
     return this;
   }
@@ -553,16 +576,9 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     this.readLookup.set(runId, undefined);
     const prev = this.get(runId);
     if (prev) {
-      removeIndexedSubagentRun(runsByChildSessionKey, prev.childSessionKey, runId, prev);
-      removeIndexedSubagentRun(runsByRequesterSessionKey, prev.requesterSessionKey, runId, prev);
-      removeIndexedSubagentRun(runsByCollectorGroupKey, collectorGroupKey(prev), runId, prev);
-    }
-    if (
-      prev?.collect === true &&
-      prev.childSessionKey &&
-      collectorRunIdByChildSessionKey.get(prev.childSessionKey) === runId
-    ) {
-      collectorRunIdByChildSessionKey.delete(prev.childSessionKey);
+      for (const index of runIndexes) {
+        index.update(runId, prev, "remove");
+      }
     }
     return super.delete(runId);
   }
@@ -583,10 +599,9 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     this.retirementScopes.clear();
     super.clear();
     this.readLookup = new SubagentSessionReadLookup();
-    collectorRunIdByChildSessionKey.clear();
-    runsByChildSessionKey.clear();
-    runsByRequesterSessionKey.clear();
-    runsByCollectorGroupKey.clear();
+    for (const index of runIndexes) {
+      index.clear();
+    }
     publishSubagentRunChanges();
   }
 }
@@ -604,7 +619,7 @@ subscribeSubagentRunChanges("projection", ({ runIds: ids }) => {
   }
 });
 
-export function getSubagentSessionReadLookup(runs: Map<string, SubagentRunRecord>) {
+export function getSubagentSessionReadLookup(runs: ReadonlyMap<string, SubagentRunRecord>) {
   return runs instanceof SubagentRunMap ? runs.readLookup : new SubagentSessionReadLookup(runs);
 }
 
@@ -623,16 +638,19 @@ export function getCurrentSubagentRunOwner(
   return undefined;
 }
 
+export function getSubagentChildSessionCandidates(
+  childSessionKey: string,
+): Iterable<SubagentRunRecord> {
+  return childSessionCandidatesByKey.get(childSessionKey)?.values() ?? [];
+}
+
 /** Iterate live generations for one child session without scanning the registry. */
 export function* getSubagentRunsForChildSession(
   childSessionKey: string,
   childAgentId?: string,
 ): Iterable<SubagentRunRecord> {
-  for (const entry of runsByChildSessionKey.get(childSessionKey)?.values() ?? []) {
-    if (matchesSubagentChildSessionOwner(entry, childSessionKey, childAgentId)) {
-      yield entry;
-    }
-  }
+  const key = childSessionOwnerKey({ childSessionKey, childAgentId });
+  yield* (key ? runsByChildSessionOwner.get(key)?.values() : undefined) ?? [];
 }
 
 /** Current requester-owned generations, without restoring or scanning retained rows. */
@@ -664,17 +682,8 @@ export function findSwarmCollectorSession(
   if (!key) {
     return undefined;
   }
-  if (childAgentId !== undefined && !parseAgentSessionKey(key)) {
-    let collector: SubagentRunRecord | undefined;
-    for (const entry of getSubagentRunsForChildSession(key, childAgentId)) {
-      if (entry.collect === true) {
-        collector = entry;
-      }
-    }
-    return collector;
-  }
-  const runId = collectorRunIdByChildSessionKey.get(key);
-  return runId ? subagentRuns.get(runId) : undefined;
+  const ownerKey = childSessionOwnerKey({ childSessionKey: key, childAgentId });
+  return ownerKey ? collectorsByChildSessionOwner.getLatest(ownerKey) : undefined;
 }
 
 /** Resolve the host-registered collector that authorizes a Gateway request. */

@@ -8,10 +8,11 @@ import {
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { onUserProfilesChanged } from "./user-profile-events.js";
-import { readUserProfileIdentity, retainUserProfileCatalog } from "./user-profile-list.js";
+import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
+import { readResidentUserProfileIdentity, prepareUserProfileCatalog } from "./user-profile-list.js";
 import { setCanonicalUserProfileRole } from "./user-profile-writes.js";
 import { setUserProfileRole } from "./user-profile-writes.worker.js";
-import { ensureProfileForEmail, getUserProfileRole } from "./user-profiles.js";
+import { ensureProfileForEmail } from "./user-profiles.js";
 
 const delivery = vi.hoisted(() => ({
   afterResult: undefined as ((index: number) => Promise<void>) | undefined,
@@ -65,7 +66,7 @@ it.each(["ordered", "reversed", "recovery first", "native successor", "native AB
     let release = () => {};
     try {
       const profile = ensureProfileForEmail("role-order@example.test");
-      release = retainUserProfileCatalog();
+      release = (await prepareUserProfileCatalog()).release;
       delivery.afterResult = async (index) => {
         const gate = gates[index]!;
         gate.received.resolve();
@@ -106,8 +107,8 @@ it.each(["ordered", "reversed", "recovery first", "native successor", "native AB
           });
         }
       }
-      expect(getUserProfileRole(profile.id)).toBe(expected);
-      expect(readUserProfileIdentity(profile.id)?.role).toBe(expected);
+      expect(getUserProfileListItem(profile.id).role ?? null).toBe(expected);
+      expect(readResidentUserProfileIdentity(profile.id)?.role).toBe(expected);
     } finally {
       for (const gate of gates) {
         gate.resume.resolve();
@@ -133,10 +134,10 @@ it.each(["delivered", "lost during close"] as const)(
     try {
       const profile = ensureProfileForEmail("role-placement@example.test");
       const pathname = openOpenClawStateDatabase().path;
-      release = retainUserProfileCatalog();
+      release = (await prepareUserProfileCatalog()).release;
       const observed: Array<string | null | undefined> = [];
       stop = onUserProfilesChanged(() => {
-        observed.push(readUserProfileIdentity(profile.id)?.role);
+        observed.push(readResidentUserProfileIdentity(profile.id)?.role);
       });
       if (reply === "lost during close") {
         delivery.afterResult = async () => {
@@ -158,8 +159,12 @@ it.each(["delivered", "lost during close"] as const)(
       }
       expect(observed).toEqual(["guest"]);
       vi.restoreAllMocks();
-      expect(readUserProfileIdentity(profile.id)?.role).toBe("guest");
-      expect(getUserProfileRole(profile.id)).toBe("guest");
+      if (reply === "lost during close") {
+        release();
+        release = (await prepareUserProfileCatalog()).release;
+      }
+      expect(readResidentUserProfileIdentity(profile.id)?.role).toBe("guest");
+      expect(getUserProfileListItem(profile.id).role).toBe("guest");
     } finally {
       vi.restoreAllMocks();
       await Promise.allSettled([closing]);

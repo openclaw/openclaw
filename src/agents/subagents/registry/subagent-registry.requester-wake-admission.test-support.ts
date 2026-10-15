@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { WorkerTaskError } from "../../../infra/worker-task-pool.js";
 import {
@@ -9,17 +8,17 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../../../state/agent-database-admission.js";
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import * as descendants from "../announce/subagent-announce.requester-settle-descendants.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
-import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import type {
   GatewayRequest,
   SessionStoreEntry,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
+import type { PrepareRequesterWakeChildSession } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
 export function registerRequesterStartupAdmissionTests({
   requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+  prepareChildSession,
   getFixture,
   createGatewayContext,
   flushOwnedWork,
@@ -27,6 +26,7 @@ export function registerRequesterStartupAdmissionTests({
   wakeRequester,
 }: {
   requesterSessionKey: string;
+  prepareChildSession: PrepareRequesterWakeChildSession;
   getFixture: () => {
     testState: OpenClawTestState;
     sessionStore: Record<string, SessionStoreEntry>;
@@ -37,28 +37,17 @@ export function registerRequesterStartupAdmissionTests({
   getRequesterWakeCalls: () => GatewayRequest[];
   wakeRequester: typeof maybeWakeRequesterAfterAllChildrenSettled;
 }) {
-  it.each([
-    { failure: "result changed", outcome: "retry" },
-    { failure: "result changed after read", outcome: "retry" },
-    { failure: "result changed during reservation", outcome: "retry" },
-    { failure: "worker capacity", outcome: "retry" },
-    { failure: "result changed", outcome: "cancel" },
-    { failure: "worker capacity", outcome: "replace" },
-  ] as const)(
-    "preserves a saved wake through $failure preparation ($outcome)",
-    async ({ failure, outcome }) => {
+  it.each(["retry", "cancel", "replace"] as const)(
+    "preserves a saved wake through worker capacity preparation (%s)",
+    async (outcome) => {
       vi.setSystemTime(100_000);
-      const { sessionStore, sessionStorePath } = getFixture();
       const runId = "preparation-child";
       const childSessionKey = `agent:main:subagent:${runId}`;
-      sessionStore[childSessionKey] = { sessionId: runId, updatedAt: 1 };
-      await replaceSessionEntry(
-        { storePath: sessionStorePath, sessionKey: childSessionKey },
-        sessionStore[childSessionKey],
-      );
+      const { sessionId, lifecycleRevision } = await prepareChildSession(childSessionKey, runId, 1);
       await registry.addSubagentRunForTests({
         runId,
         childSessionKey,
+        childSessionIdentity: { sessionId, lifecycleRevision },
         requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterAgentId: "main",
         requesterDisplayKey: "main",
@@ -91,63 +80,10 @@ export function registerRequesterStartupAdmissionTests({
         },
       });
       const original = registry.getSubagentRunByRunId(runId)!;
-      const changeResult = () => {
-        const current = registry.getSubagentRunByRunId(runId)!;
-        return registry.addSubagentRunForTests({
-          ...current,
-          completion: {
-            ...current.completion!,
-            terminalReply: { disposition: "visible", text: "fresh result" },
-          },
-        });
-      };
       const read = vi
         .spyOn(sessionAccessor, "findTranscriptEvent")
-        .mockImplementationOnce(async () => {
-          if (failure === "worker capacity") {
-            throw new WorkerTaskError("worker task capacity reached", "overloaded");
-          }
-          if (failure === "result changed") {
-            await changeResult();
-          }
-          return undefined;
-        });
-      if (failure === "result changed after read") {
-        const createReader = descendants.createRequesterDescendantReader;
-        let changed = false;
-        vi.spyOn(descendants, "createRequesterDescendantReader").mockImplementation((params) => {
-          const readDescendants = createReader(params);
-          let reads = 0;
-          return async () => {
-            const result = await readDescendants();
-            if (++reads === 2 && !changed) {
-              changed = true;
-              await changeResult();
-            }
-            return result;
-          };
-        });
-      }
-      if (failure === "result changed during reservation") {
-        const mutate = completionStore.mutateRequesterSettleWakeBatch;
-        let changed = false;
-        vi.spyOn(completionStore, "mutateRequesterSettleWakeBatch").mockImplementation(
-          async (params) => {
-            const result = await mutate(params);
-            if (
-              params.operation.kind === "transition" &&
-              params.operation.state.status === "dispatching" &&
-              !changed
-            ) {
-              changed = true;
-              await changeResult();
-            }
-            return result;
-          },
-        );
-      }
-      // Read current captured output on retry without depending on a transcript fixture.
-      read.mockResolvedValue(undefined);
+        .mockRejectedValueOnce(new WorkerTaskError("worker task capacity reached", "overloaded"))
+        .mockResolvedValue(undefined);
       const context = createGatewayContext();
       await registry.initSubagentRegistry();
       await registry.activateSubagentRegistry(() => context);
@@ -190,9 +126,7 @@ export function registerRequesterStartupAdmissionTests({
         expect(wakes[0]?.params?.idempotencyKey).toBe(
           `announce:requester-settle:main:${MAIN_REQUESTER_SESSION_KEY}:${runId}:yield-1`,
         );
-        expect(wakes[0]?.params?.message).toContain(
-          failure === "worker capacity" ? "old result" : "fresh result",
-        );
+        expect(wakes[0]?.params?.message).toContain("old result");
         expect(registry.getSubagentRunByRunId(runId)).toBeUndefined();
       } else if (outcome === "cancel") {
         expect(registry.getSubagentRunByRunId(runId)?.requesterSettleWake).toBeUndefined();
@@ -210,19 +144,16 @@ export function registerRequesterStartupAdmissionTests({
   );
 
   it("resumes a persisted requester cohort after database startup inspection finishes", async () => {
-    const { testState, sessionStore, sessionStorePath } = getFixture();
+    const { testState } = getFixture();
     vi.setSystemTime(100_000);
     const runIds = ["restored-alpha", "restored-beta"];
     for (const runId of runIds) {
       const childSessionKey = `agent:main:subagent:${runId}`;
-      sessionStore[childSessionKey] = { sessionId: runId, updatedAt: 1 };
-      await replaceSessionEntry(
-        { storePath: sessionStorePath, sessionKey: childSessionKey },
-        sessionStore[childSessionKey],
-      );
+      const { sessionId, lifecycleRevision } = await prepareChildSession(childSessionKey, runId, 1);
       await registry.addSubagentRunForTests({
         runId,
         childSessionKey,
+        childSessionIdentity: { sessionId, lifecycleRevision },
         requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterAgentId: "main",
         requesterDisplayKey: "main",

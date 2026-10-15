@@ -16,6 +16,57 @@ import { renderUpdateRunReport } from "./update-run-report.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
+it.each(["failed", "succeeded", "skipped", "rolled-back"] as const)(
+  "enriches only failed terminal diagnostics without replacing the %s outcome",
+  (status) => {
+    const options = { env: { OPENCLAW_STATE_DIR: dirs.make("update-late-failure-") } };
+    const run = createUpdateRun({ trigger: "api" }, options);
+    const original = { check: "managed-service", code: "EACCES", message: "Permission denied" };
+    const late = { check: "managed-service", code: "handoff-permission-denied" };
+    recordUpdateRunStep(
+      run.runId,
+      {
+        step: "requested",
+        status: "failed",
+        detail: "original refusal",
+        exitCode: 7,
+        failureFacts: [original],
+      },
+      options,
+    );
+    const terminal = finishUpdateRun(run.runId, { status, reason: "original-outcome" }, options);
+    const append = () =>
+      recordUpdateRunDiagnostics(
+        run.runId,
+        {
+          failure: {
+            step: "requested",
+            detail: "late refusal",
+            exitCode: 9,
+            failureFacts: [original, late],
+          },
+        },
+        () => {
+          throw new Error("diagnostics were not recorded");
+        },
+        options,
+      );
+    const recorded = append();
+    expect(append()).toEqual(recorded);
+    expect(recorded).toMatchObject({
+      status,
+      reason: "original-outcome",
+      finishedAtMs: terminal.finishedAtMs,
+      steps: [
+        expect.objectContaining({
+          ...terminal.steps[0],
+          failureFacts: status === "failed" ? [original, late] : [original],
+        }),
+      ],
+    });
+  },
+);
+
 it("records serving health without replacing a persisted restart refusal", () => {
   const options = { env: { OPENCLAW_STATE_DIR: dirs.make("update-unsafe-observation-") } };
   const run = createUpdateRun({ trigger: "cli" }, options);

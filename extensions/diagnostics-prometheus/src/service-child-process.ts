@@ -3,7 +3,7 @@ import { asNonNegativeFiniteNumber as numericValue } from "openclaw/plugin-sdk/n
 import type { DiagnosticEventPayload } from "../api.js";
 import type { PrometheusMetricStore } from "./prometheus-metric-store.js";
 
-/** Git launches carry a bounded owner label; every other executable family reports `none`. */
+/** Git owners and SQLite session transports carry bounded operation labels. */
 export function recordChildProcessSpawn(
   store: PrometheusMetricStore,
   evt: Extract<DiagnosticEventPayload, { type: "diagnostic.child_process.spawn" }>,

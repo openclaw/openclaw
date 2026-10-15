@@ -215,10 +215,7 @@ class I18nManager {
 
   public t(key: string, params?: Record<string, string>): string {
     const keys = key.split(".");
-    let value = lookupTranslation(
-      this.translations[this.locale] || this.translations[DEFAULT_LOCALE],
-      keys,
-    );
+    let value = lookupTranslation(this.translations[this.locale], keys);
     if (value === undefined && this.locale !== DEFAULT_LOCALE) {
       value = lookupTranslation(this.translations[DEFAULT_LOCALE], keys);
     }

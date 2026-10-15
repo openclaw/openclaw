@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ISyncData, IRooms, IStoredClientOpts } from "matrix-js-sdk/lib/matrix.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -176,17 +177,13 @@ function isSyncCacheMeta(value: unknown): value is MatrixSyncCacheMeta {
     value.version === MATRIX_SYNC_CACHE_VERSION &&
     typeof value.generation === "string" &&
     value.generation.trim() !== "" &&
-    typeof value.chunkCount === "number" &&
-    Number.isSafeInteger(value.chunkCount) &&
-    value.chunkCount >= 0 &&
-    value.chunkCount <= SYNC_CACHE_MAX_CHUNKS
+    asSafeIntegerInRange(value.chunkCount, { min: 0, max: SYNC_CACHE_MAX_CHUNKS }) !== undefined
   );
 }
 
 function buildSyncCacheRows(payload: PersistedMatrixSyncStore): {
   meta: { key: string; value: MatrixSyncCacheMeta };
   chunks: { key: string; value: MatrixSyncCacheChunk }[];
-  nextChunkKeys: Set<string>;
 } {
   const generation = randomUUID().replaceAll("-", "");
   const syncJson = payload.savedSync ? JSON.stringify(payload.savedSync) : "";
@@ -206,7 +203,6 @@ function buildSyncCacheRows(payload: PersistedMatrixSyncStore): {
   }));
   return {
     chunks,
-    nextChunkKeys: new Set(chunks.map((chunk) => chunk.key)),
     meta: {
       key: SYNC_CACHE_META_KEY,
       value: {

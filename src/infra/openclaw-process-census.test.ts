@@ -514,6 +514,123 @@ it.each([
 const references = { runId: "update-run-123", artifactPaths: ["/tmp/retained runtime"] };
 const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
 
+it.each(["/usr/lib/systemd/systemd", "/lib/systemd/systemd"])(
+  "does not let the user manager pin abandoned runtimes when cwd is denied (%s)",
+  (executable) => {
+    rows.set(peer, { ppid: 1, argv: [executable, "--user"], uid: 1000, cwd: denied() });
+    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+    rows.get(peer)!.cwd = "/tmp/openclaw-update-runtime-Ab1234";
+    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
+    rows.get(peer)!.cwd = denied();
+    rows.get(peer)!.argv.push("/tmp/openclaw-update-runtime-Ab1234");
+    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
+  },
+);
+
+it("excludes only the same-account PAM helper of a standard user manager", () => {
+  rows.set(peer, {
+    ppid: 1,
+    argv: ["/usr/lib/systemd/systemd", "--user"],
+    uid: 1000,
+    cwd: denied(),
+  });
+  rows.set(peer + 1, { ppid: peer, argv: ["(sd-pam)"], uid: 1000, cwd: denied() });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+  rows.get(peer + 1)!.cwd = "/tmp/openclaw-update-runtime-Ab1234";
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer + 1] });
+  rows.get(peer + 1)!.cwd = denied();
+  rows.get(peer + 1)!.ppid = 1;
+  expect(inspectOtherOpenClawProcesses()).toEqual({
+    error: expect.stringContaining(
+      `Could not classify PID ${peer + 1}: working directory is unavailable`,
+    ),
+  });
+});
+
+it("does not let protected systemd login processes block update-repair evidence", () => {
+  rows.set(peer, {
+    ppid: 1,
+    argv: ["/usr/lib/systemd/systemd", "--user"],
+    uid: 1000,
+    cwd: denied(),
+  });
+  rows.set(peer + 1, { ppid: peer, argv: ["(sd-pam)"], uid: 1000, cwd: denied() });
+  const handoffRefs = {
+    runId: "systemd-update-run",
+    artifactPaths: ["/tmp/openclaw-update-runtime-Ab1234"],
+  };
+  expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
+    matchingPids: [],
+    unverifiedPids: [],
+  });
+  rows.get(peer + 1)!.cwd = handoffRefs.artifactPaths[0];
+  expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
+    matchingPids: [peer + 1],
+    unverifiedPids: [],
+  });
+  rows.get(peer + 1)!.cwd = denied();
+  rows.get(peer + 1)!.ppid = 1;
+  expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
+    matchingPids: [],
+    unverifiedPids: [peer + 1],
+  });
+});
+
+it.each(["foreign", "same", "unknown process", "unknown inspector"])(
+  "requires a positively foreign UID to exclude systemd with denied cwd (%s)",
+  (owner) => {
+    rows.set(1, {
+      ppid: 0,
+      argv: ["/usr/lib/systemd/systemd", "--system"],
+      uid: owner === "same" ? 1000 : 0,
+      cwd: denied(),
+    });
+    if (owner === "unknown process") {
+      const inspect = read.getMockImplementation()!;
+      read.mockImplementation((file: string) => {
+        if (file === "/proc/1/status") {
+          throw denied();
+        }
+        return inspect(file);
+      });
+    } else if (owner === "unknown inspector") {
+      Reflect.deleteProperty(process, "getuid");
+    }
+    expect(inspectOtherOpenClawProcesses()).toEqual(
+      owner === "foreign"
+        ? { pids: [] }
+        : {
+            error: expect.stringContaining(
+              "Could not classify PID 1: working directory is unavailable",
+            ),
+          },
+    );
+  },
+);
+
+it.each([
+  ["node", "--eval", "1"],
+  ["bun", "run", "--silent", "start"],
+  ["tsx", "--foreign-runtime-option", "watch", "worker.ts"],
+])("keeps foreign runtime custody unresolved without cwd for %j", (...argv) => {
+  rows.set(peer, { ppid: 1, argv, uid: 0, cwd: denied() });
+  expect(inspectOtherOpenClawProcesses()).toEqual({
+    error: expect.stringContaining(
+      `Could not classify PID ${peer}: working directory is unavailable`,
+    ),
+  });
+});
+
+it.each([
+  { argv: ["/usr/bin/worker", "/tmp/openclaw-update-runtime-Ab1234/tree/worker.js"] },
+  { argv: ["/usr/bin/worker"], cwd: "/tmp/openclaw-update-runtime-Ab1234/tree" },
+  { argv: ["openclaw-gateway"] },
+  { argv: ["node", "--eval", "1"], environment: "OPENCLAW_SERVICE_MARKER=openclaw\0" },
+])("preserves foreign retained-runtime and OpenClaw evidence for $argv", (facts) => {
+  rows.set(peer, { ppid: 1, uid: 0, cwd: denied(), ...facts });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
+});
+
 it("finds orphaned handoff references while excluding only its verified updater launcher", () => {
   rows.set(launcher, {
     ppid: 1,

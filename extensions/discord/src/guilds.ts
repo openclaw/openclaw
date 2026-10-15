@@ -18,14 +18,9 @@ export async function listGuilds(
     fetcher,
     options,
   );
-  return raw
-    .filter(
-      (guild): guild is { id: string; name: string } =>
-        typeof guild.id === "string" && typeof guild.name === "string",
-    )
-    .map((guild) => ({
-      id: guild.id,
-      name: guild.name,
-      slug: normalizeDiscordSlug(guild.name),
-    }));
+  return raw.flatMap((guild) =>
+    typeof guild.id === "string" && typeof guild.name === "string"
+      ? [{ id: guild.id, name: guild.name, slug: normalizeDiscordSlug(guild.name) }]
+      : [],
+  );
 }

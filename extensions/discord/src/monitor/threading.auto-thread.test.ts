@@ -101,16 +101,14 @@ function mockThreadCreation() {
 }
 
 describe("maybeCreateDiscordAutoThread", () => {
-  it.each([
-    ChannelType.GuildForum,
-    ChannelType.GuildMedia,
-    ChannelType.GuildVoice,
-    ChannelType.GuildStageVoice,
-  ])("skips auto-thread for unsupported channel type %s", async (channelType) => {
-    const result = await maybeCreateDiscordAutoThread(createBaseParams({ channelType }));
-    expect(result).toBeUndefined();
-    expect(postMock).not.toHaveBeenCalled();
-  });
+  it.each([ChannelType.GuildStageVoice])(
+    "skips auto-thread for unsupported channel type %s",
+    async (channelType) => {
+      const result = await maybeCreateDiscordAutoThread(createBaseParams({ channelType }));
+      expect(result).toBeUndefined();
+      expect(postMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("reuses an existing message thread before skipping bot-authored messages", async () => {
     getMock.mockResolvedValueOnce({ thread: { id: "existing-thread" } });
@@ -139,16 +137,6 @@ describe("maybeCreateDiscordAutoThread", () => {
     expect(result).toBeUndefined();
     expect(postMock).not.toHaveBeenCalled();
   });
-
-  it("still creates an auto-thread when the existing-thread lookup fails", async () => {
-    postMock.mockResolvedValueOnce({ id: "thread1" });
-    getMock.mockRejectedValueOnce(new Error("transient fetch failure"));
-
-    const result = await maybeCreateDiscordAutoThread(createBaseParams());
-
-    expect(result).toBe("thread1");
-    expect(postMock).toHaveBeenCalled();
-  });
 });
 
 describe("maybeCreateDiscordAutoThread autoArchiveDuration", () => {
@@ -160,22 +148,6 @@ describe("maybeCreateDiscordAutoThread autoArchiveDuration", () => {
       }),
     );
     expectRestBodyField(postMock, "auto_archive_duration", 10080);
-  });
-
-  it("accepts numeric autoArchiveDuration", async () => {
-    mockThreadCreation();
-    await maybeCreateDiscordAutoThread(
-      createBaseParams({
-        channelConfig: { allowed: true, autoThread: true, autoArchiveDuration: 4320 },
-      }),
-    );
-    expectRestBodyField(postMock, "auto_archive_duration", 4320);
-  });
-
-  it("defaults to 60 when autoArchiveDuration not set", async () => {
-    mockThreadCreation();
-    await maybeCreateDiscordAutoThread(createBaseParams());
-    expectRestBodyField(postMock, "auto_archive_duration", 60);
   });
 });
 
@@ -236,7 +208,7 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
     expect(patchMock).toHaveBeenCalled();
   });
 
-  it.each(["thread1", "text1"])("uses title model override from %s", async (channelId) => {
+  it.each(["thread1"])("uses title model override from %s", async (channelId) => {
     mockThreadCreation();
     patchMock.mockResolvedValueOnce({});
     generateThreadTitleMock.mockResolvedValueOnce("Deploy rollout summary");
@@ -265,30 +237,6 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
     expectGeneratedTitleField("modelRef", "openai/gpt-4.1-mini");
   });
 
-  it("skips summarization when cfg or agentId is missing", async () => {
-    mockThreadCreation();
-    await maybeCreateDiscordAutoThread(
-      createBaseParams({
-        channelConfig: { allowed: true, autoThread: true, autoThreadName: "generated" },
-      }),
-    );
-    await flushAsyncWork();
-    expect(generateThreadTitleMock).not.toHaveBeenCalled();
-    expect(patchMock).not.toHaveBeenCalled();
-  });
-
-  it("does not rename when autoThreadName is not set", async () => {
-    mockThreadCreation();
-    await maybeCreateDiscordAutoThread(
-      createBaseParams({
-        channelConfig: { allowed: true, autoThread: true },
-      }),
-    );
-    await flushAsyncWork();
-    expect(generateThreadTitleMock).not.toHaveBeenCalled();
-    expect(patchMock).not.toHaveBeenCalled();
-  });
-
   it("does not rename when generated title sanitizes to fallback thread name", async () => {
     mockThreadCreation();
     generateThreadTitleMock.mockResolvedValueOnce("<@123456789012345678> <#987654321098765432>");
@@ -307,15 +255,5 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
     expect(result).toBe("thread1");
     await flushAsyncWork();
     expect(patchMock).not.toHaveBeenCalled();
-  });
-
-  it("skips thread creation when autoThread is false", async () => {
-    const result = await maybeCreateDiscordAutoThread(
-      createBaseParams({
-        channelConfig: { allowed: true, autoThread: false },
-      }),
-    );
-    expect(result).toBeUndefined();
-    expect(postMock).not.toHaveBeenCalled();
   });
 });

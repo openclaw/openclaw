@@ -333,7 +333,7 @@ describe("package scripts", () => {
       "src/agents/sandbox/fs-paths.test.ts",
       "src/agents/sessions/tools/render-utils.test.ts",
       "src/agents/agent-tools.read.windows.test.ts",
-      "src/agents/agent-tools.read.host-operations.test.ts",
+      "src/agents/agent-tools.read.workspace-mutations.test.ts",
       "src/agents/sessions/tools/path-utils.test.ts",
       "src/agents/provider-local-service.env-case.test.ts",
       "src/infra/process-env.test.ts",

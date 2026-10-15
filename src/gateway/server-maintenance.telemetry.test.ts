@@ -12,13 +12,12 @@ const {
   checkTelemetryUpdateMock,
   generateSecureIntMock,
   devicePairCleanupMock,
-  pluginStateCleanupMock,
   forbiddenDefaultAdapter,
 } = vi.hoisted(() => ({
   checkTelemetryUpdateMock: vi.fn<typeof import("../infra/telemetry.js").checkTelemetryUpdate>(),
   generateSecureIntMock: vi.fn<typeof import("../infra/secure-random.js").generateSecureInt>(),
-  devicePairCleanupMock: vi.fn(async () => 0),
-  pluginStateCleanupMock: vi.fn(async (_options: { assertActive: () => void }) => undefined),
+  devicePairCleanupMock:
+    vi.fn<typeof import("../infra/device-bootstrap.js").startDevicePairSetupMaintenance>(),
   forbiddenDefaultAdapter: vi.fn((adapter: string): never => {
     throw new Error(`Unexpected default maintenance adapter: ${adapter}`);
   }),
@@ -29,12 +28,9 @@ vi.mock("../infra/secure-random.js", async (importOriginal) => ({
   generateSecureInt: generateSecureIntMock,
 }));
 
+// mock-isolation: Inject scheduled device work to test shutdown without a database worker.
 vi.mock("../infra/device-bootstrap.js", () => ({
-  pruneExpiredDevicePairSetupCompletions: devicePairCleanupMock,
-}));
-
-vi.mock("../plugin-state/plugin-state-worker-client.js", () => ({
-  sweepExpiredPluginStateEntriesInWorker: pluginStateCleanupMock,
+  startDevicePairSetupMaintenance: devicePairCleanupMock,
 }));
 
 vi.mock("../infra/telemetry.js", () => ({
@@ -65,14 +61,6 @@ vi.mock("../media/store.js", () => ({
   cleanOldMedia: () => forbiddenDefaultAdapter("media GC"),
   pruneOutboundMedia: () => forbiddenDefaultAdapter("outbound media GC"),
   prunePlaybackTranscodeCache: () => forbiddenDefaultAdapter("playback media GC"),
-}));
-
-vi.mock("../skills/workshop/store-sqlite-record.js", () => ({
-  parseSkillProposalRow: () => forbiddenDefaultAdapter("skill proposal reader"),
-}));
-
-vi.mock("../skills/workshop/workspace-skill-read.js", () => ({
-  listWritableWorkshopSkillSummaries: () => forbiddenDefaultAdapter("skill status reader"),
 }));
 
 vi.mock("./chat-abort.js", () => ({
@@ -113,8 +101,7 @@ describe("gateway telemetry maintenance", () => {
     vi.restoreAllMocks();
     checkTelemetryUpdateMock.mockReset();
     generateSecureIntMock.mockReset();
-    devicePairCleanupMock.mockReset().mockResolvedValue(0);
-    pluginStateCleanupMock.mockReset().mockResolvedValue(undefined);
+    devicePairCleanupMock.mockReset();
     expect(defaultAdapterCalls).toHaveLength(0);
   });
 
@@ -122,7 +109,6 @@ describe("gateway telemetry maintenance", () => {
     ["health", false],
     ["worktree", false],
     ["device-pair", false],
-    ["plugin-state", false],
     ["worktree", true],
   ] as const)(
     "joins admitted %s work and cleanup before settling stop (failure=%s)",
@@ -144,7 +130,7 @@ describe("gateway telemetry maintenance", () => {
           return maintenance;
         });
       }
-      const blockedCall = fails ? 1 : 2;
+      const blockedCall = fails || owner === "device-pair" ? 1 : 2;
       const operation = createDeferredCore();
       const cleanup = createDeferredCore();
       const cleanupStarted = createDeferredCore();
@@ -160,15 +146,18 @@ describe("gateway telemetry maintenance", () => {
         cleanupStarted.resolve();
       };
       const state = createGatewayMaintenanceStateForTest();
-      devicePairCleanupMock.mockImplementation(async () => {
+      if (owner === "health") {
+        state.clients.add({
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: { id: "test", version: "test", platform: "test", mode: "test" },
+          },
+        });
+      }
+      devicePairCleanupMock.mockImplementation(({ scheduler }) => {
         if (owner === "device-pair") {
-          await run();
-        }
-        return 0;
-      });
-      pluginStateCleanupMock.mockImplementation(async () => {
-        if (owner === "plugin-state") {
-          await run();
+          scheduler.schedule({ id: "device-pair-test", atMs: scheduler.now(), run });
         }
       });
       const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
@@ -193,18 +182,8 @@ describe("gateway telemetry maintenance", () => {
           owner === "worktree" ? blockedCall * 60 * 60_000 + 1 : 60_000,
         );
         expect(calls).toBe(blockedCall);
-        if (owner === "plugin-state") {
-          await vi.advanceTimersByTimeAsync(60_000);
-          expect(calls).toBe(blockedCall);
-        }
         if (!fails) {
           markGatewayRestartDraining();
-        }
-        if (owner === "plugin-state") {
-          state.scheduler.beginClose();
-          const admission = pluginStateCleanupMock.mock.calls.at(-1)?.[0];
-          expect(admission?.assertActive).toBeTypeOf("function");
-          expect(() => admission?.assertActive()).not.toThrow();
         }
         let stopped = false;
         const stopping = timers.stopPeriodicTasks().then(
@@ -232,10 +211,6 @@ describe("gateway telemetry maintenance", () => {
           expect(error).toMatchObject({ errors: [failure] });
         } else {
           expect(error).toBeUndefined();
-        }
-        if (owner === "plugin-state") {
-          const admission = pluginStateCleanupMock.mock.calls.at(-1)?.[0];
-          expect(() => admission?.assertActive()).toThrow();
         }
       } finally {
         operation.resolve();

@@ -17,7 +17,12 @@ it.each([false, true])(
     const construct = vi.spyOn(coreCodingTools, "createCoreCodingTools");
     const options = {
       workspaceDir: tempDirs.make("prepared-surface-assembly-"),
-      config: { tools: { deny: ["write", ...(denyProcess ? ["process"] : [])] } },
+      config: {
+        tools: {
+          exec: { host: "gateway" as const },
+          deny: ["write", ...(denyProcess ? ["process"] : [])],
+        },
+      },
       wrapBeforeToolCallHook: false,
       toolConstructionPlan: {
         includeBaseCodingTools: true,

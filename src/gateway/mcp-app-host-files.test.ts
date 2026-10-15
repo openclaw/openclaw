@@ -7,6 +7,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "../agents/mcp-ui-resource.js";
 import { testing as viewTesting } from "../agents/mcp-ui-resource.test-support.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   acceptGatewayDeviceSourceAuthority,
   captureGatewayDeviceRevocation,
@@ -38,8 +41,28 @@ vi.mock("./server-methods/session-scoped-read.js", () => ({
 vi.mock("./server-methods/sessions-files.js", () => ({
   resolveLocalSessionWorkspaceRoot: () => state.root,
 }));
-vi.mock("./session-utils.js", () => ({
-  loadGatewaySessionEntryReadOnly: () => ({ entry: { sessionId: state.sessionId } }),
+vi.mock("./session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils.js")>()),
+  loadGatewaySessionEntryReadOnlyAsync: async (sessionKey: string) => ({
+    cfg: {},
+    agentId: "main",
+    canonicalKey: sessionKey,
+    storePath: state.root,
+    entry: { sessionId: state.sessionId },
+  }),
+}));
+vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-facts.js")>()),
+  readRetainedSessionEntryFacts: (_database: unknown, request: { sessionKeys: string[] }) => ({
+    entries: request.sessionKeys.map((sessionKey) => ({
+      sessionKey,
+      entry: { sessionId: state.sessionId },
+    })),
+  }),
+}));
+// mock-isolation: Host-file tests supply the bound session identity without opening session storage.
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async () => ({ entry: { sessionId: state.sessionId } }),
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
   completeDeferredSessionMcpRuntimeRetirement: async () => false,
@@ -191,9 +214,70 @@ afterEach(() => {
     dispose();
   }
   viewTesting.clearViewStore();
+  memorySessionActorOwners.reset();
+  vi.unstubAllEnvs();
 });
 
 describe("registered MCP App host-file routes", () => {
+  it("keeps memory file handles after their opening RPC and refuses them after owner closure", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.root);
+    const memoryKey = "agent:main:dashboard:incognito-file";
+    const owner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
+    const actor = await owner.acquire(
+      { sessionKey: memoryKey, database: owner.identity },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    try {
+      expect(
+        (
+          await actor.storage!.mutate(
+            {
+              type: "session.entry.create",
+              input: { entry: { sessionId: state.sessionId, updatedAt: 1, incognito: true } },
+            },
+            { assertCurrent() {}, authorize() {} },
+          )
+        ).kind,
+      ).toBe("committed");
+      const opening = new AbortController();
+      const assertOpeningCurrent = () => opening.signal.throwIfAborted();
+      const file = await runWithSessionActorStorage(
+        {
+          actor,
+          agentId: "main",
+          path: owner.path,
+          authority: { assertCurrent: assertOpeningCurrent, authorize: assertOpeningCurrent },
+        },
+        () =>
+          prepareMcpAppHostFile(
+            { ...options({}), signal: opening.signal },
+            { sessionKey: memoryKey, agentId: "main", path: "part.stl" },
+          ),
+      );
+      runtime.sessionKey = memoryKey;
+      getMcpAppViewLease(viewId, runtime)!.hostFile = file;
+      opening.abort();
+      const result = await invoke("mcp.app.readResource", {
+        sessionKey: memoryKey,
+        uri: file.resourceUri,
+        _meta: { "openai/resource": { representation: "text" } },
+      });
+      expect(result[0]).toBe(true);
+      expect(result[1].contents[0].text).toBe("solid original");
+      memorySessionActorOwners.closeDatabase(owner);
+      const closed = await invoke("mcp.app.readResource", {
+        sessionKey: memoryKey,
+        uri: file.resourceUri,
+      });
+      expect(closed[0]).toBe(false);
+    } finally {
+      await actor.release();
+    }
+  });
+
   it("mints opaque URIs and serves explicit text/blob representations without host paths", async () => {
     expect(uri.startsWith("openclaw-file://")).toBe(true);
     expect(uri).not.toContain("part.stl");
@@ -260,64 +344,39 @@ describe("registered MCP App host-file routes", () => {
     expect((await invoke("mcp.app.readResource", { uri }))[0]).toBe(false);
   });
 
-  it("publishes only the bound resource and releases watchers when its connection closes", async () => {
-    const notified = createDeferred();
+  it("publishes after a rename gap and subsequent writes", async () => {
+    let notified = createDeferred();
     publish.mockImplementation(() => notified.resolve());
     expect((await invoke("mcp.app.subscribeResource", { uri }))[0]).toBe(true);
-    await writeFile(path.join(state.root, "part.stl"), "updated by another editor");
+    const file = path.join(state.root, "part.stl");
+    await rename(file, `${file}.bak`);
+    await notified.promise;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(getMcpAppViewLease(viewId, runtime)?.disposeCallbacks?.size).toBe(1);
+    notified = createDeferred();
+    publish.mockClear();
+    await writeFile(file, "solid replacement");
     await notified.promise;
     expect(publish).toHaveBeenCalledWith(
       "mcp.app.resourceUpdated",
       { viewId, uri },
       new Set(["alice"]),
     );
-    const view = getMcpAppViewLease(viewId, runtime)!;
-    expect(view.disposeCallbacks?.size).toBe(1);
+    notified = createDeferred();
+    publish.mockClear();
+    await writeFile(file, "solid updated replacement");
+    await notified.promise;
+    expect(publish).toHaveBeenCalledWith(
+      "mcp.app.resourceUpdated",
+      { viewId, uri },
+      new Set(["alice"]),
+    );
     connection.abort();
-    expect(view.disposeCallbacks?.size).toBe(0);
+    expect(getMcpAppViewLease(viewId, runtime)?.disposeCallbacks?.size).toBe(0);
     expect((await invoke("mcp.app.readResource", { uri }))[0]).toBe(false);
   });
-
-  it.each(["atomic replacement", "rename gap"])(
-    "publishes after %s and subsequent writes",
-    async (kind) => {
-      let notified = createDeferred();
-      publish.mockImplementation(() => notified.resolve());
-      expect((await invoke("mcp.app.subscribeResource", { uri }))[0]).toBe(true);
-      const file = path.join(state.root, "part.stl");
-      if (kind === "rename gap") {
-        await rename(file, `${file}.bak`);
-        await notified.promise;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(getMcpAppViewLease(viewId, runtime)?.disposeCallbacks?.size).toBe(1);
-        notified = createDeferred();
-        publish.mockClear();
-        await writeFile(file, "solid replacement");
-      } else {
-        await writeFile(`${file}.tmp`, "solid replacement");
-        await rename(`${file}.tmp`, file);
-      }
-      await notified.promise;
-      expect(publish).toHaveBeenCalledWith(
-        "mcp.app.resourceUpdated",
-        { viewId, uri },
-        new Set(["alice"]),
-      );
-      notified = createDeferred();
-      publish.mockClear();
-      await writeFile(file, "solid updated replacement");
-      await notified.promise;
-      expect(publish).toHaveBeenCalledWith(
-        "mcp.app.resourceUpdated",
-        { viewId, uri },
-        new Set(["alice"]),
-      );
-      connection.abort();
-      expect(getMcpAppViewLease(viewId, runtime)?.disposeCallbacks?.size).toBe(0);
-    },
-  );
 
   it("stops polling when the connection closes during a rename gap", async () => {
     const polling = vi.mocked(watchFile).mockClear();

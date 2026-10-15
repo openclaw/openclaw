@@ -1,6 +1,10 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   enqueueCommandInLane,
@@ -9,6 +13,7 @@ import {
 } from "../../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
@@ -32,6 +37,7 @@ function createLaneController(params: {
     ...params.runOverrides,
     ...(params.enqueue ? { enqueue: params.enqueue } : {}),
   };
+  setRuntimeConfigSnapshot(runParams.config ?? {});
   let lifecycleGeneration = getAgentEventLifecycleGeneration();
 
   return createEmbeddedRunLaneController({
@@ -62,65 +68,41 @@ async function expectLaneCounts(lane: string, activeCount: number, queuedCount: 
 
 describe("embedded run session lane", () => {
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     resetCommandQueueStateForTest();
+    clearRuntimeConfigSnapshot();
   });
 
-  it("passes the run deadline and lifecycle signals into injected session queues", async () => {
-    let observedOptions: Parameters<CommandQueueEnqueueFn>[1];
-    const enqueue: CommandQueueEnqueueFn = async (task, options) => {
-      observedOptions = options;
-      return await task();
-    };
-    const controller = createLaneController({
-      sessionLane: "test:injected-session-deadline",
-      runId: "injected-session-deadline",
-      enqueue,
-    });
-
-    await expect(controller.enqueueSession(async () => "finished")).resolves.toBe("finished");
-    expect(observedOptions).toMatchObject({
-      taskIdentity: { taskKind: "turn", runId: "injected-session-deadline" },
-      priority: "foreground",
-      taskTimeoutMs: 30_001,
-      taskTimeoutAbortGraceMs: 30_000,
-      taskTimeoutAbortSignal: controller.laneTaskAbortController.signal,
-      taskTimeoutReleaseSignal: controller.laneTaskReleaseController.signal,
-    });
-    expect(observedOptions?.taskTimeoutProgressAtMs?.()).toEqual(expect.any(Number));
-  });
-
-  it.each(["enqueueSession", "enqueueGlobal"] as const)(
-    "passes available run identity through %s before admission",
-    async (enqueueMethod) => {
-      for (const trigger of ["user", "cron"] as const) {
-        let observedOptions: Parameters<CommandQueueEnqueueFn>[1];
-        const refused = new Error("queue admission refused");
-        const controller = createLaneController({
-          sessionLane: "test:identity-session",
-          runId: "child-run",
-          runOverrides: {
-            trigger,
-            sessionKey: "agent:example:subagent:child",
-            spawnedBy: "agent:example:main",
-          },
-          enqueue: async (_task, options) => {
-            observedOptions = options;
-            throw refused;
-          },
-        });
-
-        await expect(
-          controller[enqueueMethod](async () => ({ meta: { durationMs: 1 } })),
-        ).rejects.toBe(refused);
-        expect(observedOptions?.taskIdentity).toEqual({
-          taskKind: trigger === "cron" ? "cron" : "spawn",
+  it("passes available run identity through session admission", async () => {
+    const enqueueMethod = "enqueueSession";
+    for (const trigger of ["user", "cron"] as const) {
+      let observedOptions: Parameters<CommandQueueEnqueueFn>[1];
+      const refused = new Error("queue admission refused");
+      const controller = createLaneController({
+        sessionLane: "test:identity-session",
+        runId: "child-run",
+        runOverrides: {
+          trigger,
           sessionKey: "agent:example:subagent:child",
-          runId: "child-run",
-          requesterSessionKey: "agent:example:main",
-        });
-      }
-    },
-  );
+          spawnedBy: "agent:example:main",
+        },
+        enqueue: async (_task, options) => {
+          observedOptions = options;
+          throw refused;
+        },
+      });
+
+      await expect(
+        controller[enqueueMethod](async () => ({ meta: { durationMs: 1 } })),
+      ).rejects.toBe(refused);
+      expect(observedOptions?.taskIdentity).toEqual({
+        taskKind: trigger === "cron" ? "cron" : "spawn",
+        sessionKey: "agent:example:subagent:child",
+        runId: "child-run",
+        requesterSessionKey: "agent:example:main",
+      });
+    }
+  });
 
   it.each(["deadline", "release"] as const)(
     "releases all queued session turns when the active turn reaches its %s",
@@ -195,58 +177,63 @@ describe("embedded run session lane", () => {
   });
 
   it("keeps the session lease alive until every concurrent global admission settles", async () => {
-    const sessionLane = "test:session-concurrent-global-admission";
-    const globalLane = "test:concurrent-global-admission";
-    setCommandLaneConcurrency(globalLane, 1);
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const sessionLane = "test:session-concurrent-global-admission";
+      const globalLane = "test:concurrent-global-admission";
+      setCommandLaneConcurrency(globalLane, 1);
 
-    const interveningGlobalGate = createDeferred();
-    const interveningGlobalTaskStarted = createDeferred();
-    const controller = createLaneController({
-      sessionLane,
-      globalLane,
-      runId: "healthy-concurrent-global-admission",
-    });
-    const run = controller.enqueueSession(
-      async () => {
-        const firstGlobalAdmission = controller.enqueueGlobal(async () => ({
-          meta: { durationMs: 1 },
-        }));
-        const interveningGlobalTask = enqueueCommandInLane(
-          globalLane,
+      const interveningGlobalGate = createDeferred();
+      const interveningGlobalTaskStarted = createDeferred();
+      const controller = createLaneController({
+        sessionLane,
+        globalLane,
+        runId: "healthy-concurrent-global-admission",
+      });
+      // Load placement facts before the queue-heartbeat budget starts.
+      await controller.enqueueGlobal(async () => ({ meta: { durationMs: 0 } }));
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      try {
+        const run = controller.enqueueSession(
           async () => {
-            interveningGlobalTaskStarted.resolve();
-            await interveningGlobalGate.promise;
+            const firstGlobalAdmission = controller.enqueueGlobal(async () => ({
+              meta: { durationMs: 1 },
+            }));
+            const interveningGlobalTask = enqueueCommandInLane(
+              globalLane,
+              async () => {
+                interveningGlobalTaskStarted.resolve();
+                await interveningGlobalGate.promise;
+              },
+              { priority: "foreground" },
+            );
+            const secondGlobalAdmission = controller.enqueueGlobal(async () => ({
+              meta: { durationMs: 2 },
+            }));
+            return await Promise.all([
+              firstGlobalAdmission,
+              interveningGlobalTask,
+              secondGlobalAdmission,
+            ]);
           },
-          { priority: "foreground" },
+          { taskTimeoutMs: 25 },
         );
-        const secondGlobalAdmission = controller.enqueueGlobal(async () => ({
-          meta: { durationMs: 2 },
-        }));
-        return await Promise.all([
-          firstGlobalAdmission,
-          interveningGlobalTask,
-          secondGlobalAdmission,
+        await interveningGlobalTaskStarted.promise;
+        await vi.advanceTimersByTimeAsync(75);
+        await expectLaneCounts(sessionLane, 1, 0);
+        await expectLaneCounts(globalLane, 1, 1);
+
+        interveningGlobalGate.resolve();
+        await expect(run).resolves.toEqual([
+          { meta: { durationMs: 1 } },
+          undefined,
+          { meta: { durationMs: 2 } },
         ]);
-      },
-      { taskTimeoutMs: 25 },
-    );
-
-    try {
-      await interveningGlobalTaskStarted.promise;
-      await delay(75);
-      await expectLaneCounts(sessionLane, 1, 0);
-      await expectLaneCounts(globalLane, 1, 1);
-
-      interveningGlobalGate.resolve();
-      await expect(run).resolves.toEqual([
-        { meta: { durationMs: 1 } },
-        undefined,
-        { meta: { durationMs: 2 } },
-      ]);
-      await expectLaneCounts(sessionLane, 0, 0);
-    } finally {
-      interveningGlobalGate.resolve();
-    }
+        await expectLaneCounts(sessionLane, 0, 0);
+      } finally {
+        interveningGlobalGate.resolve();
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("keeps a session alive while another run's stalled global task times out", async () => {

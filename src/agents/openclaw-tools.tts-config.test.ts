@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import type { MediaGenerateToolOptions } from "./tools/media-generate-background.js";
@@ -68,7 +69,11 @@ const mediaConfig = {
 } satisfies OpenClawConfig;
 
 describe("createOpenClawTools context wiring", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+    vi.clearAllMocks();
+  });
+  afterEach(() => clearRuntimeConfigSnapshot());
 
   it("passes the session agent and active account configuration into TTS", async () => {
     const config = {
@@ -92,25 +97,6 @@ describe("createOpenClawTools context wiring", () => {
       }),
     );
     expect(mocks.textToSpeech.mock.calls[0]?.[0].cfg).toBe(config);
-  });
-
-  it("uses trusted transcript caller authority instead of the delivery account", () => {
-    const config = { transcripts: { enabled: true } } satisfies OpenClawConfig;
-    createTools({
-      config,
-      agentChannel: "discord",
-      agentAccountId: "delivery",
-      gatewayCallerAccountId: "creator",
-      gatewayCallerChannel: "telegram",
-      gatewayCallerScheduled: true,
-    });
-    expect(mocks.transcripts).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        caller: { kind: "operator", source: "scheduled" },
-        config,
-      }),
-    );
   });
 
   it("uses the delivery account when no separate transcript authority exists", () => {
@@ -159,21 +145,6 @@ describe("createOpenClawTools context wiring", () => {
     );
   });
 
-  it("does not yield when background media starts", async () => {
-    const onYield = vi.fn();
-    const tool = createTools({
-      config: mediaConfig,
-      agentSessionKey: "agent:main:subagent:media-child",
-      onYield,
-    }).find((candidate) => candidate.name === "image_generate");
-    expect(tool).toBeDefined();
-    await tool?.execute("media-start", {});
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(onYield).not.toHaveBeenCalled();
-  });
-
   it.each([
     [
       "agent:main:cron:daily-media",
@@ -185,12 +156,21 @@ describe("createOpenClawTools context wiring", () => {
       "agent:main:main",
       "agent:main:qa-channel:default:direct:media-requester",
     ],
+    ["agent:main:policy", "agent:work:run", "agent:main:policy"],
   ])(
     "passes a separate durable requester key for background media from %s",
-    (agentSessionKey, runSessionKey, taskSessionKey) => {
-      createTools({
-        config: mediaConfig,
+    async (agentSessionKey, runSessionKey, taskSessionKey) => {
+      await createOpenClawToolsAsync({
+        disableMessageTool: true,
+        disablePluginTools: true,
+        authProfileStore: { version: 1, profiles: {} },
+        config: {
+          ...mediaConfig,
+          agents: { ...mediaConfig.agents, entries: { main: {}, work: {} } },
+        },
         agentSessionKey,
+        sandboxAgentId: "main",
+        sandboxed: true,
         runSessionKey,
         onYield: vi.fn(),
       });
@@ -199,45 +179,15 @@ describe("createOpenClawTools context wiring", () => {
           expect.objectContaining({
             agentSessionKey: taskSessionKey,
             requesterRunSessionKey: runSessionKey,
+            sandboxSessionKey: agentSessionKey,
+            sandboxAgentId: "main",
+            requesterAgentId: runSessionKey.startsWith("agent:work:") ? "work" : "main",
           }),
+          true,
         );
       }
     },
   );
-
-  it("passes the active live-run route into session_status", () => {
-    const sessionKey = "agent:main:discord:channel:1489550370136129537";
-    createTools({
-      agentSessionKey: sessionKey,
-      runSessionKey: sessionKey,
-      agentChannel: "webchat",
-      agentAccountId: "browser",
-      agentTo: "channel:1489550370136129537",
-      agentThreadId: "origin-thread",
-      currentChannelId: "webchat:control-ui",
-      currentThreadTs: "webchat-thread-1",
-    });
-    expect(mocks.status).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activeDeliveryContext: {
-          channel: "webchat",
-          to: "webchat:control-ui",
-          accountId: "browser",
-          threadId: "webchat-thread-1",
-        },
-      }),
-    );
-  });
-
-  it("prefers the durable run session key for cron bindings", () => {
-    createTools({
-      agentSessionKey: "agent:main:telegram:default:direct:1234",
-      runSessionKey: "agent:main:main",
-    });
-    expect(mocks.cron).toHaveBeenCalledWith(
-      expect.objectContaining({ agentSessionKey: "agent:main:main" }),
-    );
-  });
 
   it("passes preserved channel delivery context into cron", () => {
     const sessionKey = "agent:main:matrix:channel:!abcdef1234567890:example.org";

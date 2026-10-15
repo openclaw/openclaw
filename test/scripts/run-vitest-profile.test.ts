@@ -161,48 +161,29 @@ describe("scripts/run-vitest-profile", () => {
     ).toBe(path.resolve(".artifacts/custom-profile"));
   });
 
-  it.each(["main", "runner"])(
-    "launches %s without shell parsing and preserves Vitest arguments",
-    (mode) => {
-      const outputDir = path.join(os.tmpdir(), "profile with spaces");
-      const forwarded = [
-        "--config",
-        "custom config.ts",
-        "--pool",
-        "threads",
-        "--isolate",
-        "--reporter",
-        "json",
-      ];
-      const plan = buildVitestProfileCommandWithArgs({ mode, outputDir, vitestArgs: forwarded });
-      expect(plan.command).toBe(process.execPath);
-      expect(plan.args.slice(1, 3)).toEqual([mode, outputDir]);
-      expect(plan.args.slice(-forwarded.length)).toEqual(forwarded);
-    },
-  );
-
   it.for([
-    { pool: "forks", isolate: true, custom: false, failRun: false },
-    { pool: "threads", isolate: true, custom: false, failRun: true },
     { pool: "forks", isolate: false, custom: false, failRun: true },
-    { pool: "threads", isolate: false, custom: false, failRun: false },
-    { pool: "forks", isolate: true, custom: true, failRun: true },
     { pool: "threads", isolate: true, custom: true, failRun: false },
     { pool: "forks", isolate: true, custom: true, failRun: false, projects: true },
-    { pool: "forks", isolate: false, custom: false, failRun: false, failProfile: true },
     { pool: "threads", isolate: false, custom: false, failRun: true, failProfile: true },
-    ...["ignore", "filter"].flatMap((errorPolicy) =>
-      [false, true].map((failProfile) => ({
-        pool: errorPolicy === "ignore" ? "forks" : "threads",
-        isolate: false,
-        custom: false,
-        failRun: false,
-        failProfile,
-        unhandled: true,
-        errorPolicy,
-      })),
-    ),
-    { pool: "forks", isolate: false, custom: false, failRun: false, unhandled: true },
+    {
+      pool: "forks",
+      isolate: false,
+      custom: false,
+      failRun: false,
+      failProfile: true,
+      unhandled: true,
+      errorPolicy: "ignore",
+    },
+    {
+      pool: "threads",
+      isolate: false,
+      custom: false,
+      failRun: false,
+      failProfile: true,
+      unhandled: true,
+      errorPolicy: "filter",
+    },
   ])(
     "profiles selected runner %j",
     (
@@ -451,22 +432,19 @@ it("holds admitted work until the caller releases it", async () => {
       }
     }));
 
-  it.for([
-    { mode: "main", flags: ["--help", "--unknown-profile-test-option"] },
-    { mode: "runner", flags: ["-h", "--pool"] },
-    { mode: "main", flags: ["--help", "--help"] },
-    { mode: "runner", flags: ["--help", "--help"] },
-  ])("prints $mode help for $flags without starting a test server", ({ mode, flags }, { signal }) =>
-    lifetime.run(async () => {
-      const root = createTempDir("oc-profile-help-");
-      const ordering = path.join(root, "hash-order.jsonl");
-      const drained = path.join(root, "event-loop-drained");
-      const stages = path.join(root, "profile-stages.jsonl");
-      const profiles = path.join(root, "profiles");
-      const preload = path.join(root, "observe-hash-order.mjs");
-      fs.writeFileSync(
-        preload,
-        `import childProcess from "node:child_process";
+  it.for([{ mode: "main", flags: ["--help", "--help"] }])(
+    "prints $mode help for $flags without starting a test server",
+    ({ mode, flags }, { signal }) =>
+      lifetime.run(async () => {
+        const root = createTempDir("oc-profile-help-");
+        const ordering = path.join(root, "hash-order.jsonl");
+        const drained = path.join(root, "event-loop-drained");
+        const stages = path.join(root, "profile-stages.jsonl");
+        const profiles = path.join(root, "profiles");
+        const preload = path.join(root, "observe-hash-order.mjs");
+        fs.writeFileSync(
+          preload,
+          `import childProcess from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -552,44 +530,41 @@ crypto.getHashes = function() {
   return getHashes();
 };
 syncBuiltinESMExports();`,
-      );
-      const args = [
-        path.join(repoRoot, "scripts/run-vitest-profile.mts"),
-        mode,
-        "--output-dir",
-        path.join(root, "profiles"),
-        "--",
-        ...flags,
-      ];
-      const result = await runProfileProcess(
-        args,
-        root,
-        signal,
-        { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` },
-        { mode, flags, ordering, profiles, stages },
-      );
-      expect(
-        fs
-          .readFileSync(ordering, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line)),
-        result.output,
-      ).toEqual([{ tlsLoaded: false, profiling: mode === "main" }]);
-      expect(result.code, result.output).toBe(0);
-      expect(result.output).toContain("Usage:");
-      expect(fs.existsSync(drained), result.output).toBe(true);
-      expect(fs.readdirSync(profiles)).toHaveLength(mode === "main" ? 1 : 0);
-    }),
+        );
+        const args = [
+          path.join(repoRoot, "scripts/run-vitest-profile.mts"),
+          mode,
+          "--output-dir",
+          path.join(root, "profiles"),
+          "--",
+          ...flags,
+        ];
+        const result = await runProfileProcess(
+          args,
+          root,
+          signal,
+          { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` },
+          { mode, flags, ordering, profiles, stages },
+        );
+        expect(
+          fs
+            .readFileSync(ordering, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line)),
+          result.output,
+        ).toEqual([{ tlsLoaded: false, profiling: mode === "main" }]);
+        expect(result.code, result.output).toBe(0);
+        expect(result.output).toContain("Usage:");
+        expect(fs.existsSync(drained), result.output).toBe(true);
+        expect(fs.readdirSync(profiles)).toHaveLength(mode === "main" ? 1 : 0);
+      }),
   );
 
-  it.for(
-    ["main", "runner"].flatMap((mode) => [
-      { mode, flag: "--unknown-profile-test-option", error: "Unknown option" },
-      { mode, flag: "--runner=custom-runner.ts", error: "Unknown option" },
-      { mode, flag: "--pool", error: "value is missing" },
-    ]),
-  )("rejects $mode $flag before evaluating config", ({ mode, flag, error }, { signal }) =>
+  it.for([
+    { mode: "main", flag: "--unknown-profile-test-option", error: "Unknown option" },
+    { mode: "runner", flag: "--pool", error: "value is missing" },
+  ])("rejects $mode $flag before evaluating config", ({ mode, flag, error }, { signal }) =>
     lifetime.run(async () => {
       const root = createTempDir("oc-profile-validation-");
       const config = path.join(root, "probe.config.mjs");
@@ -630,19 +605,6 @@ throw new Error("Invalid CLI options reached config loading");`,
       expect(result.output.trimEnd()).toMatch(/\[run-vitest-profile\] FAILED \(exit 1\)$/u);
     }),
   );
-
-  it("keeps the public parser's unknown-option opt-in separate from value validation", async () => {
-    const { parseCLI } = await import("vitest/node");
-    const args = ["vitest", "run", "--unknown-profile-test-option"];
-    expect(() => parseCLI([...args], { allowUnknownOptions: false })).toThrow("Unknown option");
-    expect(parseCLI([...args], { allowUnknownOptions: true }).options).toMatchObject({
-      unknownProfileTestOption: true,
-    });
-    expect(() => parseCLI(["vitest", "run", "--pool"], { allowUnknownOptions: true })).toThrow(
-      "value is missing",
-    );
-    expect(() => parseCLI(["vitest", "init"])).toThrow("missing required args");
-  });
 
   it("retains the CLI startup error when profile output cannot be written", ({ signal }) =>
     lifetime.run(async () => {

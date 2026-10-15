@@ -12,7 +12,7 @@ import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js"
 import { parseAccountSelector } from "../../../commands/channels/account-selector.js";
 import { parseChannelSelector } from "../../../commands/channels/channel-selector.js";
 import type { messageCommand } from "../../../commands/message.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
@@ -50,20 +50,14 @@ const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([
 ]);
 
 function validateMessageNumericOptions(opts: Record<string, unknown>): void {
-  for (const [key, flag] of STRICT_POSITIVE_INTEGER_OPTIONS) {
-    if (opts[key] === undefined) {
-      continue;
-    }
-    if (parseStrictPositiveInteger(opts[key]) === undefined) {
-      throw new Error(`${flag} must be a positive integer.`);
-    }
-  }
-  for (const [key, flag] of STRICT_NON_NEGATIVE_INTEGER_OPTIONS) {
-    if (opts[key] === undefined) {
-      continue;
-    }
-    if (parseStrictNonNegativeInteger(opts[key]) === undefined) {
-      throw new Error(`${flag} must be a non-negative integer.`);
+  for (const [options, parse, kind] of [
+    [STRICT_POSITIVE_INTEGER_OPTIONS, parseStrictPositiveInteger, "positive"],
+    [STRICT_NON_NEGATIVE_INTEGER_OPTIONS, parseStrictNonNegativeInteger, "non-negative"],
+  ] as const) {
+    for (const [key, flag] of options) {
+      if (opts[key] !== undefined && parse(opts[key]) === undefined) {
+        throw new Error(`${flag} must be a ${kind} integer.`);
+      }
     }
   }
 }
@@ -145,7 +139,7 @@ export function createMessageCliHelpers(messageChannelOptions: string) {
               });
             });
             if (preloadPlugins) {
-              const config = getRuntimeConfig();
+              const config = await captureRuntimeConfigAsyncReader()();
               const pluginIds = scopedChannel
                 ? resolveDiscoverableScopedChannelPluginIds({
                     config,

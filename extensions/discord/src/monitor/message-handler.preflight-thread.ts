@@ -12,12 +12,7 @@ export async function resolveDiscordPreflightThreadContext(params: {
 }) {
   const { resolveDiscordThreadChannel, resolveDiscordThreadParentInfo } =
     await loadDiscordThreadingRuntime();
-  const earlyThreadChannel = resolveDiscordThreadChannel({
-    isGuildMessage: params.isGuildMessage,
-    message: params.message,
-    channelInfo: params.channelInfo,
-    messageChannelId: params.messageChannelId,
-  });
+  const earlyThreadChannel = resolveDiscordThreadChannel(params);
   if (!earlyThreadChannel) {
     return { earlyThreadChannel: null };
   }

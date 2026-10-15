@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { createSpawnBrokerHost } from "./host.js";
 import { attachBrokerNativeResource } from "./resource-client.js";
 
-it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+it.skipIf(process.platform === "win32")(
   "retains both disposal failures through the running native resource server and client",
   async () => {
     // This module executes in the real broker process, not in the test's client.

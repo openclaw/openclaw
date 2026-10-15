@@ -1,4 +1,4 @@
-// Control UI tests cover session pull request chips above the chat composer.
+// Control UI tests cover session pull request actions in user-opened Details.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext } from "playwright";
@@ -18,6 +18,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   sharedPublisher,
   waitForWatchedSessionKey,
@@ -96,7 +97,7 @@ describeControlUiE2e("session pull request chips", () => {
 
   afterEach(closeContexts);
 
-  it("pins detected PR chips above the composer with rate-limit staleness", async () => {
+  it("shows detected PRs in Details with rate-limit staleness", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -154,13 +155,24 @@ describeControlUiE2e("session pull request chips", () => {
 
     const chips = page.locator(".chat-pr");
     await expect.poll(() => chips.count()).toBe(3);
+    expect(await page.locator(".chat-details-toggle").getAttribute("aria-expanded")).toBe("false");
+    expect(await chips.first().isVisible()).toBe(false);
+    expect(
+      await page.locator('[data-details-group="pull-requests"]').getAttribute("open"),
+    ).not.toBeNull();
+    await openChatDetails(page);
 
     const openChip = chips.first();
     await expect.poll(() => openChip.getAttribute("data-state")).toBe("open");
-    await expect.poll(() => openChip.locator(".chat-pr__number").textContent()).toBe("#103469");
     await expect
-      .poll(() => openChip.locator(".chat-pr__branch").textContent())
-      .toBe("claude/browser-tabs-tighter-header");
+      .poll(() => openChip.locator(".chat-pr__number").textContent())
+      .toBe("openclaw/openclaw#103469");
+    await expect
+      .poll(() => openChip.locator(".chat-pr__repo").textContent())
+      .toBe("fix(macos): tighten the link-browser tab header");
+    expect(await openChip.locator(".chat-pr__identity").getAttribute("title")).toContain(
+      "openclaw/openclaw · claude/browser-tabs-tighter-header",
+    );
     await expect.poll(() => openChip.locator(".chat-pr__additions").textContent()).toBe("+4");
     await expect
       .poll(() => openChip.locator(".chat-pr__checks").getAttribute("data-checks"))
@@ -192,15 +204,16 @@ describeControlUiE2e("session pull request chips", () => {
     expect(await chevron.count()).toBe(1);
     expect(await chevron.isVisible()).toBe(true);
     const openTransform = await chevron.evaluate((node) => getComputedStyle(node).transform);
-    expect(await checksControl.evaluate((node) => getComputedStyle(node).borderTopStyle)).toBe(
-      "solid",
-    );
-    // Clicking outside light-dismisses the popover.
-    await page.locator(".chat-prs").click({ position: { x: 4, y: 4 } });
+    expect(await checksControl.isVisible()).toBe(true);
+    // The composer remains outside both popovers even at narrow sizes.
+    await page.locator(".agent-chat__input textarea").click();
     await expect.poll(() => openChip.locator(".chat-pr__checks[open]").count()).toBe(0);
     await expect
       .poll(() => chevron.evaluate((node) => getComputedStyle(node).transform))
       .not.toBe(openTransform);
+    // Reopening Details does not reopen its dismissed CI popup.
+    await openChatDetails(page);
+    expect(await menu.isVisible()).toBe(false);
     // Keyboard activation keeps the same disclosure behavior.
     await checksControl.focus();
     await page.keyboard.press("Enter");
@@ -215,17 +228,15 @@ describeControlUiE2e("session pull request chips", () => {
       .toContain("Merged");
     await expect.poll(() => mergedChip.locator(".chat-pr__warning").count()).toBe(0);
 
-    // The chip row sits inside the chat column directly above the composer.
+    // PRs belong to the user-opened Details surface, never the composer stack.
     await page.locator(".chat").evaluate(finishElementAnimations);
-    const rowBottom = await page
-      .locator(".chat-pr")
-      .last()
-      .evaluate((node) => node.getBoundingClientRect().bottom);
-    const composerTop = await page
-      .locator(".agent-chat__input")
-      .evaluate((node) => node.getBoundingClientRect().top);
-    expect(rowBottom).toBeLessThanOrEqual(composerTop);
-    expect(composerTop - rowBottom).toBeLessThanOrEqual(8);
+    expect(await page.locator(".chat-footer .chat-prs").count()).toBe(0);
+    expect(await page.locator(".chat-details .chat-pr").count()).toBe(3);
+    const detailsBox = await page.locator('.chat-details[role="dialog"]').boundingBox();
+    const composerBox = await page.locator(".agent-chat__input").boundingBox();
+    expect(detailsBox).not.toBeNull();
+    expect(composerBox).not.toBeNull();
+    expect(detailsBox!.y + detailsBox!.height).toBeLessThanOrEqual(composerBox!.y);
     if (captureUiProof) {
       await page.screenshot({ path: path.join(stackingProofDir, "after-pr-discovery.png") });
     }
@@ -235,7 +246,7 @@ describeControlUiE2e("session pull request chips", () => {
     await expect.poll(() => chips.count()).toBe(2);
     await expect
       .poll(() => chips.first().locator(".chat-pr__number").textContent())
-      .toBe("#103469");
+      .toBe("openclaw/openclaw#103469");
   });
 
   it.each([
@@ -262,6 +273,7 @@ describeControlUiE2e("session pull request chips", () => {
       });
       await page.goto(`${server.baseUrl}chat`);
       const watchedKey = await waitForWatchedSessionKey(gateway);
+      await openChatDetails(page);
       await expect
         .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
         .toBe(theme);
@@ -288,25 +300,33 @@ describeControlUiE2e("session pull request chips", () => {
         await expect.poll(() => chips.count()).toBe(count);
         await page.locator(".chat").evaluate(finishElementAnimations);
         const bounds = await stack.evaluate((element) => {
-          const composer = document.querySelector(".agent-chat__input")!;
-          const composerBounds = composer.getBoundingClientRect();
+          const detailsBounds = element.closest(".chat-details")!.getBoundingClientRect();
+          const stackBounds = element.getBoundingClientRect();
           return {
-            composerTop: composerBounds.top,
-            composerLeft: composerBounds.left,
-            composerWidth: composerBounds.width,
+            detailsBottom: detailsBounds.bottom,
+            stackLeft: stackBounds.left,
+            stackWidth: stackBounds.width,
+            fitsHorizontally: element.scrollWidth <= element.clientWidth + 1,
             rows: [...element.children].map((row) => {
               const rect = row.getBoundingClientRect();
               return { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width };
             }),
           };
         });
+        expect(bounds.fitsHorizontally).toBe(true);
         let previousBottom = 0;
         for (const row of bounds.rows) {
           expect(row.top).toBeGreaterThanOrEqual(previousBottom);
-          expect(row.bottom).toBeLessThanOrEqual(bounds.composerTop);
-          expect(row.left).toBeCloseTo(bounds.composerLeft, 1);
-          expect(row.width).toBeCloseTo(bounds.composerWidth, 1);
+          expect(row.bottom).toBeLessThanOrEqual(bounds.detailsBottom);
+          expect(row.left).toBeCloseTo(bounds.stackLeft, 1);
+          expect(row.width).toBeCloseTo(bounds.stackWidth, 1);
           previousBottom = row.bottom;
+        }
+        if (captureUiProof) {
+          await writeFile(
+            path.join(stackingProofDir, `pr-links-${width}-${theme}-${count}.png`),
+            await takeControlUiViewportScreenshot(page, stack, [chips.first()]),
+          );
         }
         for (const chip of await chips.all()) {
           await chip.locator(".chat-pr__link").click({ trial: true });
@@ -338,6 +358,7 @@ describeControlUiE2e("session pull request chips", () => {
       });
       await page.goto(`${server.baseUrl}chat`);
       const watchedKey = await waitForWatchedSessionKey(gateway);
+      await openChatDetails(page);
       await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
         sessions: {
           [watchedKey]: {
@@ -371,11 +392,13 @@ describeControlUiE2e("session pull request chips", () => {
       const create = row.getByRole("button", { name: "Publish PR" });
       await expect.poll(() => create.textContent()).toContain("Publish PR");
       await expect.poll(() => create.getAttribute("href")).toBeNull();
-      // No dismiss control: the row reflects the checkout itself.
-      await expect.poll(() => row.locator(".chat-pr__dismiss").count()).toBe(0);
+      const dismiss = row.getByRole("button", {
+        name: "Hide claude/cloud-workers-live-events for this session",
+        exact: true,
+      });
+      await expect.poll(() => dismiss.isEnabled()).toBe(true);
 
-      // The row shares the composer's centered width; it is part of the input
-      // stack, not a full-pane banner.
+      // The compact offer stays inside Details at both viewport sizes.
       await page.setViewportSize(viewport);
       await page.locator(".chat").evaluate(finishElementAnimations);
       if (captureUiProof) {
@@ -384,18 +407,26 @@ describeControlUiE2e("session pull request chips", () => {
           path: path.join(stackingProofDir, `${label}-branch-spacing.png`),
         });
       }
-      const rowBox = await page.locator(".chat-prs").boundingBox();
-      const composerBox = await page.locator(".agent-chat__input").boundingBox();
-      expect(rowBox && composerBox).toBeTruthy();
-      if (rowBox && composerBox) {
-        expect(Math.abs(rowBox.width - composerBox.width)).toBeLessThanOrEqual(1);
-        expect(Math.abs(rowBox.x - composerBox.x)).toBeLessThanOrEqual(1);
-        const chipBox = await row.boundingBox();
-        expect(chipBox).not.toBeNull();
-        const gap = composerBox.y - (chipBox!.y + chipBox!.height);
-        expect(gap).toBeGreaterThanOrEqual(0);
-        expect(gap).toBeLessThanOrEqual(8);
-      }
+      // Viewport changes position the open Details panel asynchronously.
+      await expect
+        .poll(async () => {
+          const rowBox = await row.boundingBox();
+          const detailsBox = await page.locator('.chat-details[role="dialog"]').boundingBox();
+          return Boolean(
+            rowBox &&
+            detailsBox &&
+            rowBox.x >= detailsBox.x &&
+            rowBox.x + rowBox.width <= detailsBox.x + detailsBox.width &&
+            detailsBox.x >= 0 &&
+            detailsBox.x + detailsBox.width <= viewport.width &&
+            (await row.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)),
+          );
+        })
+        .toBe(true);
+      await create.click({ trial: true });
+
+      await dismiss.click();
+      await expect.poll(() => page.locator(".chat-prs").count()).toBe(0);
     },
   );
 
@@ -425,6 +456,7 @@ describeControlUiE2e("session pull request chips", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
     const watchedKey = await waitForWatchedSessionKey(gateway);
+    await openChatDetails(page);
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: {
         [watchedKey]: {
@@ -555,6 +587,7 @@ describeControlUiE2e("session pull request chips", () => {
     });
     await page.goto(controlUiSessionUrl(server.baseUrl, sessionA));
     await waitForWatchedSessionKey(gateway);
+    await openChatDetails(page);
     const publicationState = (branch: string) => ({
       pullRequests: [],
       branch: {
@@ -592,6 +625,7 @@ describeControlUiE2e("session pull request chips", () => {
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: { [sessionB]: publicationState("openclaw/publication-b") },
     });
+    await openChatDetails(page);
     await gateway.deferNext("sessions.github.publish", { sessionKey: sessionB });
     const requestCountB = (await gateway.getRequests("sessions.github.publish")).length;
     await page.getByRole("button", { name: "Publish PR" }).click();
@@ -656,6 +690,7 @@ describeControlUiE2e("session pull request chips", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
     const watchedKey = await waitForWatchedSessionKey(gateway);
+    await openChatDetails(page);
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: {
         [watchedKey]: {
@@ -725,6 +760,7 @@ describeControlUiE2e("session pull request chips", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
     const watchedKey = await waitForWatchedSessionKey(gateway);
+    await openChatDetails(page);
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: {
         [watchedKey]: {
@@ -820,6 +856,7 @@ describeControlUiE2e("session pull request chips", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
     const watchedKey = await waitForWatchedSessionKey(gateway);
+    await openChatDetails(page);
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: {
         [watchedKey]: {
@@ -843,7 +880,7 @@ describeControlUiE2e("session pull request chips", () => {
     expect(
       await page.getByRole("button", { name: "Publication account", exact: true }).count(),
     ).toBe(0);
-    expect(await page.locator(".chat-pr wa-dropdown, .chat-pr wa-popover").count()).toBe(0);
+    expect(await page.locator(".chat-pr__accounts-panel").count()).toBe(0);
     expect(await page.locator(".chat-prs").textContent()).not.toContain("reclaim the workspace");
     await page.getByRole("button", { name: "Publish PR" }).click();
     const request = await gateway.waitForRequest("sessions.github.publish");

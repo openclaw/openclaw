@@ -103,8 +103,9 @@ function classifyCanonicalRow(
   if (!isValidCreatedAtMs(row.updated_at_ms)) {
     return "invalid";
   }
+  let canonical: DeviceIdentity;
   try {
-    validateStoredDeviceIdentity(
+    canonical = validateStoredDeviceIdentity(
       {
         deviceId: row.device_id,
         publicKeyPem: row.public_key_pem,
@@ -120,14 +121,7 @@ function classifyCanonicalRow(
   // serialization metadata, not a reason to rotate an already-canonical key.
   return row.identity_key === IDENTITY_KEY &&
     row.device_id === identity.deviceId &&
-    deviceIdentityKeyMaterialMatches(
-      {
-        deviceId: row.device_id,
-        publicKeyPem: row.public_key_pem,
-        privateKeyPem: row.private_key_pem,
-      },
-      identity,
-    )
+    deviceIdentityKeyMaterialMatches(canonical, identity)
     ? "same"
     : "different";
 }
@@ -207,11 +201,6 @@ function importAndRecordReceipt(params: {
             stateDb.insertInto("device_identities").values({ identity_key: IDENTITY_KEY, ...row }),
           );
         }
-      }
-
-      const verified = readCanonicalIdentity(db);
-      if (!verified || classifyCanonicalRow(verified, params.snapshot.identity) !== "same") {
-        throw new Error("SQLite verification failed for the primary device identity");
       }
 
       const reportJson = JSON.stringify({
@@ -404,18 +393,13 @@ export async function migrateLegacyDeviceIdentity(params: {
           ],
         };
       }
-      const activePath = hasSource
-        ? params.detected.sourcePath
-        : hasClaim
-          ? params.detected.claimPath
-          : null;
-      if (!activePath) {
+      if (!hasSource && !hasClaim) {
         return { changes: [], warnings: [] };
       }
 
       let snapshot: LegacySourceSnapshot;
       try {
-        snapshot = await source.read(activePath === params.detected.claimPath);
+        snapshot = await source.read(!hasSource);
       } catch (error) {
         return {
           changes: [],
@@ -425,7 +409,7 @@ export async function migrateLegacyDeviceIdentity(params: {
 
       let result: ReturnType<typeof importAndRecordReceipt>;
       try {
-        if (activePath === params.detected.sourcePath) {
+        if (hasSource) {
           snapshot = await source.claim({
             snapshot,
             mismatchMessage: "legacy device identity changed before Doctor could claim it",

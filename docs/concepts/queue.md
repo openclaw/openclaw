@@ -18,10 +18,12 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 ## How it works
 
 - A lane-aware FIFO queue drains each lane with a configurable concurrency cap (default 1 for unconfigured lanes; `main` uses `max(8, available CPU parallelism * 4)`, ordinary sub-agent queues default to 8 per spawning session, and Swarm collector queues default to 32 per group).
+- Priority has a bounded head start: foreground work can overtake normal work by up to 15 seconds and background work by up to 30 seconds. After that, newer foreground arrivals cannot keep passing the older work. Lanes and shared capacity groups use the same order, preserving FIFO within each priority. Occupied slots and earlier queued work can still delay admission; running turns are never preempted.
 - CLI, embedded, and Codex runs share the same **session-key lane** (`session:<key>`). Each turn waits there before acquiring the session's execution claim, so changing runtimes cannot start a competing turn.
+- Inbound messages can be persisted before their turn enters the lane. A running turn reads a consistent transcript prefix, so a later queued message does not invalidate its context read. Rewrites, compaction, deletion, and branch changes still invalidate that read.
 - Inbound session runs then enter the **global `main` lane**, whose parallelism is capped by `agents.defaults.maxConcurrent`. Ordinary sub-agent runs instead use their immediate spawning/controller session's budget, set by `agents.defaults.subagents.maxConcurrent`. Swarm collector children use their group's separate budget, set by `tools.swarm.maxConcurrent`.
 - Embedded attempt preparation yields to the event loop after 16 stage starts or at least 8 ms of synchronous dispatch work per slice, so concurrent starts leave room for Gateway requests. A running stage is not preempted. Asynchronous stage work can still overlap and does not count toward that time budget; this does not lower the run concurrency limit or change session serialization.
-- When verbose logging is enabled, queued runs emit a short notice if they waited more than ~2s before starting.
+- When verbose logging is enabled, queued runs emit a short notice if they waited more than ~2s before starting. `queueAhead` records the enqueue-time backlog, not a prediction of admission order after priority and aging.
 - Typing indicators still fire immediately on enqueue (when supported by the channel) so user experience is unchanged while the run waits its turn.
 
 ## Defaults
@@ -41,8 +43,10 @@ Same-turn steering is the default. A prompt that arrives mid-run is injected int
 
 - `steer`: inject messages into the active runtime, including while it is executing tools. OpenClaw lets the first executable call of an assistant message start before steering can skip its unstarted sequential tail. Running tools finish, and parallel batches never skip calls for steering. After each batch settles, OpenClaw checks steering before stop hooks and makes it visible after the tool results, before the next model decision. Codex app-server receives one batched `turn/steer` and applies it at the next model boundary. If steering is unavailable, OpenClaw waits until the active run ends before starting the prompt.
 - `followup`: do not steer. Enqueue each message for a later agent turn after the current run ends.
-- `collect`: do not steer. Coalesce queued messages into a **single** followup turn after the quiet window. If messages target different channels/threads, they drain individually to preserve routing.
-- `interrupt`: abort the active run for that session, then run the newest message.
+- `collect`: do not steer. Coalesce compatible queued messages into a **single** followup turn after the quiet window. Messages must share routing, authorization, and execution settings and must not have distinct exclusive admission lifecycles.
+- `interrupt`: abort the active run for that session, then run the newest message. This cancellation does not resume the old turn through Gateway restart recovery.
+
+Messages from channels using durable ingress admission, including Discord and Telegram, keep separate followup turns: `collect` behaves like `followup` there. Each message owns an exclusive admission lifecycle so one source cannot commit before another rejects a combined turn. Compatible Gateway `chat.send` inputs use non-exclusive lifecycles and can still collect.
 
 For runtime-specific timing and dependency behavior, see [Steering queue](/concepts/queue-steering). For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
@@ -141,10 +145,15 @@ overflow summary.
 - `chat.abort` with a specific `runId` cancels that turn while it is still
   queued, if the requester is authorized (same ownership rules as active runs).
 - `chat.abort` for a session without `runId` cancels **authorized queued turns
-  first**, then aborts authorized active runs. That order prevents queue drain
+  first**, then aborts authorized active runs, including controller-less runs
+  admitted or queued before their runner starts (such as OpenAI-compatible HTTP
+  requests), as well as active channel replies. That order prevents queue drain
   from promoting work into a half-stopped session.
 - Clearing the entire session queue without per-requester checks is not the
   stop path for multi-owner sessions.
+- A new prompt accepted after Stop keeps its own cancellation and queue custody.
+  If the stopped turn is still settling preparation, the new prompt waits for
+  that owner to finish before running; it does not inherit the earlier Stop.
 - Queued waits are not projected as active agent runs for `sessions.list` and
   do not own active-run timeout semantics; only the active phase does.
 - A queued request that expires or is cancelled before execution settles only
@@ -191,6 +200,14 @@ attempt's inbound and queue dedupe entries before ingress retries it. Messages
 already adopted or consumed keep duplicate suppression, so transport redelivery
 does not repeat their effects.
 
+Queued channel input is adopted only after the session owner accepts durable
+input and recovery custody. Preparation failures before acceptance keep ingress retryable;
+failures after acceptance produce a terminal error reply without replaying the
+input. Entering the session lane alone does not complete ingress.
+Repeated preparation errors stop renewing the waiting heartbeat, allowing the
+existing ingress watchdog to apply its retry and dead-letter policy. Normal
+capacity waits keep their heartbeat.
+
 ## Lanes and scope
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
@@ -204,22 +221,25 @@ does not repeat their effects.
 
 ## Background work
 
-Skill Workshop reviews and plugin background completions, including [dreaming](/concepts/dreaming), share a separate budget of **three concurrent runs**. Workshop reviews use at most one slot; each plugin can use up to three available slots. This keeps maintenance work out of foreground reply capacity while bounding its total concurrency. These limits are built in and need no configuration.
+Plugin background completions, including [dreaming](/concepts/dreaming), use the Gateway's `subagent` lane at background priority. Its concurrency follows `agents.defaults.subagents.maxConcurrent` across plugins and workspaces (default: `8`). Set it to `1` to run one completion at a time. Ordinary spawned sub-agent queues retain their per-spawning-session budgets.
+
+Skill Workshop reviews use a separate background budget, with at most one review running at a time.
 
 Schedulers that await background work do not occupy this budget themselves. Only the dispatched work holds a slot, through completion or cancellation cleanup, so a scheduler cannot block the child it is waiting for. Cancelled queued work is removed before it starts; Gateway restart or runtime retirement prevents stale completions from starting or returning results.
 
-The Control UI **System busyness** overlay and `diagnostics.lanes` report this work in one `background` row. Its active and queued counts include every owner; owner lanes are not counted again in the dynamic session-lane totals.
+The Control UI **System busyness** overlay and `diagnostics.lanes` report plugin completions in the `subagent` row and Workshop reviews in the `background` row. Background owner lanes are not counted again in the dynamic session-lane totals.
 
 ## Troubleshooting
 
 - If commands seem stuck, enable verbose logs and look for "queued for ...ms" lines to confirm the queue is draining.
+- In `lane wait exceeded`, `activeAhead` counts active tasks when the entry was queued; `activeNow` counts them immediately before it starts. `activeAhead=1 activeNow=0` can mean the preceding task just finished, even after a long wait. It does not establish a leaked slot. Admission failures and completed tasks release their slots and drain queued successors even when diagnostics throw; `lane task diagnostics failed after settlement` identifies a task whose completion logging failed after its caller settled.
 - Codex app-server runs that accept a turn and then stop emitting progress are interrupted by the Codex adapter so the active session lane can release instead of waiting for the outer run timeout.
 - When diagnostics are enabled, sessions that remain in `processing` past the built-in warning threshold with no observed reply, tool, status, block, or ACP progress are classified by current activity:
   - Active work with recent progress logs as `session.long_running`. Owned silent model calls also stay `session.long_running` until the built-in abort threshold so slow or non-streaming providers are not reported as stalled too early.
   - Active work with no recent progress logs as `session.stalled`; owned model calls, blocked tool calls, and stalled embedded runs switch to `session.stalled` at or after the abort threshold. Ownerless stale model/tool activity is not hidden as long-running.
   - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
   - `session.stuck` always triggers recovery that can release the affected session lane. A `session.stalled` classification past the abort threshold (blocked tool call, stalled model call, or stalled embedded run) can also trigger active-abort recovery, so both classifications can unstick a queue, not only `session.stuck`.
-  - Repeated model requests without semantic progress share one stagnation clock. Fresh transport bytes or another retry cannot renew it indefinitely. Recovery rechecks that evidence before aborting, honors owned tool and provider retry deadlines, and lets the existing run owner settle before the queue drains.
+  - Repeated model requests without semantic progress share one stagnation clock, starting with the first retry. A long initial response that hits its output limit therefore leaves a full recovery window for the corrective request. Successfully completed embedded tools reset the clock under their current run owner, even if the enclosing response later hits its output limit. Failed, blocked, or retired-owner tools do not reset it. Fresh transport bytes or later retries cannot renew it indefinitely. Recovery rechecks that evidence before aborting, honors owned tool and provider retry deadlines, and lets the existing run owner settle before the queue drains.
   - When recovery aborts an interactive turn before it replied and its request is already saved in the transcript, OpenClaw attempts one continuation instead of immediately asking the user to retry. When the next queued follow-up is from the same sender and route (for example a `chat.send` with `queueMode: "followup"`), it takes over the outstanding request; otherwise a recovery turn starts on the stalled turn's route. The recovery reply is delivered the same way as any queued follow-up from that source; a Web UI (`chat.send`) recovery arrives as its own run in the chat. Group-thread participant turns get the notice instead, because queued participant replies have no delivery owner. Both use the existing transcript and are instructed not to repeat completed actions. Other senders' queued messages and channel messages that arrived during the stalled turn run afterwards as their own turns. The "stopped making progress" notice is the last resort if that continuation also stalls or cannot be scheduled, including when the original request was not yet saved. Heartbeat and cron turns are unaffected.
   - Repeated `session.stuck` and `session.long_running` warning log lines back off exponentially while the session remains unchanged; recovery attempts still run on every heartbeat tick regardless of that backoff.
 

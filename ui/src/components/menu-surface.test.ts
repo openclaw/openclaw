@@ -18,17 +18,6 @@ afterEach(async () => {
   bridge.available = false;
 });
 
-describe("promoteToPopoverTopLayer", () => {
-  it("falls back to in-flow rendering when showPopover throws", () => {
-    const element = document.createElement("div");
-    element.showPopover = vi.fn(() => {
-      throw new Error("top layer unavailable");
-    });
-    promoteToPopoverTopLayer(element);
-    expect(element.hasAttribute("popover")).toBe(false);
-  });
-});
-
 describe("openclaw-menu-surface", () => {
   it("promotes itself to the top layer on every connect", () => {
     const surface = document.createElement("openclaw-menu-surface");
@@ -43,16 +32,6 @@ describe("openclaw-menu-surface", () => {
     surface.remove();
     document.body.append(surface);
     expect(showPopover).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps children rendered in-flow when the popover API is unavailable", () => {
-    const surface = document.createElement("openclaw-menu-surface");
-    const menu = document.createElement("div");
-    menu.className = "menu";
-    surface.append(menu);
-    document.body.append(surface);
-    expect(surface.hasAttribute("popover")).toBe(false);
-    expect(surface.querySelector(".menu")).toBe(menu);
   });
 });
 
@@ -72,7 +51,7 @@ describe("native overlay occlusion for menus", () => {
     first.showPopover = vi.fn();
     promoteToPopoverTopLayer(first);
     promoteToPopoverTopLayer(first);
-    // Fallback surfaces must also occlude: native webviews cover in-page menus.
+    // Native webviews also cover top-layer menus.
     promoteToPopoverTopLayer(second);
     await new Promise(requestAnimationFrame);
     expect(changes.mock.calls).toEqual([[false], [true]]);

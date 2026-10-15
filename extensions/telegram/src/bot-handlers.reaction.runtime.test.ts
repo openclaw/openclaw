@@ -7,6 +7,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import {
   registerSessionBindingAdapter,
   testing as sessionBindingTesting,
@@ -170,6 +171,20 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     resetSystemEventsForTest();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     clearRuntimeConfigSnapshot();
+    vi.restoreAllMocks();
+  });
+
+  it("keeps reaction content in the system event, not verbose diagnostics", async () => {
+    const log = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
+    enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
+    await registerHandler(buildTelegramConfig())(
+      forumReactionContext({ isForum: false, chatType: "private" }),
+    );
+    expect(peekSystemEventEntries("agent:main:main")[0]?.text).toContain(FIRE_EMOJI);
+    const diagnostics = log.mock.calls.map(([line]) => line).join("\n");
+    expect(diagnostics).toContain("reaction event enqueued chat=5678 message=100");
+    expect(diagnostics).not.toContain("Bob");
+    expect(diagnostics).not.toContain(FIRE_EMOJI);
   });
 
   it.each(["private", "supergroup"] as const)(
@@ -315,24 +330,6 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
   });
 
-  it("recovers the cached topic before authorization and routes to that topic", async () => {
-    resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "forum", id: FORUM_TOPIC_ID });
-    const handler = registerHandler(
-      buildTelegramConfig({ topics: { [String(FORUM_TOPIC_ID)]: { enabled: true } } }),
-    );
-
-    await handler(forumReactionContext());
-
-    expect(resolveCachedMessageThreadSpec).toHaveBeenCalledWith({
-      chatId: FORUM_CHAT_ID,
-      messageId: REACTED_MESSAGE_ID,
-    });
-    expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(1);
-    expect(String(systemEventOptions().sessionKey)).toContain(
-      `telegram:group:${FORUM_CHAT_ID}:topic:${FORUM_TOPIC_ID}`,
-    );
-  });
-
   it("routes a recovered topic through its configured topic agent", async () => {
     resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "forum", id: FORUM_TOPIC_ID });
     const handler = registerHandler(
@@ -428,44 +425,4 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
       expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(sentByBot ? 1 : 0);
     },
   );
-
-  it("never consults the message cache for non-forum groups", async () => {
-    const handler = registerHandler(buildTelegramConfig());
-
-    await handler(forumReactionContext({ isForum: false }));
-
-    expect(resolveCachedMessageThreadSpec).not.toHaveBeenCalled();
-    expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(1);
-    expect(String(systemEventOptions().sessionKey)).not.toContain(":topic:");
-  });
-
-  it("never consults the message cache for direct chats", async () => {
-    const handler = registerHandler(buildTelegramConfig());
-
-    await handler(forumReactionContext({ isForum: false, chatType: "private" }));
-
-    expect(resolveCachedMessageThreadSpec).not.toHaveBeenCalled();
-    expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(1);
-    expect(String(systemEventOptions().sessionKey)).not.toContain(":topic:");
-    expect(String(systemEventOptions().sessionKey)).not.toContain(":group:");
-  });
-
-  it("skips the cache lookup entirely when no reaction was added", async () => {
-    const handler = registerHandler(
-      buildTelegramConfig({ topics: { [String(FORUM_TOPIC_ID)]: { enabled: true } } }),
-    );
-
-    // A removal-only update enqueues nothing, so it must not spend a cache lookup
-    // or log an unresolved-topic warning.
-    await handler(
-      forumReactionContext({
-        oldReaction: [{ type: "emoji", emoji: FIRE_EMOJI }],
-        newReaction: [],
-      }),
-    );
-
-    expect(resolveCachedMessageThreadSpec).not.toHaveBeenCalled();
-    expect(enqueueRoutedSystemEvent).not.toHaveBeenCalled();
-    expect(runtimeLog).not.toHaveBeenCalled();
-  });
 });

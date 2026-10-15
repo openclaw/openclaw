@@ -16,6 +16,7 @@ import {
   type ShortTermDreamingStats,
   type ShortTermDreamingStatsEntry,
 } from "../../memory-host-sdk/dreaming.js";
+import { readMemorySearchManagerStatus } from "../../memory-host-sdk/host/types.js";
 import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
 import type { MemoryHealth } from "../../plugins/memory-provider-types.js";
 import {
@@ -154,48 +155,41 @@ const DREAMING_ENTRY_LIST_LIMIT = 8;
 
 // Keep malformed persisted timestamps behind valid entries; returning NaN here
 // makes Array.sort preserve arbitrary input order and can hide valid diagnostics.
-function parseDreamingTimestampMs(value: string | undefined): number {
-  return parseDateStringTimestampMs(value) ?? Number.NEGATIVE_INFINITY;
+function compareDreamingTimestamp(a: string | undefined, b: string | undefined): number {
+  const aMs = parseDateStringTimestampMs(a) ?? Number.NEGATIVE_INFINITY;
+  const bMs = parseDateStringTimestampMs(b) ?? Number.NEGATIVE_INFINITY;
+  return aMs === bMs ? 0 : bMs > aMs ? 1 : -1;
 }
 
 function compareDreamingEntryByRecency(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
 ): number {
-  const aMs = parseDreamingTimestampMs(a.lastRecalledAt);
-  const bMs = parseDreamingTimestampMs(b.lastRecalledAt);
-  if (bMs !== aMs) {
-    return bMs > aMs ? 1 : -1;
-  }
-  if (b.totalSignalCount !== a.totalSignalCount) {
-    return b.totalSignalCount - a.totalSignalCount;
-  }
-  return a.path.localeCompare(b.path);
+  return (
+    compareDreamingTimestamp(a.lastRecalledAt, b.lastRecalledAt) ||
+    b.totalSignalCount - a.totalSignalCount ||
+    a.path.localeCompare(b.path)
+  );
 }
 
 function compareDreamingEntryBySignals(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
 ): number {
-  if (b.totalSignalCount !== a.totalSignalCount) {
-    return b.totalSignalCount - a.totalSignalCount;
-  }
-  if (b.phaseHitCount !== a.phaseHitCount) {
-    return b.phaseHitCount - a.phaseHitCount;
-  }
-  return compareDreamingEntryByRecency(a, b);
+  return (
+    b.totalSignalCount - a.totalSignalCount ||
+    b.phaseHitCount - a.phaseHitCount ||
+    compareDreamingEntryByRecency(a, b)
+  );
 }
 
 function compareDreamingEntryByPromotion(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
 ): number {
-  const aMs = parseDreamingTimestampMs(a.promotedAt);
-  const bMs = parseDreamingTimestampMs(b.promotedAt);
-  if (bMs !== aMs) {
-    return bMs > aMs ? 1 : -1;
-  }
-  return compareDreamingEntryBySignals(a, b);
+  return (
+    compareDreamingTimestamp(a.promotedAt, b.promotedAt) || compareDreamingEntryBySignals(a, b)
+  );
 }
 
 async function loadDreamingStoreStats(
@@ -215,52 +209,40 @@ async function loadDreamingStoreStats(
 }
 
 function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStats {
-  let shortTermCount = 0;
-  let recallSignalCount = 0;
-  let dailySignalCount = 0;
-  let groundedSignalCount = 0;
-  let totalSignalCount = 0;
-  let phaseSignalCount = 0;
-  let lightPhaseHitCount = 0;
-  let remPhaseHitCount = 0;
-  let promotedTotal = 0;
-  let promotedToday = 0;
+  const totals = {
+    shortTermCount: 0,
+    recallSignalCount: 0,
+    dailySignalCount: 0,
+    groundedSignalCount: 0,
+    totalSignalCount: 0,
+    phaseSignalCount: 0,
+    lightPhaseHitCount: 0,
+    remPhaseHitCount: 0,
+    promotedTotal: 0,
+    promotedToday: 0,
+  };
   let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
   let lastPromotedAt: string | undefined;
-  const storePaths = new Set<string>();
-  const phaseSignalPaths = new Set<string>();
-  const storeErrors: string[] = [];
-  const phaseSignalErrors: string[] = [];
-  const shortTermEntries: ShortTermDreamingStatsEntry[] = [];
-  const signalEntries: ShortTermDreamingStatsEntry[] = [];
-  const promotedEntries: ShortTermDreamingStatsEntry[] = [];
+  const storePaths = new Set(stats.flatMap((stat) => (stat.storePath ? [stat.storePath] : [])));
+  const phaseSignalPaths = new Set(
+    stats.flatMap((stat) => (stat.phaseSignalPath ? [stat.phaseSignalPath] : [])),
+  );
+  const storeErrors = stats.flatMap((stat) => (stat.storeError ? [stat.storeError] : []));
+  const phaseSignalErrors = stats.flatMap((stat) =>
+    stat.phaseSignalError ? [stat.phaseSignalError] : [],
+  );
 
   for (const stat of stats) {
-    shortTermCount += stat.shortTermCount;
-    recallSignalCount += stat.recallSignalCount;
-    dailySignalCount += stat.dailySignalCount;
-    groundedSignalCount += stat.groundedSignalCount;
-    totalSignalCount += stat.totalSignalCount;
-    phaseSignalCount += stat.phaseSignalCount;
-    lightPhaseHitCount += stat.lightPhaseHitCount;
-    remPhaseHitCount += stat.remPhaseHitCount;
-    promotedTotal += stat.promotedTotal;
-    promotedToday += stat.promotedToday;
-    if (stat.storePath) {
-      storePaths.add(stat.storePath);
-    }
-    if (stat.phaseSignalPath) {
-      phaseSignalPaths.add(stat.phaseSignalPath);
-    }
-    if (stat.storeError) {
-      storeErrors.push(stat.storeError);
-    }
-    if (stat.phaseSignalError) {
-      phaseSignalErrors.push(stat.phaseSignalError);
-    }
-    shortTermEntries.push(...stat.shortTermEntries);
-    signalEntries.push(...stat.signalEntries);
-    promotedEntries.push(...stat.promotedEntries);
+    totals.shortTermCount += stat.shortTermCount;
+    totals.recallSignalCount += stat.recallSignalCount;
+    totals.dailySignalCount += stat.dailySignalCount;
+    totals.groundedSignalCount += stat.groundedSignalCount;
+    totals.totalSignalCount += stat.totalSignalCount;
+    totals.phaseSignalCount += stat.phaseSignalCount;
+    totals.lightPhaseHitCount += stat.lightPhaseHitCount;
+    totals.remPhaseHitCount += stat.remPhaseHitCount;
+    totals.promotedTotal += stat.promotedTotal;
+    totals.promotedToday += stat.promotedToday;
     const promotedAtMs = stat.lastPromotedAt ? Date.parse(stat.lastPromotedAt) : Number.NaN;
     if (Number.isFinite(promotedAtMs) && promotedAtMs > latestPromotedAtMs) {
       latestPromotedAtMs = promotedAtMs;
@@ -269,28 +251,19 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
   }
 
   return {
-    shortTermCount,
-    recallSignalCount,
-    dailySignalCount,
-    groundedSignalCount,
-    totalSignalCount,
-    phaseSignalCount,
-    lightPhaseHitCount,
-    remPhaseHitCount,
-    promotedTotal,
-    promotedToday,
+    ...totals,
     shortTermEntries: sortAndLimitBy(
-      shortTermEntries,
+      stats.flatMap((stat) => stat.shortTermEntries),
       DREAMING_ENTRY_LIST_LIMIT,
       compareDreamingEntryByRecency,
     ),
     signalEntries: sortAndLimitBy(
-      signalEntries,
+      stats.flatMap((stat) => stat.signalEntries),
       DREAMING_ENTRY_LIST_LIMIT,
       compareDreamingEntryBySignals,
     ),
     promotedEntries: sortAndLimitBy(
-      promotedEntries,
+      stats.flatMap((stat) => stat.promotedEntries),
       DREAMING_ENTRY_LIST_LIMIT,
       compareDreamingEntryByPromotion,
     ),
@@ -406,13 +379,13 @@ export const createDoctorHandlers = (
     }
 
     try {
-      let status = manager.status();
+      let status = await readMemorySearchManagerStatus(manager);
       const shouldProbe = params.probe === true || params.deep === true;
       let embedding = shouldProbe
         ? await manager.probeEmbeddingAvailability()
         : (manager.getCachedEmbeddingAvailability?.() ?? SKIPPED_MEMORY_EMBEDDING_PROBE);
       if (shouldProbe) {
-        status = manager.status();
+        status = await readMemorySearchManagerStatus(manager);
       }
       if (!embedding.ok && !embedding.error) {
         embedding = { ok: false, error: "memory embeddings unavailable" };
@@ -445,6 +418,9 @@ export const createDoctorHandlers = (
             ),
       );
       const cronStatus = await resolveManagedDreamingCronStatus(context);
+      for (const phase of Object.values(dreamingConfig.phases)) {
+        Object.assign(phase, cronStatus);
+      }
       const payload: DoctorMemoryStatusPayload = {
         agentId,
         provider: status.provider,
@@ -458,20 +434,6 @@ export const createDoctorHandlers = (
         dreaming: {
           ...dreamingConfig,
           ...storeStats,
-          phases: {
-            light: {
-              ...dreamingConfig.phases.light,
-              ...cronStatus,
-            },
-            deep: {
-              ...dreamingConfig.phases.deep,
-              ...cronStatus,
-            },
-            rem: {
-              ...dreamingConfig.phases.rem,
-              ...cronStatus,
-            },
-          },
         },
       };
       respond(true, payload, undefined);

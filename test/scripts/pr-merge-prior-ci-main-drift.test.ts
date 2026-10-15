@@ -1,11 +1,32 @@
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { afterAll, afterEach, expect, it } from "vitest";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
+import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
 const { describePosix, fixture } = createMergeOutcomeFixtureHarness();
-const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
+const { preExistingCandidate: createCandidate } = createPriorCiCandidateFactory(fixture);
+const snapshots = useAutoCleanupTempDirTracker(afterAll);
+const restoredRoots = new Set<string>();
+afterEach(() => cleanupTempDirs(restoredRoots));
+let prepared: { candidate: ReturnType<typeof createCandidate>; snapshot: string } | undefined;
+
+function preExistingCandidate() {
+  if (!prepared) {
+    const candidate = createCandidate();
+    const snapshot = snapshots.make("pr-main-drift-setup-");
+    copyTreeCloseOnExec(candidate.root, snapshot);
+    prepared = { candidate, snapshot };
+  } else {
+    // Keep absolute worktree and evidence paths valid while resetting every case's refs and state.
+    rmSync(prepared.candidate.root, { recursive: true, force: true });
+    copyTreeCloseOnExec(prepared.snapshot, prepared.candidate.root);
+    restoredRoots.add(prepared.candidate.root);
+  }
+  return prepared.candidate;
+}
 
 function expectNoDispatch(f: ReturnType<typeof preExistingCandidate>) {
   expect(f.state().mutations).toBe(0);
@@ -92,32 +113,40 @@ describePosix("prior-CI forward main admission", () => {
     expectNoDispatch(f);
   });
 
-  it("stops after three authority rounds without fetching the last missing tip", () => {
+  it("lands after more than three main advances once a round stays stable", () => {
     const f = preExistingCandidate();
     f.save({
       ...f.state(),
-      observations: [
+      graphqlMergeProjection: { mergeStateStatus: "UNKNOWN" },
+      restObservations: [
         {},
         {},
         {},
+        ...Array.from({ length: 4 }, () => ({ advanceMain: true })),
         {},
-        { advanceMain: true },
-        {},
-        { advanceMain: true },
-        {},
-        { advanceMain: true },
       ],
     });
     const result = f.adminPriorCi(f.path);
     expect(result.error, result.output).toBeUndefined();
+    expect(result.status, result.output).toBe(0);
+    expect(f.state().mainAdvances).toHaveLength(4);
+    expect(result.output).toContain("Admin authority round 5:");
+    expect(f.state().mutations).toBe(1);
+    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+    expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(f.state().mainAdvances.at(-1));
+  });
+
+  it("stops at the authority deadline before intent when main keeps advancing", () => {
+    const f = preExistingCandidate();
+    f.save({
+      ...f.state(),
+      graphqlMergeProjection: { mergeStateStatus: "UNKNOWN" },
+      restObservations: [{}, {}, {}, { advanceMain: true, advanceSeconds: 901 }],
+    });
+    const result = f.adminPriorCi(f.path);
+    expect(result.error, result.output).toBeUndefined();
     expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("main kept advancing after 3 authority rounds");
-    const advances = f.state().mainAdvances;
-    expect(advances).toHaveLength(3);
-    for (const main of advances.slice(0, 2)) {
-      expect(f.git(["cat-file", "-t", main])).toBe("commit");
-    }
-    expect(() => f.git(["cat-file", "-e", advances[2]!])).toThrow();
+    expect(result.output).toContain("900s/32-round limit");
     expectNoDispatch(f);
   });
 
@@ -128,6 +157,8 @@ describePosix("prior-CI forward main admission", () => {
     "final GraphQL recalculation",
     "remote-only final main",
     "remote-only recalculation",
+    "known status",
+    "final known status",
   ] as const)("lands the pinned head when main advances during %s", (stage) => {
     const f = preExistingCandidate();
     const remoteOnly = stage.startsWith("remote-only");
@@ -135,7 +166,10 @@ describePosix("prior-CI forward main admission", () => {
     let main = remoteOnly ? f.base : f.commit(f.tree("before\n", "advanced\n"), [f.base]);
     const state = f.state();
     const unknown = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
-    const settled = { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" };
+    const settled = {
+      mergeable: "MERGEABLE",
+      mergeStateStatus: stage.includes("known status") ? "CLEAN" : "BLOCKED",
+    };
     if (remoteOnly) {
       state.observations = [
         {},
@@ -146,8 +180,12 @@ describePosix("prior-CI forward main admission", () => {
         ...(recalculating ? [{ pr: unknown }, { pr: settled }] : []),
       ];
     } else {
-      state.observations =
-        stage === "settlement"
+      state.observations = stage.includes("known status")
+        ? [
+            ...Array.from({ length: stage === "known status" ? 1 : 4 }, () => ({})),
+            { main, pr: settled },
+          ]
+        : stage === "settlement"
           ? [{ pr: unknown }]
           : recalculating
             ? [
@@ -170,8 +208,10 @@ describePosix("prior-CI forward main admission", () => {
       main = f.state().mainAdvances[0]!;
       expect(f.git(["cat-file", "-t", main])).toBe("commit");
       expect(f.record()).toMatchObject({ accepted: true });
-      expect(result.output).toContain(`Requalifying prior-CI admission after main ${main}`);
-      expect(f.state().settlementSleeps).toEqual(recalculating ? [1] : []);
+      expect(result.output).toContain(
+        "Requalifying admin admission against the next fresh main snapshot",
+      );
+      expect(f.state().settlementSleeps).toEqual(recalculating ? [2] : []);
     } else {
       if (stage === "settlement") {
         expect(f.state()).toMatchObject({
@@ -182,7 +222,7 @@ describePosix("prior-CI forward main admission", () => {
         });
       }
       if (recalculating) {
-        expect(f.state().settlementSleeps).toEqual([1]);
+        expect(f.state().settlementSleeps).toEqual([2]);
         expect(f.state().restMainReads).toBe(0);
       }
       expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
@@ -204,11 +244,32 @@ describePosix("prior-CI forward main admission", () => {
     expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(main);
   });
 
+  it("waits for late mergeability recalculation after a verified main advance", () => {
+    const f = preExistingCandidate();
+    const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+    const unknown = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
+    f.save({
+      ...f.state(),
+      observations: [
+        {},
+        { main, pr: unknown },
+        ...Array.from({ length: 3 }, () => ({ pr: unknown })),
+        { pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
+      ],
+    });
+
+    const result = f.adminPriorCi(f.path);
+
+    expect(result.status, result.output).toBe(0);
+    expect(f.state().settlementSleeps).toEqual([2, 4, 8, 8]);
+    expect(f.state().mutations).toBe(1);
+    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+  });
+
   it.each([
     ["same main", "PR or main changed during observation"],
-    ["persistent", "mergeability recalculation remained UNKNOWN after 3 observations"],
+    ["persistent", "mergeability recalculation"],
     ["conflict", "PR or main changed during observation"],
-    ["known status", "PR or main changed during observation"],
     ["head", "PR or main changed during observation"],
     ["rewind", "both observed and verified main"],
     ["final revoked admin", "writer must be an active organization admin"],
@@ -218,6 +279,9 @@ describePosix("prior-CI forward main admission", () => {
     const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
     const state = f.state();
     state.priorCi.revokeAdminOnMainFetch = true;
+    if (fault === "persistent") {
+      state.clockStep = 20;
+    }
     state.observations = [
       ...Array.from({ length: fault.startsWith("final ") ? 4 : 1 }, () => ({})),
       {
@@ -231,7 +295,7 @@ describePosix("prior-CI forward main admission", () => {
               ...(fault === "rewind" ? { main: f.base } : {}),
               pr: {
                 mergeable: fault === "conflict" ? "CONFLICTING" : "MERGEABLE",
-                mergeStateStatus: fault === "known status" ? "CLEAN" : "BLOCKED",
+                mergeStateStatus: "BLOCKED",
                 ...(fault === "head" ? { headRefOid: f.base } : {}),
               },
               ...(fault === "final revoked admin" ? { priorCi: { membership: "member" } } : {}),
@@ -247,9 +311,12 @@ describePosix("prior-CI forward main admission", () => {
 
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain(diagnostic);
-    expect(f.state().settlementSleeps).toEqual(
-      fault === "same main" ? [] : fault === "persistent" ? [1, 2] : [1],
-    );
+    if (fault === "persistent") {
+      expect(result.output).toContain("60s");
+      expect(f.state().settlementSleeps.every((delay) => delay <= 8)).toBe(true);
+    } else {
+      expect(f.state().settlementSleeps).toEqual(fault === "same main" ? [] : [2]);
+    }
     expect(f.state().priorCi.adminRevokedDuringMainFetch).toBe(false);
     expectNoDispatch(f);
   });
@@ -262,9 +329,12 @@ describePosix("prior-CI forward main admission", () => {
     ["conflict", "reread", "cannot establish prepared-head merge tree"],
     ["empty change", "reread", "NO NET CHANGE"],
     ["unavailable main", "reread", "cannot fetch authoritative main"],
+    ["strict", "reread", "OPENCLAW_PR_STRICT_DRIFT=1"],
+    ["strict", "first observation", "OPENCLAW_PR_STRICT_DRIFT=1"],
   ] as const)("refuses %s at %s before intent or merge I/O", (fault, stage, message) => {
     const f = preExistingCandidate();
     const state = f.state();
+    state.strictDrift = fault === "strict";
     const main = f.commit(
       f.tree(
         fault === "conflict"
@@ -304,6 +374,7 @@ describePosix("prior-CI forward main admission", () => {
         ["policy", "evidence or authority changed during admission"],
         ["security source", "publisher source differs from the current owner"],
         ["evidence", "operator evidence changed while reading authority"],
+        ["new failing suite", "currently effective CI gate"],
       ] as const
     ).flatMap(([fault, message]) =>
       (["reread", "rematerialization"] as const).map((stage) => [fault, stage, message] as const),
@@ -335,6 +406,9 @@ describePosix("prior-CI forward main admission", () => {
         : stage === "rematerialization"
           ? [{}, {}, {}, {}, { advanceMain: true }, { priorCi }]
           : [{}, { main, priorCi }];
+    if (fault === "new failing suite") {
+      state.observations.at(-1)!.restUnseenSuite = "new-gate";
+    }
     if (stage !== "reread" && fault === "admin") {
       state.priorCi.revokeAdminOnMainFetch = true;
     }
@@ -346,6 +420,7 @@ describePosix("prior-CI forward main admission", () => {
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain(message);
     if (stage === "rematerialization") {
+      expect(result.output).toContain("Requalifying admin admission");
       expect(f.git(["cat-file", "-t", f.state().mainAdvances[0]!])).toBe("commit");
     }
     if (stage === "pre-final fetch") {
@@ -357,7 +432,6 @@ describePosix("prior-CI forward main admission", () => {
 
   it.each([
     ["head", "reread"],
-    ["status", "reread"],
     ["head", "rematerialization"],
     ["rewind", "rematerialization"],
   ] as const)("refuses changed %s during %s", (fault, stage) => {
@@ -374,10 +448,7 @@ describePosix("prior-CI forward main admission", () => {
       ];
     } else {
       const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-      state.observations = [
-        {},
-        { main, pr: fault === "head" ? { headRefOid: f.base } : { mergeStateStatus: "BEHIND" } },
-      ];
+      state.observations = [{}, { main, pr: { headRefOid: f.base } }];
     }
     f.save(state);
     const result = f.adminPriorCi(f.path);
@@ -389,20 +460,42 @@ describePosix("prior-CI forward main admission", () => {
     );
     if (stage === "rematerialization") {
       expect(result.error, result.output).toBeUndefined();
+      expect(result.output).toContain("Requalifying admin admission");
       expect(f.git(["cat-file", "-t", f.state().mainAdvances[0]!])).toBe("commit");
     }
     expectNoDispatch(f);
   });
 
-  it("keeps Crabbox admin main stability strict", () => {
-    const f = fixture();
-    const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-    f.save({ ...f.state(), admin: true, gates: "fail", observations: [{}, { main }] });
-    const result = f.run();
+  it("refuses a changed Security Review publisher source on the newly observed main", () => {
+    const f = preExistingCandidate();
+    const blob = f.git(["hash-object", "-w", "--stdin"], "changed protected publisher source\n");
+    const replace = (tree: string, name: string, entry: string) =>
+      f.git(
+        ["mktree"],
+        [
+          ...f
+            .git(["ls-tree", tree])
+            .split("\n")
+            .filter((line) => !line.endsWith(`\t${name}`)),
+          entry,
+          "",
+        ].join("\n"),
+      );
+    const lib = replace(
+      `${f.base}:scripts/lib`,
+      "bounded-response.mjs",
+      `100644 blob ${blob}\tbounded-response.mjs`,
+    );
+    const scripts = replace(`${f.base}:scripts`, "lib", `040000 tree ${lib}\tlib`);
+    const tree = replace(f.base, "scripts", `040000 tree ${scripts}\tscripts`);
+    const main = f.commit(tree, [f.base]);
+    f.save({ ...f.state(), observations: [{}, { main }] });
+
+    const result = f.adminPriorCi(f.path);
+
     expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("PR or main changed during observation");
-    expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
+    expect(result.output).toContain("publisher source differs from the current owner");
+    expectNoDispatch(f);
   });
 
   it("keeps retained prior-CI outcomes fenced after main moves", () => {
@@ -411,7 +504,7 @@ describePosix("prior-CI forward main admission", () => {
     f.adminPriorCi(f.path);
     expect(f.record()).toMatchObject({ phase: "intent", route: "admin" });
     expect(f.state().mutations).toBe(1);
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
     const outcome = f.git(["rev-parse", "refs/openclaw/pr-merge-outcomes/123"]);
     const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
     f.save({ ...f.state(), observations: [{}, { main }] });

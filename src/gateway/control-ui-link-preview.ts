@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fileTypeFromBuffer } from "file-type";
 import { Parser } from "htmlparser2";
 import pLimit from "p-limit";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withResponseBodyTimeout } from "../infra/http-response-body-timeout.js";
 import { readResponseWithLimit } from "../infra/http-response-body.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -23,7 +24,11 @@ const SUCCESS_TTL_MS = 60 * 60_000;
 const FAILURE_TTL_MS = 5 * 60_000;
 const loads = pLimit(4);
 const processor = createImageProcessor();
-const cache = new Map<string, { expiresAt: number; promise: Promise<ControlUiLinkPreview> }>();
+type PreviewScope = { principal: object; revision: string | number };
+type CacheEntry = { expiresAt: number; promise: Promise<ControlUiLinkPreview> };
+const principals = new WeakMap<object, number>();
+let nextPrincipal = 0;
+const cache = new Map<string, CacheEntry>();
 
 /** Public presentation only: never reuse browser credentials or private-network policy. */
 export function parseControlUiLinkPreviewUrl(value: unknown, base?: string): URL | null {
@@ -203,17 +208,11 @@ async function fetchPreviewResource<T>(
   }
 }
 
-async function loadImage(
-  url: string,
-  icon: boolean,
-  signal: AbortSignal,
-  isEnabled: () => boolean,
-) {
-  return await fetchPreviewResource(url, "image/*", signal, isEnabled, async (response) => {
-    const bytes = await readResponseWithLimit(response, icon ? ICON_MAX_BYTES : IMAGE_MAX_BYTES, {
-      signal,
-      chunkTimeoutMs: REQUEST_TIMEOUT_MS,
-    });
+async function loadImage(bytes: Buffer | undefined, icon: boolean, signal: AbortSignal) {
+  try {
+    if (!bytes || bytes.length > (icon ? ICON_MAX_BYTES : IMAGE_MAX_BYTES)) {
+      return undefined;
+    }
     const detected = await fileTypeFromBuffer(bytes);
     if (icon && detected?.mime === "image/x-icon") {
       return `data:image/x-icon;base64,${bytes.toString("base64")}`;
@@ -238,11 +237,19 @@ async function loadImage(
     return result.data.length <= (icon ? ICON_MAX_BYTES : IMAGE_OUTPUT_MAX_BYTES)
       ? `data:image/png;base64,${result.data.toString("base64")}`
       : undefined;
-  });
+  } catch {
+    return undefined;
+  }
 }
 
-async function loadPreview(url: URL, isEnabled: () => boolean): Promise<ControlUiLinkPreview> {
-  const signal = AbortSignal.timeout(PREVIEW_TIMEOUT_MS);
+async function loadPreview(
+  url: URL,
+  isEnabled: () => boolean,
+  signal: AbortSignal,
+): Promise<ControlUiLinkPreview> {
+  if (signal.aborted || !isEnabled()) {
+    return {};
+  }
   const page = await fetchPreviewResource(
     url.href,
     "text/html,application/xhtml+xml",
@@ -260,11 +267,28 @@ async function loadPreview(url: URL, isEnabled: () => boolean): Promise<ControlU
     ...(page?.icons ?? []),
     new URL("/favicon.ico", page?.finalUrl ?? url.href).href,
   ]);
+  // A page may advertise the same resource as its social image and favicon.
+  const images = new Map<string, Promise<Buffer | undefined>>();
+  const imageBytes = (target: string) => {
+    let pending = images.get(target);
+    if (!pending) {
+      pending = fetchPreviewResource(target, "image/*", signal, isEnabled, (response) =>
+        readResponseWithLimit(response, target === page?.image ? IMAGE_MAX_BYTES : ICON_MAX_BYTES, {
+          signal,
+          chunkTimeoutMs: REQUEST_TIMEOUT_MS,
+        }),
+      );
+      images.set(target, pending);
+    }
+    return pending;
+  };
   const [imageDataUrl, faviconDataUrl] = await Promise.all([
-    page?.image ? loadImage(page.image, false, signal, isEnabled) : undefined,
+    page?.image
+      ? imageBytes(page.image).then((bytes) => loadImage(bytes, false, signal))
+      : undefined,
     (async () => {
       for (const iconUrl of iconUrls) {
-        const icon = await loadImage(iconUrl, true, signal, isEnabled);
+        const icon = await loadImage(await imageBytes(iconUrl), true, signal);
         if (icon) {
           return icon;
         }
@@ -282,17 +306,23 @@ async function loadPreview(url: URL, isEnabled: () => boolean): Promise<ControlU
     : {};
 }
 
-/** Anonymous bounded cache: no user, browser-profile, cookie, or authentication state enters it. */
+/** Anonymous requests, isolated to the requesting principal and owner revision. */
 export async function loadControlUiLinkPreview(
   url: URL,
   isEnabled: () => boolean,
+  scope: PreviewScope,
 ): Promise<ControlUiLinkPreview> {
-  const target = parseControlUiLinkPreviewUrl(url.href);
-  if (!isEnabled() || !target) {
+  if (!isEnabled()) {
     return {};
   }
+  let principal = principals.get(scope.principal);
+  if (principal === undefined) {
+    principal = ++nextPrincipal;
+    principals.set(scope.principal, principal);
+  }
+  const key = JSON.stringify([principal, scope.revision, url.href]);
   const now = Date.now();
-  const existing = cache.get(target.href);
+  const existing = cache.get(key);
   if (existing && existing.expiresAt > now) {
     const result = await existing.promise;
     return isEnabled() ? result : {};
@@ -300,12 +330,17 @@ export async function loadControlUiLinkPreview(
   if (loads.activeCount + loads.pendingCount >= 32) {
     return {};
   }
+  // Queue time belongs to the same deadline as network and image work.
+  const signal = AbortSignal.timeout(PREVIEW_TIMEOUT_MS);
   const entry = {
     expiresAt: Number.POSITIVE_INFINITY,
-    promise: loads(() => loadPreview(target, isEnabled)).catch(() => ({})),
+    promise: racePromiseWithAbortSignal(
+      loads(() => loadPreview(url, isEnabled, signal)),
+      signal,
+    ).catch(() => ({})),
   };
-  cache.delete(target.href);
-  cache.set(target.href, entry);
+  cache.delete(key);
+  cache.set(key, entry);
   pruneMapToMaxSize(cache, CACHE_MAX_ENTRIES);
   const result = await entry.promise;
   entry.expiresAt = Date.now() + (Object.keys(result).length ? SUCCESS_TTL_MS : FAILURE_TTL_MS);

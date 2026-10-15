@@ -12,6 +12,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
@@ -28,6 +32,7 @@ import { agentIdentityHandlers } from "./agent-identity.js";
 import { createAgentTestSessionRowProjection } from "./agent-session-projection.test-support.js";
 import { agentHandlers } from "./agent.js";
 import { resetSubagentRegistryMocks } from "./agent.subagent-registry.mocks.test-support.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -52,6 +57,7 @@ export const makeContext = (session?: {
   agentId: string;
   row: GatewaySessionRow;
 }): GatewayRequestContext => {
+  setRuntimeConfigSnapshot(resolveAgentTestConfig());
   const projection = createAgentTestSessionRowProjection(resolveAgentTestConfig, session);
   return {
     trackExecution: trackAsyncWork,
@@ -138,16 +144,19 @@ export function mockMainSessionEntry(
   entry: Record<string, unknown>,
   cfg: Record<string, unknown> = {},
 ) {
+  const sessionEntry = buildExistingMainStoreEntry(entry);
   mocks.loadSessionEntry.mockReturnValue({
     cfg,
-    storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
-    entry: {
-      sessionId: "existing-session-id",
-      updatedAt: Date.now(),
-      ...entry,
-    },
+    agentId: "main",
+    storePath: mocks.userTurnStorePath ?? getAgentTestStorePath(),
+    store: { "agent:main:main": sessionEntry },
+    storeKeys: ["agent:main:main"],
+    entry: sessionEntry,
     canonicalKey: "agent:main:main",
-  });
+    legacyKey: undefined,
+  } satisfies Awaited<
+    ReturnType<typeof import("../session-entry-load.test-support.js").loadSessionEntryAsync>
+  >);
 }
 
 export function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
@@ -300,7 +309,7 @@ export function setupCronContinuationReleaseFixture() {
   };
   mocks.loadSessionEntry.mockReturnValue({
     cfg: {},
-    storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
+    storePath: mocks.userTurnStorePath ?? getAgentTestStorePath(),
     canonicalKey: sessionKey,
     entry,
   });
@@ -548,6 +557,7 @@ export const describe0AfterEach0 = async () => {
   mocks.lifecycleGeneration = "test-generation";
   setDateOnlyFakeClockActive(false);
   vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
 };
 
 async function resetIntegrationState() {
@@ -576,6 +586,7 @@ async function resetIntegrationState() {
   mocks.lifecycleGeneration = "test-generation";
   setDateOnlyFakeClockActive(false);
   vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
 }
 
 export const describe1BeforeEach0 = () => {

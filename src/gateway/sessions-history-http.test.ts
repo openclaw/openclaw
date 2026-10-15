@@ -4,11 +4,9 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import {
-  replaceSessionEntry,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionEntryRows from "../config/sessions/session-accessor.sqlite-status.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -22,6 +20,14 @@ import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display
 import { readSseEvent } from "./session-history-fixtures.test-support.js";
 import * as sessionHistoryState from "./session-history-state.js";
 import { SessionHistorySseState } from "./session-history-state.js";
+import {
+  expectErrorResponse,
+  fetchSessionHistory,
+  readSessionHistoryBody,
+  registerMemorySessionHistoryTests,
+  type SessionHistoryBody,
+  type SessionHistoryMessage,
+} from "./sessions-history-http-read.test-support.js";
 import {
   closeHistoryHarness,
   makeTranscriptAssistantMessage,
@@ -38,7 +44,6 @@ import {
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 const AUTH_HEADER = { Authorization: "Bearer test-gateway-token-1234567890" };
-const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 const cleanupDirs: string[] = [];
 const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -93,34 +98,6 @@ async function appendText(storePath: string, text: string, emitInlineMessage = t
   return appended.messageId;
 }
 
-async function fetchSessionHistory(
-  port: number,
-  sessionKey: string,
-  params?: {
-    query?: string;
-    headers?: Record<string, string>;
-  },
-) {
-  return fetch(
-    `http://127.0.0.1:${port}/sessions/${encodeURIComponent(sessionKey)}/history${params?.query ?? ""}`,
-    { headers: { ...READ_SCOPE_HEADER, ...params?.headers } },
-  );
-}
-
-type SessionHistoryMessage = {
-  role?: string;
-  content?: Array<{ text?: string }>;
-  __openclaw?: { id?: string; seq?: number; turnBoundary?: boolean };
-};
-
-type SessionHistoryBody = {
-  sessionKey?: string;
-  items?: SessionHistoryMessage[];
-  messages?: SessionHistoryMessage[];
-  nextCursor?: string;
-  hasMore?: boolean;
-};
-
 function sessionHistoryRowIdentity(message: unknown): string {
   const record = requireRecord(message, "session history row");
   const metadata = requireRecord(record["__openclaw"], "session history row metadata");
@@ -132,16 +109,6 @@ function sessionHistoryRowIdentity(message: unknown): string {
     (typeof firstContent?.id === "string" ? firstContent.id : undefined) ??
     (typeof record.toolCallId === "string" ? record.toolCallId : "");
   return `${String(metadata.seq)}:${String(record.role)}:${label}`;
-}
-
-async function readSessionHistoryBody(
-  port: number,
-  sessionKey: string,
-  params?: Parameters<typeof fetchSessionHistory>[2],
-): Promise<SessionHistoryBody> {
-  const res = await fetchSessionHistory(port, sessionKey, params);
-  expect(res.status).toBe(200);
-  return (await res.json()) as SessionHistoryBody;
 }
 
 function attributedHistoryMessageProjection(value: unknown) {
@@ -183,10 +150,6 @@ type SessionHistorySseStream = {
   reader: ReadableStreamDefaultReader<Uint8Array>;
   streamState: { buffer: string };
 };
-
-function expectErrorResponse(body: unknown, expected: { type: string; message: string }) {
-  expect(body).toEqual({ ok: false, error: expected });
-}
 
 async function openSessionHistorySse(
   port: number,
@@ -253,6 +216,8 @@ describe("session history HTTP endpoints", () => {
     testState.sessionConfig = undefined;
     testState.agentsConfig = undefined;
   });
+
+  registerMemorySessionHistoryTests(createSessionStoreFile);
 
   test("uses SSE only for an explicit acceptable event-stream media range", async () => {
     const expectedText = "accept negotiation sentinel";
@@ -766,7 +731,7 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("returns 404 after initializing a missing configured session store", async () => {
+  test("returns 404 without initializing a missing configured session store", async () => {
     await closeHistoryHarness();
     const storePath = await createSessionStoreFile();
     const agentId = "new-history";
@@ -797,7 +762,7 @@ describe("session history HTTP endpoints", () => {
           type: "not_found",
           message: `Session not found: ${sessionKey}`,
         });
-        expect((await fs.stat(missingDatabasePath)).isFile()).toBe(true);
+        await expect(fs.stat(missingDatabasePath)).rejects.toMatchObject({ code: "ENOENT" });
       },
       { fresh: true },
     );

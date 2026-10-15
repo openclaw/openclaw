@@ -2,7 +2,10 @@ import {
   prepareLocalAgentAvatarFile,
   type PreparedLocalAgentAvatarFile,
 } from "../agents/identity-avatar-file.js";
-import type { AgentAvatarResolution } from "../agents/identity-avatar.js";
+import {
+  type AgentAvatarResolution,
+  resolvePublicAgentAvatarSource,
+} from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasAvatarUriScheme,
@@ -19,6 +22,26 @@ import {
 } from "./assistant-avatar-cache.js";
 import { DEFAULT_ASSISTANT_IDENTITY } from "./assistant-identity.js";
 import { buildControlUiResourcePath, matchControlUiResourceUrl } from "./control-ui-contract.js";
+
+export type ControlUiAvatarMeta = {
+  avatarUrl: string | null;
+  avatarSource: string | null;
+  avatarStatus: AgentAvatarResolution["kind"] | null;
+  avatarReason: string | null;
+};
+
+export function controlUiAvatarResolutionMeta(
+  resolved: AgentAvatarResolution | null,
+): Omit<ControlUiAvatarMeta, "avatarUrl"> {
+  if (!resolved) {
+    return { avatarSource: null, avatarStatus: null, avatarReason: null };
+  }
+  return {
+    avatarSource: resolvePublicAgentAvatarSource(resolved) ?? null,
+    avatarStatus: resolved.kind,
+    avatarReason: resolved.kind === "none" ? resolved.reason : null,
+  };
+}
 
 type GatewayAssistantIdentity = {
   agentId: string;
@@ -66,11 +89,11 @@ export async function prepareGatewayAssistantAvatar(params: {
 }): Promise<PreparedGatewayAssistantAvatarProjection> {
   const { cfg, identity } = params;
   const source = identity.avatar;
+  const image = prepareGatewayAvatarDataUrl(cfg, identity.agentId, source);
   if (isAvatarHttpUrl(source)) {
     return { resolution: { kind: "remote", url: source, source } };
   }
   if (isAvatarDataUrl(source)) {
-    const image = prepareGatewayAvatarDataUrl(source);
     return image
       ? { resolution: { kind: "data", url: source, source }, image }
       : { resolution: { kind: "none", reason: "unsupported_data_url", source } };

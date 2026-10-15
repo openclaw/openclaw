@@ -4,6 +4,7 @@ export const AGENT_MODEL_FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.modelPolicy.allow": "Allowed Agent Models",
   "agents.entries.*.models.*.agentRuntime": "Agent Model Runtime",
   "agents.entries.*.models.*.agentRuntime.id": "Agent Model Runtime ID",
+  "agents.entries.*.nativeRuntimeConsent": "Remembered native runtime permissions",
   "agents.entries.*.models.*.codeMode": "Code Mode",
   "agents.entries.*.agentRuntime": "Legacy Agent Runtime",
   "agents.entries.*.agentRuntime.id": "Legacy Agent Runtime ID",

@@ -423,30 +423,6 @@ describe("runtime parity suite transport cleanup", () => {
     },
   );
 
-  it("preserves the scenario error when its owned lab cleanup fails", async () => {
-    const lab = createCleanupTestLab();
-    const scenarioError = new Error("runtime scenario failed");
-    const cleanupError = new Error("owned lab shutdown failed");
-    lab.stop = vi.fn(async () => {
-      throw cleanupError;
-    });
-    const cleanup = vi.fn(async () => {});
-    const factory = createCleanupTestFactory(lab, () => ({ cleanup }));
-    const runChild = vi.fn<QaSuiteRunner>().mockRejectedValueOnce(scenarioError);
-
-    await expect(runCleanupTestSuite({ factory, lab, runChild })).rejects.toMatchObject({
-      message: expect.stringContaining(
-        "failed cleanup phases: lab stop: owned lab shutdown failed",
-      ),
-      cause: scenarioError,
-      errors: [scenarioError, cleanupError],
-    });
-
-    expect(runChild).toHaveBeenCalledOnce();
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(lab.stop).toHaveBeenCalledOnce();
-  });
-
   it("releases an exclusive parent lease before its first runtime child acquires it", async () => {
     const lab = createCleanupTestLab();
     const events: string[] = [];
@@ -502,8 +478,8 @@ describe("runtime parity suite transport cleanup", () => {
     expect(activeOwner).toBeUndefined();
   });
 
-  it.each(["cleanup", "cleanupAfterGatewayStop"] as const)(
-    "retries failed parent %s before stopping its owned lab",
+  it.each(["cleanupAfterGatewayStop"] as const)(
+    "retains failed parent %s without replaying cleanup before stopping its owned lab",
     async (cleanupPhase) => {
       const lab = createCleanupTestLab();
       const cleanupError = new Error("credential release failed");
@@ -514,9 +490,12 @@ describe("runtime parity suite transport cleanup", () => {
       const factory = createCleanupTestFactory(lab, () => ({ [cleanupPhase]: cleanup }));
       const runChild = vi.fn<QaSuiteRunner>();
 
-      await expect(runCleanupTestSuite({ factory, lab, runChild })).rejects.toBe(cleanupError);
+      await expect(runCleanupTestSuite({ factory, lab, runChild })).rejects.toMatchObject({
+        cause: cleanupError,
+        errors: [cleanupError, cleanupError],
+      });
 
-      expect(cleanup).toHaveBeenCalledTimes(2);
+      expect(cleanup).toHaveBeenCalledOnce();
       expect(runChild).not.toHaveBeenCalled();
       expect(lab.stop).toHaveBeenCalledOnce();
     },

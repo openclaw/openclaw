@@ -10,6 +10,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { reserveAgentCreationClaimAdmission } from "./agent-creation-claim.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
+import { captureAgentDeletionResourceOwner } from "./agent-deletion-cleanup.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
@@ -18,17 +19,20 @@ export type OpenClawAgentDatabaseAsyncResource = {
   path: string;
   revoke: () => void;
   close: () => Promise<void>;
+  /** A native executor retains its database lease until dependent readers and publications settle. */
+  retireAfterResources?: true;
 };
 export type OpenClawAgentDatabaseReadCandidateResource = Omit<
   OpenClawAgentDatabaseAsyncResource,
   "agentId"
 > & { scope?: "sibling-family" };
-type AgentDatabaseResource =
+type AgentDatabaseResource = (
   | (OpenClawAgentDatabaseAsyncResource & { ownership: "known"; closeSync?: () => void })
   | (OpenClawAgentDatabaseReadCandidateResource & {
       ownership: "unresolved";
       agentId?: never;
-    });
+    })
+) & { cleanupOwner?: object };
 export type AgentDatabaseCloseSelection = {
   path?: string;
   rootPath?: string;
@@ -62,13 +66,15 @@ export function captureAgentDatabaseCloseFence(
 
 export { matchesAgentDatabaseReadCandidatePath };
 
-registerAgentDatabaseReaderCloser(async (candidates) => {
+registerAgentDatabaseReaderCloser(async (candidates, retainedPaths) => {
   const results = await Promise.allSettled(
     [...new Set([...resources.active, ...resources.closing.keys()])]
-      .filter((resource) =>
-        candidates.some((candidate) =>
-          matchesAgentDatabaseReadCandidatePath(candidate, resource.path),
-        ),
+      .filter(
+        (resource) =>
+          !retainedPaths?.has(path.resolve(resource.path)) &&
+          candidates.some((candidate) =>
+            matchesAgentDatabaseReadCandidatePath(candidate, resource.path),
+          ),
       )
       .map((resource) => closeAgentDatabaseResource(resource)),
   );
@@ -137,10 +143,13 @@ function registerAgentDatabaseResource(
   resource: AgentDatabaseResource,
   creationOptions?: OpenClawAgentDatabaseOptions,
 ): () => void {
-  const owned = {
+  const owned: AgentDatabaseResource = {
     ...resource,
     path: path.resolve(resource.path),
   };
+  owned.cleanupOwner = captureAgentDeletionResourceOwner((target) =>
+    matchesAgentDatabaseClose(target, owned),
+  );
   assertAgentDatabaseResourceAdmission(owned);
   const releaseCreation =
     creationOptions && owned.ownership === "known"
@@ -249,14 +258,41 @@ export function revokeAgentDatabaseResources(
 export async function drainAgentDatabaseResources<T>(
   selection: AgentDatabaseCloseSelection,
   closeNative: () => Promise<T>,
+  cleanupOwner?: object,
 ): Promise<T> {
   return withAgentDatabaseCloseFence(selection, async () => {
-    const results = await Promise.allSettled(revokeAgentDatabaseResources(selection));
+    const selected = [...new Set([...resources.active, ...resources.closing.keys()])].filter(
+      (resource) =>
+        matchesAgentDatabaseClose(selection, resource) &&
+        (!cleanupOwner || resource.cleanupOwner === cleanupOwner),
+    );
+    const nativeOwners = selected.filter((resource) => resource.retireAfterResources);
+    for (const resource of nativeOwners) {
+      // Retain exact failed-close custody before revocation can cause another admission.
+      if (!resources.closing.has(resource)) {
+        resources.closing.set(resource, undefined);
+      }
+      resource.revoke();
+    }
+    const results = await Promise.allSettled(
+      selected
+        .filter((resource) => !resource.retireAfterResources)
+        .map((resource) => closeAgentDatabaseResource(resource)),
+    );
     const errors = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
     if (errors.length > 0) {
       throw new AggregateError(errors, "Agent database resource drainage failed");
+    }
+    const nativeResults = await Promise.allSettled(
+      nativeOwners.map((resource) => closeAgentDatabaseResource(resource)),
+    );
+    const nativeErrors = nativeResults.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (nativeErrors.length > 0) {
+      throw new AggregateError(nativeErrors, "Agent database native retirement failed");
     }
     return closeNative();
   });

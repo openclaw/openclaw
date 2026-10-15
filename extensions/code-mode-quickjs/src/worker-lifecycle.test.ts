@@ -124,11 +124,104 @@ async function instrumentedWorker(prefix: string, source: string) {
   return pathToFileURL(workerPath);
 }
 
-// Restore the WeakRef retention probe when Bun's node:v8 exposure can provide a synchronous
-// worker-local gc without stalling the instrumented QuickJS resume path.
-const v8GcIt = process.versions.bun ? it.skip : it;
-
 describe("Code Mode worker lifecycle", () => {
+  it.each([
+    {
+      name: "host continuation",
+      source: "await yield_control();",
+      phase: "host",
+      code: "internal_error",
+      calls: 1,
+      resumeTimeoutMs: Number.NaN,
+    },
+    {
+      name: "guest same-message exception",
+      source: 'throw new Error("invalid code mode continuation budget");',
+      phase: "guest",
+      code: "internal_error",
+      calls: 0,
+    },
+    {
+      name: "host source wrapper",
+      source: "return true;",
+      prelude: "}",
+      phase: "host",
+      code: "internal_error",
+      calls: 0,
+    },
+    {
+      name: "guest syntax",
+      source: "return (",
+      phase: "input",
+      code: "invalid_input",
+      calls: 0,
+    },
+    {
+      name: "guest pending promise",
+      source: "await new Promise(() => {});",
+      phase: "input",
+      code: "invalid_input",
+      calls: 0,
+    },
+    {
+      name: "bridge rejection",
+      source: "await yield_control();",
+      phase: "bridge",
+      code: "internal_error",
+      calls: 1,
+      rejectBridge: true,
+    },
+    {
+      name: "guest deadline",
+      source: "await yield_control(); while (true) {}",
+      phase: "guest",
+      code: "timeout",
+      calls: 1,
+      resumeTimeoutMs: 30,
+    },
+    {
+      name: "host admission deadline",
+      source: "return true;",
+      phase: "host",
+      code: "timeout",
+      calls: 0,
+      timeoutMs: 0,
+    },
+  ])("preserves $name failure provenance without replay", async (fixture) => {
+    const onFailure = vi.fn();
+    const onBoundary = vi.fn(async (state: CodeModeWorkerBoundary) => ({
+      kind: "continue" as const,
+      timeoutMs: fixture.resumeTimeoutMs ?? 1_000,
+      pendingRequests: [],
+      settledRequests: state.pendingRequests.map(({ id }) => ({
+        id,
+        ok: fixture.rejectBridge !== true,
+        json: JSON.stringify({ message: "synthetic bridge failure", code: "tool_error" }),
+      })),
+    }));
+    const result = await runCodeModeWorker(
+      {
+        ...input(fixture.source, { ...config, timeoutMs: fixture.timeoutMs ?? config.timeoutMs }),
+        prelude: fixture.prelude,
+      },
+      10_000,
+      undefined,
+      undefined,
+      { onBoundary, onFailure },
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      code: fixture.code,
+      failurePhase: fixture.phase,
+    });
+    expect(onFailure).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      fixture.phase,
+      expect.stringMatching(/^code-mode-quickjs:/),
+    );
+    expect(onBoundary).toHaveBeenCalledTimes(fixture.calls);
+  });
+
   it("preserves legacy snapshot errors without source-location metadata", async () => {
     const { wasmModule: wasm } = await modules;
     const vm = await QuickJS.create({ wasm, memoryLimit: config.memoryLimitBytes });
@@ -212,7 +305,7 @@ describe("Code Mode worker lifecycle", () => {
     expect(result).toMatchObject({ status: "failed", error: "Error: prelude failure" });
   });
 
-  v8GcIt("transfers snapshot heaps and releases consumed copies across resumes", async () => {
+  it("transfers snapshot heaps and releases consumed copies across resumes", async () => {
     // The dependency's storage codec copies the whole heap in both directions.
     // Exercise real snapshots and restores while allowing metadata-only accounting.
     const workerUrl = await instrumentedWorker(
@@ -223,15 +316,30 @@ describe("Code Mode worker lifecycle", () => {
       import { setFlagsFromString } from "node:v8";
       import { runInNewContext } from "node:vm";
       import { parentPort } from "node:worker_threads";
-      setFlagsFromString("--expose-gc");
-      const gc = runInNewContext("gc");
+      const gc = (() => {
+        // Bun ignores V8 flags; use its synchronous full collector in this worker.
+        if (typeof globalThis.Bun?.gc === "function") {
+          return () => globalThis.Bun.gc(true);
+        }
+        setFlagsFromString("--expose-gc");
+        return runInNewContext("gc");
+      })();
       let consumed;
       let settlements = [];
-      parentPort.on("message", ({ input }) => {
-        if (input.kind === "resume") {
-          settlements = input.settledRequests.map((reply) => new WeakRef(reply));
+      const on = parentPort.on;
+      // Observe the production listener without starting delivery before it is installed.
+      parentPort.on = function (event, listener) {
+        if (event !== "message") {
+          return on.call(this, event, listener);
         }
-      });
+        parentPort.on = on;
+        return on.call(this, event, function (message) {
+          if (message.input.kind === "resume") {
+            settlements = message.input.settledRequests.map((reply) => new WeakRef(reply));
+          }
+          return listener.call(this, message);
+        });
+      };
       const restore = QuickJS.restore;
       QuickJS.restore = async (snapshot, options) => {
         consumed = {

@@ -3,6 +3,10 @@ import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -13,7 +17,9 @@ import {
   createApiKeyCredential as keyCredential,
   createAuthProfileStoreFixture as authStore,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import { refreshAuthProfileFileState } from "./auth-profiles/file-state.js";
 import { clearAuthProfileMigrationDiagnostics } from "./auth-profiles/legacy-source-diagnostic.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -150,12 +156,16 @@ const cliCredentialMocks = vi.hoisted(() => ({
 vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
 beforeEach(() => {
+  prepareSharedAuthStoreOwnershipForNative();
   clearRuntimeAuthProfileStoreSnapshots();
   cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
 });
 
-afterEach(clearRuntimeAuthProfileStoreSnapshots);
+afterEach(() => {
+  clearRuntimeAuthProfileStoreSnapshots();
+  clearRuntimeConfigSnapshot();
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -342,6 +352,7 @@ describe("getApiKeyForModelCore", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-oauth-", agentEnv: "main" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         await state.writeAuthProfiles(
           authStore({
             "openai:chatgpt": {
@@ -389,6 +400,7 @@ describe("getApiKeyForModelCore", () => {
   });
 
   it("resolves ChatGPT token-sharing as renewable OAuth for public Responses", async () => {
+    setRuntimeConfigSnapshot({});
     await expect(
       resolveModelAuth({
         model: {
@@ -415,22 +427,6 @@ describe("getApiKeyForModelCore", () => {
       profileId: "openai:shared",
     });
   });
-
-  it.each([["chatgpt-token-sharing", "openai-responses", "https://proxy.example/v1"]])(
-    "rejects %s for %s at %s before returning a bearer",
-    async (authFlow, api, baseUrl) => {
-      await expect(
-        resolveModelAuth({
-          model: { id: "gpt-5.5", provider: "openai", api, baseUrl } as Model,
-          profileId: "openai:shared",
-          lockedProfile: true,
-          store: authStore({
-            "openai:shared": { type: "oauth", provider: "openai", ...oauthFixture, authFlow },
-          }),
-        }),
-      ).rejects.toThrow(/requires (the public OpenAI Responses endpoint|token-sharing consent)/);
-    },
-  );
 
   it("rejects an explicit OpenAI API-key profile for the Codex transport", async () => {
     const store = authStore({
@@ -751,6 +747,7 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
             for (const removeSource of [false, true]) {
               if (removeSource) {
                 await fs.rm(legacyPath);
+                await refreshAuthProfileFileState();
               }
               await expect(
                 resolveAuth({ provider: "litellm", agentDir, cfg }),

@@ -85,10 +85,8 @@ export function buildPendingInputQueueItems(
 ): ChatQueueDisplayItem[] {
   return inputs
     .toSorted((left, right) => left.acceptedAt - right.acceptedAt)
-    .flatMap<ChatQueueDisplayItem>((input) => {
-      if (!input.queued || input.state !== "queued" || !input.runId) {
-        return [];
-      }
+    .filter((input) => input.queued && input.state === "queued" && input.runId)
+    .map<ChatQueueDisplayItem>((input) => {
       const message = normalizeMessage(input.message);
       const attachmentLabels = message.content.flatMap((part) =>
         part.type === "attachment" || part.type === "attachment_error"
@@ -98,19 +96,17 @@ export function buildPendingInputQueueItems(
             : [],
       );
       const imageCount = message.content.filter((part) => part.type === "image").length;
-      return [
-        {
-          id: `pending-input:${input.id}`,
-          text:
-            extractText(input.message) ||
-            attachmentLabels.join(", ") ||
-            (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : ""),
-          createdAt: input.acceptedAt,
-          pendingRunId: input.runId,
-          serverQueued: true,
-          sender: message.sender ?? undefined,
-        },
-      ];
+      return {
+        id: `pending-input:${input.id}`,
+        text:
+          extractText(input.message) ||
+          attachmentLabels.join(", ") ||
+          (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : ""),
+        createdAt: input.acceptedAt,
+        pendingRunId: input.runId,
+        serverQueued: true,
+        sender: message.sender ?? undefined,
+      };
     });
 }
 
@@ -131,8 +127,9 @@ export function buildPendingInputItems(
     ) {
       continue;
     }
-    let pendingStatus: PendingInputStatus | undefined;
+    let pendingStatus: PendingInputStatus;
     if (input.state === "queued") {
+      pendingStatus = "queued";
       if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {
         pendingStatus = workerSetupPending ? "waitingForWorkerSetup" : "waitingForWorkspaceSync";
       }
@@ -157,17 +154,11 @@ export function buildPendingInputItems(
       ...buildMessageItems([input.message], () =>
         input.runId ? `send:${input.runId}` : `pending-input:${input.id}`,
       ).flatMap((item) =>
-        projectChatSystemNotice(
-          { ...item, startsTurn: true },
-          undefined,
-          pendingStatus
-            ? {
-                status: pendingStatus,
-                key: `pending-input:${input.id}:state`,
-                timestamp: input.acceptedAt,
-              }
-            : undefined,
-        ),
+        projectChatSystemNotice({ ...item, startsTurn: true }, undefined, {
+          status: pendingStatus,
+          key: `pending-input:${input.id}:state`,
+          timestamp: input.acceptedAt,
+        }),
       ),
     );
   }
@@ -370,6 +361,7 @@ async function requestPendingInputPage(
         inputReceipts?: ChatInputReceipts;
       }>("chat.history", {
         sessionKey: view.sessionKey,
+        toolResultMaxChars: 2_000,
         agentId: view.agentId,
         limit: 20,
         ...(inputRunIds.length ? { inputRunIds } : {}),

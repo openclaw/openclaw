@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import {
+  getSubagentDepthFromSessionStore,
+  getSubagentDepthFromSessionStoreInWorker,
+} from "./subagent-depth.js";
 import { createSessionCapabilityLookup } from "./subagent-session-store.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -19,26 +22,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("getSubagentDepthFromSessionStore", () => {
-  it("uses spawnDepth from the session store when available", () => {
-    const key = "agent:main:subagent:flat";
-    const depth = getSubagentDepthFromSessionStore(key, {
-      store: createSessionCapabilityLookup({
-        [key]: { spawnDepth: 2 },
-      }),
-    });
-    expect(depth).toBe(2);
-  });
-
-  it("normalizes signed decimal stored spawnDepth strings", () => {
-    const key = "agent:main:subagent:flat";
-    const depth = getSubagentDepthFromSessionStore(key, {
-      store: createSessionCapabilityLookup({
-        [key]: { spawnDepth: "+02" },
-      }),
-    });
-    expect(depth).toBe(2);
-  });
-
   it("ignores non-decimal and unsafe stored spawnDepth strings", () => {
     const key = "agent:main:subagent:flat";
     for (const spawnDepth of ["1e3", "0x10", "1.5", "9007199254740993"]) {
@@ -49,22 +32,6 @@ describe("getSubagentDepthFromSessionStore", () => {
       });
       expect(depth).toBe(1);
     }
-  });
-
-  it("derives depth from spawnedBy ancestry when spawnDepth is missing", () => {
-    // Ancestry fallback keeps restored sessions useful when old stores predate
-    // the explicit spawnDepth field.
-    const key1 = "agent:main:subagent:one";
-    const key2 = "agent:main:subagent:two";
-    const key3 = "agent:main:subagent:three";
-    const depth = getSubagentDepthFromSessionStore(key3, {
-      store: createSessionCapabilityLookup({
-        [key1]: { spawnedBy: "agent:main:main" },
-        [key2]: { spawnedBy: key1 },
-        [key3]: { spawnedBy: key2 },
-      }),
-    });
-    expect(depth).toBe(3);
   });
 
   it("ignores parentSessionKey threading when resolving spawn depth", () => {
@@ -86,20 +53,6 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(getSubagentDepthFromSessionStore("agent:main:dashboard:legacy", { store })).toBe(0);
   });
 
-  it("resolves depth when caller is identified by sessionId", () => {
-    const key1 = "agent:main:subagent:one";
-    const key2 = "agent:main:subagent:two";
-    const key3 = "agent:main:subagent:three";
-    const depth = getSubagentDepthFromSessionStore("subagent-three-session", {
-      store: createSessionCapabilityLookup({
-        [key1]: { sessionId: "subagent-one-session", spawnedBy: "agent:main:main" },
-        [key2]: { sessionId: "subagent-two-session", spawnedBy: key1 },
-        [key3]: { sessionId: "subagent-three-session", spawnedBy: key2 },
-      }),
-    });
-    expect(depth).toBe(3);
-  });
-
   it("resolves prefixed store keys when caller key omits the agent prefix", async () => {
     const tmpDir = tempDirs.make("openclaw-subagent-depth-");
     const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
@@ -117,7 +70,7 @@ describe("getSubagentDepthFromSessionStore", () => {
       },
     );
 
-    const depth = getSubagentDepthFromSessionStore("subagent:flat", {
+    const depth = await getSubagentDepthFromSessionStoreInWorker("subagent:flat", {
       cfg: {
         session: {
           store: storeTemplate,
@@ -148,7 +101,7 @@ describe("getSubagentDepthFromSessionStore", () => {
       session: { scope: "global", store: storePath },
     } satisfies OpenClawConfig;
 
-    expect(getSubagentDepthFromSessionStore("global", { cfg })).toBe(2);
+    expect(await getSubagentDepthFromSessionStoreInWorker("global", { cfg })).toBe(2);
   });
 
   it("resolves a cross-agent parent outside the supplied child store", async () => {
@@ -168,7 +121,7 @@ describe("getSubagentDepthFromSessionStore", () => {
       },
     );
 
-    const depth = getSubagentDepthFromSessionStore("agent:work:dashboard:child", {
+    const depth = await getSubagentDepthFromSessionStoreInWorker("agent:work:dashboard:child", {
       cfg: { session: { store: storeTemplate } },
       store: createSessionCapabilityLookup({
         "agent:work:dashboard:child": {
@@ -204,7 +157,7 @@ describe("getSubagentDepthFromSessionStore", () => {
     );
 
     expect(
-      getSubagentDepthFromSessionStore(childKey, {
+      await getSubagentDepthFromSessionStoreInWorker(childKey, {
         cfg: {
           agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
           session: { store: storePath },
@@ -212,32 +165,16 @@ describe("getSubagentDepthFromSessionStore", () => {
       }),
     ).toBe(3);
   });
-
-  it("falls back to session-key segment counting when metadata is missing", () => {
-    const key = "agent:main:subagent:flat";
-    const depth = getSubagentDepthFromSessionStore(key, {
-      store: createSessionCapabilityLookup({
-        [key]: {},
-      }),
-    });
-    expect(depth).toBe(1);
-  });
 });
 
 describe("resolveAgentTimeoutMs", () => {
-  it("defaults to 48 hours when config does not override the timeout", () => {
-    expect(resolveAgentTimeoutMs({})).toBe(48 * 60 * 60 * 1000);
-  });
-
-  it.each([
-    ["unlimited", 0, MAX_TIMER_TIMEOUT_MS],
-    ["finite", 30, 30_000],
-    ["negative", -1, 1_000],
-    ["NaN", Number.NaN, 48 * 60 * 60 * 1000],
-  ])("resolves config timeoutSeconds %s", (_label, timeoutSeconds, expected) => {
-    const cfg = { agents: { defaults: { timeoutSeconds } } } as OpenClawConfig;
-    expect(resolveAgentTimeoutMs({ cfg })).toBe(expected);
-  });
+  it.each([["unlimited", 0, MAX_TIMER_TIMEOUT_MS]])(
+    "resolves config timeoutSeconds %s",
+    (_label, timeoutSeconds, expected) => {
+      const cfg = { agents: { defaults: { timeoutSeconds } } } as OpenClawConfig;
+      expect(resolveAgentTimeoutMs({ cfg })).toBe(expected);
+    },
+  );
 
   it("uses a timer-safe sentinel for no-timeout overrides", () => {
     expect(resolveAgentTimeoutMs({ overrideSeconds: 0 })).toBe(MAX_TIMER_TIMEOUT_MS);

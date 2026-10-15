@@ -59,7 +59,28 @@ Frame shapes:
 - Response: `{type:"res", id, ok, payload|error}`
 - Event: `{type:"event", event, payload, seq?, stateVersion?, recipientProfileId?}`
 
-Live text uses append deltas after an initial recipient snapshot. An outer event
+Handler failures return a typed `UNAVAILABLE` response for the affected request
+and leave a healthy socket open. This includes connect preparation failures;
+a client whose connect failed must still complete a successful handshake before
+using the connection as an established session. An already admitted operator
+connection can continue to serve recovery RPCs even if its hello snapshot failed.
+Failures after hello delivery are logged without sending a second connect response.
+Malformed JSON closes with code `1007` and reason `invalid JSON`; handshake and
+authentication policy violations use their explicit policy close codes and reasons.
+A failed hello transport write closes with `1011` and reason
+`gateway hello delivery failed`.
+
+Live text uses append deltas after an initial recipient snapshot. The
+`chat.history` field `inFlightRun.text` restores only the current run's unpersisted
+assistant tail. Silent-reply suppression uses the full available source; the tail keeps existing directive and media normalization without being classified as a silent reply again. If the cap evicts source context, retained tail text stays visible conservatively. Cumulative snapshots or replacements that restore text evicted by the live buffer cap may redisplay committed text when ownership is unknown, preserving unsaved output.
+When durable history or a keyed
+commentary item takes ownership of live text, the Gateway sends an existing
+`replace: true` frame before subsequent append deltas. Terminal result snapshots
+retain their complete result in `message.content`. A buffer-backed terminal can
+also supply the existing `message.openclawDisplayContent` projection: the same
+unpersisted tail finalized for display, including an explicitly empty tail and
+any Canvas blocks. The Control UI applies that projection before storing its
+live view; delivery consumers retain the complete content. An outer event
 sequence gap means a client may have lost part of that baseline: retire the
 connection and reconnect before applying more deltas. If the frame revealing the
 gap is a `chat` final, aborted, or error event, deliver its authoritative terminal
@@ -69,6 +90,26 @@ Renew session subscriptions
 after reconnect; the Gateway sends a complete snapshot with the next text frame
 for each observed run. Run-local payload sequences can skip numbers because text
 is paced and coalesced; they are not the outer connection sequence.
+
+Canonical `agent` events with `stream: "item"` and `data.kind: "preamble"`
+include optional `preamble` metadata. When the item replaces a live preview,
+`preamble.retainedText` supplies the producer's remaining answer projection,
+including an empty string when no answer prefix remains. An empty `preamble`
+object means this event carries no new retirement projection. Earlier preview
+credit can still cover later item IDs and completion echoes. Append-only clients
+can preserve a preview they already delivered, carry its credit across those
+identities, and rebase their final-answer state. Chat and raw assistant
+frames are paced independently; their arrival order and payload sequence numbers
+are not a reclassification identity. Older clients can ignore this additive
+metadata. ACP commentary reconciliation requires an updated Gateway and bridge.
+
+Retirement uses assistant occurrence identity, never text-prefix matching.
+Producers correlate live occurrences with committed transcript idempotency keys
+or the host's exact source receipts. Native harnesses that persist part of a
+still-streaming item retain its text-merge `itemId` and separately identify each
+captured interval with `occurrenceId`. Unidentified text remains in the
+live tail until it gains an identity-bearing commit or the run terminates;
+equal durable text alone cannot hide it.
 
 Clients that share one connection among several views must keep reconstruction
 with their local stream owner. A new local listener may join after the wire
@@ -156,7 +197,7 @@ unbound action. Requests that omit `expectedProfileId` retain existing behavior.
 
 `expectedProfileId` is an optional opaque string of 1 to 128 characters on an
 authenticated request frame. The Gateway compares it exactly with the current
-canonical profile ID of the authenticated principal. It does not trim, fold
+primary profile ID of the authenticated principal. It does not trim, fold
 case, or follow merge aliases on the expected value. Obtain the ID from
 `users.self`; a Gateway URL, account label, agent ID, or session key is not a
 profile ID. A missing authenticated profile cannot satisfy the precondition.
@@ -179,7 +220,7 @@ the earlier outcome before retrying uncertain work. Ordinary socket disconnects
 do not cancel already-accepted work.
 
 On authenticated operator broadcasts, optional `recipientProfileId` identifies
-the recipient's canonical profile at publication. It is a per-recipient frame
+the recipient's primary profile at publication. It is a per-recipient frame
 fact, not the event's origin, a run-owner identity, or an authorization grant.
 Existing event permissions and subscriptions still govern delivery. Bind the
 consumer to both its physical Gateway connection and selected profile; if the

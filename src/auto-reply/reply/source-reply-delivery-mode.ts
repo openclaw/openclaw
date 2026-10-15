@@ -13,6 +13,7 @@ import { resolveCommandTurnContext } from "../command-turn-context.js";
 import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { MsgContext } from "../templating.js";
+import type { FollowupRun } from "./queue/types.js";
 
 export type SourceReplyDeliveryModeContext = Pick<
   MsgContext,
@@ -28,6 +29,7 @@ export type SourceReplyDeliveryModeContext = Pick<
   | "CommandTurn"
   | "BotUsername"
   | "WasMentioned"
+  | "MentionSource"
   | "InputProvenance"
 >;
 
@@ -76,22 +78,17 @@ export function resolveSourceReplyDeliveryMode(params: {
     return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
-  if (
-    (chatType === "group" || chatType === "channel") &&
-    isUnauthorizedTextSlashCommand(params.ctx)
-  ) {
+  const isGroup = chatType === "group" || chatType === "channel";
+  if (isGroup && isUnauthorizedTextSlashCommand(params.ctx)) {
     return "message_tool_only";
   }
-  const configuredMode =
-    chatType === "group" || chatType === "channel"
-      ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
-      : (params.cfg.messages?.visibleReplies ??
-        (isInternalSourceReplyChannel(params.ctx) ? "automatic" : params.defaultVisibleReplies));
-  const mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
-  if (mode === "message_tool_only" && params.messageToolAvailable === false) {
-    return "automatic";
-  }
-  return mode;
+  const configuredMode = isGroup
+    ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
+    : (params.cfg.messages?.visibleReplies ??
+      (isInternalSourceReplyChannel(params.ctx) ? "automatic" : params.defaultVisibleReplies));
+  return configuredMode === "message_tool" && params.messageToolAvailable !== false
+    ? "message_tool_only"
+    : "automatic";
 }
 
 /** Selects reply requiredness at admission, preserving configured ambient group silence. */
@@ -122,7 +119,8 @@ export function resolveSourceReplyExpectation(params: {
   });
   if (
     conversationType === "group" &&
-    params.ctx.WasMentioned !== true &&
+    // Thread participation admits the message but does not explicitly request a reply.
+    (params.ctx.WasMentioned !== true || params.ctx.MentionSource === "implicit_thread") &&
     resolveSilentReplySettings({
       cfg: params.cfg,
       surface: params.ctx.Surface ?? params.ctx.Provider,
@@ -132,6 +130,19 @@ export function resolveSourceReplyExpectation(params: {
     return "optional";
   }
   return "required";
+}
+
+export function resolveFollowupReplyExpectation(queued: FollowupRun, cfg: OpenClawConfig) {
+  return (
+    queued.run.terminalReplyExpectation ??
+    resolveSourceReplyExpectation({
+      ctx: {
+        InboundEventKind: queued.currentInboundEventKind,
+        InputProvenance: queued.run.inputProvenance,
+      },
+      cfg,
+    })
+  );
 }
 
 export function resolveSourceReplyVisibilityPolicy(params: {

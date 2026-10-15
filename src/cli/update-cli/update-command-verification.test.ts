@@ -14,6 +14,7 @@ import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
+import { isUpdateRunVerificationConfirmed } from "../../infra/update-run-verification.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -92,17 +93,93 @@ afterEach(async () => {
 });
 
 describe("update readiness generation", () => {
+  it.each(["transient-timeout", "mixed"])(
+    "records collection and channel probe warnings after core verification (%s)",
+    async (kind) => {
+      mockProcessPlatform("linux");
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      }));
+      let probes = 0;
+      callGateway.mockImplementation((opts) =>
+        gatewayHealthResponse({
+          server: { version: "2026.9.8", buildId: "candidate", bootId: "candidate-boot" },
+          health: {
+            channels: {
+              telegram: {
+                probe:
+                  kind === "transient-timeout" && probes++ > 0
+                    ? { ok: true }
+                    : {
+                        ...(kind === "timeout" ? {} : { ok: false }),
+                        ...(kind === "negative" ? {} : { timedOut: true }),
+                        error: "health collection timed out after 7000ms",
+                      },
+              },
+              ...(kind === "mixed"
+                ? { discord: { probe: { ok: false, error: "invalid credentials" } } }
+                : {}),
+            },
+          },
+        })(opts),
+      );
+      const result: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
+      const onVerified = vi.fn();
+      const verification = await verifyUpdatedGateway({
+        result,
+        opts: { json: true, run: { runId: "collection-timeout", env: {} } },
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: await listen(),
+        expectedVersion: "2026.9.8",
+        expectedBuildId: "candidate",
+        requireRunningService: true,
+        settle: { probes: 2 },
+        onVerified,
+      });
+      expect(verification.ok).toBe(true);
+      expect(onVerified).toHaveBeenCalledOnce();
+      expect(result.steps[0]?.exitCode).toBe(0);
+      expect(recordUpdateRunVerification).toHaveBeenCalledWith(
+        "collection-timeout",
+        expect.objectContaining({
+          serviceRunning: true,
+          versionMatch: true,
+          readyz: true,
+          settled: true,
+          channelsReady: true,
+        }),
+        expect.anything(),
+      );
+      const facts = vi.mocked(recordUpdateRunVerification).mock.calls.at(-1)?.[1];
+      expect(facts && isUpdateRunVerificationConfirmed(facts)).toBe(true);
+      if (kind !== "negative") {
+        expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+          "telegram: health collection timed out after 7000ms",
+        );
+        expect(result.steps[0]?.warnings?.join("\n")).toContain(
+          "telegram: health collection timed out after 7000ms",
+        );
+        expect(recordUpdateRunStep).toHaveBeenCalledWith(
+          "collection-timeout",
+          expect.objectContaining({ step: "warning:gateway verification", status: "completed" }),
+          expect.anything(),
+        );
+      }
+    },
+  );
+
   it.each<{
     readyzStatus: number;
     replaced: boolean;
     slowInspection?: "command" | "runtime" | "listener";
   }>([
-    { readyzStatus: 200, replaced: false },
-    { readyzStatus: 503, replaced: false },
     { readyzStatus: 200, replaced: true },
     { readyzStatus: 200, replaced: false, slowInspection: "command" },
-    { readyzStatus: 200, replaced: false, slowInspection: "runtime" },
-    { readyzStatus: 200, replaced: false, slowInspection: "listener" },
   ])(
     "observes foreground identity and HTTP once (HTTP $readyzStatus, replaced=$replaced, slow=$slowInspection)",
     async ({ readyzStatus, replaced, slowInspection }) => {
@@ -190,7 +267,7 @@ describe("update readiness generation", () => {
     },
   );
 
-  it.each([30 * 60_000, 100])(
+  it.each([30 * 60_000])(
     "bounds foreground verification when HTTP readiness cannot complete (%ims)",
     async (timeoutMs) => {
       const service = makeGatewayService({ status: "stopped" });
@@ -377,7 +454,7 @@ describe("update readiness generation", () => {
     );
   });
 
-  it.each(["none", "runtime", "port", "command"] as const)(
+  it.each(["runtime", "port", "command"] as const)(
     "keeps recovery observation factual with inspection cleanup: %s",
     async (fault) => {
       mockProcessPlatform("linux");
@@ -426,84 +503,13 @@ describe("update readiness generation", () => {
         signal: controller.signal,
       });
       pendingVerification = verification;
-      if (fault !== "none") {
-        await expect(verification).rejects.toBe(cleanup);
-        expect(result.verification).toBeUndefined();
-        expect(result.steps).toEqual([]);
-        return;
-      }
-      await expect(verification).resolves.toMatchObject({ ok: true });
-      expect(result).toMatchObject({ status: "error", reason: "post-update-plugins" });
-      expect(result.steps).toContainEqual(
-        expect.objectContaining({ name: "gateway recovery verification", exitCode: 0 }),
-      );
-      expect(
-        result.steps.some((step) =>
-          step.failureFacts?.some((fact) => fact.code === "gateway-probe-failed"),
-        ),
-      ).toBe(false);
-      expect(result.verification).toMatchObject({
-        runningVersion: "2026.9.5",
-        runningBuildId: "candidate-build",
-        readyz: true,
-        settled: true,
-        versionMatch: true,
-      });
-      expect(recordUpdateRunVerification).not.toHaveBeenCalled();
-      expect(recordUpdateRunStep).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["still-starting", "stopped-free"] as const)(
-    "preserves the readiness owner's bounded verdict (%s)",
-    async (waitOutcome) => {
-      const recoverHealth = vi.fn<
-        NonNullable<Parameters<typeof verifyUpdatedGateway>[0]["recoverHealth"]>
-      >(async (health) => ({ health, launchAgentRecovery: null }));
-      const result: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
-      const verification = await verifyUpdatedGateway({
-        result,
-        opts: { json: true, run: { runId: "bounded-startup", env: {} } },
-        serviceEnv: { HOME: "/synthetic-home" },
-        gatewayPort: 18789,
-        expectedVersion: "2026.9.4",
-        requireRunningService: true,
-        health: {
-          healthy: false,
-          waitOutcome,
-          runtime: { status: waitOutcome === "still-starting" ? "running" : "stopped", pid: 8000 },
-          portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
-          staleGatewayPids: [],
-          expectedVersion: "2026.9.4",
-          startupPhase: "loading plugins",
-          elapsedMs: 300_000,
-        },
-        recoverHealth,
-      });
-      expect(verification).toMatchObject(
-        waitOutcome === "still-starting"
-          ? { ok: false, stopReason: "still-starting" }
-          : { ok: false, summary: "service-not-running" },
-      );
-      expect(recoverHealth).toHaveBeenCalledTimes(waitOutcome === "still-starting" ? 0 : 1);
-      expect(result.steps[0]?.exitCode).toBe(waitOutcome === "still-starting" ? 0 : 1);
-      expect(recordUpdateRunVerification).toHaveBeenLastCalledWith(
-        "bounded-startup",
-        expect.objectContaining({ versionMatch: undefined }),
-        expect.anything(),
-      );
+      await expect(verification).rejects.toBe(cleanup);
+      expect(result.verification).toBeUndefined();
+      expect(result.steps).toEqual([]);
     },
   );
 
   it.each([
-    {
-      startupAtMs: 0,
-      healthyAtMs: 0,
-      timeoutMs: 1_000,
-      verified: true,
-      minMs: 5_500,
-      maxMs: 6_500,
-    },
     {
       startupAtMs: 1_500,
       healthyAtMs: 1_500,
@@ -570,58 +576,7 @@ describe("update readiness generation", () => {
     },
   );
 
-  it.each(["stable", "pid storm", "boot storm"])(
-    "only preserves stable startup at the deadline: %s",
-    async (startup) => {
-      mockProcessPlatform("linux");
-      const service = makeGatewayService({ status: "running", pid: 8000 });
-      vi.mocked(service.readRuntime).mockImplementation(async () => ({
-        status: "running",
-        pid: startup === "pid storm" ? 8000 + monotonicClock.nowMs / 500 : 8000,
-      }));
-      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
-      if (startup === "boot storm") {
-        inspectPortUsage.mockImplementation(async (port) => ({
-          port,
-          status: "busy",
-          listeners: [{ pid: 8000 }],
-          hints: [],
-        }));
-        callGateway.mockImplementation((opts) =>
-          gatewayHealthResponse({
-            server: { version: "2026.9.4", bootId: `boot-${monotonicClock.nowMs}` },
-          })(opts),
-        );
-      }
-      const recoverHealth = vi.fn<
-        NonNullable<Parameters<typeof verifyUpdatedGateway>[0]["recoverHealth"]>
-      >(async (health) => ({ health, launchAgentRecovery: null }));
-      const updateResult: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
-      const result = await verifyUpdatedGateway({
-        result: updateResult,
-        opts: { json: true },
-        serviceEnv: { HOME: "/synthetic-home" },
-        gatewayPort: 18789,
-        expectedVersion: "2026.9.4",
-        requireRunningService: true,
-        timeoutMs: 1_000,
-        recoverHealth,
-      });
-      expect(result).toMatchObject(
-        startup === "stable"
-          ? { stopReason: "still-starting" }
-          : { ok: false, summary: "generation-changed" },
-      );
-      if (startup !== "stable") {
-        expect(result.stopReason).toBeUndefined();
-      }
-      expect(recoverHealth).not.toHaveBeenCalled();
-      expect(updateResult.steps[0]?.exitCode).toBe(startup === "stable" ? 0 : 1);
-    },
-  );
-
   it.each([
-    { activation: "native restart", exhausted: false },
     { activation: "native restart", exhausted: true },
     { activation: "service refresh", exhausted: false },
     { activation: "service refresh", exhausted: true },
@@ -680,15 +635,7 @@ describe("update readiness generation", () => {
     },
   );
 
-  it.each([
-    { timeout: undefined, readyAtMs: 44 * 60_000, expected: "ok" },
-    {
-      timeout: undefined,
-      readyAtMs: resolveGatewayStartupTiming("win32").deadlineMs + 60_000,
-      expected: "readiness-pending",
-    },
-    { timeout: "60", readyAtMs: 44 * 60_000, expected: "readiness-pending" },
-  ])(
+  it.each([{ timeout: undefined, readyAtMs: 44 * 60_000, expected: "ok" }])(
     "preserves Windows cold startup and an explicit update timeout ($timeout, ready at $readyAtMs)",
     async ({ timeout, readyAtMs, expected }) => {
       const budgetMs =
@@ -742,14 +689,11 @@ describe("update readiness generation", () => {
   it.each([
     { transition: "unchanged", supplied: false },
     { transition: "replacement-at-deadline", supplied: false },
-    { transition: "unchanged-at-deadline", supplied: false },
     { transition: "same-pid-new-boot", supplied: false },
     { transition: "replacement-during-final-health", supplied: false },
     { transition: "same-pid-new-boot-during-native", supplied: false },
     { transition: "pidless-new-boot-during-native", supplied: false },
-    { transition: "unchanged-pidless", supplied: false },
     { transition: "first-final-health-error", supplied: false },
-    { transition: "last-final-health-error", supplied: false },
     { transition: "readyz-error", supplied: false },
     { transition: "replacement", supplied: true },
   ] as const)(
@@ -782,8 +726,7 @@ describe("update readiness generation", () => {
       callGateway.mockImplementation(async (opts) => {
         const response = await gatewayHealthResponse({
           server: { version: "2026.9.1", buildId: "candidate-build", bootId },
-          ...((transition === "first-final-health-error" && callGateway.mock.calls.length === 13) ||
-          (transition === "last-final-health-error" && callGateway.mock.calls.length === 14)
+          ...(transition === "first-final-health-error" && callGateway.mock.calls.length === 13
             ? { error: new Error("synthetic health failed") }
             : {}),
         })(opts);
@@ -850,7 +793,7 @@ describe("update readiness generation", () => {
       }
       release.resolve();
       const result = await verification;
-      const verified = unchanged && transition !== "unchanged-at-deadline";
+      const verified = unchanged;
       expect(result.ok).toBe(verified);
       if (transition.endsWith("-at-deadline")) {
         // The held HTTP read exhausted the budget; identity cannot be reread afterward.

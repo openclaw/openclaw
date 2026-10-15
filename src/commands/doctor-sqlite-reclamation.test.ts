@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
 import * as diskSpace from "../infra/disk-space.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -33,12 +34,18 @@ async function seed(state: OpenClawTestState, withAgent = false) {
         VALUES ('agent:main:history','hot','{"sessionId":"hot","updatedAt":2}',2);
       INSERT INTO session_windows(session_id,session_key,created_at,updated_at)
         VALUES ('hot','agent:main:history',1,2);
-      INSERT INTO transcript_events(rowid,session_id,seq,event_json,created_at)
-        VALUES (41,'hot',7,'{"type":"message","id":"kept"}',11);
       INSERT INTO session_transcript_fts(rowid,text,session_id,message_id,role,timestamp)
         VALUES (-17,'saffronquasar 雪','hot','kept','assistant','2026-10-01');
       INSERT INTO session_transcript_fts_rows(id,session_id,message_id) VALUES (-17,'hot','kept');
     `);
+    const eventJson = '{"type":"message","id":"kept"}';
+    agent.db
+      .prepare(`INSERT INTO transcript_events
+      (rowid,session_id,seq,event_json,created_at,navigation_type,navigation_custom_type,
+       navigation_display,message_role,navigation_last_type,navigation_last_custom_type,navigation_valid)
+      VALUES (41,'hot',7,$eventJson,11,$navigation_type,$navigation_custom_type,
+        $navigation_display,$message_role,$navigation_last_type,$navigation_last_custom_type,$navigation_valid)`)
+      .run({ eventJson, ...deriveTranscriptPredicateFields(eventJson) });
   }
   await closeOpenClawAgentDatabasesAsync(state.stateDir);
   await closeOpenClawStateDatabaseAsync();

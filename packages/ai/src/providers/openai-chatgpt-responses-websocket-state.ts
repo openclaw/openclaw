@@ -43,7 +43,7 @@ export interface WebSocketLike {
   removeEventListener(type: WebSocketEventType, listener: WebSocketListener): void;
 }
 
-export interface CachedWebSocketContinuationState {
+interface CachedWebSocketContinuationState {
   lastRequestBody: RequestBody;
   lastResponseId: string;
   lastResponseItems: ResponseInput;

@@ -77,7 +77,7 @@ stored recommendations; use `openclaw agents list` to find configured IDs.
 Fresh workspaces defer the recommendation choice to the bootstrap conversation.
 After that conversation handles the user's choices,
 `openclaw onboard recommendations acknowledge` marks the stored offer answered.
-The acknowledgement is idempotent. If a chosen install fails, pass each failed
+Repeating the acknowledgement has no additional effect. If a chosen install fails, pass each failed
 opaque ID with `--retry <id...>`; successful and declined matches are consumed,
 while failed matches remain pending for a later onboarding run. Unknown IDs
 fail without changing the stored offer. After an interrupted ClawHub skill
@@ -267,7 +267,7 @@ acknowledgement, so invoking `--reset` can move state to Trash before you can
 decline that prompt. After reset, the command runs guided, classic, or
 non-interactive onboarding according to the other flags.
 
-Session reset permanently removes canonical SQLite history and its owned archive
+Session reset permanently removes stored SQLite history and its owned archive
 files through the same cleanup as [`openclaw reset`](/cli/reset). It preserves
 auth profiles and unrelated database state. Stop any running Gateway first;
 onboarding refuses session cleanup while another process owns the state directory.
@@ -297,6 +297,13 @@ OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 ## Non-interactive setup
 
 `--non-interactive` requires `--accept-risk` (acknowledges that agents are powerful and full system access is risky). `--mode` defaults to `local`.
+
+Replacing an existing provider credential saves it inactive and prints a
+`models auth activate` command; setup does not automatically switch your working
+connection or continue to daemon installation. Temporary credential staging files
+are removed after their databases close. If removal remains blocked, setup warns
+with the leftover directory path without hiding the provider result or activation
+instructions. Remove that directory manually once the lock clears.
 
 ### Required external plugins
 
@@ -359,7 +366,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --custom-model-id "qwen3.5:27b"
 ```
 
-`--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.5:cloud` also work here.
+`--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.6:cloud` also work here.
 
 Non-interactive llama.cpp against an existing `llama-server`:
 
@@ -394,9 +401,9 @@ Existing [trusted-proxy authentication](/gateway/trusted-proxy-auth) and its pro
 - `--gateway-token` and `--gateway-token-ref-env` are mutually exclusive.
 - Remote onboarding uses `--remote-token <token>` or `--remote-password <password>` for `gateway.remote` credentials. `--gateway-token`, `--gateway-token-ref-env`, and `--gateway-password` configure local Gateway auth and are not valid in remote mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use `--remote-token` with `--secret-input-mode ref`.
 - With `--secret-input-mode ref`, non-interactive `--gateway-password` and `--remote-password` require a matching `OPENCLAW_GATEWAY_PASSWORD`, and `--remote-token` requires a matching `OPENCLAW_GATEWAY_TOKEN`; onboarding stores an env SecretRef and rejects missing or mismatched values before changing state. Interactive setup can also select configured file, exec, or store refs.
-- With `--install-daemon`: a SecretRef-managed `gateway.auth.token` is validated but not persisted as resolved plaintext in supervisor service environment metadata; if the ref is unresolved, install fails closed with remediation guidance. If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install blocks until mode is set explicitly.
+- With `--install-daemon`: a SecretRef-managed `gateway.auth.token` is validated but not persisted as resolved plaintext in supervisor service environment metadata; if the ref is unresolved, install stops with remediation guidance. If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install blocks until mode is set explicitly.
 - Local onboarding writes `gateway.mode="local"` into the config. A later config file missing `gateway.mode` indicates config damage or an incomplete manual edit, not a valid local-mode shortcut.
-- Local onboarding ensures the chosen setup path's required plugins are available (for example the Codex or Copilot runtime). Non-interactive setup cannot approve new capabilities; [review and preinstall required external plugins](#required-external-plugins), then rerun onboarding. Remote onboarding only writes connection info for the remote Gateway - it never installs local plugin packages.
+- Local onboarding checks that the chosen setup path's required plugins are available (for example the Codex or Copilot runtime). Non-interactive setup cannot approve new capabilities; [review and preinstall required external plugins](#required-external-plugins), then rerun onboarding. Remote onboarding only writes connection info for the remote Gateway - it never installs local plugin packages.
 - `--allow-unconfigured` is a separate `openclaw gateway run` escape hatch; it does not let onboarding skip `gateway.mode`.
 
 ```bash
@@ -475,7 +482,7 @@ Token-based model auth (used with `--auth-choice token`):
 
 Cloudflare AI Gateway: `--cloudflare-ai-gateway-account-id <id>`, `--cloudflare-ai-gateway-gateway-id <id>`.
 
-Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>` (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
+Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>` (default: `node`). Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 
 Skills: `--node-manager <npm|pnpm|bun>` (default `npm`), `--skip-skills`.
 

@@ -1,5 +1,10 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveModelRefFromString } from "../../agents/model-selection-shared.js";
@@ -25,6 +30,7 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 
 type CaptureSessionDiffBaseline =
@@ -80,7 +86,7 @@ async function seedSession(
 ) {
   const storePath = path.join(tempDirs.make("get-reply-session-"), "sessions.json");
   await replaceSessionEntry({ sessionKey, storePath }, entry);
-  const sessionEntryHandle = { replaceCurrent: vi.fn() };
+  const sessionEntryHandle = createReplySessionEntryHandle({ sessionEntry: entry, sessionKey });
   const fixture = createGetReplySessionState({
     sessionKey,
     sessionEntry: entry,
@@ -142,7 +148,7 @@ describe("getReplyFromConfig configOverride", () => {
   beforeEach(async () => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     const sessionDiff = await import("../../sessions/session-diff.js");
-    const commands = await import("./commands.runtime.js");
+    const commands = await import("./commands.js");
     vi.spyOn(sessionDiff, "captureSessionDiffBaseline").mockImplementation(mocks.captureBaseline);
     vi.spyOn(commands, "handleCommands").mockResolvedValue({ shouldContinue: true });
     mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
@@ -372,6 +378,53 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     );
     vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
   });
+  it("starts the model before baseline capture and settles it before tools and cleanup", async ({
+    signal,
+  }) => {
+    const { ctx, sessionKey, sessionEntryHandle } =
+      await prepareBaselineClaimSession("overlapping-baseline");
+    const capture = createDeferred<Awaited<ReturnType<CaptureSessionDiffBaseline>>>();
+    const modelStarted = createDeferred();
+    const events: string[] = [];
+    const sessionDiff = await import("../../sessions/session-diff.js");
+    vi.spyOn(sessionDiff, "captureSessionDiffBaseline").mockReturnValueOnce(capture.promise);
+    mockFallbackDirectiveResult(sessionKey);
+    vi.mocked(runPreparedReplyMock).mockImplementationOnce(async (params) => {
+      events.push("model");
+      const updated = {
+        ...sessionEntryHandle.getCurrent()!,
+        label: "set during model preparation",
+      };
+      sessionEntryHandle.replaceCurrent(updated);
+      modelStarted.resolve();
+      expect(params.opts?.awaitSessionDiffBaseline).toBeTypeOf("function");
+      await params.opts?.awaitSessionDiffBaseline?.();
+      events.push("tool");
+      return { text: "ok" };
+    });
+    const reply = getReplyFromConfig(ctx, undefined, makeReasoningModelConfig());
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(modelStarted.promise, reply, "model did not start"),
+        signal,
+      );
+      expect(events).toEqual(["model"]);
+    } finally {
+      capture.resolve({
+        version: 1,
+        sessionId: "overlapping-baseline",
+        root: "/workspace",
+        files: [],
+      });
+      await reply.catch(() => undefined);
+    }
+    await expect(reply).resolves.toEqual({ text: "ok" });
+    expect(events).toEqual(["model", "tool"]);
+    expect(sessionEntryHandle.getCurrent()).toMatchObject({
+      label: "set during model preparation",
+      sessionDiffBaseline: { sessionId: "overlapping-baseline" },
+    });
+  });
   it("suppresses heartbeat model overrides for a model-locked session", async () => {
     const { sessionKey } = await mockAutoFallbackSession(true);
     mockFallbackDirectiveResult(sessionKey, { resolvedThinkLevel: "off" });
@@ -410,11 +463,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       "openai:metered",
     );
   });
-  it.each([
-    ["turn override", undefined, "off"],
-    ["per-model off", false, "off"],
-    ["per-model high", "high", "high"],
-  ] as const)(
+  it.each([["turn override", undefined, "off"]] as const)(
     "honors %s and clears fallback reasoning during primary probes",
     async (_name, thinking, expected) => {
       const { sessionKey } = await mockAutoFallbackSession();

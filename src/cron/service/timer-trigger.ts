@@ -1,16 +1,19 @@
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { isCronTimeoutErrorText } from "../execution-error-constants.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
+import { createCronSourceIdentity } from "../source-schedule.js";
 import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
 } from "../store/delivery-codec.js";
-import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type {
   CronJob,
   CronDeliveryTrace,
+  CronFailureNotificationDetail,
   CronResolvedDeliveryState,
   CronRunErrorClassification,
   CronRunStatus,
+  CronTriggerEvalOutcome,
 } from "../types.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
@@ -24,7 +27,6 @@ import type {
   CronSystemEventEnqueueResult,
   DeferredCronNotifications,
 } from "./state.js";
-import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 
 /** Default max retries for cron jobs on transient errors (#24355). */
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
@@ -34,7 +36,7 @@ type TransientCronRetryDecision = {
   consecutiveErrors: number;
   retryCategory?: CronRetryOn;
   backoffMs?: number;
-  reason: "transient retry" | "max retries exhausted" | "permanent error";
+  reason: "transient retry" | "max retries exhausted" | "permanent error" | "aborted";
 };
 
 type DisabledHeartbeatOneShotRetryDecision = {
@@ -90,7 +92,7 @@ export function applyTriggerRunResult(
     result.status === "ok"
   ) {
     if (job.schedule.kind === "stream") {
-      job.state.streamSourceIdentity = createCronStreamSourceIdentity();
+      job.state.streamSourceIdentity = createCronSourceIdentity();
     }
     job.enabled = false;
     job.state.nextRunAtMs = undefined;
@@ -122,6 +124,26 @@ export function resolveCronNextRunWithLowerBound(params: {
   });
 }
 
+/**
+ * True when a scheduled quick re-run targets a provider outage, so the failure alert and
+ * owner repair wait for it. Provider transport failures (DNS, refused connections, request
+ * timeouts) classify as `timeout`. Failures the job owns are not held: its scripts, command
+ * payloads, and cron's own execution watchdog usually need the owner repair promptly.
+ */
+export function holdsFailureNotificationForRetry(
+  job: CronJob,
+  result: { error?: string; failureNotificationDetail?: CronFailureNotificationDetail },
+  category: CronRetryOn | undefined,
+): boolean {
+  if (category === undefined || result.failureNotificationDetail?.kind === "script-failure") {
+    return false;
+  }
+  return (
+    category !== "timeout" ||
+    (job.payload.kind !== "command" && !isCronTimeoutErrorText(result.error))
+  );
+}
+
 export function resolveTransientCronRetryDecision(params: {
   error: string | undefined;
   errorClassification?: CronRunErrorClassification;
@@ -129,6 +151,13 @@ export function resolveTransientCronRetryDecision(params: {
   executionStarted?: boolean;
   consecutiveErrors: number | undefined;
 }): TransientCronRetryDecision {
+  if (params.errorClassification?.kind === "aborted") {
+    return {
+      retryable: false,
+      consecutiveErrors: params.consecutiveErrors ?? 0,
+      reason: "aborted",
+    };
+  }
   if (params.errorClassification?.kind === "permanent") {
     return {
       retryable: false,

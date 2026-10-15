@@ -1,13 +1,14 @@
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   loadTranscriptEvents,
-  replaceTranscriptEvents,
   stageSessionPendingInput,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -15,6 +16,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as historyWorker from "../../config/sessions/session-history-worker-runtime.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -23,7 +25,7 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
@@ -31,8 +33,9 @@ import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 describe("chat.message.get recovery visibility", () => {
-  it("hides recovered failures across hidden announce chunks while retaining unresolved and partial replies", async () => {
+  it("hides attempt diagnostics across hidden announce chunks while retaining partial replies", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:message-recovery",
@@ -125,9 +128,9 @@ describe("chat.message.get recovery visibility", () => {
         __openclaw: expect.objectContaining({ id: "failed" }),
       });
       await lookup("failed");
-      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }));
-      // The initial page ends on the hidden announce; its paired reply is newer lookahead.
-      expect(await readHistory({ offset: 1, limit: messages.length - 1 })).toContainEqual(
+      expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
+      // Neither a bounded page nor a receipt-less attempt establishes terminal failure.
+      expect(await readHistory({ offset: 1, limit: messages.length - 1 })).not.toContainEqual(
         failedMessage,
       );
 
@@ -151,7 +154,7 @@ describe("chat.message.get recovery visibility", () => {
             : [expect.objectContaining({ __openclaw: expect.objectContaining({ id: "user" }) })],
         );
       }
-      // Both hidden rows now fit the initial window; only the real retry repairs the failure.
+      // Both hidden rows now fit the initial window; the attempt diagnostic remains hidden.
       expect(await readHistory({ offset: 1, limit: messages.length })).not.toContainEqual(
         failedMessage,
       );
@@ -185,6 +188,7 @@ describe("chat.message.get recovery visibility", () => {
 
 it("resolves one indexed message per worker request while hiding stale announce pairs", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:indexed-message-get",
@@ -282,6 +286,7 @@ it("resolves one indexed message per worker request while hiding stale announce 
 describe("durable tool output inspection", () => {
   it("fetches a retained history reference without crossing conversation or pending-input ownership", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:retained-reference",
@@ -397,6 +402,7 @@ describe("durable tool output inspection", () => {
 
   it("reopens SQLite with bounded history previews and exact recoverable tool text", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:tool-output",
@@ -452,7 +458,20 @@ describe("durable tool output inspection", () => {
       const databasePath = resolveOpenClawAgentSqlitePath(
         toDatabaseOptions(resolveSqliteTranscriptReadScope(scope)),
       );
-      expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
+      const claimSoleCustody = () => {
+        const database = new DatabaseSync(databasePath);
+        try {
+          // A retained WAL connection prevents exclusive custody even between reads.
+          database.exec(
+            "PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT",
+          );
+        } finally {
+          database.close();
+        }
+      };
+      expect(claimSoleCustody).toThrow(/database is locked/);
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+      expect(claimSoleCustody).not.toThrow();
       clearSessionStoreCacheForTest();
       expect(await loadTranscriptEvents(scope)).toEqual(persisted);
       for (const fixture of fixtures) {
@@ -549,6 +568,7 @@ describe("durable tool output inspection", () => {
 
   it("rejects a full structured message above the transport budget", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:tool-transport",

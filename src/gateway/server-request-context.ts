@@ -5,7 +5,8 @@ import {
   type GatewayClientId,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { getUserProfileDisplay } from "../state/user-profiles.js";
+import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
+import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
@@ -137,7 +138,7 @@ type GatewayRequestContextRuntime = Pick<
     >;
     sessionMessageSubscribers: Pick<
       GatewayCoreRuntime["sessionMessageSubscribers"],
-      "unsubscribeAll"
+      "get" | "unsubscribeAll"
     >;
     toolEventRecipients: Pick<
       GatewayCoreRuntime["toolEventRecipients"],
@@ -211,6 +212,7 @@ export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContext {
   const { runtime } = params;
+  const agentDatabaseStartup = getAgentDatabaseStartupAdmission();
   const {
     connectionWork,
     runtimeState,
@@ -265,6 +267,17 @@ export function createGatewayRequestContext(
       return runtimeState.cronState.storePath;
     },
     getRuntimeConfig,
+    ...(agentDatabaseStartup
+      ? {
+          agentDatabaseStartup: {
+            get hasPendingAgents() {
+              return agentDatabaseStartup.hasPendingAgents;
+            },
+            waitForAgentPreparation:
+              agentDatabaseStartup.waitForAgentPreparation.bind(agentDatabaseStartup),
+          },
+        }
+      : {}),
     resolveSessionRequestTargets: (request) =>
       resolveSessionRequestTargets({ ...request, context }),
     getCommittedRuntimeConfig: () =>
@@ -396,7 +409,7 @@ export function createGatewayRequestContext(
               ? profile
               : undefined
             : canonicalProfileId
-              ? getUserProfileDisplay(canonicalProfileId)
+              ? getResidentUserProfileDisplay(canonicalProfileId)
               : undefined;
           // Global invalidation must not renew unchanged presence rows. Explicit
           // callbacks can arrive after their caller has attached the new profile.
@@ -475,6 +488,7 @@ export function createGatewayRequestContext(
         });
       }
     },
+    sharedGatewaySessionGenerationState,
     disconnectClientsUsingSharedGatewayAuth: () => {
       disconnectStaleSharedGatewayAuthClients({
         clients,
@@ -539,6 +553,7 @@ export function createGatewayRequestContext(
       runtimeState.sessionViewerPresence?.unsubscribe(connId);
     },
     getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
+    getSessionMessageSubscriberConnIds: sessionMessageSubscribers.get,
     registerToolEventRecipient: runtime.toolEventRecipients.add,
     dedupe: runtime.dedupe,
     wizardSessions: runtime.wizardSessions,

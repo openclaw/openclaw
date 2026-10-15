@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -8,17 +9,25 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
+import { createProcessTool } from "./bash-tools.process.js";
 import * as worker from "./code-mode-executor.js";
 import * as codeModeState from "./code-mode-state.js";
+import { waitForPendingBridgeSettlement } from "./code-mode-state.js";
+import type { SettledBridgeRequest } from "./code-mode-worker-types.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   createCodeModeHarness,
   pluginTool,
   pluginToolWithExecute,
+  mcpTool,
   resetCodeModeTestState,
   resultDetails,
   testing,
+  runUntilCompleted,
+  waitUntilCompleted,
 } from "./code-mode.test-support.js";
+import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import {
@@ -41,6 +50,73 @@ afterEach(async () => {
 });
 
 describe("Code Mode wait, scope, and suspended runs", () => {
+  it.each(["native", "client-shadow", "mcp", "cleared", "denied"] as const)(
+    "offers only executable native process guidance for a %s catalog",
+    async (kind) => {
+      const target =
+        kind === "mcp"
+          ? mcpTool({ name: "process", serverName: "remote", toolName: "process" })
+          : createProcessTool({ scopeKey: "wait-guidance" });
+      const fixture = harness([target]);
+      if (kind === "client-shadow") {
+        addClientToolsToToolCatalog({
+          catalogRef: fixture.catalogRef,
+          enabled: true,
+          tools: [pluginTool("process", "Client process")],
+        });
+      }
+      if (kind === "cleared") {
+        clearToolSearchCatalog(fixture.ctx);
+      }
+      const wait =
+        kind === "denied"
+          ? createCodeModeTools({ ...fixture.ctx, toolExecutionAllow: ["read"] })[1]!
+          : fixture.wait;
+      const failure = await wait.execute("wrong-id", { runId: "shell-session-id" }).catch(String);
+      expect(failure).toContain("Only the top-level runId");
+      expect(failure).toContain("This error does not mean earlier actions had no effect");
+      if (kind === "native") {
+        expect(failure).toContain(
+          'poll that same session with process using action: "poll" in a new exec',
+        );
+      } else {
+        expect(failure).not.toContain('action: "poll"');
+      }
+    },
+  );
+
+  it("uses the current catalog after replacement for missing-run guidance", async () => {
+    const fixture = harness([createProcessTool({ scopeKey: "wait-replacement" })]);
+    await expect(fixture.wait.execute("before", { runId: "missing" })).rejects.toThrow(
+      'action: "poll"',
+    );
+    applyCodeModeCatalog({
+      ...fixture.ctx,
+      tools: [...fixture.tools, pluginTool("replacement", "Replacement")],
+    });
+    const failure = await fixture.wait.execute("after", { runId: "missing" }).catch(String);
+    expect(failure).toContain("review earlier exec/wait results");
+    expect(failure).not.toContain('action: "poll"');
+  });
+
+  it("rejects a completed run without replaying its action", async () => {
+    const target = pluginTool("one_action", "One action");
+    const { exec, wait } = harness([target]);
+    const first = resultDetails(
+      await exec.execute("once", {
+        code: 'await one_action({}); await yield_control(); return "done";',
+      }),
+    );
+    expect(first.status).toBe("waiting");
+    expect(resultDetails(await wait.execute("resume", { runId: first.runId }))).toMatchObject({
+      status: "completed",
+      value: "done",
+    });
+    await expect(wait.execute("stale", { runId: first.runId })).rejects.toThrow(
+      "This ID is unknown or no longer resumable",
+    );
+    expect(target.execute).toHaveBeenCalledOnce();
+  });
   it("keeps one execution allowance across event-driven required waits", async () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const releases = [createDeferred(), createDeferred()];
@@ -381,24 +457,12 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       expect(final.content[0]).not.toMatchObject({
         text: expect.stringContaining("<|endoftext|>"),
       });
+      expect(target.execute).toHaveBeenCalledOnce();
+      const nestedCallId = vi.mocked(target.execute).mock.calls[0]?.[0];
+      expect(nestedCallId).toContain("network");
+      expect(nestedCallId).not.toContain("network-wait");
     },
   );
-
-  it("preserves the original exec identity for tool calls after yield and wait", async () => {
-    const target = pluginTool("resumed_identity", "Resumed identity");
-    const { exec, wait } = harness([target]);
-    const first = resultDetails(
-      await exec.execute("original-parent", {
-        code: 'await yield_control("pause"); return await resumed_identity({});',
-      }),
-    );
-    expect(first.status).toBe("waiting");
-    const final = resultDetails(await wait.execute("different-parent", { runId: first.runId }));
-    expect(final.status).toBe("completed");
-    expect(target.execute).toHaveBeenCalledOnce();
-    expect(vi.mocked(target.execute).mock.calls[0]?.[0]).toContain("original-parent");
-    expect(vi.mocked(target.execute).mock.calls[0]?.[0]).not.toContain("different-parent");
-  });
 
   it("allocates distinct replay identities when a later turn reuses a tool-call id", async () => {
     const { exec } = harness([pluginTool("fake_noop", "Noop")]);
@@ -457,7 +521,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(signal.aborted).toBe(true);
       await expect(wait.execute("expired-wait", { runId: parked.runId })).rejects.toThrow(
-        "code mode run is unavailable or expired",
+        "This error does not mean earlier actions had no effect",
       );
       expect(target.execute).toHaveBeenCalledOnce();
       expect(testing.activeRuns.size).toBe(0);
@@ -466,48 +530,38 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     }
   });
 
-  it.each(["exec", "wait"])(
-    "preserves accepted output when %s expiry exceeds the Date range",
-    async (mode) => {
-      const target = pluginTool("expiry_fixture", "Expiry fixture");
-      const { exec, wait } = harness([target], { codeMode: { snapshotTtlSeconds: 1 } });
-      const limit = 8_640_000_000_000_000;
-      const now = vi.spyOn(Date, "now").mockReturnValue(limit - 1_000);
-      let details: Record<string, unknown>;
-      try {
-        const input = {
-          code: `${mode === "wait" ? 'text("delivered"); await yield_control();' : ""}
+  it("preserves accepted output when wait expiry exceeds the Date range", async () => {
+    const target = pluginTool("expiry_fixture", "Expiry fixture");
+    const { exec, wait } = harness([target], { codeMode: { snapshotTtlSeconds: 1 } });
+    const limit = 8_640_000_000_000_000;
+    const now = vi.spyOn(Date, "now").mockReturnValue(limit - 1_000);
+    let details: Record<string, unknown>;
+    try {
+      const input = {
+        code: `text("delivered"); await yield_control();
         text("accepted first"); await expiry_fixture({}); text("accepted inline"); await yield_control("pause"); return "done";`,
-        };
-        const first =
-          mode === "wait" ? resultDetails(await exec.execute("park", input)) : undefined;
-        if (first) {
-          expect(first).toMatchObject({
-            status: "waiting",
-            output: [{ type: "text", text: "delivered" }],
-          });
-        }
-        now.mockReturnValue(limit - 1);
-        details = resultDetails(
-          await (first
-            ? wait.execute("resume", { runId: first.runId })
-            : exec.execute("overflow", input)),
-        );
-      } finally {
-        now.mockRestore();
-      }
-      expect(details).toMatchObject({
-        status: "failed",
-        error: "code mode run expiry is unavailable.",
-        output: [
-          { type: "text", text: "accepted first" },
-          { type: "text", text: "accepted inline" },
-        ],
+      };
+      const first = resultDetails(await exec.execute("park", input));
+      expect(first).toMatchObject({
+        status: "waiting",
+        output: [{ type: "text", text: "delivered" }],
       });
-      expect(target.execute).toHaveBeenCalledOnce();
-      expect(testing.activeRuns.size).toBe(0);
-    },
-  );
+      now.mockReturnValue(limit - 1);
+      details = resultDetails(await wait.execute("resume", { runId: first.runId }));
+    } finally {
+      now.mockRestore();
+    }
+    expect(details).toMatchObject({
+      status: "failed",
+      error: "code mode run expiry is unavailable.",
+      output: [
+        { type: "text", text: "accepted first" },
+        { type: "text", text: "accepted inline" },
+      ],
+    });
+    expect(target.execute).toHaveBeenCalledOnce();
+    expect(testing.activeRuns.size).toBe(0);
+  });
 
   describe("suspended-run owner scope", () => {
     const identities = ["runId", "sessionId", "sessionKey", "agentId"] as const;
@@ -542,24 +596,296 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   });
 
   it("rejects concurrent waits for the same suspended run", async () => {
-    const { exec, wait } = harness(
-      [
-        pluginToolWithExecute(
-          "slow",
-          "Slow helper",
-          async () => await new Promise<never>(() => {}),
-        ),
-      ],
-      { codeMode: { timeoutMs: 500 } },
-    );
+    const { exec, wait } = harness([]);
     const first = resultDetails(
-      await exec.execute("concurrent", { code: "await slow({}); return 'done';" }),
+      await exec.execute("concurrent", { code: "await yield_control(); return 'done';" }),
     );
     expect(first.status).toBe("waiting");
     const pending = wait.execute("wait-a", { runId: first.runId });
     await expect(wait.execute("wait-b", { runId: first.runId })).rejects.toThrow(
-      "already being resumed",
+      "Use that wait’s result before deciding the next step",
     );
-    expect(resultDetails(await pending)).toMatchObject({ status: "waiting", runId: first.runId });
+    expect(resultDetails(await pending)).toMatchObject({ status: "completed", value: "done" });
   });
+});
+
+async function runCode(code: string, targets: AnyAgentTool[]) {
+  const { ctx, tools } = createCodeModeHarness();
+  applyCodeModeCatalog({
+    tools: [...tools, ...targets],
+    ...ctx,
+  });
+  return resultDetails(await tools[0]!.execute("preflight", { code }));
+}
+
+describe("Code Mode preflight repair", () => {
+  it.each([
+    { kind: "input", code: "input_contract", calls: 0 },
+    { kind: "schema", code: "invalid_contract", calls: 0 },
+    { kind: "spoof", code: "tool_error", calls: 1 },
+  ])("classifies $kind failures without inferring safe retry", async ({ kind, code, calls }) => {
+    const target = pluginToolWithExecute("contract_target", "Contract boundary", async () => {
+      if (kind === "spoof") {
+        throw Object.assign(new Error("already started"), {
+          code: "input_contract",
+          effectStatus: "none",
+        });
+      }
+      return jsonResult({ count: "wrong" });
+    });
+    target.parameters = Type.Object({ count: Type.Number() }, { additionalProperties: false });
+    target.outputSchema =
+      kind === "schema"
+        ? ({ type: "not-a-type" } as never)
+        : Type.Object({ count: Type.Number() }, { additionalProperties: false });
+    const result = await runCode(
+      "try { await contract_target({ count: " +
+        (kind === "input" ? '"wrong"' : "1") +
+        " }); } catch (e) { return { code: e.code, effectStatus: e.effectStatus, location: e.location, message: e.message }; }",
+      [target],
+    );
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        code,
+        effectStatus: "unknown",
+        location: expect.stringContaining("openclaw-code-mode:user.js:1:"),
+      },
+    });
+    expect(target.execute).toHaveBeenCalledTimes(calls);
+  });
+
+  it("reports bounded output validation details after a mutation without exposing returned values", async () => {
+    let applied = 0;
+    const privateValue = "SYNTHETIC_PRIVATE_OUTPUT";
+    const fields = [
+      "field0",
+      "long_" + "🦞".repeat(600),
+      ...Array.from({ length: 6 }, (_, index) => `field${index + 2}`),
+    ];
+    const target = pluginToolWithExecute(
+      "update_receipt",
+      "Update a synthetic receipt",
+      async () => {
+        applied += 1;
+        return jsonResult({
+          receipt: Object.fromEntries(fields.map((field) => [field, privateValue])),
+        });
+      },
+    );
+    target.outputSchema = Type.Object(
+      {
+        receipt: Type.Object(Object.fromEntries(fields.map((field) => [field, Type.Number()]))),
+      },
+      { additionalProperties: false },
+    );
+
+    const details = await runCode(
+      "try { await update_receipt({}); } catch (e) { return { code:e.code, effectStatus:e.effectStatus, message:e.message }; }",
+      [target],
+    );
+
+    expect(applied).toBe(1);
+    expect(target.execute).toHaveBeenCalledOnce();
+    expect(details).toMatchObject({
+      status: "completed",
+      value: {
+        code: "output_contract",
+        effectStatus: "unknown",
+        message: expect.stringContaining("receipt.field0: must be number"),
+      },
+    });
+    const message = JSON.stringify(details.value);
+    expect(message).toContain("tool returned");
+    expect(message).toContain("Check current state before retrying");
+    expect(message).toContain("additional validation issues omitted");
+    expect(message).toContain("[truncated]");
+    expect(message).not.toContain(privateValue);
+    expect(Buffer.byteLength(message, "utf8")).toBeLessThan(2048);
+  });
+
+  it("rejects stale exec timeout input before starting the command", async () => {
+    const exec = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const execute = vi.spyOn(exec, "execute");
+
+    const details = await runCode('await exec({ command: "printf ok", timeout: 5 });', [exec]);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(details).toMatchObject({
+      status: "failed",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+    });
+    expect(details.error).toContain("timeout");
+  });
+});
+
+describe("Code Mode program data", () => {
+  async function run(tools: AnyAgentTool[], code: string) {
+    const h = createCodeModeHarness({ codeMode: { maxOutputBytes: 1024 } });
+    applyCodeModeCatalog({
+      ...h.ctx,
+      tools: [...h.tools, ...tools],
+    });
+    return runUntilCompleted({ execTool: h.tools[0]!, waitTool: h.tools[1]!, code });
+  }
+
+  it("refuses aggregate overflow across a parked boundary", async () => {
+    const bytes = 6 * 1024 * 1024;
+    const tool = pluginToolWithExecute("large_page", "Read a large page", async () =>
+      jsonResult("x".repeat(bytes)),
+    );
+    const code =
+      "const pages = Promise.allSettled([large_page({}), large_page({})]); " +
+      "await yield_control(); " +
+      'return (await pages).map(item => item.status === "fulfilled" ? { length: item.value.length } : { error: item.reason.message });';
+    const result = await run([tool], code);
+    expect(result, JSON.stringify(result)).toMatchObject({
+      status: "completed",
+      value: [
+        { length: bytes },
+        { error: expect.stringMatching(/program-data budget exceeded.*Paginate/) },
+      ],
+    });
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+  });
+});
+
+it("clears host and worker-input aliases after bridge settlement", async () => {
+  const original = worker.runCodeModeExecutor;
+  const arrays: SettledBridgeRequest[][] = [];
+  const aliases: SettledBridgeRequest[] = [];
+  const spy = vi.spyOn(worker, "runCodeModeExecutor").mockImplementation(async (input, ...args) => {
+    // Production owns the worker input; retain its exact aliases to detect premature accounting-only release.
+    const resume = input as { kind: string; settledRequests?: SettledBridgeRequest[] };
+    if (resume.kind === "resume" && resume.settledRequests) {
+      arrays.push(resume.settledRequests);
+      aliases.push(...resume.settledRequests);
+    }
+    return await original(input, ...args);
+  });
+  const h = createCodeModeHarness();
+  const success = pluginToolWithExecute("reply_success", "Read data", async () =>
+    jsonResult("x".repeat(200000)),
+  );
+  const failure = pluginToolWithExecute("reply_failure", "Fail", async () => {
+    throw new Error("failure:" + "x".repeat(200000));
+  });
+  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, success, failure] });
+  try {
+    const first = resultDetails(
+      await h.tools[0]!.execute("aliases", {
+        code: "const replies = Promise.allSettled([reply_success({}), reply_failure({})]); await yield_control(); return (await replies).map(reply => reply.status);",
+      }),
+    );
+    expect(first.status).toBe("waiting");
+    const retainedState = testing.activeRuns.get(String(first.runId))!;
+    await waitForPendingBridgeSettlement(retainedState.pending, {
+      kind: "draining",
+      requiredRequestIds: retainedState.pending.map((entry) => entry.id),
+    });
+    const final = await waitUntilCompleted({ details: first, waitTool: h.tools[1]! });
+    expect(final).toMatchObject({ status: "completed", value: ["fulfilled", "rejected"] });
+    expect(aliases.some((reply) => reply.ok)).toBe(true);
+    expect(aliases.some((reply) => !reply.ok)).toBe(true);
+    expect(arrays.every((array) => array.length === 0)).toBe(true);
+    expect(aliases.every((reply) => reply.json === "")).toBe(true);
+    for (const pending of retainedState.pending) {
+      expect(pending.settled).toBe(true);
+      expect(() => pending.reply.take()).toThrow("unavailable");
+    }
+  } finally {
+    spy.mockRestore();
+    clearToolSearchCatalog(h.ctx);
+  }
+});
+
+it.each(["cancel", "expiry"])(
+  "does not retain a late tool completion after parked %s",
+  async (close) => {
+    const started = createDeferred();
+    const release = createDeferred();
+    const finished = createDeferred();
+    const h = createCodeModeHarness();
+    const tool = pluginToolWithExecute("late_page", "Signal-ignoring data source", async () => {
+      started.resolve();
+      await release.promise;
+      finished.resolve();
+      return jsonResult("late".repeat(300000));
+    });
+    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
+    try {
+      const first = resultDetails(
+        await h.tools[0]!.execute("late", {
+          code: "const page = late_page({}); await yield_control(); return (await page).length;",
+        }),
+      );
+      expect(first.status).toBe("waiting");
+      await started.promise;
+      const retained = testing.activeRuns.get(String(first.runId))!;
+      if (close === "expiry") {
+        testing.removeExpiredRuns(retained.expiresAt + 1);
+      } else {
+        clearToolSearchCatalog(h.ctx);
+      }
+      await waitForPendingBridgeSettlement(retained.pending, {
+        kind: "draining",
+        requiredRequestIds: retained.pending.map((entry) => entry.id),
+      });
+      release.resolve();
+      await finished.promise;
+      await Promise.resolve();
+      expect(retained.owner.signal.aborted).toBe(true);
+      expect(testing.activeRuns.size).toBe(0);
+      for (const pending of retained.pending) {
+        expect(() => pending.reply.take()).toThrow("unavailable");
+      }
+      expect(tool.execute).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      clearToolSearchCatalog(h.ctx);
+    }
+  },
+);
+
+it("releases each guest-discarded timer lease before the cell closes", async () => {
+  const h = createCodeModeHarness();
+  applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
+  try {
+    let result = resultDetails(
+      await h.tools[0]!.execute("discarded-timers", {
+        code: `for (let i = 0; i < 6; i++) {
+        const timer = setTimeout(() => { throw new Error("discarded timer fired"); }, 60_000);
+        await yield_control("armed");
+        clearTimeout(timer);
+        await yield_control("cleared");
+      }
+      return "done";`,
+      }),
+    );
+    for (let round = 0; round < 6; round++) {
+      expect(result.status).toBe("waiting");
+      const parked = testing.activeRuns.get(String(result.runId))!;
+      const timer = parked.pending.find((entry) => entry.method === "sleep")!;
+      expect(timer).toBeDefined();
+      expect(timer.settled).toBeUndefined();
+      const release = vi.spyOn(timer.reply, "release");
+      result = resultDetails(await h.tools[1]!.execute("discard-timer", { runId: result.runId }));
+      expect(result.status).toBe("waiting");
+      expect(parked.owner.signal.aborted).toBe(false);
+      expect(release).toHaveBeenCalledOnce();
+      expect(() => timer.reply.take()).toThrow("unavailable");
+      expect(
+        testing.activeRuns
+          .get(String(result.runId))!
+          .pending.some((entry) => entry.id === timer.id),
+      ).toBe(false);
+      release.mockRestore();
+      result = resultDetails(await h.tools[1]!.execute("next-timer", { runId: result.runId }));
+    }
+    expect(result).toMatchObject({ status: "completed", value: "done" });
+  } finally {
+    clearToolSearchCatalog(h.ctx);
+    vi.restoreAllMocks();
+  }
 });

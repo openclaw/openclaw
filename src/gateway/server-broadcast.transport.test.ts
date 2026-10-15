@@ -1,7 +1,9 @@
 import { EventEmitter, getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -57,7 +59,78 @@ const liveText = (group: AbortSignal) => ({
 
 describe("broadcast transport retirement", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("delivers identity invalidations only to agent identity readers", () => {
+    const read = controlledPeer("read");
+    const sessionRead = controlledPeer("session-read");
+    const admin = controlledPeer("admin");
+    const node = controlledPeer("node");
+    sessionRead.client.connect.scopes = ["operator.sessions.read"];
+    admin.client.connect.scopes = ["operator.admin"];
+    node.client.connect.role = "node";
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([
+        read.client,
+        sessionRead.client,
+        admin.client,
+        node.client,
+      ]),
+    });
+
+    broadcast("agent.identity.changed", { agentId: "main" });
+
+    for (const peer of [read, admin]) {
+      expect(peer.frames).toEqual([
+        { type: "event", event: "agent.identity.changed", payload: { agentId: "main" }, seq: 1 },
+      ]);
+    }
+    expect(sessionRead.frames).toEqual([]);
+    expect(node.frames).toEqual([]);
+  });
+
+  it("keeps drain events on authorized session subscriptions", () => {
+    const selected = controlledPeer("selected");
+    const other = controlledPeer("other");
+    const revoked = controlledPeer("revoked");
+    const node = controlledPeer("node");
+    const peers = [selected, other, revoked, node];
+    const subscribers = createSessionMessageSubscriberRegistry();
+    for (const peer of peers) {
+      peer.client.connect.scopes = ["operator.sessions.read"];
+      peer.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    }
+    node.client.connect.role = "node";
+    subscribers.subscribe("selected", "agent:work:global");
+    subscribers.subscribe("revoked", "agent:work:global");
+    subscribers.subscribe("node", "agent:work:global");
+    subscribers.subscribe("other", "agent:main:global");
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(peers.map((peer) => peer.client)),
+      sessionMessageSubscribers: subscribers,
+      canReceiveSessionEvent: (client) => client.connId !== "revoked",
+    });
+
+    broadcastToConnIds(
+      "socket.drain",
+      { sessionKey: "global", agentId: "work", reason: "reset", ts: 1 },
+      new Set(peers.map((peer) => peer.client.connId)),
+      { agentId: "work", sessionKeys: ["agent:work:global"], dropIfSlow: false },
+    );
+
+    expect(selected.frames).toEqual([
+      {
+        type: "event",
+        event: "socket.drain",
+        payload: { sessionKey: "global", agentId: "work", reason: "reset", ts: 1 },
+        seq: 1,
+      },
+    ]);
+    for (const peer of [other, revoked, node]) {
+      expect(peer.frames).toEqual([]);
+    }
   });
 
   it("shares encoded plugin events only after scope filtering and preserves recipient sequences", () => {
@@ -84,12 +157,58 @@ describe("broadcast transport retirement", () => {
     expect(Buffer.isBuffer(first)).toBe(true);
     expect(admin.socket.send.mock.calls[0]![0]).toBe(first);
 
+    const encode = vi.spyOn(Buffer, "from");
     broadcastPluginEvent("plugin.fixture.changed", payload, "operator.read");
+    const payloadEncodings = encode.mock.calls.filter(
+      ([value]) => typeof value === "string" && value.includes(payload.text),
+    );
+    encode.mockRestore();
+    expect(payloadEncodings.length).toBeLessThanOrEqual(1);
     expect(read.frames.at(-1)?.seq).toBe(1);
     expect(write.frames.at(-1)?.seq).toBe(2);
     expect(admin.frames.at(-1)?.seq).toBe(2);
     expect(write.socket.send.mock.calls[1]![0]).not.toBe(first);
     expect(admin.socket.send.mock.calls[1]![0]).toBe(write.socket.send.mock.calls[1]![0]);
+  });
+
+  it("shares encoded presence only after current recipient projection", () => {
+    const peers = ["first", "same", "same-again", "ahead", "other", "revoked"].map(controlledPeer);
+    for (const peer of peers) {
+      peer.client.preparedRecipientProfileId = peer.client.connId === "other" ? "other" : "reader";
+    }
+    const visible = [{ text: "synthetic 🦞 update", ts: 1 }];
+    const hidden: typeof visible = [];
+    let revoked = false;
+    const project = vi.fn((client: GatewayWsClient) =>
+      client.connId === "revoked" && revoked ? hidden : visible,
+    );
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+      preparePresenceProjection: () => project,
+    });
+    broadcastToConnIds("tick", {}, new Set(["ahead"]));
+    peers[0]!.socket.send.mockImplementationOnce(() => {
+      revoked = true;
+    });
+    broadcast("presence", { presence: visible });
+
+    const frames = peers.map((peer) => peer.socket.send.mock.lastCall![0]);
+    expect(Buffer.isBuffer(frames[0])).toBe(true);
+    expect(frames[1]).toBe(frames[0]);
+    expect(frames[2]).toBe(frames[1]);
+    expect(project).toHaveBeenCalledTimes(6);
+    for (const [index, frame] of frames.entries()) {
+      expect(JSON.parse(String(frame))).toEqual({
+        type: "event",
+        event: "presence",
+        payload: { presence: index === 5 ? hidden : visible },
+        seq: index === 3 ? 2 : 1,
+        recipientProfileId: index === 4 ? "other" : "reader",
+      });
+    }
+    visible[0]!.ts = 2;
+    broadcast("presence", { presence: visible });
+    expect(String(peers[1]!.socket.send.mock.lastCall![0])).toContain('"ts":2');
   });
 
   it("terminates only the slow socket captured before replacement", () => {

@@ -9,6 +9,7 @@ import {
   captureComposerProof,
   installTalkBrowserFixtures,
   TALK_READY_HISTORY_MESSAGE,
+  waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -177,7 +178,11 @@ suite.define(() => {
       });
       expect(dictationAppearance.color).toBe(dictationAppearance.textStrong);
       if (cancel) {
-        await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+        await page.getByRole("button", { name: "Sessions", exact: true }).click();
+        await page.locator(".shell--nav-collapsed").waitFor();
+        expect(await textarea.evaluate((element) => document.activeElement === element)).toBe(
+          false,
+        );
         await page.keyboard.press("Escape");
       } else {
         await page.getByRole("button", { name: "Stop and keep text" }).click();
@@ -316,17 +321,23 @@ suite.define(() => {
         // can open while transcripts arrive. Establish which surface Escape owns.
         await textarea.hover();
         await textarea.focus();
-        const openTooltips = page.locator("openclaw-tooltip[open]");
+        const openTooltips = page.locator(
+          "openclaw-tooltip .tooltip-surface[popover]:popover-open",
+        );
         await expect.poll(() => openTooltips.count()).toBe(0);
         if (tooltipOpen) {
           const stop = page.getByRole("button", { name: "Stop and keep text" });
-          const tooltip = stop.locator("..").locator("wa-tooltip");
+          const tooltip = stop.locator("..").locator(".tooltip-surface[popover]");
           await stop.hover();
-          await expect.poll(() => tooltip.getAttribute("open")).not.toBeNull();
+          await expect
+            .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
+            .toBe(true);
 
           await page.keyboard.press("Escape");
 
-          await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
+          await expect
+            .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
+            .toBe(false);
           expect(await textarea.inputValue()).toBe("keep this draft discard this speech too");
           expect(await textarea.evaluate((element: HTMLTextAreaElement) => element.readOnly)).toBe(
             true,
@@ -493,6 +504,7 @@ suite.define(() => {
       { permissions: ["microphone"], viewport: { width: 390, height: 844 } },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
+          historyMessages: [TALK_READY_HISTORY_MESSAGE],
           methodResponses: createDictationMethodResponses(
             "dictation-browser-proof",
             "dictation-browser-proof",
@@ -500,6 +512,7 @@ suite.define(() => {
         });
         await installTalkBrowserFixtures(page);
         await page.goto(`${suite.server.baseUrl}chat`);
+        await waitForTalkReady(page);
 
         const microphone = page.getByRole("button", { name: "Dictation" });
         await microphone.click();
@@ -529,7 +542,7 @@ suite.define(() => {
         }
         for (const control of [phase, stop, send]) {
           const box = await control.boundingBox();
-          expect(box).not.toBeNull();
+          expect(box, control.toString()).not.toBeNull();
           if (!box) {
             throw new Error("expected visible dictation control layout box");
           }

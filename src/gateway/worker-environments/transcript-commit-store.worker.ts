@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -26,6 +26,7 @@ import {
   type WorkerTranscriptCommitBeginResult,
   type WorkerTranscriptCommitOperations,
 } from "./transcript-commit-store.worker-contract.js";
+import { createWorkerLedgerInputValidation } from "./worker-ledger-validation.js";
 
 type TranscriptCommitDb = Pick<
   StateDatabase,
@@ -40,35 +41,9 @@ type ExistingCommitResult = Extract<
   { kind: "recover" | "replay" | "rejected" }
 >;
 
-const REQUEST_HASH_PATTERN = /^[a-f0-9]{64}$/u;
-
-function required(value: unknown, field: string): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`Worker transcript commit ${field} must be a non-empty string`);
-  }
-  return value.trim();
-}
-
-function nonNegativeInteger(value: unknown, field: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`Worker transcript commit ${field} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function positiveInteger(value: unknown, field: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`Worker transcript commit ${field} must be a positive integer`);
-  }
-  return value;
-}
-
-function normalizeRequestHash(value: unknown): string {
-  if (typeof value !== "string" || !REQUEST_HASH_PATTERN.test(value)) {
-    throw new Error("Worker transcript commit request hash must be lowercase SHA-256 hex");
-  }
-  return value;
-}
+const { required, integer, requestHash } = createWorkerLedgerInputValidation(
+  "Worker transcript commit",
+);
 
 function parseOutcomeJson(value: string): WorkerTranscriptCommitOutcome {
   let parsed: unknown;
@@ -87,16 +62,16 @@ function normalizeInput(input: WorkerTranscriptCommitInput, nowMs: number): Norm
   return {
     environmentId: required(input.environmentId, "environment id"),
     sessionId: required(input.sessionId, "session id"),
-    runEpoch: nonNegativeInteger(input.runEpoch, "run epoch"),
-    seq: positiveInteger(input.seq, "sequence"),
-    requestHash: normalizeRequestHash(input.requestHash),
-    nowMs: nonNegativeInteger(nowMs, "timestamp"),
+    runEpoch: integer(input.runEpoch, "run epoch"),
+    seq: integer(input.seq, "sequence", 1),
+    requestHash: requestHash(input.requestHash),
+    nowMs: integer(nowMs, "timestamp"),
   };
 }
 
-const query = (db: DatabaseSync) => getNodeSqliteKysely<TranscriptCommitDb>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<TranscriptCommitDb>(db);
 
-function findHead(db: DatabaseSync, input: NormalizedCommitInput): HeadRow | undefined {
+function findHead(db: EngineConnection, input: NormalizedCommitInput): HeadRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -107,7 +82,7 @@ function findHead(db: DatabaseSync, input: NormalizedCommitInput): HeadRow | und
   );
 }
 
-function findCommit(db: DatabaseSync, input: NormalizedCommitInput): CommitRow | undefined {
+function findCommit(db: EngineConnection, input: NormalizedCommitInput): CommitRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -148,7 +123,7 @@ function classifyExistingCommit(params: {
 function writeTranscriptCommit<T>(
   database: OpenClawStateDatabase,
   operationLabel: string,
-  operation: (db: DatabaseSync) => T,
+  operation: (db: EngineConnection) => T,
 ): T {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {

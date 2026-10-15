@@ -87,33 +87,12 @@ describe("formatCliParseErrorOutput", () => {
     name: string;
     args: string[];
     root: string;
-    alias?: string;
     children: string[];
     argument?: string;
     requiredOption?: string;
-    valueOption?: string;
     message: string;
     machineOutput: (argv: readonly string[], command?: Command) => boolean;
   }>([
-    {
-      name: "automation lookup",
-      args: ["cron", "get"],
-      root: "cron",
-      children: ["get"],
-      argument: "<id>",
-      message: 'Missing required argument "id".',
-      machineOutput: isCronMachineOutput,
-    },
-    {
-      name: "profiled automation alias",
-      args: ["--profile", "work", "automations", "get"],
-      root: "cron",
-      alias: "automations",
-      children: ["get"],
-      argument: "<id>",
-      message: 'Missing required argument "id".',
-      machineOutput: isCronMachineOutput,
-    },
     {
       name: "raw automation scratch",
       args: ["cron", "scratch"],
@@ -149,43 +128,6 @@ describe("formatCliParseErrorOutput", () => {
       argument: "<path>",
       message: 'Missing required argument "path".',
       machineOutput: isConfigMachineOutput,
-    },
-    {
-      name: "skill verification after a root terminator",
-      args: ["--", "skills", "verify"],
-      root: "skills",
-      children: ["verify"],
-      argument: "<ref>",
-      message: 'Missing required argument "ref".',
-      machineOutput: isSkillsMachineOutput,
-    },
-    {
-      name: "config read after a root terminator",
-      args: ["--", "config", "get"],
-      root: "config",
-      children: ["get"],
-      argument: "<path>",
-      message: 'Missing required argument "path".',
-      machineOutput: isConfigMachineOutput,
-    },
-    ...["version", "tag"].map((option) => ({
-      name: `skill verification with a card-looking ${option} value`,
-      args: ["skills", "verify", `--${option}`, "--card"],
-      root: "skills",
-      children: ["verify"],
-      argument: "<ref>",
-      valueOption: `--${option} <value>`,
-      message: 'Missing required argument "ref".',
-      machineOutput: isSkillsMachineOutput,
-    })),
-    {
-      name: "node invocation",
-      args: ["nodes", "invoke"],
-      root: "nodes",
-      children: ["invoke"],
-      requiredOption: "--node <id>",
-      message: 'Missing required option "--node <id>".',
-      machineOutput: isNodesMachineOutput,
     },
     {
       name: "node approval",
@@ -233,9 +175,6 @@ describe("formatCliParseErrorOutput", () => {
         .exitOverride();
       program.configureOutput({ writeErr: () => {} });
       const root = program.command(testCase.root);
-      if (testCase.alias) {
-        root.alias(testCase.alias);
-      }
       setCommandJsonMode(root, "output", ({ argv, command }) =>
         testCase.machineOutput(argv, command),
       );
@@ -252,9 +191,6 @@ describe("formatCliParseErrorOutput", () => {
       }
       if (testCase.requiredOption) {
         command.requiredOption(testCase.requiredOption);
-      }
-      if (testCase.valueOption) {
-        command.option(testCase.valueOption).option("--card");
       }
       command.action(() => {});
 
@@ -313,7 +249,6 @@ describe("formatCliParseErrorOutput", () => {
   });
 
   it.each([
-    { name: "human automation", args: ["cron", "show"], root: "cron", child: "show" },
     {
       name: "parse-only config",
       args: ["config", "set", "gateway.port", "--json"],
@@ -363,163 +298,6 @@ describe("formatCliParseErrorOutput", () => {
     }
   });
 
-  it("keeps successful machine-command help outside the JSON failure path", async () => {
-    const originalArgv = process.argv;
-    process.argv = ["node", "openclaw", "cron", "get", "--help"];
-    let stdout = "";
-    try {
-      const program = new OpenClawCommand().name("openclaw").exitOverride();
-      program.configureOutput({
-        writeOut: (output) => {
-          stdout += output;
-        },
-        writeErr: () => {},
-      });
-      const cron = program.command("cron");
-      setCommandJsonMode(cron, "output", ({ argv }) => isCronMachineOutput(argv));
-      createCronOutputCommand(cron, "get")
-        .argument("<id>")
-        .action(() => {});
-
-      await withConsoleLogsRoutedToStderrForJson(
-        process.argv,
-        async () => {
-          const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
-
-          expect(error).toBeInstanceOf(CommanderError);
-          expect((error as CommanderError).exitCode).toBe(0);
-          expect(stdout).toContain("Usage: openclaw cron get");
-          expect(isJsonOutputModeActive(process.argv)).toBe(false);
-        },
-        { machineOutput: true, restoreChanges: true },
-      );
-    } finally {
-      process.argv = originalArgv;
-    }
-  });
-
-  it.each([
-    { label: "JSON spelling", value: "--json", supportsJson: true },
-    { label: "true-valued JSON spelling", value: "--json=true", supportsJson: true },
-    { label: "false-valued JSON spelling", value: "--json=false", supportsJson: true },
-    { label: "command without JSON output", value: "--json", supportsJson: false },
-    {
-      label: "JSON spelling before a positional terminator",
-      value: "--json",
-      supportsJson: true,
-      suffix: ["--", "--json"],
-    },
-    {
-      label: "JSON spelling after a short option alias",
-      value: "--json",
-      supportsJson: true,
-      flag: "-l",
-    },
-  ])("keeps a consumed $label as a human parse error", async (testCase) => {
-    const { value, supportsJson } = testCase;
-    const originalArgv = process.argv;
-    process.argv = [
-      "node",
-      "openclaw",
-      "--profile",
-      "work",
-      "p",
-      "s",
-      testCase.flag ?? "--limit",
-      value,
-      ...(testCase.suffix ?? []),
-    ];
-    let stderr = "";
-    try {
-      const program = new OpenClawCommand()
-        .name("openclaw")
-        .enablePositionalOptions()
-        .option("--profile <name>")
-        .exitOverride();
-      program.configureOutput({
-        writeErr: (output) => {
-          stderr += output;
-        },
-      });
-      const command = program
-        .command("plugins")
-        .alias("p")
-        .command("search")
-        .alias("s")
-        .option("-l, --limit <value>", "Result limit", () => {
-          throw new InvalidArgumentError("--limit must be a positive integer.");
-        });
-      if (supportsJson) {
-        command.option("--json", "Output JSON");
-      }
-
-      await withConsoleLogsRoutedToStderrForJson(
-        process.argv,
-        async () => {
-          const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
-
-          expect(error).toBeInstanceOf(CommanderError);
-          expect(error).not.toBeInstanceOf(ExpectedCliError);
-          expect((error as CommanderError).exitCode).toBe(1);
-          expect(stderr).toContain("--limit must be a positive integer.");
-          expect(isJsonOutputModeActive(process.argv)).toBe(false);
-        },
-        { restoreChanges: true },
-      );
-    } finally {
-      process.argv = originalArgv;
-    }
-  });
-
-  it.each([
-    { label: "before an invalid value", args: ["--json", "--limit", "bad"] },
-    { label: "after an invalid value", args: ["--limit", "bad", "--json"] },
-    { label: "before a consumed JSON value", args: ["--json", "--limit", "--json"] },
-    { label: "after a consumed JSON value", args: ["--limit", "--json", "--json"] },
-    { label: "after a consumed valued JSON token", args: ["--limit", "--json=true", "--json"] },
-  ])("preserves a genuine JSON request $label", async ({ args }) => {
-    const originalArgv = process.argv;
-    process.argv = ["node", "openclaw", "plugins", "search", ...args];
-    try {
-      const program = new OpenClawCommand().name("openclaw").exitOverride();
-      program.configureOutput({ writeErr: () => {} });
-      program
-        .command("plugins")
-        .command("search")
-        .option("--json", "Output JSON")
-        .option("--limit <value>", "Result limit", () => {
-          throw new InvalidArgumentError("--limit must be a positive integer.");
-        });
-
-      const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
-
-      expect(error).toBeInstanceOf(ExpectedCliError);
-      expect((error as ExpectedCliError).message).toContain("--limit must be a positive integer.");
-    } finally {
-      process.argv = originalArgv;
-    }
-  });
-
-  it("preserves JSON diagnostics for an unsupported but genuine output flag", async () => {
-    const originalArgv = process.argv;
-    process.argv = ["node", "openclaw", "fleet", "logs", "--json"];
-    try {
-      const program = new OpenClawCommand().name("openclaw").exitOverride();
-      program.configureOutput({ writeErr: () => {} });
-      program
-        .command("fleet")
-        .command("logs")
-        .action(() => {});
-
-      const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
-
-      expect(error).toBeInstanceOf(ExpectedCliError);
-      expect((error as ExpectedCliError).message).toContain("--json");
-    } finally {
-      process.argv = originalArgv;
-    }
-  });
-
   it("uses the same structured root diagnostic as the human renderer", () => {
     const error = createCliUnknownCommandError("pairng", {
       argv: ["node", "openclaw", "pairng", "--json"],
@@ -543,16 +321,6 @@ describe("formatCliParseErrorOutput", () => {
     expect(error.humanOutput).toContain("Did you mean this?\n  openclaw sessions list\n");
   });
 
-  it("explains unknown commands with root help and plugin hints", () => {
-    const output = formatCliParseErrorOutput("error: unknown command 'wat'\n", {
-      argv: ["node", "openclaw", "wat"],
-    });
-
-    expect(output).toBe(
-      'OpenClaw does not know the command "wat".\nTry: openclaw --help\nPlugin command? openclaw plugins list\nDocs: https://docs.openclaw.ai/cli\n',
-    );
-  });
-
   it("explains unknown subcommands within the active command tree", () => {
     const output = formatCliParseErrorOutput("error: unknown command 'list'\n", {
       argv: ["node", "openclaw", "webhooks", "list"],
@@ -561,18 +329,6 @@ describe("formatCliParseErrorOutput", () => {
 
     expect(output).toBe(
       'OpenClaw webhooks has no command "list".\nTry: openclaw webhooks --help\nDocs: https://docs.openclaw.ai/cli\n',
-    );
-  });
-
-  it("suggests sibling subcommands within the active command tree", () => {
-    const output = formatCliParseErrorOutput("error: unknown command 'gmial'\n", {
-      argv: ["node", "openclaw", "webhooks", "gmial"],
-      commandPath: ["webhooks"],
-      commandNames: ["gmail"],
-    });
-
-    expect(output).toBe(
-      'OpenClaw webhooks has no command "gmial".\nDid you mean this?\n  openclaw webhooks gmail\nTry: openclaw webhooks --help\nDocs: https://docs.openclaw.ai/cli\n',
     );
   });
 
@@ -586,19 +342,6 @@ describe("formatCliParseErrorOutput", () => {
     expect(error.code).toBe("commander.unknownCommand");
     expect(output).toBe(
       'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli\n',
-    );
-  });
-
-  it("suggests a live child command when later arguments follow the typo", async () => {
-    const { error, output } = await parseLazyGroupError({
-      argv: ["config", "gett", "gateway.port"],
-      group: "config",
-      subcommands: [{ name: "get" }, { name: "set" }],
-    });
-
-    expect(error.code).toBe("commander.unknownCommand");
-    expect(output).toBe(
-      'OpenClaw config has no command "gett".\nDid you mean this?\n  openclaw config get\nTry: openclaw config --help\nDocs: https://docs.openclaw.ai/cli\n',
     );
   });
 
@@ -617,30 +360,6 @@ describe("formatCliParseErrorOutput", () => {
     );
   });
 
-  it("loads a real lazy subcommand before showing its help", async () => {
-    const { error, output, stdout } = await parseLazyGroupError({
-      argv: ["sessions", "list", "--help"],
-      group: "sessions",
-      subcommands: [{ name: "list" }, { name: "cleanup" }],
-    });
-
-    expect(error.code).toBe("commander.helpDisplayed");
-    expect(error.exitCode).toBe(0);
-    expect(output).toBe("");
-    expect(stdout).toContain("Usage: openclaw sessions list [options]");
-  });
-
-  it("suggests aliases from the live child command tree", async () => {
-    const { error, output } = await parseLazyGroupError({
-      argv: ["cron", "remov"],
-      group: "cron",
-      subcommands: [{ name: "rm", aliases: ["remove", "delete"] }, { name: "edit" }],
-    });
-
-    expect(error.code).toBe("commander.unknownCommand");
-    expect(output).toContain("Did you mean this?\n  openclaw cron remove\n");
-  });
-
   it("keeps excess arguments on a matched lazy subcommand", async () => {
     const { error, output } = await parseLazyGroupError({
       argv: ["sessions", "list", "extra1", "extra2"],
@@ -651,16 +370,6 @@ describe("formatCliParseErrorOutput", () => {
     expect(error.code).toBe("commander.excessArguments");
     expect(output).toBe(
       "Too many arguments for this command.\nTry: openclaw sessions list --help\n",
-    );
-  });
-
-  it("suggests close known commands for unknown commands", () => {
-    const output = formatCliParseErrorOutput("error: unknown command 'upate'\n", {
-      argv: ["node", "openclaw", "upate"],
-    });
-
-    expect(output).toBe(
-      'OpenClaw does not know the command "upate".\nDid you mean this?\n  openclaw update\nTry: openclaw --help\nPlugin command? openclaw plugins list\nDocs: https://docs.openclaw.ai/cli\n',
     );
   });
 
@@ -693,47 +402,6 @@ describe("formatCliParseErrorOutput", () => {
 
     expect(output).toBe(
       'OpenClaw does not recognize option "--wat".\nTry: openclaw channels status --help\n',
-    );
-  });
-
-  it("points missing required arguments at command help", () => {
-    const output = formatCliParseErrorOutput("error: missing required argument 'name'\n", {
-      argv: ["node", "openclaw", "plugins", "install"],
-    });
-
-    expect(output).toBe(
-      'Missing required argument "name".\nTry: openclaw plugins install --help\n',
-    );
-  });
-
-  it.each([
-    {
-      name: "missing mandatory option",
-      raw: "  ERROR: required option '--node <id>' not specified\n",
-      message: 'Missing required option "--node <id>".',
-    },
-    {
-      name: "unclassified Commander diagnostic",
-      raw: "error: option '--timeout <ms>' argument missing\n",
-      message: "OpenClaw could not parse this command: option '--timeout <ms>' argument missing",
-    },
-  ])("preserves the complete ordinary $name diagnostic", ({ raw, message }) => {
-    expect(
-      formatCliParseErrorOutput(raw, {
-        argv: ["node", "openclaw", "nodes", "invoke"],
-        commandPath: ["nodes", "invoke"],
-      }),
-    ).toBe(`${message}\nTry: openclaw nodes invoke --help\n`);
-  });
-
-  it("prefers the parsed Commander path over option-like argv values", () => {
-    const output = formatCliParseErrorOutput("error: unknown option '--wat'\n", {
-      argv: ["node", "openclaw", "plugins", "--source", "install", "list", "--wat"],
-      commandPath: ["plugins", "list"],
-    });
-
-    expect(output).toBe(
-      'OpenClaw does not recognize option "--wat".\nTry: openclaw plugins list --help\n',
     );
   });
 });

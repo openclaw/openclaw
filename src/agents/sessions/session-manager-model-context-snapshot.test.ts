@@ -1,74 +1,316 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
-import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { rewriteSqliteTranscriptEventRowsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
+import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
+import { createDurableSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
+import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
+import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
-import { readGlobalSingleton } from "../../shared/global-singleton.js";
+import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import {
+  getOwnedSessionTranscriptReader,
+  readOwnedSessionTranscriptEntry,
+  runWithoutOwnedSessionTranscriptWrites,
+  withOwnedSessionTranscriptWrites,
+  type InitialSessionTranscriptWriter,
+} from "../../config/sessions/transcript-write-context.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../../infra/diagnostic-events.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
+  getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
-import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
+import { sessionManagerOpenTranscriptCohort } from "./session-manager-core.js";
+import {
+  sessionManagerPrepareCurrentTurnReplay,
+  sessionManagerReadInitialContext,
+} from "./session-manager-current-turn.js";
+import * as managerContext from "./session-manager-incognito.js";
+import { readCommittedSessionManagerReload } from "./session-manager-reload.js";
 import { SessionManager } from "./session-manager.js";
 
-it("refuses full context after a rewrite between validation and acceptance", async () => {
-  await withOpenClawTestState({ label: "full-context-validation-reply" }, async (state) => {
+const memoryOwners: Array<{ agentId: string; path: string }> = [];
+afterEach(() => {
+  for (const owner of memoryOwners.splice(0)) {
+    memorySessionActorOwners.closeDatabase(owner);
+  }
+});
+
+async function withSelectedTranscriptReader<T>(
+  target: Parameters<typeof SessionManager.openModelContextAsync>[0],
+  run: (actor?: SessionActor) => Promise<T>,
+  retainActor = false,
+): Promise<T> {
+  const { databaseClaim } = await loadSessionEntryForAdmission(target);
+  let actor: SessionActor | undefined;
+  try {
+    if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
+      throw new Error("Expected admitted durable session reader");
+    }
+    const reader = databaseClaim.reader;
+    const assertCurrent = () => reader.assertCurrent();
+    if (retainActor) {
+      const identity = readDatabasePathIdentitySync(reader.database.path);
+      if (!identity.key.startsWith("file:")) {
+        throw new Error("Expected a physical actor database");
+      }
+      const acquired = await createDurableSessionActorFactory(reader.database).acquire(
+        {
+          sessionKey: target.sessionKey,
+          database: {
+            kind: "file",
+            physicalIdentity: identity.key.slice(5),
+            birthtime: identity.birthtime,
+            nativeLocation: reader.database.path,
+          },
+        },
+        { assertCurrent, assertReadable: assertCurrent },
+      );
+      if ("kind" in acquired) {
+        throw new Error("Expected a durable session actor");
+      }
+      actor = acquired;
+      await actor.read({ assertCurrent, authorize: assertCurrent });
+    }
+    return await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: target,
+        sessionReader: reader,
+        ...(actor && { sessionActor: { actor, database: reader.database } }),
+        withTranscriptWrite: async (write) => write(),
+      },
+      () => run(actor),
+    );
+  } finally {
+    try {
+      await actor?.release();
+    } finally {
+      await databaseClaim.release();
+    }
+  }
+}
+
+it("reloads a durable sibling transcript under the parent writer without borrowing its actor", async () => {
+  await withOpenClawTestState({ label: "sibling-transcript-reload" }, async (state) => {
+    const parent = {
+      agentId: "main",
+      sessionId: "parent",
+      sessionKey: "agent:main:parent",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    const sibling = { ...parent, sessionId: "sibling", sessionKey: "agent:main:sibling" };
+    const updatedAt = Date.now();
+    await upsertSessionEntryCore(parent, { sessionId: parent.sessionId, updatedAt });
+    await upsertSessionEntryCore(sibling, { sessionId: sibling.sessionId, updatedAt });
+    const manager = await SessionManager.openAsync(sibling);
+    const message = makeUserMessage("sibling transcript", 1);
+    const entryId = await manager.appendMessageAsync(message);
+
+    await withSelectedTranscriptReader(
+      parent,
+      async () => {
+        const reloaded = await readCommittedSessionManagerReload(sibling, undefined);
+        expect(reloaded.kind).toBe("full");
+        expect(reloaded.snapshot.events).toEqual([
+          expect.objectContaining({ type: "session", id: sibling.sessionId }),
+          expect.objectContaining({ type: "message", id: entryId, message }),
+        ]);
+      },
+      true,
+    );
+  });
+});
+
+it.each(["bounded", "anchors"] as const)(
+  "reads current actor entry facts through %s history after writes and replacement",
+  async (route) => {
+    await withOpenClawTestState({ label: `actor-entry-${route}` }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId: "actor-entry",
+        sessionKey: "agent:main:actor-entry",
+        storePath: state.statePath("transcript.sqlite"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const source = await SessionManager.openAsync(target);
+      const entryId = await source.appendMessageAsync(makeUserMessage("original", 1));
+      if (!entryId) {
+        throw new Error("Expected the appended message ID");
+      }
+      const otherTarget = { ...target, sessionId: "other-session", sessionKey: "agent:main:other" };
+      await upsertSessionEntryCore(otherTarget, { sessionId: otherTarget.sessionId, updatedAt: 1 });
+      const otherSource = await SessionManager.openAsync(otherTarget);
+      const otherEntryId = await otherSource.appendMessageAsync(makeUserMessage("other", 1));
+      if (!otherEntryId) {
+        throw new Error("Expected the other session's message ID");
+      }
+      await withSelectedTranscriptReader(
+        target,
+        async (actor) => {
+          if (!actor) {
+            throw new Error("Expected retained session actor");
+          }
+          const read = async (readTarget = target, readEntryId = entryId) => {
+            const hydration = transcriptHydration.prepareSessionTranscriptHydration(readTarget, {
+              maxBytes: 4096,
+              maxEvents: 3,
+            });
+            const selection = { entryIds: [readEntryId], contextAuthority: true as const };
+            let facts: SessionTranscriptAnchorFacts | undefined;
+            if (route === "bounded") {
+              await hydration.readCohort!(
+                { ...selection, sessionKey: readTarget.sessionKey },
+                (prepared) => {
+                  if (prepared.kind === "bounded") {
+                    facts = prepared.transcript;
+                  }
+                },
+              );
+            } else {
+              facts = await transcriptAnchors.readSessionTranscriptAnchorsAsync(
+                readTarget,
+                { ...selection, afterSeq: 0 },
+                undefined,
+                (current) => {
+                  facts = current;
+                },
+              );
+            }
+            return facts;
+          };
+          expect((await read(otherTarget, otherEntryId))?.contextAuthority?.entry?.sessionId).toBe(
+            otherTarget.sessionId,
+          );
+          expect((await read())?.contextAuthority?.entry?.activeWriterRunId).toBeUndefined();
+          const authority = { assertCurrent() {}, authorize() {} };
+          const current = actor.snapshot(authority)!;
+          const adopted = await actor.adoptRun(
+            {
+              commandId: "adopt-current-run",
+              phaseId: "turn",
+              sessionId: target.sessionId,
+              expectedState: buildRestartRecoveryExpectedState(current.entry!),
+              lifecycle: {},
+              runId: "current-run",
+            },
+            authority,
+          );
+          expect(adopted.kind).toBe("committed");
+          expect((await read())?.contextAuthority?.entry?.activeWriterRunId).toBe("current-run");
+
+          await upsertSessionEntryCore(target, { sessionId: "replacement", updatedAt: 2 });
+          expect(actor.snapshot(authority)).toBeUndefined();
+          expect(readOwnedSessionTranscriptEntry(target)?.sessionId).toBe("replacement");
+          const replaced = await read();
+          expect(replaced?.contextAuthority?.entry?.sessionId).toBe("replacement");
+          expect(replaced?.anchors).toEqual([]);
+        },
+        true,
+      );
+    });
+  },
+);
+
+it.each(["unchanged", "append", "rewrite"] as const)(
+  "keeps the consumed durable snapshot after a later %s without another history read",
+  async (change) => {
+    await withOpenClawTestState({ label: "actor-context-validation" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId: "actor-context",
+        sessionKey: "agent:main:actor-context",
+        storePath: state.statePath("transcript.sqlite"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const source = await SessionManager.openAsync(target);
+      const original = makeUserMessage("original", 1);
+      await source.appendMessageAsync(original);
+      await withSelectedTranscriptReader(
+        target,
+        async () => {
+          const validated = vi.spyOn(transcriptAnchors, "readSessionTranscriptAnchorsFromSource");
+          try {
+            const pending = SessionManager.readSessionContextAsync(target, async (messages) => {
+              const selected = [...messages];
+              await runWithoutOwnedSessionTranscriptWrites(async () => {
+                if (change === "append") {
+                  await source.appendMessageAsync(makeUserMessage("later", 2));
+                } else if (change === "rewrite") {
+                  source.removeTrailingEntries((entry) => entry.type === "message");
+                }
+              });
+              return selected;
+            });
+            await expect(pending).resolves.toEqual([original]);
+            expect(validated).not.toHaveBeenCalled();
+          } finally {
+            validated.mockRestore();
+          }
+        },
+        true,
+      );
+    });
+  },
+);
+
+it("replays a durable current turn and rejects it after a rewrite", async () => {
+  await withOpenClawTestState({ label: "actor-replay-validation" }, async (state) => {
     const target = {
       agentId: "main",
-      sessionId: "full-context-rewrite",
-      sessionKey: "agent:main:full-context-rewrite",
+      sessionId: "actor-replay",
+      sessionKey: "agent:main:actor-replay",
       storePath: state.statePath("transcript.sqlite"),
     };
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const source = await SessionManager.openAsync(target);
-    await source.appendMessageAsync(makeUserMessage("original", 1));
-    const validated = createDeferred();
-    const release = createDeferred();
-    // oxlint-disable-next-line typescript/unbound-method -- Forward the original pool receiver.
-    const run = WorkerTaskPoolCore.prototype.run;
-    const spy = vi.spyOn(WorkerTaskPoolCore.prototype, "run").mockImplementation(async function (
-      this: WorkerTaskPoolCore<unknown, unknown>,
-      input,
-      options,
-    ) {
-      const reply = await run.call(this, input, options);
-      if (
-        isRecord(reply) &&
-        reply.ok === true &&
-        isRecord(reply.value) &&
-        // Include the former reply so the regression exercises the pre-fix acceptance race.
-        ((isRecord(reply.value.facts) && reply.value.facts.contextValidated === true) ||
-          reply.value.kind === "context-messages-current")
-      ) {
-        validated.resolve();
-        await release.promise;
-      }
-      return reply;
-    });
-    const pending = SessionManager.readSessionContextAsync(target, (messages) => [...messages]);
-    try {
-      await awaitGateBeforeSettlement(
-        validated.promise,
-        pending,
-        "Context validation was not reached",
-      );
-      expect(source.removeTrailingEntries((entry) => entry.type === "message")).toBe(1);
-      release.resolve();
-      await expect(pending).rejects.toThrow(/transcript|context/i);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([pending]);
-      spy.mockRestore();
-    }
+    const userId = await source.appendMessageAsync(makeUserMessage("original", 1));
+    const replayView = await SessionManager.openAsync(target);
+    await withSelectedTranscriptReader(
+      target,
+      async () => {
+        const replay = () =>
+          replayView[sessionManagerPrepareCurrentTurnReplay](
+            () => false,
+            (entry) => entry?.type === "message" && entry.message.role === "user",
+          );
+        expect(await replay()).toMatchObject({ entryId: userId });
+        runWithoutOwnedSessionTranscriptWrites(() =>
+          source.removeTrailingEntries((entry) => entry.type === "message"),
+        );
+        await expect(replay()).rejects.toThrow(
+          /Persisted user turn changed|Session transcript projection is rebuilding/,
+        );
+      },
+      true,
+    );
   });
 });
 
@@ -112,40 +354,6 @@ it("retains the full-context read owner until an awaited consumer settles", asyn
   });
 });
 
-it.each(["key", "path"] as const)(
-  "rejects a replaced native owner selected by %s",
-  async (route) => {
-    await withOpenClawTestState({ label: "native-context-owner" }, async (state) => {
-      const pathname = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-      const options = { agentId: "main", path: pathname, env: state.env };
-      const original = openOpenClawAgentDatabase(options);
-      const target = {
-        agentId: "main",
-        sessionId: "empty-native-context",
-        sessionKey:
-          route === "key"
-            ? "agent:main:dashboard:incognito-context-owner"
-            : "agent:main:context-owner",
-        storePath:
-          route === "key" ? path.join(state.agentDir("main"), "openclaw-agent.sqlite") : pathname,
-        env: state.env,
-      };
-      await expect(
-        SessionManager.readSessionContextAsync(target, async (messages) => {
-          expect([...messages]).toEqual([]);
-          await closeOpenClawAgentDatabaseByPathAsync(pathname, "main");
-          expect(openOpenClawAgentDatabase(options)).not.toBe(original);
-          return "stale owner result";
-        }),
-      ).rejects.toThrow("incognito database owner is no longer current");
-      expect(
-        await SessionManager.readSessionContextAsync(target, (messages) => [...messages]),
-      ).toEqual([]);
-      expect(fs.existsSync(pathname)).toBe(false);
-    });
-  },
-);
-
 it("reads full durable context through workers and preserves the deprecated synchronous result", async () => {
   await withOpenClawTestState({ label: "context-read-async" }, async (state) => {
     const target = {
@@ -164,28 +372,19 @@ it("reads full durable context through workers and preserves the deprecated sync
     if (!seeded.anchor) {
       throw new Error("Missing initial transcript anchor");
     }
-    const warned = readGlobalSingleton(Symbol.for("openclaw.sessionPersistenceDeprecations"));
-    if (!(warned instanceof Set)) {
-      throw new Error("Missing session persistence warning budget");
-    }
-    const warningKey = "SessionManager.readSessionContext";
-    const previouslyWarned = warned.delete(warningKey);
     const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     let expected: unknown;
     try {
-      expected = SessionManager.readSessionContext(target, (messages) => [...messages]);
-      expect(SessionManager.readSessionContext(target, () => 7)).toBe(7);
+      withPluginRuntimePluginScope({ pluginId: "session-context-compat" }, () => {
+        expected = SessionManager.readSessionContext(target, (messages) => [...messages]);
+        expect(SessionManager.readSessionContext(target, () => 7)).toBe(7);
+      });
       expect(warn).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining("readSessionContextAsync"),
         { code: "DEP_SESSION_PERSISTENCE", type: "DeprecationWarning" },
       );
     } finally {
       warn.mockRestore();
-      if (previouslyWarned) {
-        warned.add(warningKey);
-      } else {
-        warned.delete(warningKey);
-      }
     }
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
     const exec = vi.spyOn(DatabaseSync.prototype, "exec");
@@ -204,13 +403,15 @@ it("reads full durable context through workers and preserves the deprecated sync
       exec.mockRestore();
     }
     await expect(
-      SessionManager.readSessionContextAsync(target, async () => {
+      SessionManager.readSessionContextAsync(target, async (messages) => {
         await manager.appendMessageAsync(makeUserMessage("changed", 2));
+        return [...messages];
       }),
-    ).rejects.toThrow("changed during context read");
+    ).resolves.toEqual(expected);
     const missing = { ...target, storePath: path.join(state.agentDir("main"), "absent.sqlite") };
+    const consumeMissing = vi.fn(() => "unreadable");
     await expect(
-      SessionManager.readSessionContextAsync(missing, () => "unreadable", {
+      SessionManager.readSessionContextAsync(missing, consumeMissing, {
         admission: {
           ...seeded.anchor,
           storePath: missing.storePath,
@@ -219,85 +420,511 @@ it("reads full durable context through workers and preserves the deprecated sync
         },
       }),
     ).rejects.toThrow("Session transcript changed during context read");
+    expect(consumeMissing).not.toHaveBeenCalled();
     expect(fs.existsSync(missing.storePath)).toBe(false);
-    const alias = path.join(state.stateDir, "context-alias");
-    const successor = path.join(state.stateDir, "missing-successor");
-    fs.mkdirSync(successor);
-    fs.symlinkSync(path.dirname(target.storePath), alias, "junction");
-    await expect(
-      SessionManager.readSessionContextAsync(
-        { ...target, storePath: path.join(alias, path.basename(target.storePath)) },
-        async () => {
-          fs.unlinkSync(alias);
-          fs.symlinkSync(successor, alias, "junction");
-        },
-      ),
-    ).rejects.toThrow(/captured|identity|owner/);
   });
 });
 
-it.each([false, true])("shares immutable initial messages (incognito=%s)", async (incognito) => {
-  await withOpenClawTestState({ label: "shared-model-context" }, async (state) => {
+it.each(["durable", "admitted", "incognito"] as const)(
+  "keeps projected initial messages detached from the stored view (%s)",
+  async (mode) => {
+    await withOpenClawTestState({ label: "shared-model-context" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "shared-context",
+        sessionKey:
+          mode === "incognito"
+            ? "agent:main:dashboard:incognito-shared-context"
+            : "agent:main:shared-context",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      if (mode === "incognito") {
+        memoryOwners.push({
+          agentId: "main",
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+        });
+      } else {
+        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      }
+      const seed = await SessionManager.openAsync(scope);
+      const userId = await seed.appendMessageAsync({
+        role: "user",
+        content: "question",
+        timestamp: 1,
+      });
+      const replyId = await seed.appendMessageAsync(
+        Object.assign(makeAgentAssistantMessage({ content: [{ type: "text", text: "answer" }] }), {
+          __openclaw: { upstreamUserText: "synthetic-private-native-payload" },
+        }),
+      );
+      const manager = await SessionManager.openAsync(scope, undefined, {
+        maxEvents: 20,
+        maxBytes: 8192,
+      });
+      const readContext = async () => {
+        await waitForDiagnosticEventsDrained();
+        const requests: { kind: string; requestClass: string }[] = [];
+        const unsubscribe = onInternalDiagnosticEvent(
+          (event) => {
+            if (
+              event.type === "worker.request" &&
+              event.phase === "queued" &&
+              (event.kind === "sessionTranscript" ||
+                (event.kind === "sqlite_writer" && event.requestClass === "sessions"))
+            ) {
+              requests.push({ kind: event.kind, requestClass: event.requestClass });
+            }
+          },
+          { include: ["worker.request"] },
+        );
+        try {
+          const context = await manager[sessionManagerReadInitialContext]();
+          await waitForDiagnosticEventsDrained();
+          if (mode === "admitted") {
+            expect(requests).toEqual([{ kind: "sessionTranscript", requestClass: "task" }]);
+            await expect(
+              SessionManager.openModelContextAsync(scope, {
+                limits: { maxBytes: 1, maxEvents: 1 },
+              }),
+            ).rejects.toThrow(/context limit/);
+          }
+          return context;
+        } finally {
+          unsubscribe();
+        }
+      };
+      const context =
+        mode === "admitted"
+          ? await withSelectedTranscriptReader(scope, readContext)
+          : await readContext();
+      const user = manager.getEntry(userId!);
+      const reply = manager.getEntry(replyId!);
+      const projectedReply = context.messages[1];
+      if (
+        user?.type !== "message" ||
+        reply?.type !== "message" ||
+        reply.message.role !== "assistant" ||
+        projectedReply?.role !== "assistant"
+      ) {
+        throw new Error("Missing stored messages");
+      }
+      expect(context.messages[0]).toEqual(user.message);
+      expect(projectedReply.content).not.toBe(reply.message.content);
+      expect(JSON.stringify(context)).not.toContain("synthetic-private-native-payload");
+      expect(Reflect.set(projectedReply.content[0]!, "text", "changed")).toBe(true);
+      expect(reply.message.content).toEqual([{ type: "text", text: "answer" }]);
+    });
+  },
+);
+
+it.each([
+  "unchanged",
+  "default-selector",
+  "mutable-message",
+  "native-append",
+  "worker-append",
+  "worker-reset",
+  "worker-compaction",
+  "local-reset",
+  "local-branch",
+  "fork",
+  "retarget",
+  "truncated",
+] as const)(
+  "reuses complete hydration without losing durable model bytes after %s",
+  async (change) => {
+    await withOpenClawTestState({ label: "hydrated-model-context" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId: "hydrated-model-context",
+        sessionKey: "agent:main:hydrated-model-context",
+        storePath:
+          change === "default-selector"
+            ? resolveDefaultSessionStorePath("main")
+            : state.statePath("transcript.sqlite"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const source = await SessionManager.openAsync(target);
+      const questionId = await source.appendMessageAsync(makeUserMessage("question", 1));
+      const replyId = await source.appendMessageAsync(
+        Object.assign(makeAgentAssistantMessage({ content: [{ type: "text", text: "answer" }] }), {
+          __openclaw: { upstreamUserText: "private-durable-context" },
+        }),
+      );
+      await withSelectedTranscriptReader(target, async () => {
+        const manager = await SessionManager[sessionManagerOpenTranscriptCohort](
+          target,
+          { maxBytes: 8192, maxEvents: change === "truncated" ? 1 : 20 },
+          { sessionKey: target.sessionKey, entryIds: [] },
+          () => {},
+        );
+        let readTarget = target;
+        let expectedMessages: unknown[] = [
+          { role: "user", content: "question" },
+          { role: "assistant", content: [{ text: "answer" }] },
+        ];
+        if (change === "mutable-message") {
+          const reply = manager.getEntry(replyId!);
+          if (reply?.type !== "message" || reply.message.role !== "assistant") {
+            throw new Error("Missing mutable assistant entry");
+          }
+          reply.message.content = [{ type: "text", text: "unpersisted replacement" }];
+        } else if (change === "native-append") {
+          source.appendMessage(makeUserMessage("native successor", 2));
+          expectedMessages.push({ role: "user", content: "native successor" });
+        } else if (change === "worker-append") {
+          await source.appendMessageAsync(makeUserMessage("worker successor", 2));
+          expectedMessages.push({ role: "user", content: "worker successor" });
+        } else if (change === "worker-reset") {
+          await source.appendResetBoundaryAsync("new");
+          expectedMessages = [];
+        } else if (change === "worker-compaction") {
+          await source.appendCompactionAsync("Earlier question summarized", replyId!, 100);
+          expectedMessages = [
+            { role: "compactionSummary", summary: "Earlier question summarized" },
+            { role: "assistant", content: [{ text: "answer" }] },
+          ];
+        } else if (change === "local-reset") {
+          manager.resetLeaf();
+          expectedMessages = [];
+        } else if (change === "local-branch") {
+          manager.branch(questionId!);
+          expectedMessages = [{ role: "user", content: "question" }];
+        } else if (change === "fork") {
+          const forkId = await runWithoutOwnedSessionTranscriptWrites(() =>
+            manager.createBranchedSession(questionId!),
+          );
+          expect(forkId).toBe(manager.getSessionId());
+          expect(forkId).not.toBe(target.sessionId);
+          readTarget = { ...target, sessionId: forkId! };
+          expectedMessages = [{ role: "user", content: "question" }];
+        } else if (change === "retarget") {
+          readTarget = {
+            ...target,
+            sessionId: "replacement-context",
+            sessionKey: "agent:main:replacement-context",
+          };
+          await runWithoutOwnedSessionTranscriptWrites(async () => {
+            await upsertSessionEntryCore(readTarget, {
+              sessionId: readTarget.sessionId,
+              updatedAt: 2,
+            });
+            const replacement = await SessionManager.openAsync(readTarget);
+            await replacement.appendMessageAsync(makeUserMessage("replacement question", 2));
+            await manager.setSessionTargetAsync(readTarget);
+          });
+          expectedMessages = [{ role: "user", content: "replacement question" }];
+        } else if (change === "truncated") {
+          expectedMessages = [{ role: "assistant", content: [{ text: "answer" }] }];
+        }
+        const readModel = vi.spyOn(contextWorker, "readSessionTranscriptModelContextInWorker");
+        const readContext = vi.spyOn(managerContext, "readSessionManagerModelContextAsync");
+        try {
+          const consume = () => manager[sessionManagerReadInitialContext]();
+          const context =
+            change === "retarget" || change === "fork"
+              ? await withSelectedTranscriptReader(readTarget, consume)
+              : await consume();
+          expect(JSON.stringify(context)).not.toMatch(/private-durable-context|unpersisted/);
+          expect(context.messages).toMatchObject(expectedMessages);
+          const expectedReads =
+            change === "unchanged" ||
+            change === "default-selector" ||
+            change === "mutable-message" ||
+            change === "local-reset" ||
+            change === "local-branch"
+              ? 0
+              : 1;
+          expect(readContext).toHaveBeenCalledTimes(expectedReads);
+          expect(readModel).toHaveBeenCalledTimes(expectedReads);
+        } finally {
+          readContext.mockRestore();
+          readModel.mockRestore();
+        }
+        if (change === "local-reset" || change === "local-branch") {
+          const durable = await SessionManager.openModelContextAsync(target);
+          expect(durable.buildSessionContext().messages).toMatchObject([
+            { role: "user", content: "question" },
+            { role: "assistant", content: [{ text: "answer" }] },
+          ]);
+        }
+      });
+    });
+  },
+);
+
+it("rejects prepared context from a revoked writer inside a replacement run", async () => {
+  await withOpenClawTestState({ label: "prepared-context-writer" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "prepared-context-writer",
+      sessionKey: "agent:main:prepared-context-writer",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(target);
+    await source.appendMessageAsync(makeUserMessage("original question", 1));
+    await withSelectedTranscriptReader(target, async () => {
+      const reader = getOwnedSessionTranscriptReader(target);
+      const original = new AbortController();
+      const writer: InitialSessionTranscriptWriter = {
+        writerRunId: "original-run",
+        committedFence: undefined,
+        assertActive: () => original.signal.throwIfAborted(),
+        recordCommitted: () => {},
+        withTranscriptWrite: async (write) => await write(),
+      };
+      const manager = await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: target,
+          sessionReader: reader,
+          initialWriter: writer,
+          withTranscriptWrite: writer.withTranscriptWrite,
+        },
+        () =>
+          SessionManager[sessionManagerOpenTranscriptCohort](
+            target,
+            { maxBytes: 8192, maxEvents: 20 },
+            { sessionKey: target.sessionKey, entryIds: [] },
+            () => {},
+          ),
+      );
+      original.abort(new Error("Original transcript writer is no longer active"));
+      const replacement: InitialSessionTranscriptWriter = {
+        ...writer,
+        writerRunId: "replacement-run",
+        assertActive: () => {},
+      };
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: target,
+          sessionReader: reader,
+          initialWriter: replacement,
+          withTranscriptWrite: replacement.withTranscriptWrite,
+        },
+        async () => {
+          await expect(manager[sessionManagerReadInitialContext]()).rejects.toThrow(
+            "Original transcript writer is no longer active",
+          );
+        },
+      );
+    });
+  });
+});
+
+it("rejects a removed user admission before the bounded reader captures its witness", async () => {
+  await withOpenClawTestState({ label: "bounded-removed-admission" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const scope = {
       agentId: "main",
-      sessionId: "shared-context",
-      sessionKey: incognito
-        ? "agent:main:dashboard:incognito-shared-context"
-        : "agent:main:shared-context",
+      sessionId: "bounded-removed-admission",
+      sessionKey: "agent:main:bounded-removed-admission",
       storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const seed = await SessionManager.openAsync(scope);
-    const userId = await seed.appendMessageAsync({
-      role: "user",
-      content: "question",
-      timestamp: 1,
+    const recorder = createUserTurnTranscriptRecorder({
+      target: { ...scope, sessionEntry: undefined },
+      input: { text: "current request", idempotencyKey: "bounded-current-input" },
     });
-    const replyId = await seed.appendMessageAsync(
-      Object.assign(makeAgentAssistantMessage({ content: [{ type: "text", text: "answer" }] }), {
-        __openclaw: { upstreamUserText: "synthetic-private-native-payload" },
-      }),
-    );
-    const manager = await SessionManager.openAsync(scope, undefined, {
-      maxEvents: 20,
-      maxBytes: 8192,
-    });
-    const context = await manager[sessionManagerReadInitialContext]();
-    const user = manager.getEntry(userId!);
-    const reply = manager.getEntry(replyId!);
-    const projectedReply = context.messages[1];
-    if (
-      user?.type !== "message" ||
-      reply?.type !== "message" ||
-      reply.message.role !== "assistant" ||
-      projectedReply?.role !== "assistant"
-    ) {
-      throw new Error("Missing stored messages");
+    await recorder.persistApproved();
+    const admission = recorder.getAdmissionReceipt();
+    if (!admission) {
+      throw new Error("Expected a committed user admission");
     }
-    expect(context.messages[0]).toBe(user.message);
-    expect(projectedReply.content).toBe(reply.message.content);
-    expect(Object.isFrozen(user.message)).toBe(true);
-    expect(Object.isFrozen(reply.message.content)).toBe(true);
-    expect(JSON.stringify(context)).not.toContain("synthetic-private-native-payload");
-    expect(Reflect.set(projectedReply.content[0]!, "text", "changed")).toBe(false);
-    expect(reply.message.content).toEqual([{ type: "text", text: "answer" }]);
+    const source = await SessionManager.openAsync(scope);
+    await withSelectedTranscriptReader(scope, async () => {
+      expect(source.removeTrailingEntries((entry) => entry.id === admission.entryId)).toBe(1);
+      await expect(
+        SessionManager.openModelContextAsync(scope, {
+          admission,
+          limits: { maxBytes: 8192, maxEvents: 20 },
+        }),
+      ).rejects.toMatchObject({
+        name: "SessionTranscriptReadFenceError",
+        message: "Current-turn transcript admission changed",
+      });
+    });
   });
 });
 
-it.each(
-  [false, true].flatMap((incognito) =>
-    (["append", "rewrite"] as const).map((mutation) => ({ incognito, mutation })),
-  ),
-)(
-  "reads the completed-turn snapshot across later $mutation (incognito=$incognito)",
-  async ({ incognito, mutation }) => {
+it.each(["append", "rewrite"] as const)(
+  "rejects a native %s before consuming bounded admitted model context",
+  async (mutation) => {
+    await withOpenClawTestState({ label: "admitted-context-native-mutation" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "admitted-context",
+        sessionKey: "agent:main:admitted-context",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const source = await SessionManager.openAsync(scope);
+      await source.appendMessageAsync(makeUserMessage("original", 1));
+      await withSelectedTranscriptReader(scope, async () => {
+        const options = { limits: { maxBytes: 8192, maxEvents: 20 } };
+        const read = contextWorker.readSessionTranscriptModelContextInWorker;
+        let changed = false;
+        const spy = vi
+          .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+          .mockImplementationOnce(async (...args) => {
+            const context = await read(...args);
+            if (mutation === "rewrite") {
+              expect(source.removeTrailingEntries((entry) => entry.type === "message")).toBe(1);
+            }
+            source.appendMessage(makeUserMessage("changed", 2));
+            changed = true;
+            return context;
+          });
+        try {
+          await expect(SessionManager.openModelContextAsync(scope, options)).rejects.toThrow(
+            "Session entry changed during read",
+          );
+          expect(changed).toBe(true);
+        } finally {
+          spy.mockRestore();
+        }
+        const current = await SessionManager.openModelContextAsync(scope, options);
+        expect(current.buildSessionContext().messages).toMatchObject(
+          mutation === "rewrite"
+            ? [{ content: "changed" }]
+            : [{ content: "original" }, { content: "changed" }],
+        );
+      });
+    });
+  },
+);
+
+it("allows a queued writer to finish during an unbounded admitted context read", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ label: "unbounded-context-writer-fifo" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "unbounded-context",
+      sessionKey: "agent:main:unbounded-context",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(scope);
+    await source.appendMessageAsync(makeUserMessage("original", 1));
+    await withSelectedTranscriptReader(scope, async () => {
+      const scanned = createDeferred();
+      const release = createDeferred();
+      const read = contextWorker.readSessionTranscriptModelContextInWorker;
+      const spy = vi
+        .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+        .mockImplementationOnce(async (...args) => {
+          const context = await read(...args);
+          scanned.resolve();
+          await release.promise;
+          return context;
+        });
+      const pending = SessionManager.openModelContextAsync(scope);
+      let writer: ReturnType<SessionManager["appendMessageAsync"]> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(scanned.promise, pending, "Context scan was not reached"),
+          signal,
+        );
+        writer = source.appendMessageAsync(makeUserMessage("concurrent input", 2));
+        expect(
+          await withinTest(
+            awaitGateBeforeSettlement(writer, pending, "Context returned before its worker reply"),
+            signal,
+          ),
+        ).toBeTruthy();
+        release.resolve();
+        const accepted = await pending;
+        expect(accepted.buildSessionContext().messages).toMatchObject([{ content: "original" }]);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([pending, writer]);
+        spy.mockRestore();
+      }
+      const current = await SessionManager.openModelContextAsync(scope);
+      expect(current.buildSessionContext().messages).toMatchObject([
+        { content: "original" },
+        { content: "concurrent input" },
+      ]);
+    });
+  });
+});
+
+it("keeps one bounded context snapshot and observes a foreign rewrite on the next read", async () => {
+  await withOpenClawTestState({ label: "admitted-context-foreign-commit" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "foreign-context",
+      sessionKey: "agent:main:foreign-context",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(scope);
+    const userId = await source.appendMessageAsync(makeUserMessage("original", 1));
+    const databaseOptions = { agentId: scope.agentId, path: scope.storePath };
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const row = readTranscriptEventRows(database, scope.sessionId).find(
+      ({ eventJson }) => asOptionalRecord(JSON.parse(eventJson))?.id === userId,
+    );
+    if (!row) {
+      throw new Error("Missing committed context fixture message");
+    }
+    const event = asOptionalRecord(JSON.parse(row.eventJson));
+    await closeOpenClawAgentDatabaseByPathAsync(scope.storePath, scope.agentId);
+    await withSelectedTranscriptReader(scope, async () => {
+      expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
+      const options = { limits: { maxBytes: 8192, maxEvents: 20 } };
+      const read = contextWorker.readSessionTranscriptModelContextInWorker;
+      const spy = vi
+        .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+        .mockImplementationOnce(async (...args) => {
+          const context = await read(...args);
+          const foreign = openNodeSqliteDatabase(scope.storePath);
+          admitSqliteSchema(foreign);
+          try {
+            foreign.exec("BEGIN IMMEDIATE");
+            rewriteSqliteTranscriptEventRowsInTransaction({ ...database, db: foreign }, scope, [
+              {
+                seq: row.seq,
+                expectedEventJson: row.eventJson,
+                event: {
+                  ...event,
+                  message: { ...asOptionalRecord(event?.message), content: "foreign rewrite" },
+                },
+              },
+            ]);
+            foreign.exec("COMMIT");
+          } finally {
+            if (foreign.isTransaction) {
+              foreign.exec("ROLLBACK");
+            }
+            foreign.close();
+          }
+          return context;
+        });
+      try {
+        // This operation keeps its coherent snapshot; a new unpinned read observes the rewrite.
+        const before = await SessionManager.openModelContextAsync(scope, options);
+        expect(before.buildSessionContext().messages).toMatchObject([{ content: "original" }]);
+        expect(spy).toHaveBeenCalledOnce();
+      } finally {
+        spy.mockRestore();
+      }
+      expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
+      const after = await SessionManager.openModelContextAsync(scope, options);
+      expect(after.buildSessionContext().messages).toMatchObject([{ content: "foreign rewrite" }]);
+    });
+  });
+});
+
+it.each(["append", "rewrite"] as const)(
+  "reads the completed durable turn snapshot across later %s",
+  async (mutation) => {
     await withOpenClawTestState({ label: "completed-model-context" }, async (state) => {
       const scope = {
         agentId: "main",
         sessionId: "completed-context",
-        sessionKey: incognito
-          ? "agent:main:dashboard:incognito-completed-context"
-          : "agent:main:completed-context",
+        sessionKey: "agent:main:completed-context",
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
@@ -323,21 +950,16 @@ it.each(
         }
         source.appendMessage({ role: "user", content: "newest question", timestamp: 3 });
       };
-      const spy = incognito
-        ? undefined
-        : vi
-            .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
-            .mockImplementationOnce(async (...args) => {
-              spy!.mockRestore();
-              const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
-              mutate();
-              return result;
-            });
+      const spy = vi
+        .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+        .mockImplementationOnce(async (...args) => {
+          spy.mockRestore();
+          const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
+          mutate();
+          return result;
+        });
       try {
         const pending = SessionManager.openModelContextAsync(scope, { through: terminal.anchor });
-        if (incognito) {
-          mutate();
-        }
         if (mutation === "rewrite") {
           await expect(pending).rejects.toThrow(/transcript|anchor/i);
         } else {
@@ -349,7 +971,7 @@ it.each(
           });
         }
       } finally {
-        spy?.mockRestore();
+        spy.mockRestore();
       }
     });
   },

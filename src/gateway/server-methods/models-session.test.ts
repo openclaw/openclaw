@@ -2,6 +2,7 @@ import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createFallbackSessionEntry } from "../../config/sessions/session-accessor.sqlite-normalize.js";
 import {
@@ -16,6 +17,7 @@ import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-age
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -24,6 +26,7 @@ import {
   readUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
 import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -32,6 +35,8 @@ import {
   registerGatewayModelCatalogPrivateAccess,
   type PreparedGatewayModelCatalogSnapshot,
 } from "../server-model-catalog-auth.js";
+import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
+import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import {
   connectChatMetadataAccount,
@@ -68,6 +73,7 @@ function fixture() {
       },
     },
   } satisfies OpenClawConfig;
+  setRuntimeConfigSnapshot(config);
   const owner = createChatMetadataOwner(
     config,
     "gpt-5.6-luna",
@@ -160,16 +166,69 @@ function fixture() {
 
 const isolated = {
   layout: "state-only",
+  prepareProfileCatalog: true,
   prefix: "direct-session-catalog-",
   env: WITHOUT_OPENAI_ENV_AUTH,
 } as const;
 
 describe("direct session model catalogs", () => {
+  it("shares a saved selection revision with session events without retiring it for activity", async () => {
+    await withOpenClawTestState(isolated, async (state) => {
+      const f = fixture();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      await state.writeConfig(f.config);
+      const scope = { agentId: "main", sessionKey: "agent:main:catalog-revision" };
+      await writeSessionFixture(scope, {
+        sessionId: "catalog-revision-session",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: f.person.id },
+        authProfileOverride: f.authProfileId,
+        authProfileOverrideSource: "user",
+      });
+      let revision: unknown;
+      for (const [patch, changed] of [
+        [{}, true],
+        [{ label: "Renamed", updatedAt: 2, lastReadAt: 2 }, false],
+        [{ authProfileOverride: "openai:shared" }, true],
+        [{ modelOverride: "gpt-5.6-luna", providerOverride: "openai" }, true],
+        [{ agentRuntimeOverride: "openclaw" }, true],
+        [{ lifecycleRevision: "replacement" }, true],
+      ] satisfies Array<[Partial<SessionEntry>, boolean]>) {
+        await writeSessionFixture(scope, patch);
+        const respond = await f.request({ sessionKey: scope.sessionKey, view: "configured" });
+        const result = respond.mock.calls[0]?.[1];
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        expect(result).toHaveProperty("sessionModelRevision", expect.any(String));
+        const nextRevision = (result as { sessionModelRevision: string }).sessionModelRevision;
+        expect(nextRevision === revision).toBe(!changed);
+        revision = nextRevision;
+        const entry = expectDefined(loadSessionEntry(scope), "saved entry");
+        const row = buildGatewaySessionRow({
+          cfg: f.config,
+          agentId: scope.agentId,
+          key: scope.sessionKey,
+          entry,
+          store: { [scope.sessionKey]: entry },
+          storePath: openOpenClawAgentDatabase(scope).path,
+          preparedAcpMeta: null,
+          preparedRepositoryWorkspace: null,
+          activeModel: null,
+        });
+        expect(
+          buildGatewaySessionSnapshot({ sessionRow: row, includeSession: true }),
+        ).toMatchObject({
+          session: { sessionModelRevision: revision },
+        });
+      }
+    });
+  });
+
   it.each(["missing", "foreign"] as const)(
     "rejects a saved session with %s ownership before catalog I/O",
     async (ownership) => {
       await withOpenClawTestState(isolated, async (state) => {
         const f = fixture();
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         await state.writeConfig(f.config);
         const sessionKey = "agent:main:hidden-catalog";
         await writeSessionFixture(
@@ -195,6 +254,7 @@ describe("direct session model catalogs", () => {
         });
         expect(f.readPrepared).not.toHaveBeenCalled();
         expect(f.loadDeferred).not.toHaveBeenCalled();
+        await closeOpenClawAgentDatabasesAsync(state.root);
         expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       });
     },
@@ -203,6 +263,7 @@ describe("direct session model catalogs", () => {
   it("keeps a scoped models.list result across only a committed read acknowledgment", async () => {
     await withOpenClawTestState(isolated, async (state) => {
       const f = fixture();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       await state.writeConfig(f.config);
       const scope = { agentId: "main", sessionKey: "agent:main:catalog-read-marker" };
       await writeSessionFixture(scope, {
@@ -272,8 +333,9 @@ describe("direct session model catalogs", () => {
       const changed = await pending;
       const fresh = await f.request(params);
       expect(fresh.mock.calls).toEqual(control.mock.calls);
-      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       expect(changed.mock.calls).toEqual(control.mock.calls);
+      await closeOpenClawAgentDatabasesAsync(state.root);
+      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     });
   });
 
@@ -286,7 +348,9 @@ describe("direct session model catalogs", () => {
     "catalog owner",
   ] as const)("revalidates the selected model catalog after %s", async (change) => {
     await withOpenClawTestState(isolated, async (state) => {
+      let closedStorePath: string | undefined;
       const f = fixture();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       await state.writeConfig(f.config);
       const scope = { agentId: "main", sessionKey: "agent:main:held-saved" };
       await writeSessionFixture(scope, {
@@ -322,6 +386,7 @@ describe("direct session model catalogs", () => {
             openOpenClawAgentDatabase(scope);
           } else {
             closeOpenClawAgentDatabaseByPath(database.path);
+            closedStorePath = database.path;
           }
         } else if (change === "profile alias change") {
           publishUserProfileAliasChange();
@@ -357,7 +422,12 @@ describe("direct session model catalogs", () => {
             retryAfterMs: 0,
           }),
         );
+        if (closedStorePath) {
+          // Synchronous revocation precedes the async resource owner's settlement.
+          await closeOpenClawAgentDatabaseByPathAsync(closedStorePath);
+        }
       }
+      await closeOpenClawAgentDatabasesAsync(state.root);
       expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     });
   });
@@ -367,6 +437,7 @@ describe("direct session model catalogs", () => {
     async (changeSelected) => {
       await withOpenClawTestState(isolated, async (state) => {
         const f = fixture();
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         await state.writeConfig(f.config);
         const selected = { agentId: "main", sessionKey: "agent:main:metadata-selected" };
         const other = { ...selected, sessionKey: "agent:main:metadata-other" };
@@ -413,6 +484,7 @@ describe("direct session model catalogs", () => {
           await pending;
           expect(respond).toHaveBeenCalledWith(true, { swarmEnabled: false });
         }
+        await closeOpenClawAgentDatabasesAsync(state.root);
         expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       });
     },
@@ -421,6 +493,7 @@ describe("direct session model catalogs", () => {
   it("uses a saved session pin after the viewer changes their default and keeps agent reads separate", async () => {
     await withOpenClawTestState(isolated, async (state) => {
       const f = fixture();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       f.config.agents = {
         ...f.config.agents,
         ownership: "explicit",
@@ -479,6 +552,7 @@ describe("direct session model catalogs", () => {
   it("projects a saved native session without borrowing host authentication state", async () => {
     await withOpenClawTestState(isolated, async (state) => {
       const f = fixture();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       await state.writeConfig(f.config);
       clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
       const sessionKey = "agent:main:harness:catalog-native:saved";
@@ -516,6 +590,7 @@ describe("direct session model catalogs", () => {
         const direct = await f.request({ sessionKey, view: "configured" });
         expect(direct.mock.calls[0]?.[1]).toMatchObject({
           models: [{ id: "gpt-5.6-luna", provider: "openai" }],
+          sessionModelRevision: undefined,
         });
         const payload = direct.mock.calls[0]?.[1];
         expect(payload).not.toEqual(
@@ -539,6 +614,7 @@ describe("direct session model catalogs", () => {
   it("does not substitute a viewer default for a session with no saved pin", async () => {
     await withOpenClawTestState(isolated, async (state) => {
       const f = fixture();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       await state.writeConfig(f.config);
       const agent = await f.request({ agentId: "main", view: "configured" });
       expect(agent).toHaveBeenCalledWith(
@@ -558,6 +634,7 @@ describe("direct session model catalogs", () => {
   it("previews a retained self-owned draft without changing shared inventory or account defaults", async () => {
     await withOpenClawTestState(isolated, async () => {
       const f = fixture();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
       const before = readUserModelAuthProfile(f.authProfileId);
       const preview = await f.request({
@@ -595,6 +672,7 @@ describe("direct session model catalogs", () => {
     async (caller) => {
       await withOpenClawTestState(isolated, async () => {
         const f = fixture();
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         let authProfileId = f.authProfileId;
         if (caller === "foreign admin") {
           const other = ensureProfileForEmail("other-reader@example.test");
@@ -627,6 +705,7 @@ describe("direct session model catalogs", () => {
   it("rejects a combined saved-session and draft-account request", async () => {
     await withOpenClawTestState(isolated, async () => {
       const f = fixture();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const result = await f.request({
         sessionKey: "agent:main:saved",
         authProfileId: f.authProfileId,
@@ -645,6 +724,7 @@ describe("direct session model catalogs", () => {
     async (loss) => {
       await withOpenClawTestState(isolated, async () => {
         const f = fixture();
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const entered = createDeferred();
         const release = createDeferred();
         const abort = new AbortController();

@@ -23,7 +23,7 @@ describe("native Browser panel reply ownership", () => {
       const reply = createDeferred<{ ok: true }>();
       native.postMessage.mockImplementationOnce(() => reply.promise);
       const reload = () =>
-        panel.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Reload"]')?.click();
+        panel.renderRoot?.querySelector<HTMLButtonElement>('[aria-label="Reload"]')?.click();
       reload();
       expect(native.messages().at(-1)).toEqual({ type: "reload", tabId: "mac-first" });
 
@@ -43,7 +43,7 @@ describe("native Browser panel reply ownership", () => {
       reply.reject(new Error("The earlier reload failed"));
       await flushBrowserResponses();
       await panel.updateComplete;
-      const error = panel.shadowRoot?.querySelector(".bp-note--error");
+      const error = panel.renderRoot?.querySelector(".bp-note--error");
       if (owner === "current") {
         expect(error?.textContent).toContain("The earlier reload failed");
       } else {

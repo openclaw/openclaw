@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   asPositiveFiniteNumber,
   resolveIntegerOption,
@@ -27,8 +28,13 @@ import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
+import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
+import type { SandboxFsBridge } from "../sandbox/fs-bridge.types.js";
 import { stringEnum } from "../schema/string-enum.js";
-import { writePrivateTempFile } from "../sessions/tools/private-temp-file.js";
+import {
+  writePrivateTempFile,
+  type PrivateTempFileOptions,
+} from "../sessions/tools/private-temp-file.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
@@ -319,6 +325,7 @@ async function spillWebFetchContent(
   wrapped: WebFetchWrappedContent,
   maxChars: number,
   sourceTruncated: boolean,
+  output: PrivateTempFileOptions,
 ): Promise<WebFetchWrappedContent> {
   if (!wrapped.truncated) {
     return sourceTruncated ? { ...wrapped, truncated: true } : wrapped;
@@ -327,10 +334,23 @@ async function spillWebFetchContent(
   // uses this fixed file cap so vanished pages can still be read after truncation.
   const content = truncateUtf16Safe(value, WEB_FETCH_SPILL_MAX_CHARS);
   const spillChars = content.length;
-  const spillPath = await writePrivateTempFile(
-    "openclaw-web-fetch",
-    wrapWebContent(content, "web_fetch"),
-  );
+  let spillPath: string;
+  try {
+    spillPath = await writePrivateTempFile(
+      "openclaw-web-fetch",
+      wrapWebContent(content, "web_fetch"),
+      output,
+    );
+  } catch (error) {
+    output.assertCurrent?.();
+    if (!output.sandbox) {
+      throw error;
+    }
+    const notice = "\n\n[Full output unavailable in sandbox.]";
+    const visible = wrapWebFetchContent(value, maxChars - notice.length);
+    const text = `${visible.text}${notice}`;
+    return { ...visible, truncated: true, text, length: text.length };
+  }
   const spillCapped = value.length > WEB_FETCH_SPILL_MAX_CHARS;
   const isSpillTruncated = sourceTruncated || spillCapped;
   const spillNote = sourceTruncated
@@ -385,6 +405,8 @@ type WebFetchRuntimeParams = {
   lookupFn?: LookupFn;
   signal?: AbortSignal;
   resolveProviderFallback: () => Promise<WebFetchProviderFallback>;
+  output: PrivateTempFileOptions;
+  cacheScope?: string;
 };
 
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
@@ -426,6 +448,7 @@ async function buildWebFetchPayload(params: {
   extractMode: ExtractMode;
   maxChars: number;
   tookMs: number;
+  output: PrivateTempFileOptions;
 }): Promise<Record<string, unknown>> {
   const payload = isRecord(params.payload) ? params.payload : {};
   let metadataTruncated = false;
@@ -470,6 +493,7 @@ async function buildWebFetchPayload(params: {
     wrapWebFetchContent(rawText, bodyMaxChars),
     bodyMaxChars,
     payload.truncated === true,
+    params.output,
   );
   const providerRawLength =
     resolveOptionalIntegerOption(payload.rawLength, { min: 0 }) ?? wrapped.rawLength;
@@ -537,6 +561,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   // Append the operator header set after the existing cache discriminators so
   // requests without custom headers keep their current cache key.
   const cacheDiscriminators = [
+    params.cacheScope ? `sandbox:${params.cacheScope}` : "",
     `user-agent:${sha256Hex(params.userAgent)}`,
     params.providerCacheKey ? `provider:${params.providerCacheKey}` : "",
     params.ssrfPolicy ? `ssrf-policy:${sha256Hex(JSON.stringify(params.ssrfPolicy))}` : "",
@@ -551,7 +576,24 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   );
   const cached = readCache(FETCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
-    return { ...cached.value, cached: true };
+    const spill = cached.value.spill;
+    const sandbox = params.output.sandbox;
+    const available =
+      !sandbox ||
+      !isRecord(spill) ||
+      typeof spill.path !== "string" ||
+      (
+        await sandbox.bridge?.stat({
+          filePath: spill.path,
+          cwd: sandbox.root,
+          expectedPolicyPath: spill.path,
+          signal: params.signal,
+        })
+      )?.type === "file";
+    params.output.assertCurrent?.();
+    if (available) {
+      return { ...cached.value, cached: true };
+    }
   }
 
   // Preserve the direct fetch's rejection; replacing it with signal.reason would
@@ -560,7 +602,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   // Publish only after guard release: cancellation or cleanup failure must not
   // leave a successful cache entry for a call that never returned its content.
   throwIfFetchAborted(params.signal);
-  writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+  params.output.assertCurrent?.();
+  // Retry a failed sandbox save on the next call; never cache an unavailable spill.
+  if (!params.output.sandbox || !payload.truncated || payload.spill) {
+    writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+  }
   return payload;
 }
 
@@ -592,6 +638,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       extractMode: params.extractMode,
       maxChars: params.maxChars,
       tookMs,
+      output: params.output,
     });
   }
 
@@ -677,44 +724,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
         text = markdownToText(body);
       }
     } else if (["text/html", "application/xhtml+xml"].includes(normalizedContentType)) {
-      if (params.readabilityEnabled) {
-        const readable = await extractReadableContent({
-          html: body,
-          url: finalUrl,
-          extractMode: params.extractMode,
-          config: params.config,
-        });
-        if (readable?.text) {
-          text = readable.text;
-          title = readable.title;
-          extractor = readable.extractor;
-        } else {
-          let payload: Record<string, unknown> | null = null;
-          try {
-            payload = await fetchProviderPayload(finalUrl);
-          } catch {
-            throwIfFetchAborted(params.signal);
-          }
-          if (payload) {
-            return payload;
-          }
-          const basic = await extractBasicHtmlContent({
-            html: body,
-            extractMode: params.extractMode,
-          });
-          if (basic?.text) {
-            text = basic.text;
-            title = basic.title;
-            extractor = "raw-html";
-          } else {
-            const providerLabel =
-              (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
-            throw new Error(
-              `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
-            );
-          }
-        }
-      } else {
+      if (!params.readabilityEnabled) {
         const payload = await fetchProviderPayload(finalUrl);
         if (payload) {
           return payload;
@@ -723,13 +733,51 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
           "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
         );
       }
+      let extracted = await extractReadableContent({
+        html: body,
+        url: finalUrl,
+        extractMode: params.extractMode,
+        config: params.config,
+      });
+      if (!extracted?.text) {
+        let payload: Record<string, unknown> | null = null;
+        try {
+          payload = await fetchProviderPayload(finalUrl);
+        } catch {
+          throwIfFetchAborted(params.signal);
+        }
+        if (payload) {
+          return payload;
+        }
+        const basic = await extractBasicHtmlContent({
+          html: body,
+          extractMode: params.extractMode,
+        });
+        if (!basic?.text) {
+          const providerLabel =
+            (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
+          throw new Error(
+            `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
+          );
+        }
+        extracted = { ...basic, extractor: "raw-html" };
+      }
+      ({ text, title, extractor } = extracted);
     } else if (
       normalizedContentType === "application/json" ||
       normalizedContentType.endsWith("+json")
     ) {
       // Structured +json subtypes are single JSON documents; sequence formats are not.
       try {
-        text = JSON.stringify(JSON.parse(body), null, 2);
+        // Keep pretty-printing without rounding or normalizing numeric source tokens.
+        // Numeric reviver calls always include source context on supported runtimes.
+        text = JSON.stringify(
+          JSON.parse(body, (_key, value: unknown, context?: { source: string }) =>
+            typeof value === "number" ? JSON.rawJSON(context!.source) : value,
+          ),
+          null,
+          2,
+        );
         extractor = "json";
       } catch {
         text = body;
@@ -752,6 +800,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       extractMode: params.extractMode,
       maxChars: params.maxChars,
       tookMs: Date.now() - start,
+      output: params.output,
     });
   } finally {
     if (!res.bodyUsed) {
@@ -766,6 +815,10 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
 export function createWebFetchTool(options?: {
   config?: OpenClawConfig;
   sandboxed?: boolean;
+  sandboxRoot?: string;
+  sandboxFsBridge?: SandboxFsBridge;
+  agentSessionKey?: string;
+  assertInvocationCurrent?: () => void;
   runtimeWebFetch?: RuntimeWebFetchMetadata;
   lateBindRuntimeConfig?: boolean;
   lookupFn?: LookupFn;
@@ -775,6 +828,11 @@ export function createWebFetchTool(options?: {
   if (fetch?.enabled === false) {
     return null;
   }
+  // Saved locations belong to the requesting session and filesystem, even when
+  // another caller fetches the same URL with identical network settings.
+  const cacheScope = options?.sandboxed
+    ? sha256Hex(JSON.stringify([options.agentSessionKey ?? randomUUID(), options.sandboxRoot]))
+    : undefined;
   const tool: AnyAgentTool = {
     label: "Web Fetch",
     name: "web_fetch",
@@ -783,6 +841,12 @@ export function createWebFetchTool(options?: {
     parameters: WebFetchSchema,
     outputSchema: WebFetchOutputSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
+      const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
+      const assertCurrent = () => {
+        assertSourceCurrent();
+        options?.assertInvocationCurrent?.();
+      };
+      assertCurrent();
       const {
         config,
         preferRuntimeProviders,
@@ -879,6 +943,14 @@ export function createWebFetchTool(options?: {
           lookupFn: options?.lookupFn,
           signal,
           resolveProviderFallback,
+          cacheScope,
+          output: {
+            ...(options?.sandboxed
+              ? { sandbox: { root: options.sandboxRoot, bridge: options.sandboxFsBridge } }
+              : {}),
+            assertCurrent,
+            signal,
+          },
         });
         return jsonResult(result);
       } finally {

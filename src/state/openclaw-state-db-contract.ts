@@ -1,9 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
+// v24 replaces retained task indexes with ordered cron history indexes.
+// v23 persists normalized meeting transcript chronology.
+// v22 promotes ACP resume keys and explicit portable cursor identities.
+// v21 derives meeting transcript selectors and bounded delivery retention columns.
 // v20 fences possibly delivered cron completions across restart recovery.
 // v19 preserves original channel-owner authorization across recovery.
 // v18 binds shared GitHub publication to its original requesting authority.
@@ -20,7 +25,8 @@ export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() =
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 20;
+export const MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION = 23;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 24;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Absence records lost history; only Doctor may reconstruct these on existing state.
 export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
@@ -28,6 +34,7 @@ export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
   "user_profile_identities",
+  "user_background_images",
   "local_workspace_projections",
   "update_runs",
   "session_repository_workspaces",
@@ -43,6 +50,7 @@ export const FIRST_USE_STATE_TABLES = [
   "execution_identity_contexts",
   "mcp_oauth_pending_authorizations",
   "node_worker_launch_containers",
+  "node_worker_launch_boots",
   "node_worker_launch_cleanup",
   "node_worker_launch_process_scopes",
   "node_worker_launches",
@@ -72,6 +80,7 @@ export const FIRST_USE_STATE_INDEXES = [
   "idx_operator_approval_standing_grants_binding",
   "idx_web_push_approval_deliveries_subscription",
   "execution_identity_contexts_run_created_idx",
+  "execution_decision_facts_cursor_id_idx",
   "execution_decision_facts_context_occurred_idx",
   "execution_decision_facts_run_occurred_idx",
   "outbound_message_execution_bindings_execution_event_idx",
@@ -92,20 +101,19 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "device_pair_setup_completions",
   "github_publication_requests",
   "device_pairing_join_codes",
-  "skill_workshop_proposal_events",
-  "skill_workshop_collection_reviews",
-  "skill_workshop_proposal_rollbacks",
-  "skill_workshop_proposals",
+  "skill_workshop_changes",
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",
 ] as const;
 export const LAZY_ADDITIVE_STATE_INDEXES = [
   ...FIRST_USE_STATE_INDEXES,
+  "cron_run_receipts_cursor_id_idx",
   "idx_cron_run_receipts_active_job",
   "idx_cron_run_receipts_job_history",
   "idx_github_publication_requests_pending",
   "secret_store_entries_live_idx",
-  "idx_skill_workshop_collection_reviews_owner_time",
+  "skill_workshop_changes_cursor_id_idx",
+  "idx_skill_workshop_changes_agent_time",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -115,7 +123,7 @@ export const OPENCLAW_DATABASE_SCHEMA_DOCS_URL =
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 export type OpenClawStateDatabase = {
-  db: DatabaseSync;
+  db: EngineConnection;
   path: string;
   walMaintenance: SqliteWalMaintenance;
 };
@@ -154,12 +162,14 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
   "creator-namespace-v14": "historical cron creators → unknown source attribution",
   "conversation-binding-targets-v15":
     "conversation bindings → exact target keys without agent/session projections",
-  "skill-workshop-directory-ownership-v16":
-    "Skill Workshop ownership → per-agent directory containment",
   "prepared-worker-ownership-v17":
     "prepared workers → one-use capacity and fixed workspace ownership",
   "github-publication-requester-authority-v18":
     "GitHub publication receipts → original requesting authority",
+  "meeting-transcript-start-time": "meeting transcript start dates → persisted milliseconds",
+  "portable-identity-columns-v22": "ACP resume keys and receipt cursors → portable columns",
+  "task-run-indexes-v24": "retained task indexes → ordered cron history and runtime/run lookup",
+  "predicate-columns-v21": "meeting transcripts and delivery retention → derived predicate columns",
   "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",
   "strict-tables-v3": "tables → SQLite STRICT typing",

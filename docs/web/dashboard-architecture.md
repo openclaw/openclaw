@@ -30,7 +30,7 @@ Principles:
 - **Agent parity.** Everything the user can do on a board, the agent can do
   with tools: add/update/remove widgets, arrange them, manage tabs, switch the
   visible tab, and request split or expanded presentation.
-- **Native shell.** The board is Lit components in the Control UI shell
+- **Native shell.** The board uses Solid components in the Control UI shell
   (the same design system as the rest of the app). Data reports render directly.
   Custom executable widgets use sandboxed iframes; Browser dashboards reuse the
   Browser panel and its navigation controls.
@@ -54,6 +54,13 @@ Principles:
 | Pin (session)       | Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions reject pin requests. Subagent runs appear in session transcripts, outside sidebar navigation. Opening a pinned session restores that browser's saved task layout. |
 
 ## UX flows
+
+The dashboard gallery requests `sessions.list` with `rowMode: "dashboard"`.
+Rows retain card display, navigation, and membership facts; model, usage,
+permission, and participant details remain available through `sessions.describe`.
+The gallery uses the shared session-event reconciler and paced fallback refresh.
+Omitted fields never clear richer session facts already held by another view.
+Other session lists retain their existing compact or full projections.
 
 - **Graduation:** agent calls `show_widget` from an inline-capable chat → widget
   renders in the transcript → hover shows **Pin to dashboard** → widget appears
@@ -164,7 +171,7 @@ them. Identity, placement, pinning, grants, and the author-facing API stay
 OpenClaw's — so `show_widget` code stays as short as it is today and never
 needs to know the MCP Apps spec exists.
 
-Registered kinds use a small runtime Plugin SDK seam. A registration owns the
+Registered kinds use a small runtime Plugin SDK API. A registration owns the
 agent-facing kind name, source validation, capability-scoped renderer
 resources, and document-body composition. The Gateway validates source again
 at `board.widget.put`, stores it in the existing generic `plugin` descriptor
@@ -192,8 +199,8 @@ Shared hosting infrastructure:
 
 - **One sandbox host.** `html` widgets render through the same hardened
   pipeline MCP apps shipped with (double-iframe on the dedicated sandbox
-  origin, per-widget CSP declared and fail-closed decoded) instead of a second
-  bespoke iframe host. The proxy receives HTML by value, so local content is
+  origin, with malformed per-widget CSP declarations rejected) instead of a second
+  custom iframe host. The proxy receives HTML by value, so local content is
   the natural case.
 - **Authenticated loading.** The trusted Control UI reads inline Canvas HTML
   over its existing Gateway connection and board HTML over its ticketed HTTP
@@ -254,6 +261,10 @@ The public proxy shell uses a URL fingerprint of its HTML and security headers.
 Browsers can cache that exact version for repeated widget mounts; changing the
 shell or its policy changes the URL. Unversioned or mismatched requests remain
 uncached. This cache contains no widget documents, credentials, or view tickets.
+The Gateway reuses up to 64 public shell URLs by their complete normalized policy,
+avoiding repeated shell rendering and hashing when boards share that policy.
+Current widget grants still determine the policy on every read; policy changes
+select a different URL, and Gateway process replacement retires the URL cache.
 
 The shared loader fetches board HTML while the sandbox proxy starts, then
 delivers it only after that exact proxy reports ready. Dashboard widgets keep a
@@ -399,7 +410,7 @@ and OAuth refresh. Caller cancellation and session mutation authorization are
 rechecked before persistence. Failure leaves existing content and grants intact.
 MCP App tool names use their own contract and do not trigger this preflight.
 
-The board capability owner carries the canonical agent/session privately and
+The board capability owner carries the resolved agent/session privately and
 rechecks the live Gateway, ticket generation, widget revision and grant across
 awaits for both data and action paths. GitHub selects the agent override, System,
 or native identity using the existing credential owner and OAuth refresh
@@ -414,14 +425,19 @@ Authenticated reads never use preview authentication or anonymous retry.
 Redirects are refused. Only this Actions read permits an upstream body up to
 1 MiB. Other GitHub JSON callers retain their 256 KiB default. The owner validates
 and projects at most 30 runs into a small response, without raw repository
-objects or secrets. A Gateway-local cache holds at most 32 successful results
-for 30 seconds. At most 32 concurrent callers can prepare or await reads.
+objects or secrets. A Gateway-local cache holds at most 32 successful results.
+For 30 seconds, reads reuse the result. Expired results return with `stale: true`
+while a single background refresh runs under the Gateway's execution owner.
+The first read still awaits GitHub. At most 32 concurrent callers can prepare
+or await reads, and at most 32 transports can remain in flight.
 The shared transport caches only validated projections under its captured
-credential scope. This internal cache write is not delivery to a widget.
+credential scope and request filters, across sessions using that identity.
+This internal cache write is not delivery to a widget.
 Every caller, including the initiator, followers, and cache hits, revalidates its
 own live authority before delivery. Removing one caller does not invalidate
-another authorized caller's result, and failed transport reads are not cached
-as success. See the
+another authorized caller's result. Failed refreshes log sanitized guidance and
+evict the old result; the next read retries through the normal error boundary.
+Failed transport reads are not cached as success. See the
 [authoring contract and example](/tools/show-widget#read-github-actions-runs).
 
 ### Modeled residual: WebRTC data channels
@@ -496,26 +512,28 @@ Board state lives in `agents/<agentId>/agent/openclaw-agent.sqlite`:
 - `board_widgets` stores widget identity, placement, content or descriptors,
   capability declarations, approved digests, and grant state.
 
-The canonical table definitions, constraints, and indexes are in
-`src/state/openclaw-agent-schema.sql`. The board schema ensure/repair path is
+The source table definitions, constraints, and indexes are in
+`src/state/openclaw-agent-schema.sql`. The board schema setup and repair path is
 `src/state/openclaw-agent-board-schema.ts`. Runtime reads and writes are owned by
 `src/boards/sqlite-board-store.ts`. See [Database schemas](/reference/database-schemas)
 for schema versions, migration and downgrade rules, and the review checkpoint for
 material storage changes. Do not use a copied SQL sketch as the schema contract.
 
-Ordinary disk snapshots, widget-document reads, and mutations borrow the canonical
-per-agent SQLite worker connection.
-The Boards backend runs the existing synchronous transaction kernels and checks
-current caller authority at transaction entry and commit. Committed changes
+Ordinary disk snapshots and widget-document reads use the existing session
+history read worker. Mutations borrow the shared per-agent SQLite writer
+connection, where the Boards backend checks current caller authority at
+transaction entry and commit. Committed changes
 invalidate the host's exact session projection before the mutation returns;
 cleanup failures do not turn a completed write into a retryable failure.
 Existing-session write preflight, source-handle acquisition,
 schema/bootstrap/migration, and board-presence projection retain their existing
 owners. Reads capture
 their physical store before waiting and join the same per-agent FIFO as writes.
-The worker reads one coherent snapshot without creating missing board tables;
-the host then checks current authority and starts consumption before releasing
-the queue. External consumer promises run without holding that queue, so queued
+The read worker retains its admitted read-only connection and reads one coherent
+snapshot without creating missing board tables or opening a writer publication.
+The host checks the captured physical identity, native mutation witness, and
+current authority before starting consumption and releasing the queue.
+External consumer promises run without holding that queue, so queued
 revocation cannot be overtaken by a later protected publication. Gateway close
 rejects new requests and joins accepted reads and publication cleanup before
 worker teardown. Incognito reads and writes continue on their process-held
@@ -574,7 +592,7 @@ client, one unambiguous matching current-channel presenter, or a persistent-sess
 automation whose server-authored tool policy explicitly allows pinned-only authoring:
 
 - `show_widget { title, widget_code?, report?, kind?, name?, pin?, size?, tab?, after?,
-presentation?, capabilities? }` — create/update by name. `kind` defaults to `html` and its enum
+  presentation?, capabilities? }` — create/update by name. `kind` defaults to `html` and its enum
   includes active registered kinds. HTML and registered source use `widget_code`.
   Native reports use `report` without `kind` or `widget_code`, require `pin: true`,
   and render only on the board. For HTML and registered kinds, `pin` also places the widget on the board.
@@ -604,7 +622,7 @@ agent is told about user tier-1 events via session notices, e.g.
 ## What this replaces
 
 - **`extensions/workspaces` is deleted.** Experimental, `enabledByDefault:
-false`, never in a stable release (first appeared in 2026.7.2 betas). No
+  false`, never in a stable release (first appeared in 2026.7.2 betas). No
   migration. A doctor rule removes stale `<stateDir>/workspaces/` if present.
   Harvested ideas: pure grid math, bridge security model (port bootstrap,
   binding gating, rate limits), byte-frozen approval.
@@ -614,7 +632,7 @@ false`, never in a stable release (first appeared in 2026.7.2 betas). No
   dashboard content kind. The `pluginSurfaceUrls["canvas"]` advertisement and
   `/__openclaw__/canvas` paths are shipped native-client contracts and stay
   stable. Discord Activities register a contextual presenter behind core's
-  canonical `show_widget` tool.
+  shared `show_widget` tool.
 
 ## Current boundaries
 

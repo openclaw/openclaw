@@ -2,18 +2,20 @@ import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.t
 import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
-import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
-import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.ts";
-import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
+import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
+import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
+import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
 import {
   handleInlineSlashArgKeydown,
   handleSlashMenuKeydown,
   type SlashMenuHost,
-} from "./chat-composer-slash-menu.ts";
+} from "./chat-composer-slash-menu.tsx";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 type ComposerKeyDownDeps = {
+  prediction?: { text: string | null; dismiss: () => void };
+  acceptPrediction?: () => void;
   state: ChatComposerState;
   props: ChatComposerProps;
   skillMenuHost: SkillMenuHost;
@@ -22,13 +24,19 @@ type ComposerKeyDownDeps = {
   requestUpdate: () => void;
   sendShortcut: ChatSendShortcut;
   canSubmitDraft: (draft: string) => boolean;
-  syncDraftAfterSend: (target: HTMLTextAreaElement | null) => void;
+  submitDraft: (
+    draft: string,
+    event: KeyboardEvent,
+    followUpModeOverride?: ChatFollowUpMode,
+  ) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
   goalComposer: GoalComposerController;
 };
 
 export function createComposerKeyDownHandler({
+  prediction,
+  acceptPrediction,
   state,
   props,
   skillMenuHost,
@@ -37,7 +45,7 @@ export function createComposerKeyDownHandler({
   requestUpdate,
   sendShortcut,
   canSubmitDraft,
-  syncDraftAfterSend,
+  submitDraft,
   showAbortableUi,
   alternateFollowUpMode,
   goalComposer,
@@ -72,25 +80,37 @@ export function createComposerKeyDownHandler({
         canSubmitDraft(target.value)
       ) {
         event.preventDefault();
-        commitComposerDraft(props, target.value);
-        void goalComposer.submit(event);
+        submitDraft(target.value, event);
       }
-      return;
-    }
-
-    if (props.connected && handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate)) {
       return;
     }
 
     if (
       props.connected &&
-      handleInlineSlashArgKeydown(event, state, slashMenuHost, requestUpdate, sendShortcut)
+      (handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate) ||
+        handleInlineSlashArgKeydown(event, state, slashMenuHost, requestUpdate, sendShortcut) ||
+        handleSlashMenuKeydown(event, state, slashMenuHost, requestUpdate))
     ) {
       return;
     }
 
-    if (props.connected && handleSlashMenuKeydown(event, state, slashMenuHost, requestUpdate)) {
-      return;
+    if (prediction?.text && !target.value) {
+      if (
+        event.key === "Tab" &&
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        acceptPrediction?.();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        prediction.dismiss();
+        return;
+      }
     }
 
     if ((event.key === "ArrowUp" || event.key === "ArrowDown") && props.onHistoryKeydown) {
@@ -171,14 +191,9 @@ export function createComposerKeyDownHandler({
         return;
       }
       event.preventDefault();
-      commitComposerDraft(props, target.value);
-      if (goalComposer.activateDraft(target.value, true)) {
-        return;
-      }
       const followUpModeOverride =
         (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
-      void props.onSend(followUpModeOverride, event);
-      syncDraftAfterSend(target);
+      submitDraft(target.value, event, followUpModeOverride);
     }
   };
 }

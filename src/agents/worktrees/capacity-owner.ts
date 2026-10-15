@@ -75,29 +75,27 @@ export function createWorktreeCapacityOwner({
     let yielded = false;
     const { leases } = await readWorktreeCleanupState(env);
     const live = new Set(leases.liveScopes);
+    const cached =
+      <T>(
+        cache: Map<string, T>,
+        prepare: (records: ManagedWorktreeRecord[]) => Promise<Map<string, T>>,
+      ) =>
+      async (records: ManagedWorktreeRecord[]) => {
+        const missing = records.filter(
+          (record) => !cache.has(record.id + worktreeGcRevision(record)),
+        );
+        for (const [key, value] of await prepare(missing)) {
+          cache.set(key, value);
+        }
+        return records.map((record) => cache.get(record.id + worktreeGcRevision(record))!);
+      };
     const removed = await enforceWorktreeCleanupLimits({
       env,
       maxCount,
       progress,
       hasLiveLease: (record) => live.has(worktreeRunLeaseScope(record.id)),
-      repositories: async (records) => {
-        const missing = records.filter(
-          (record) => !repositories.has(record.id + worktreeGcRevision(record)),
-        );
-        for (const [key, directory] of await prepareRepositories(missing, guard)) {
-          repositories.set(key, directory);
-        }
-        return records.map((record) => repositories.get(record.id + worktreeGcRevision(record))!);
-      },
-      classify: async (records) => {
-        const missing = records.filter(
-          (record) => !ranked.has(record.id + worktreeGcRevision(record)),
-        );
-        for (const [revision, candidate] of await classify(missing, guard, repositories)) {
-          ranked.set(revision, candidate);
-        }
-        return records.map((record) => ranked.get(record.id + worktreeGcRevision(record))!);
-      },
+      repositories: cached(repositories, (records) => prepareRepositories(records, guard)),
+      classify: cached(ranked, (records) => classify(records, guard, repositories)),
       shouldYield: () =>
         (yielded = attempted > 0 && (attempted >= 8 || performance.now() - started >= 5_000)),
       evict: async (record, reason) => {

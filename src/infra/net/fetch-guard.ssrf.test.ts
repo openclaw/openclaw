@@ -817,34 +817,58 @@ describe("request lifecycle", () => {
     }
   });
 
-  it("inherits the global stream timeout and checks authority after DNS", async () => {
-    const previous = getGlobalDispatcher();
-    try {
-      ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
-      installRuntime();
-      const fetchImpl = fetchStub();
-      const beforeRequest = vi.fn();
-      const lookupFn = createPublicLookup();
-      const result = await guardedRequest(fetchImpl, { lookupFn, beforeRequest });
-      expect(lookupFn).toHaveBeenCalledBefore(beforeRequest);
-      expect(beforeRequest).toHaveBeenCalledBefore(fetchImpl);
-      expect(agentCtor).toHaveBeenCalledWith(
-        expect.objectContaining({
-          allowH2: false,
-          bodyTimeout: 1_900_000,
-          headersTimeout: 1_900_000,
-          connect: expect.objectContaining({ lookup: expect.any(Function) }),
-        }),
-      );
-      await result.release();
-    } finally {
-      const current = getGlobalDispatcher();
-      setGlobalDispatcher(previous);
-      if (current !== previous) {
-        await current.destroy();
+  it.each([
+    [undefined, undefined, true],
+    [5_000, undefined, true],
+    [2_000_000, undefined, true],
+    [undefined, 2_000_000, false],
+  ] as const)(
+    "keeps request=%s and stream=%s deadlines separate (pinned=%s)",
+    async (timeoutMs, streamTimeoutMs, pinDns) => {
+      const previous = getGlobalDispatcher();
+      try {
+        ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
+        installRuntime();
+        const fetchImpl = fetchStub();
+        const beforeRequest = vi.fn();
+        const lookupFn = createPublicLookup();
+        const result = await guardedRequest(fetchImpl, {
+          lookupFn,
+          beforeRequest,
+          timeoutMs,
+          streamTimeoutMs,
+          pinDns,
+        });
+        expect(lookupFn).toHaveBeenCalledBefore(beforeRequest);
+        expect(beforeRequest).toHaveBeenCalledBefore(fetchImpl);
+        expect(agentCtor).toHaveBeenCalledWith(
+          expect.objectContaining({
+            allowH2: false,
+            bodyTimeout: timeoutMs ?? streamTimeoutMs ?? 1_900_000,
+            headersTimeout: timeoutMs ?? streamTimeoutMs ?? 1_900_000,
+            ...(pinDns
+              ? { connect: expect.objectContaining({ lookup: expect.any(Function) }) }
+              : {}),
+          }),
+        );
+        if (timeoutMs === undefined) {
+          expect(recordedCall(agentCtor.mock.calls)[0]).not.toHaveProperty("connect.timeout");
+        } else {
+          expect(recordedCall(agentCtor.mock.calls)[0]).toHaveProperty(
+            "connect.timeout",
+            timeoutMs,
+          );
+        }
+        await result.release();
+      } finally {
+        const current = getGlobalDispatcher();
+        setGlobalDispatcher(previous);
+        if (current !== previous) {
+          await current.destroy();
+        }
       }
-    }
-  });
+    },
+  );
 
   it("propagates a final dispatch rejection without sending the request", async () => {
     const rejection = new Error("request owner closed");

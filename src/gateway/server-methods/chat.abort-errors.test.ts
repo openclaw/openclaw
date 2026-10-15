@@ -8,7 +8,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   clearActiveEmbeddedRun,
@@ -45,7 +45,11 @@ import {
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import { handleSessionKillHttpRequest } from "../session-kill-http.js";
-import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import * as sessionUtils from "../session-utils.js";
+import {
+  handleChatAbortRequest,
+  handleChatAbortRequestWithLifecycle,
+} from "./chat-abort-handler.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import {
   createActiveRun,
@@ -57,6 +61,7 @@ import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 
 const fixture = useChatAbortRegistryFixture();
+afterEach(() => vi.restoreAllMocks());
 
 async function corruptChildDatabase(storePath: string, sessionKey: string) {
   const database = listOpenClawAgentDatabasesForTest().find(
@@ -94,9 +99,20 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
       ["bad", badKey],
       ["healthy", healthyKey],
     ] as const) {
+      const childAgentId = runId === "bad" || runId === "second-bad" ? "broken" : "main";
+      const storePath = await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: childAgentId,
+        sessionKey: childSessionKey,
+        defaultSessionId: `${runId}-session`,
+        lifecycleRevision: "original-child",
+      });
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId,
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
+          ?.entry,
         requesterSessionKey: runId !== "root" ? rootKey : sessionKey,
         requesterAgentId: "main",
         requesterDisplayKey: "main",
@@ -249,15 +265,19 @@ it.each([
       ["bad", badKey, sessionKey],
       ["healthy", healthyKey, sessionKey],
     ] as const) {
-      await writeSubagentSessionEntry({
+      const storePath = await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: runId === "bad" ? "broken" : "main",
         sessionKey: childSessionKey,
         defaultSessionId: `${runId}-session`,
+        lifecycleRevision: "original-child",
       });
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId: runId === "bad" ? "broken" : "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
+          ?.entry,
         requesterSessionKey,
         requesterAgentId: "main",
         requesterDisplayKey: requesterSessionKey,
@@ -423,6 +443,7 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       { storePath: childStore, sessionKey: childKey },
       {
         sessionId: "incarnation-child",
+        lifecycleRevision: "original-child",
         updatedAt: Date.now(),
       },
     );
@@ -441,6 +462,11 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
     await registerSubagentRun({
       runId: "child",
       childSessionKey: childKey,
+      childAgentId: "child",
+      sessionEntry: loadExactSessionEntryReadOnly({
+        storePath: childStore,
+        sessionKey: childKey,
+      })?.entry,
       requesterSessionKey: sessionKey,
       requesterAgentId: "main",
       requesterDisplayKey: sessionKey,
@@ -611,3 +637,55 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
     }
   },
 );
+
+it("reports typed contention without replaying or denying an already applied Stop", async () => {
+  const failure = Object.assign(new Error("database is locked"), {
+    code: "ERR_SQLITE_ERROR",
+    errcode: 5,
+  });
+  vi.spyOn(sessionUtils, "loadGatewaySessionEntryReadOnlyInWorker").mockImplementation(async () => {
+    throw failure;
+  });
+  const sessionKey = "agent:main:main";
+  const active = createActiveRun(sessionKey, { agentId: "main" });
+  const context = createChatAbortContext({ chatAbortControllers: new Map([["run-1", active]]) });
+  const respond = await invokeChatAbortHandler({
+    handler: handleChatAbortRequest,
+    context,
+    request: { sessionKey, runId: "run-1" },
+    client: { connect: { scopes: ["operator.admin"] } },
+  });
+  expect(active.controller.signal.aborted).toBe(true);
+  expect(respond).toHaveBeenCalledOnce();
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code: "UNAVAILABLE",
+      message:
+        "The server is busy. Check this turn's status before trying Stop again.\n\nSQLite transaction admission remained busy. Stopping may already have taken effect.",
+      details: { errorKind: "state_contention" },
+    }),
+  );
+});
+
+it.each([
+  new Error("database is locked: private detail"),
+  new AggregateError(
+    [Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 })],
+    "cleanup failed",
+  ),
+])("does not certify strings or uncertain cleanup aggregates", async (error) => {
+  const context = createChatAbortContext({
+    getRuntimeConfig: () => {
+      throw error;
+    },
+  });
+  await expect(
+    invokeChatAbortHandler({
+      handler: handleChatAbortRequest,
+      context,
+      request: { sessionKey: "agent:main:main", runId: "run-1" },
+    }),
+  ).rejects.toBe(error);
+});

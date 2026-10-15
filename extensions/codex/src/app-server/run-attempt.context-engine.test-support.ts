@@ -12,6 +12,14 @@ import {
 } from "./run-attempt-test-harness.js";
 import { writeCodexAppServerBinding as writeRawCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
+export function requestMethodsExcludingSkillDiscovery(harness: {
+  requests: ReadonlyArray<{ method: string }>;
+}): string[] {
+  return harness.requests
+    .filter(({ method }) => method !== "skills/list")
+    .map(({ method }) => method);
+}
+
 export function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEngine {
   const engine: ContextEngine = {
     info: {

@@ -1,6 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteSchemaCookie } from "../infra/sqlite-schema-contract.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -24,12 +22,17 @@ const definitionsSql = `SELECT name, sql FROM main.sqlite_schema
     ))`;
 const validatedSchemas = resolveGlobalSingleton(
   Symbol.for("openclaw.agentCanonicalValidationSchemas"),
-  () =>
-    new WeakMap<
-      DatabaseSync,
-      { cookie: number; schema?: SqliteSchemaFacts; unregister: () => void }
-    >(),
+  () => new WeakMap<DatabaseSync, { cookie: number; schema?: SqliteSchemaFacts }>(),
 );
+// Canonical writers no longer install validation triggers; only the pending table is expected.
+const expectedDefinitions = new Map([
+  [
+    "session_canonical_validation_pending",
+    normalizeSchemaSql(
+      extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_canonical_validation_pending"),
+    ),
+  ],
+]);
 
 function readDefinitions(
   database: DatabaseSync,
@@ -58,33 +61,7 @@ function readDefinitions(
   return definitions;
 }
 
-function expectedDefinitions(): Map<string, string | null> {
-  return resolveGlobalSingleton(
-    Symbol.for("openclaw.agentCanonicalValidationSchemaDefinitions"),
-    () => {
-      const database = openNodeSqliteDatabase(":memory:");
-      try {
-        // sqlite-allow-raw -- Bootstrap the canonical DDL in an isolated schema comparison database.
-        database.exec(
-          [
-            extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_nodes"),
-            extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_windows"),
-            extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_key_contract", {
-              endMarker: "CREATE TABLE IF NOT EXISTS session_windows (",
-              includeEndMarker: false,
-            }),
-            canonicalSessionValidationSchemaSql(),
-          ].join("\n"),
-        );
-        return readDefinitions(database);
-      } finally {
-        database.close();
-      }
-    },
-  );
-}
-
-/** Require the exact invalidation group before an empty pending set can certify readiness. */
+/** Require the canonical admission schema before consuming its pending work. */
 export function assertCanonicalSessionValidationSchema(database: DatabaseSync): void {
   const schema = getAdmittedSqliteSchemaFacts(database);
   const cookie = schema?.schemaVersion ?? readSqliteSchemaCookie(database);
@@ -95,12 +72,10 @@ export function assertCanonicalSessionValidationSchema(database: DatabaseSync): 
   if (cached && (schema ? cached.schema === schema : !cached.schema && cached.cookie === cookie)) {
     return;
   }
-  cached?.unregister();
   validatedSchemas.delete(database);
-  const expected = expectedDefinitions();
   const actual = readDefinitions(database, schema);
-  for (const name of new Set([...expected.keys(), ...actual.keys()])) {
-    if (expected.get(name) !== actual.get(name)) {
+  for (const name of new Set([...expectedDefinitions.keys(), ...actual.keys()])) {
+    if (expectedDefinitions.get(name) !== actual.get(name)) {
       throw classifyOpenClawAgentDatabaseReadError(
         database,
         new Error(
@@ -109,12 +84,9 @@ export function assertCanonicalSessionValidationSchema(database: DatabaseSync): 
       );
     }
   }
-  if (!schema && readSqliteSchemaCookie(database) !== cookie) {
-    throw new Error("Session canonical validation schema changed during admission; retry the read");
-  }
   // Admitted handles own DDL/rollback invalidation; unmanaged readers only retain committed cookies.
   if (schema || !database.isTransaction) {
-    rememberCanonicalSessionValidationSchema(database, cookie, schema);
+    validatedSchemas.set(database, { cookie, schema });
   }
 }
 
@@ -124,23 +96,10 @@ export function adoptCanonicalSessionValidationSchema(database: DatabaseSync): v
   if (!schema) {
     throw new Error("Canonical schema handoff requires admitted schema facts");
   }
-  rememberCanonicalSessionValidationSchema(database, schema.schemaVersion, schema);
+  validatedSchemas.set(database, { cookie: schema.schemaVersion, schema });
 }
 
-function rememberCanonicalSessionValidationSchema(
-  database: DatabaseSync,
-  cookie: number,
-  schema?: SqliteSchemaFacts,
-): void {
-  validatedSchemas.get(database)?.unregister();
-  const unregister = registerNodeSqliteDisposeCallback(database, () => {
-    validatedSchemas.delete(database);
-    unregister();
-  });
-  validatedSchemas.set(database, { cookie, schema, unregister });
-}
-
-/** The schema owner installs this complete group before seeding pending keys. */
+/** The schema owner installs the pending queue before seeding imported keys. */
 export function canonicalSessionValidationSchemaSql(schema = OPENCLAW_AGENT_SCHEMA_SQL): string {
   return extractSqliteTableSchema(schema, "session_canonical_validation_pending", {
     endMarker: "CREATE TABLE IF NOT EXISTS conversations (",

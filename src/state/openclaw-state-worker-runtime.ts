@@ -1,6 +1,7 @@
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { executeSandboxRegistryCommand } from "../agents/sandbox/registry-write.worker.js";
 import { persistSubagentRunChangesInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
+import { captureWorkspaceStateReceipt } from "../agents/workspace-state-publication.js";
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { executeWorkspaceStateCommand } from "../agents/workspace-state-store.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
@@ -8,19 +9,19 @@ import { patchConfigHealthEntryInDatabase } from "../config/io.health-state.kern
 import {
   executeCronStateCommand,
   isCronStateWorkerCommand,
-  prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
-import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
+import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-read.worker.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
-import * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import {
-  readStableSqliteFileGeneration,
-  sameSqliteFileGeneration,
-} from "../infra/sqlite-file-generation.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
-import { recordUpdateRunMutationInWorker } from "../infra/update-run-mutation.worker.js";
+import {
+  recordUpdateRunMutationInWorker,
+  withUpdateRunWriteAdmission,
+} from "../infra/update-run-mutation.worker.js";
 import { reconcileUpdateRunCandidatesInWorker } from "../infra/update-run-reconciliation.worker.js";
 import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
@@ -28,16 +29,20 @@ import {
   writeSecretStoreEntriesInDatabase,
   rollbackSecretStoreEntryWriteInDatabase,
   deleteSecretStoreEntryInDatabase,
+  updateSecretStoreAllowedHostsInDatabase,
 } from "../secrets/store/secret-store-write.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
 import { executeSessionUpstreamCommand } from "../sessions/session-upstream-links.worker.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
+import { TUI_LAST_SESSION_STATE_KEY_PREFIX } from "../tui/tui-last-session.contract.js";
 import { clearRetiredTuiPointers } from "../tui/tui-last-session.kernel.js";
 import { assertAgentDeletionRecoveryHoldPredicate } from "./agent-deletion-journal-recovery.kernel.js";
+import { agentProvenancePublication } from "./agent-provenance-publication.js";
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
+  recordAgentProvenanceInDatabase,
 } from "./agent-provenance.kernel.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
@@ -53,53 +58,52 @@ import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
+import {
+  isOpenClawStateDatabaseOpen,
+  runOpenClawStateWriteTransaction,
+} from "./openclaw-state-db.js";
 import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerRuntimeCommand,
 } from "./openclaw-state-worker-contract.js";
-import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
+import type { WorkerWriteOperationContext } from "./worker-operation-registry.js";
 
 export { openUpdateRunWriter } from "../infra/update-run-mutation.worker.js";
 
-export function prepareSharedStateCommand(type: PropertyKey): Promise<void> | undefined {
-  return stateWorkerRegistry.prepare(type) ?? prepareCronStateWorkerCommand(type);
-}
+export { prepareCronStateWorkerCommand as prepareSharedStateCommand } from "../cron/store/dispatch.worker.js";
 
 export function executeSharedStateCommand(
   command: OpenClawStateWorkerRuntimeCommand,
   context: { databasePath: string },
   open: () => OpenClawStateDatabase,
+  write: WorkerWriteOperationContext["write"],
   updateRunWriter: () => ExistingOpenClawStateWriter,
 ): ReturnType<OpenClawStateWorkerBackend["execute"]> {
-  // Dispatch preparation has loaded this module; do not open or observe token state.
-  if (command.type === "deviceAuth.prepare") {
-    return undefined;
-  }
   const stateOptions = () => ({
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   });
-  if (stateWorkerRegistry.has(command)) {
-    return stateWorkerRegistry.execute(command, { open, stateOptions });
-  }
-  if (command.type === "updateRuns.recordStep" || command.type === "updateRuns.recordPhase") {
-    return recordUpdateRunMutationInWorker(
-      command,
-      stateOptions(),
-      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
-      updateRunWriter(),
+  if (
+    command.type === "updateRuns.recordStep" ||
+    command.type === "updateRuns.recordPhase" ||
+    command.type === "updateRuns.create" ||
+    command.type === "updateRuns.finish" ||
+    command.type === "updateRuns.recordVerification" ||
+    command.type === "updateRuns.recordDiagnostics"
+  ) {
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      recordUpdateRunMutationInWorker(command, stateOptions(), assertCurrent, updateRunWriter),
     );
   }
   if (command.type === "updateRuns.reconcile") {
-    return reconcileUpdateRunCandidatesInWorker(command.input, stateOptions(), (stage) =>
-      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      reconcileUpdateRunCandidatesInWorker(command.input, stateOptions(), assertCurrent),
     );
   }
   if (command.type === "updateRuns.reconcileInterrupted") {
-    return persistInterruptedUpdateObservation(command.input, stateOptions(), (stage) =>
-      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      persistInterruptedUpdateObservation(command.input, stateOptions(), assertCurrent),
     );
   }
   if (command.type === "claws.install-schema-versions") {
@@ -111,33 +115,28 @@ export function executeSharedStateCommand(
       return readClawInstallSchemaVersionRows(db);
     }, stateOptions());
   }
-  if (command.type === "database.generationMatches") {
-    // Unavailable inspection retains the known failure; only a stable mismatch expires it.
-    return sameSqliteFileGeneration(
-      command.input.generation,
-      readStableSqliteFileGeneration(context.databasePath),
-    );
-  }
-  if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
+  if (command.type === "userPreferences.write") {
     return executeUserPreferenceCommand(command, {
       database: open(),
       ...stateOptions(),
     });
   }
-  if (command.type === "deviceAuth.read" || command.type === "deviceAuth.readOrigin") {
-    const read = (db: OpenClawStateDatabase["db"]) =>
-      command.type === "deviceAuth.read"
-        ? deviceAuth.readDeviceAuthTokenObservationFromDatabase(db, command.input)
-        : deviceAuth.readOriginDeviceTokenObservationFromDatabase(db, command.input);
-    return command.input.readOnly
-      ? (withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-          ({ db }) => read(db),
-          stateOptions(),
-        ) ?? { entry: null, expectedToken: null })
-      : read(open().db);
-  }
   if (command.type === "tui.lastSession.clear") {
     return clearRetiredTuiPointers(new Set(command.input.retiredSessionKeys), stateOptions(), open);
+  }
+  if (command.type === "backup.recordOutcome") {
+    // A best-effort ledger must not initialize or change a refused backup source.
+    // An already-admitted writer carries ownership; cold admission stays read-only.
+    if (!isOpenClawStateDatabaseOpen(context.databasePath)) {
+      const existing = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+        assertOpenClawStateDatabaseOwner(db, { pathname: context.databasePath });
+        return true;
+      }, stateOptions());
+      if (!existing) {
+        return undefined;
+      }
+    }
+    return write(({ db }) => recordBackupRunInDatabase(db, command.input));
   }
   const database = open();
   if (command.type === "githubPublication.prepareSessionReceiptDeletion") {
@@ -148,9 +147,6 @@ export function executeSharedStateCommand(
   }
   if (command.type === "githubRepository.personalPending") {
     return readPendingRepositoryGitHubPublicationInDatabase(database.db, command.input);
-  }
-  if (command.type === "deviceAuth.list") {
-    return deviceAuth.readDeviceAuthTokensFromDatabase(database.db, command.input);
   }
   switch (command.type) {
     case "transcripts.canonicalSessionRow":
@@ -187,24 +183,33 @@ export function executeSharedStateCommand(
     ...stateOptions(),
   };
   if (command.type === "tui.lastSession.write") {
-    return writeConfigMachineState(command.input.stateKey, command.input.sessionKey, writeOptions);
+    return writeConfigMachineState(
+      `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${command.input.scopeKey}`,
+      command.input.sessionKey,
+      writeOptions,
+    );
   }
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);
   }
   if (command.type === "workspace.replaceAttestation") {
-    return runOpenClawStateWriteTransaction((writer) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
-      return result;
-    }, writeOptions);
+    return runOpenClawStateWriteTransaction(
+      (writer) =>
+        captureWorkspaceStateReceipt(writer.db, () => {
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+          const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
+          return result;
+        }),
+      writeOptions,
+    );
   }
   if (
     command.type === "workspace.snapshotAndRegister" ||
     command.type === "workspace.mergeSetup" ||
-    command.type === "workspace.expire"
+    command.type === "workspace.expire" ||
+    command.type === "workspace.delete"
   ) {
     return executeWorkspaceStateCommand(command, database, writeOptions);
   }
@@ -230,6 +235,12 @@ export function executeSharedStateCommand(
       ? rollbackSecretStoreEntryWriteInDatabase({ ...command.input, database: writeOptions }, admit)
       : deleteSecretStoreEntryInDatabase({ ...command.input, database: writeOptions }, admit);
   }
+  if (command.type === "secrets.allowedHosts") {
+    return updateSecretStoreAllowedHostsInDatabase(
+      { ...command.input, database: writeOptions },
+      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
+  }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
   }
@@ -241,34 +252,28 @@ export function executeSharedStateCommand(
   if (command.type === "sessionGroups.mutate") {
     return mutateSessionGroupCatalogInDatabase(database, command.input, writeOptions.env);
   }
-  if (
-    command.type === "deviceAuth.store" ||
-    command.type === "deviceAuth.storeOrigin" ||
-    command.type === "deviceAuth.clear" ||
-    command.type === "deviceAuth.clearOrigin"
-  ) {
-    return runOpenClawStateWriteTransaction(({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const result =
-        command.type === "deviceAuth.store"
-          ? deviceAuth.storeDeviceAuthTokenInDatabase(db, command.input)
-          : command.type === "deviceAuth.storeOrigin"
-            ? deviceAuth.storeOriginDeviceTokenInDatabase(db, command.input)
-            : command.type === "deviceAuth.clear"
-              ? deviceAuth.clearDeviceAuthTokenFromDatabase(db, command.input)
-              : deviceAuth.clearOriginDeviceTokenInDatabase(db, command.input);
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      return result;
-    }, writeOptions);
-  }
   if (command.type === "agentProvenance.readBatch" || command.type === "agentProvenance.list") {
     ensureAgentProvenanceSchema(writeOptions);
     return command.type === "agentProvenance.readBatch"
       ? readAgentProvenanceBatchInDatabase(database.db, command.input.agentIds)
       : listAgentProvenanceInDatabase(database.db);
   }
+  if (command.type === "agentProvenance.record") {
+    ensureAgentProvenanceSchema(writeOptions);
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const { receipt } = agentProvenancePublication.capture(db, () =>
+          recordAgentProvenanceInDatabase(db, command.input),
+        );
+        deferSqliteWorkerCommitReceipt(db, {
+          provenanceAuthority: agentProvenancePublication.bound(receipt),
+        });
+      },
+      writeOptions,
+      { operationLabel: "agent-provenance.record" },
+    );
+  }
   if (
-    command.type === "sessionUpstream.current" ||
     command.type === "sessionUpstream.settle" ||
     command.type === "sessionUpstream.upsert" ||
     command.type === "sessionUpstream.delete"
@@ -287,12 +292,6 @@ export function executeSharedStateCommand(
   }
   if (command.type === "subagents.persistChanges") {
     return persistSubagentRunChangesInWorker(command.input, writeOptions);
-  }
-  if (command.type === "backup.recordOutcome") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => recordBackupRunInDatabase(db, command.input),
-      writeOptions,
-    );
   }
   if (command.type === "config.health.patch") {
     const { configPath, patch, expected, updatedAtMs } = command.input;

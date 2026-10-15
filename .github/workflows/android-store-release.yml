@@ -29,13 +29,26 @@ env:
   NODE_VERSION: "24.21.0"
 
 jobs:
+  qualify:
+    if: >-
+      github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
+      github.event_name == 'workflow_dispatch' && inputs.operation == 'release'
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/android-release-e2e.yml
+    with:
+      target_sha: ${{ github.sha }}
+
   release:
     name: Prepare and upload Android release
+    needs: qualify
     if: >-
+      !cancelled() &&
       github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
       ((github.event_name == 'schedule' && vars.ANDROID_INTERNAL_ENABLED == 'true') ||
       (github.event_name == 'workflow_dispatch' &&
-      (inputs.operation == 'release' || inputs.operation == 'internal')))
+      (inputs.operation == 'internal' || (inputs.operation == 'release' && needs.qualify.result == 'success'))))
     permissions:
       contents: write
     runs-on: ubuntu-24.04
@@ -105,8 +118,8 @@ jobs:
       - name: Setup Ruby
         uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
-          ruby-version: "3.4.10"
-          bundler: "4.0.21"
+          ruby-version: "3.4.11"
+          bundler: "4.0.22"
           bundler-cache: false
           working-directory: apps/android
 
@@ -114,9 +127,9 @@ jobs:
         working-directory: apps/android
         run: |
           set -euo pipefail
-          bundle _4.0.21_ install --jobs 4 --retry 3
-          bundle _4.0.21_ check
-          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+          bundle _4.0.22_ install --jobs 4 --retry 3
+          bundle _4.0.22_ check
+          test "$(bundle _4.0.22_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
 
       - name: Create apps-signing read token
         id: apps-signing-token

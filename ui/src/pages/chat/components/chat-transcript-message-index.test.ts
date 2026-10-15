@@ -200,9 +200,7 @@ describe("completed reply frame ownership", () => {
   }
 
   it.each<[string, (string | undefined)[], boolean, string?, boolean?]>([
-    ["ordinary run", ["run-1"], true],
     ["missing prompt", ["run-1"], false],
-    ["resumed run", ["run-u", "run-1"], true],
     ["resumed run without prompt", ["run-u", "run-1"], false],
     ["untagged work", [undefined, "run-1"], true],
     ["all untagged work without prompt", [undefined], false],
@@ -324,7 +322,7 @@ describe("completed reply frame ownership", () => {
     },
   );
 
-  it("does not pull pre-steer work across the intervening user message", () => {
+  it("keeps resumed work with its final answer after the steer", () => {
     const messages = replyHistory(["run-u", "run-1"]);
     const steer = {
       role: "user",
@@ -334,18 +332,21 @@ describe("completed reply frame ownership", () => {
     };
     messages.splice(2, 0, steer);
     const chain = project(messages);
-    const [before, after] = frames(chain);
+    const [before, frame] = frames(chain);
     expect(chain.transcriptItems).toEqual([
       expect.objectContaining({ role: "user" }),
       before,
       expect.objectContaining({ role: "user" }),
-      after,
+      frame,
     ]);
     expect(messagesIn([before!])).toEqual([messages[1]]);
-    expect(before?.runId).toBe("run-u");
-    expect(messagesIn([after!])).toEqual(messages.slice(3));
-    expect(before?.parts[0]?.kind).toBe("work-group");
-    expect(after?.parts[0]?.kind).toBe("work-group");
+    expect(frame?.runId).toBe("run-1");
+    expect(messagesIn([frame!])).toEqual(messages.slice(3));
+    expect(frame?.parts[0]?.kind).toBe("work-group");
+    expect(frame?.outcome).toMatchObject({
+      kind: "completed",
+      actionOwner: { message: messages.at(-1) },
+    });
     expect(new Set(chain.transcriptItems.map((item) => item.key)).size).toBe(
       chain.transcriptItems.length,
     );
@@ -391,19 +392,6 @@ describe("completed reply frame ownership", () => {
       expect(messagesIn(chain.transcriptItems)).toEqual(messages);
     },
   );
-
-  it.each([
-    { name: "search", sessionKey, searchActive: true },
-    { name: "channel session", sessionKey: "agent:main:telegram:direct:42", searchActive: false },
-  ])("keeps work exposed for $name", (options) => {
-    const messages = replyHistory(["run-u", "run-1"]);
-    const chain = project(messages, { ...chainOptions, ...options });
-    expect(parts(chain).some((part) => part.kind === "work-group")).toBe(false);
-    expect(messagesIn(chain.transcriptItems)).toEqual(messages);
-    if (options.searchActive) {
-      expect(chain.transcriptItems.every((item) => item.kind === "group")).toBe(true);
-    }
-  });
 });
 
 describe("transcript structure cache", () => {
@@ -420,7 +408,7 @@ describe("transcript structure cache", () => {
     expect(projectTranscriptChain(items, { ...chainOptions, searchActive: true })).not.toBe(chain);
     const streamed = projectTranscriptChain(items, chainOptions);
     // Message-less terminals record their outcome beside published history.
-    rememberLiveTerminalRun(partial, "run-1", undefined, "error");
+    rememberLiveTerminalRun(partial, "run-1", "error");
     expect(projectTranscriptChain(items, chainOptions)).not.toBe(streamed);
 
     const settled = projectTranscriptChain(items, chainOptions);

@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDoctorNoCowToolFixture } from "../commands/doctor-sqlite-nocow.test-support.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
@@ -57,6 +58,7 @@ it.skipIf(process.platform !== "linux")(
           gateway: { mode: "local" as const },
         };
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         mocks.config.mockReturnValue(cfg);
         mocks.packageRoot.mockReturnValue(undefined);
         const seeded = [
@@ -115,7 +117,7 @@ it.skipIf(process.platform !== "linux")(
           { repair: true, nonInteractive: true, workspaceSuggestions: false },
         );
         expect(readerClosed).toBe(true);
-        expect(tools.exchanges).toBe(2);
+        expect(tools.exchanges, log.mock.calls.flat().join("\n")).toBe(2);
         expect(log.mock.calls.flat().join("\n")).not.toContain("SQLite NOCOW repair refused");
         for (const [index, pathname] of paths.entries()) {
           expect(fs.statSync(pathname).ino).not.toBe(originalInodes[index]);

@@ -161,6 +161,23 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
+"plugin: mcp-events":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mcp-events/**"
+          - "docs/automation/mcp-events.md"
+"plugin: mcp-relay":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mcp-relay/**"
+          - "docs/plugins/mcp-relay.md"
+          - "docs/plugins/reference/mcp-relay.md"
+"plugin: muse":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/muse/**"
+          - "docs/plugins/muse.md"
+          - "docs/plugins/reference/muse.md"
 "plugin: mxc":
   - changed-files:
       - any-glob-to-any-file:
@@ -356,14 +373,6 @@
           - "src/daemon/**"
           - "docs/gateway/**"
 
-"fleet":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "src/fleet/**"
-          - "src/cli/fleet-cli/**"
-          - "docs/gateway/multi-tenant-hosting.md"
-          - "docs/cli/fleet.md"
-
 "docs":
   - changed-files:
       - any-glob-to-any-file:
@@ -459,6 +468,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llama-cpp/**"
+"extensions: advisor":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/advisor/**"
 "extensions: active-memory":
   - changed-files:
       - any-glob-to-any-file:

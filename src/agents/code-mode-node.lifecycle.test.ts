@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import { createDeferred } from "../../test/helpers/promise.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import type { CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
+import { prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
+import type { CodeModeNodeInput, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 
 vi.mock("node:diagnostics_channel", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:diagnostics_channel")>();
@@ -94,6 +95,51 @@ afterEach(async () => {
 });
 
 describe("Node Code Mode worker custody", () => {
+  it("shares catalog bytes across cells while sending current execution limits", async () => {
+    const catalog = Array.from({ length: 109 }, (_, i) => ({
+      callableName: `tool_${i}`,
+      name: `tool_${i}`,
+      source: "openclaw",
+      description: "catalog metadata ".repeat(100),
+    }));
+    let start = { ...input, ...prepareCodeModeNodeCatalog({ catalog, namespaces: [] }) };
+    const execute = () => host.run(() => nodeCodeModeExecutor.execute(start, { timeoutMs: 1000 }));
+    await execute();
+    const first = fixture.executions.at(-1)!.input as CodeModeNodeInput;
+    await execute();
+    const second = fixture.executions.at(-1)!.input as CodeModeNodeInput;
+    expect(first.kind).toBe("exec");
+    expect(second.kind).toBe("exec");
+    if (first.kind !== "exec" || second.kind !== "exec") {
+      throw new Error("expected execution payloads");
+    }
+    expect(second.initialization).toBe(first.initialization);
+    expect(second.initialization.byteLength).toBeGreaterThan(100_000);
+    expect(second).not.toHaveProperty("catalog");
+    expect(second).not.toHaveProperty("apiFiles");
+    expect(second).not.toHaveProperty("namespaces");
+    expect(JSON.stringify(second).length).toBeLessThan(500);
+
+    start = {
+      ...input,
+      ...prepareCodeModeNodeCatalog({
+        catalog: [{ ...catalog[0]!, description: "new revision" }],
+        namespaces: [],
+      }),
+      config: { ...input.config, maxPendingToolCalls: 3 },
+    };
+    await execute();
+    const revised = fixture.executions.at(-1)!.input as CodeModeNodeInput;
+    if (revised.kind !== "exec") {
+      throw new Error("expected execution payload");
+    }
+    expect(revised.initialization).not.toBe(first.initialization);
+    expect(JSON.parse(new TextDecoder().decode(revised.initialization))).toMatchObject({
+      __openclawCatalog: [{ description: "new revision" }],
+    });
+    expect(revised.config.maxPendingToolCalls).toBe(3);
+  });
+
   it("joins its native workers at host close without retiring a sibling host", async () => {
     const sibling = new LegacyPluginSdkResourceHost();
     const siblingScheduler = createTestGatewayScheduler();

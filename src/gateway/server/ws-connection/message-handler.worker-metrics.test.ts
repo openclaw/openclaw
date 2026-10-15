@@ -246,19 +246,25 @@ describe("dedicated worker RPC", () => {
     expect(events.at(-1)).toMatchObject({ phase: "dispatch", response: "unavailable" });
   });
 
-  it("records a throwing service once and preserves protocol failure", async () => {
+  it("records a throwing transcript service once and measures its error response", async () => {
     const events = observeRequests();
     const harness = attachHarness({ identity: ATTACHED_IDENTITY });
     await admit(harness);
     harness.service.commitTranscript.mockRejectedValueOnce(new Error("synthetic service fault"));
     harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
     await settled(events);
-    expect(events.map((event) => event.phase)).toEqual(["received", "handler", "dispatch"]);
+    expect(events.map((event) => event.phase)).toEqual([
+      "received",
+      "handler",
+      "response",
+      "dispatch",
+    ]);
     expect(events.slice(1)).toMatchObject([
       { outcome: "threw" },
-      { outcome: "threw", response: "none" },
+      { outcome: "error" },
+      { outcome: "threw", response: "sent" },
     ]);
-    expect(harness.close).toHaveBeenCalledWith(1011, "gateway-unavailable");
+    expect(harness.close).not.toHaveBeenCalled();
     expect(JSON.stringify(events)).not.toContain("synthetic service fault");
   });
 

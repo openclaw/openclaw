@@ -91,17 +91,11 @@ export function intersectToolApprovalMode(
   captured: CodexAppToolApprovalMode,
   current: CodexAppToolApprovalMode,
 ): CodexAppToolApprovalMode {
-  if (captured === current) {
+  if (captured === current || current === "approve") {
     return captured;
-  }
-  if (captured === "prompt" || current === "prompt") {
-    return "prompt";
   }
   if (captured === "approve") {
     return current;
-  }
-  if (current === "approve") {
-    return captured;
   }
   // `auto` and `writes` are annotation-dependent and not totally ordered.
   return "prompt";

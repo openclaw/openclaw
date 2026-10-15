@@ -5,6 +5,10 @@ import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -20,10 +24,10 @@ import {
 } from "./run-attempt-test-harness.js";
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
-  resetSharedCodexAppServerClientForTests,
   retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import {
   createInferenceReadyClientHarness,
   createCodexInferenceReadResponses,
@@ -62,6 +66,7 @@ function runOneShot(
 ) {
   vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(client);
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
+  setRuntimeConfigSnapshot(params.config ?? {});
   params.oneShotCliRun = true;
   params.cleanupBundleMcpOnRunEnd = true;
   params.onExecutionPhase = onExecutionPhase;
@@ -80,6 +85,7 @@ describe("Codex one-shot cleanup receipts", () => {
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
+    clearRuntimeConfigSnapshot();
   });
 
   it.each(["completed", "cancelled"] as const)(

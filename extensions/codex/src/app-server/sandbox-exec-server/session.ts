@@ -7,14 +7,12 @@ import {
   closeAllFileReads,
   closeFile,
   copyPath,
-  createDirectory,
-  getMetadata,
   openFile,
   readDirectory,
-  readFile,
+  readFileOrMetadata,
   readFileBlock,
   removePath,
-  writeFile,
+  writeFileOrDirectory,
   type CodexSandboxFileReadHandles,
 } from "./filesystem.js";
 import { httpRequest } from "./http.js";
@@ -147,15 +145,12 @@ export class CodexSandboxExecSession {
       case "fs/close":
         return closeFile(this.fileReads, params);
       case "fs/readFile":
-        return await readFile(this.execServer, params);
-      case "fs/writeFile":
-        await writeFile(this.execServer, params);
-        return {};
-      case "fs/createDirectory":
-        await createDirectory(this.execServer, params);
-        return {};
       case "fs/getMetadata":
-        return await getMetadata(this.execServer, params);
+        return await readFileOrMetadata(this.execServer, params, method);
+      case "fs/writeFile":
+      case "fs/createDirectory":
+        await writeFileOrDirectory(this.execServer, params, method);
+        return {};
       case "fs/readDirectory":
         return await readDirectory(this.execServer, params);
       case "fs/remove":

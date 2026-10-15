@@ -3,6 +3,8 @@ import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   assertProfile,
   captureDiagnosticProfile,
+  createInspectorProfileCapture,
+  createNativeCpuProfileCapture,
   DIAGNOSTIC_PROFILE_MAX_BYTES,
   ProfileFailure,
   sanitizeDiagnosticProfileFrame,
@@ -105,7 +107,7 @@ function sanitizeProfile(
   return result;
 }
 
-/** Captures the main isolate's CPU samples through the shared inspector owner. */
+/** Captures CPU samples through Node's shared native profiler or Bun's inspector. */
 export function captureDiagnosticCpuProfile(options: {
   signal: AbortSignal;
   hasAuthority: () => boolean;
@@ -113,13 +115,18 @@ export function captureDiagnosticCpuProfile(options: {
   return captureDiagnosticProfile({
     ...options,
     durationMs: DURATION_MS,
-    setup: async (session) => {
-      await session.post("Profiler.enable");
-      await session.post("Profiler.setSamplingInterval", { interval: INTERVAL_MICROS });
-    },
-    start: (session) => session.post("Profiler.start"),
-    stop: (session) => session.post("Profiler.stop"),
-    disable: (session) => session.post("Profiler.disable"),
+    create: (inspector) =>
+      process.versions.bun
+        ? createInspectorProfileCapture(inspector, {
+            setup: async (session) => {
+              await session.post("Profiler.enable");
+              await session.post("Profiler.setSamplingInterval", { interval: INTERVAL_MICROS });
+            },
+            start: (session) => session.post("Profiler.start"),
+            stop: (session) => session.post("Profiler.stop"),
+            disable: (session) => session.post("Profiler.disable"),
+          })
+        : createNativeCpuProfileCapture(INTERVAL_MICROS),
     sanitize: sanitizeProfile,
   });
 }

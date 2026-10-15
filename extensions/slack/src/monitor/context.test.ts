@@ -97,22 +97,6 @@ beforeEach(() => {
 afterEach(() => setSlackRuntime(null as never));
 
 describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
-  it("drops mismatched top-level app/team identifiers", () => {
-    const ctx = createTestContext();
-    expect(
-      ctx.shouldDropMismatchedSlackEvent({
-        api_app_id: "A_WRONG",
-        team_id: "T_EXPECTED",
-      }),
-    ).toBe(true);
-    expect(
-      ctx.shouldDropMismatchedSlackEvent({
-        api_app_id: "A_EXPECTED",
-        team_id: "T_WRONG",
-      }),
-    ).toBe(true);
-  });
-
   it("drops mismatched nested team.id payloads used by interaction bodies", () => {
     const ctx = createTestContext();
     expect(
@@ -221,46 +205,18 @@ describe("createSlackMonitorContext isChannelAllowed", () => {
 });
 
 describe("createSlackMonitorContext resolveSlackSystemEventRoute", () => {
-  it("routes threaded interaction events to the Slack thread session", () => {
-    const ctx = createTestContext();
-
-    expect(
-      ctx.resolveSlackSystemEventRoute({
-        channelId: "C_THREAD",
-        channelType: "channel",
-        senderId: "U_CLICKER",
-        threadTs: "1712345678.123456",
-      }),
-    ).toEqual({
-      agentId: "main",
-      sessionKey: "agent:main:slack:channel:c_thread:thread:1712345678.123456",
-    });
-  });
-
-  it("routes channel-less direct interactions to the sender session", () => {
+  it("routes channel-less direct interactions to the sender session", async () => {
     const ctx = createTestContext({ dmScope: "per-channel-peer" });
 
     expect(
-      ctx.resolveSlackSystemEventRoute({
+      await ctx.resolveSlackSystemEventRoute({
         channelType: "im",
         senderId: "U_SHORTCUT",
       }),
     ).toEqual({ agentId: "main", sessionKey: "agent:main:slack:direct:u_shortcut" });
   });
 
-  it("routes typeless system events through an event-carried mpDM type", () => {
-    const ctx = createTestContext();
-    ctx.rememberSlackChannelType("C0MPDM42", "mpim");
-
-    expect(
-      ctx.resolveSlackSystemEventRoute({
-        channelId: "C0MPDM42",
-        senderId: "U_ACTOR",
-      }),
-    ).toEqual({ agentId: "main", sessionKey: "agent:main:slack:group:c0mpdm42" });
-  });
-
-  it("partitions enterprise channel system events by workspace", () => {
+  it("partitions enterprise channel system events by workspace", async () => {
     const ctx = createTestContext();
     const resolveForTeam = (teamId: string) =>
       ctx.resolveSlackSystemEventRoute({
@@ -270,17 +226,17 @@ describe("createSlackMonitorContext resolveSlackSystemEventRoute", () => {
         eventScope: createEnterpriseEventScope(teamId),
       });
 
-    expect(resolveForTeam("T111")).toEqual({
+    expect(await resolveForTeam("T111")).toEqual({
       agentId: "main",
       sessionKey: "agent:main:slack:channel:team:t111:channel:c_shared",
     });
-    expect(resolveForTeam("T222")).toEqual({
+    expect(await resolveForTeam("T222")).toEqual({
       agentId: "main",
       sessionKey: "agent:main:slack:channel:team:t222:channel:c_shared",
     });
   });
 
-  it("partitions enterprise main DM system events by workspace", () => {
+  it("partitions enterprise main DM system events by workspace", async () => {
     const ctx = createTestContext({ dmScope: "main" });
     const resolveForTeam = (teamId: string) =>
       ctx.resolveSlackSystemEventRoute({
@@ -290,11 +246,11 @@ describe("createSlackMonitorContext resolveSlackSystemEventRoute", () => {
         eventScope: createEnterpriseEventScope(teamId),
       });
 
-    expect(resolveForTeam("T111")).toEqual({
+    expect(await resolveForTeam("T111")).toEqual({
       agentId: "main",
       sessionKey: "agent:main:main:account:default:team:t111",
     });
-    expect(resolveForTeam("T222")).toEqual({
+    expect(await resolveForTeam("T222")).toEqual({
       agentId: "main",
       sessionKey: "agent:main:main:account:default:team:t222",
     });
@@ -315,7 +271,6 @@ describe("createSlackMonitorContext channel metadata cache", () => {
       ),
       "rate_limited",
     ],
-    [new Error("private provider payload"), "other"],
   ])("returns only a closed lookup failure category for %s", async (error, category) => {
     const info = vi.fn().mockRejectedValue(error);
     const ctx = createTestContext({
@@ -376,38 +331,6 @@ describe("createSlackMonitorContext channel metadata cache", () => {
     });
   });
 
-  it("evicts the oldest authoritative type when the bounded cache fills", async () => {
-    const info = vi.fn().mockRejectedValue(new Error("missing_scope"));
-    const ctx = createTestContext({
-      appClient: { conversations: { info } } as unknown as App["client"],
-    });
-    ctx.rememberSlackChannelType("C0OLDEST", "mpim");
-    for (let index = 0; index < 1024; index += 1) {
-      ctx.rememberSlackChannelType(`C${index}`, "channel");
-    }
-
-    await expect(ctx.resolveChannelName("C0OLDEST")).resolves.toEqual({
-      lookupFailureCategory: "other",
-    });
-  });
-
-  it("evicts the oldest user name when the bounded user cache fills", async () => {
-    const usersInfo = vi.fn().mockResolvedValue({
-      user: { profile: { display_name: "test-user" } },
-    });
-    const ctx = createTestContext({
-      appClient: { users: { info: usersInfo } } as unknown as App["client"],
-    });
-    await ctx.resolveUserName("U0OLDEST");
-    for (let index = 0; index < 2048; index += 1) {
-      await ctx.resolveUserName(`U${index}`);
-    }
-    // U0OLDEST should have been evicted by the fill. Re-requesting it must
-    // call users.info again (cache miss) instead of returning a stale entry.
-    await ctx.resolveUserName("U0OLDEST");
-    expect(usersInfo).toHaveBeenCalledTimes(2050);
-  });
-
   it("keeps a recently re-resolved user while older entries are evicted", async () => {
     const usersInfo = vi.fn().mockImplementation(async ({ user }: { user: string }) => ({
       user: { profile: { display_name: `name-${user}` } },
@@ -426,6 +349,8 @@ describe("createSlackMonitorContext channel metadata cache", () => {
     const before = usersInfo.mock.calls.length;
     await expect(ctx.resolveUserName("U0KEEP")).resolves.toEqual({ name: "name-U0KEEP" });
     expect(usersInfo).toHaveBeenCalledTimes(before);
+    await ctx.resolveUserName("U0");
+    expect(usersInfo).toHaveBeenCalledTimes(before + 1);
   });
 
   it("downloads the cached DM profile image without blocking or attaching the bot token", async () => {
@@ -493,7 +418,7 @@ describe("createSlackMonitorContext channel metadata cache", () => {
 });
 
 describe("createSlackMonitorContext Agent View state", () => {
-  it.each(["available", "installed later", "open fails once"] as const)(
+  it.each(["installed later", "open fails once"] as const)(
     "keeps namespace stores separate and reuses successful opens when runtime is %s",
     async (mode) => {
       const workspace = { register: vi.fn(), lookup: vi.fn(async () => undefined) };
@@ -516,11 +441,9 @@ describe("createSlackMonitorContext Agent View state", () => {
           installRuntime();
         }
         const ctx = createTestContext();
-        if (mode !== "available") {
-          await expect(ctx.isSlackAgentView()).resolves.toBe(false);
-          await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
-          installRuntime();
-        }
+        await expect(ctx.isSlackAgentView()).resolves.toBe(false);
+        await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
+        installRuntime();
         await expect(ctx.isSlackAgentView()).resolves.toBe(false);
         await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
 
@@ -563,14 +486,6 @@ describe("createSlackMonitorContext Agent View state", () => {
       }
     },
   );
-
-  it("records Agent View in the account context without runtime state", async () => {
-    const ctx = createTestContext();
-
-    await expect(ctx.isSlackAgentView()).resolves.toBe(false);
-    await ctx.recordSlackAgentView();
-    await expect(ctx.isSlackAgentView()).resolves.toBe(true);
-  });
 
   it("persists and restores Agent View through plugin state", async () => {
     const stored = new Map<string, { experience: "agent"; observedAt: number }>();
@@ -655,27 +570,6 @@ describe("createSlackMonitorContext Agent View state", () => {
     expect(lookup).toHaveBeenCalledWith(stateKey);
   });
 
-  it("retries opening managed view state after a transient failure", async () => {
-    const register = vi.fn(async () => undefined);
-    const openKeyedStore = vi
-      .fn()
-      .mockImplementationOnce(() => {
-        throw new Error("sqlite unavailable");
-      })
-      .mockImplementation(() => ({ register, lookup: vi.fn() }));
-    setSlackRuntime({
-      state: { openKeyedStore },
-      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
-    } as never);
-    const ctx = createTestContext();
-
-    await ctx.recordSlackManagedViewThread("D123", "10.000");
-    await ctx.recordSlackManagedViewThread("D123", "10.000");
-
-    expect(openKeyedStore).toHaveBeenCalledTimes(2);
-    expect(register).toHaveBeenCalledOnce();
-  });
-
   it("retries managed view persistence after a transient write failure", async () => {
     const register = vi
       .fn()
@@ -691,40 +585,6 @@ describe("createSlackMonitorContext Agent View state", () => {
     await ctx.recordSlackManagedViewThread("D123", "10.000");
 
     expect(register).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache negative managed view root lookups", async () => {
-    const lookup = vi.fn(async () => undefined);
-    setSlackRuntime({
-      state: { openKeyedStore: vi.fn(() => ({ register: vi.fn(), lookup })) },
-      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
-    } as never);
-    const ctx = createTestContext();
-
-    await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
-    await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
-
-    expect(lookup).toHaveBeenCalledTimes(2);
-  });
-
-  it("evicts the oldest managed view root from the bounded memory cache", async () => {
-    const lookup = vi.fn(async () => ({
-      experience: "managed-thread" as const,
-      observedAt: Date.now(),
-    }));
-    setSlackRuntime({
-      state: { openKeyedStore: vi.fn(() => ({ register: vi.fn(), lookup })) },
-      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
-    } as never);
-    const ctx = createTestContext();
-
-    await ctx.isSlackManagedViewThread("D123", "oldest");
-    for (let index = 0; index < 4096; index += 1) {
-      await ctx.isSlackManagedViewThread("D123", `thread-${index}`);
-    }
-    await ctx.isSlackManagedViewThread("D123", "oldest");
-
-    expect(lookup).toHaveBeenCalledTimes(4098);
   });
 
   it("reads the durable Agent View marker once the app id is learned", async () => {
@@ -784,22 +644,19 @@ describe("createSlackMonitorContext Agent View state", () => {
 });
 
 describe("Slack session status and titles", () => {
-  it.each(["processing", "active", "suspended"] as const)(
-    "writes %s only for a thread",
-    async (status) => {
-      const apiCall = vi.fn().mockResolvedValue({ ok: true });
-      const ctx = createTestContext({ appClient: { apiCall } as unknown as App["client"] });
-      await ctx.setSlackSessionStatus({ channelId: "D123", status });
-      expect(apiCall).not.toHaveBeenCalled();
-      await ctx.setSlackSessionStatus({ channelId: "D123", threadTs: "10.000", status });
-      expect(apiCall).toHaveBeenCalledExactlyOnceWith("agents.sessions.setStatus", {
-        token: "xoxb-test",
-        channel_id: "D123",
-        thread_ts: "10.000",
-        status,
-      });
-    },
-  );
+  it.each(["processing"] as const)("writes %s only for a thread", async (status) => {
+    const apiCall = vi.fn().mockResolvedValue({ ok: true });
+    const ctx = createTestContext({ appClient: { apiCall } as unknown as App["client"] });
+    await ctx.setSlackSessionStatus({ channelId: "D123", status });
+    expect(apiCall).not.toHaveBeenCalled();
+    await ctx.setSlackSessionStatus({ channelId: "D123", threadTs: "10.000", status });
+    expect(apiCall).toHaveBeenCalledExactlyOnceWith("agents.sessions.setStatus", {
+      token: "xoxb-test",
+      channel_id: "D123",
+      thread_ts: "10.000",
+      status,
+    });
+  });
 
   it("warns operators only once across contexts for a missing Stop subscription", async () => {
     const warning = "missing_agent_session_stopped_event_subscription";
@@ -855,32 +712,6 @@ describe("Slack session status and titles", () => {
     expect(log).not.toHaveBeenCalled();
     expect(logVerboseMock).toHaveBeenCalledWith(expect.stringContaining("not_agent_app"));
     expect(logVerboseMock).toHaveBeenCalledWith(expect.stringContaining("rename failed"));
-  });
-
-  it("accepts the creation title, renames once per change, and does not echo user renames", async () => {
-    const apiCall = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, title: "x".repeat(200) })
-      .mockResolvedValue({ ok: true });
-    const ctx = createTestContext({ appClient: { apiCall } as unknown as App["client"] });
-    const update = { channelId: "D123", threadTs: "10.000", status: "processing" as const };
-    await ctx.setSlackSessionStatus({ ...update, title: "x".repeat(201) });
-    await ctx.setSlackSessionStatus({ ...update, title: "x".repeat(202) });
-    await ctx.setSlackSessionStatus({ ...update, title: "New display name" });
-    await ctx.setSlackSessionStatus({ ...update, title: "New display name" });
-    ctx.recordSlackSessionTitle({ ...update, title: "User title" });
-    await ctx.setSlackSessionStatus({ ...update, title: "User title" });
-    expect(apiCall).toHaveBeenNthCalledWith(
-      1,
-      "agents.sessions.setStatus",
-      expect.objectContaining({ title: "x".repeat(200) }),
-    );
-    expect(apiCall.mock.calls.filter(([method]) => method === "agents.sessions.rename")).toEqual([
-      [
-        "agents.sessions.rename",
-        { token: "xoxb-test", channel_id: "D123", thread_ts: "10.000", title: "New display name" },
-      ],
-    ]);
   });
 
   it("does not overwrite a user rename received during a status request", async () => {

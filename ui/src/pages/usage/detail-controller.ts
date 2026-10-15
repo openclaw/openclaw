@@ -1,5 +1,4 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
-import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   beginPanelRefresh,
@@ -13,6 +12,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import {
   requestSessionUsage,
   requestSessionUsageLogs,
@@ -20,7 +20,6 @@ import {
   type SessionUsageQuery,
   type SessionUsageTarget,
 } from "../../lib/sessions/usage.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { createUsageRequest } from "./request.ts";
 import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
 
@@ -31,8 +30,8 @@ function sameUsageTarget(a: UsageDetailTarget | undefined, b: UsageDetailTarget)
 }
 
 function createUsageDetailRequest<T>(
-  host: ReactiveControllerHost,
-  gateway: GatewayPageController,
+  notify: () => void,
+  gateway: GatewayPageBinding,
   request: (
     client: GatewayBrowserClient,
     target: SessionUsageTarget,
@@ -40,14 +39,12 @@ function createUsageDetailRequest<T>(
     sessionId: string | undefined,
   ) => Promise<T>,
   resolveTarget: (key: string) => UsageDetailTarget,
-  canLoad?: (key: string) => boolean,
   onClear?: () => void,
 ) {
   let value: { target: UsageDetailTarget; data?: T } | null = null;
   let status = createPanelRefreshStatus();
   let pending: Promise<void> | null = null;
-  let generation = 0;
-  const task = createUsageRequest(host, {
+  const task = createUsageRequest(notify, {
     task: async (
       [client, target]: readonly [GatewayBrowserClient, UsageDetailTarget],
       { signal },
@@ -94,7 +91,6 @@ function createUsageDetailRequest<T>(
       status = failPanelRefresh(status, undefined, gateway.snapshot);
     }
     pending = null;
-    generation += 1;
     task.cancel();
   };
   const reset = (target?: UsageDetailTarget) => {
@@ -113,12 +109,11 @@ function createUsageDetailRequest<T>(
       return pending !== null;
     },
     async recover(sessionKey: string, loadInitial = false): Promise<void> {
-      const current = generation;
       const target = resolveTarget(sessionKey);
       await pending;
       if (
-        current === generation &&
-        sameUsageTarget(target, resolveTarget(sessionKey)) &&
+        !pending &&
+        (!value || sameUsageTarget(value.target, target)) &&
         gateway.snapshot &&
         isGatewayAvailable(gateway.snapshot) &&
         (status.awaitingGateway || status.error !== null || (loadInitial && !status.hasLoaded))
@@ -131,7 +126,7 @@ function createUsageDetailRequest<T>(
       if (!client || !gateway.connected) {
         return Promise.resolve();
       }
-      const enabled = Boolean(sessionKey) && canLoad?.(sessionKey) !== false;
+      const enabled = Boolean(sessionKey);
       const target = resolveTarget(sessionKey);
       const sameTarget = sameUsageTarget(value?.target, target);
       if (!sameTarget || !enabled) {
@@ -146,7 +141,6 @@ function createUsageDetailRequest<T>(
         return pending ?? Promise.resolve();
       }
       status = beginPanelRefresh(status);
-      generation += 1;
       return (pending = task.run([client, target]));
     },
     cancel,
@@ -160,11 +154,11 @@ function createUsageDetailRequest<T>(
 export class UsageDetailsController {
   readonly timeSeries;
   readonly sessionLogs;
-  readonly contextWeight;
+  readonly session;
 
   constructor(
-    host: ReactiveControllerHost,
-    gateway: GatewayPageController,
+    notify: () => void,
+    gateway: GatewayPageBinding,
     query: () => SessionUsageQuery,
     sessions: () => UsageSessionEntry[],
     clearTimeSeriesRange: () => void,
@@ -175,15 +169,14 @@ export class UsageDetailsController {
       return { key, ...(agentId ? { agentId } : {}), sessionId: session?.sessionId };
     };
     this.timeSeries = createUsageDetailRequest(
-      host,
+      notify,
       gateway,
       requestSessionUsageTimeSeries,
       resolveTarget,
-      undefined,
       clearTimeSeriesRange,
     );
     this.sessionLogs = createUsageDetailRequest(
-      host,
+      notify,
       gateway,
       async (client, target) => {
         const payload = await requestSessionUsageLogs(client, target);
@@ -192,18 +185,14 @@ export class UsageDetailsController {
       },
       resolveTarget,
     );
-    this.contextWeight = createUsageDetailRequest(
-      host,
+    this.session = createUsageDetailRequest(
+      notify,
       gateway,
       async (client, target, signal, sessionId) => {
         const result = await requestSessionUsage(
           client,
           { ...query(), agentId: target.agentId },
-          {
-            key: target.key,
-            includeContextWeight: true,
-            signal,
-          },
+          { key: target.key, includeContextWeight: true, signal },
         );
         const session = result.sessions[0];
         if (
@@ -213,28 +202,27 @@ export class UsageDetailsController {
         ) {
           throw new Error(t("usage.details.contextOutOfDate"));
         }
-        return session?.contextWeight;
+        return session;
       },
       resolveTarget,
-      (key) => sessions().some((session) => session.key === key && session.hasContextWeight),
     );
   }
 
-  load(sessionKey: string, refreshAll = true): void {
+  load(sessionKey: string, refreshAll = true, refreshSummary = false): void {
+    void this.session.load(sessionKey, refreshAll || refreshSummary);
     void this.timeSeries.load(sessionKey, refreshAll);
     void this.sessionLogs.load(sessionKey, refreshAll);
-    void this.contextWeight.load(sessionKey);
   }
 
   cancel(): void {
+    this.session.cancel();
     this.timeSeries.cancel();
     this.sessionLogs.cancel();
-    this.contextWeight.cancel();
   }
 
   clear(): void {
+    this.session.clear();
     this.timeSeries.clear();
     this.sessionLogs.clear();
-    this.contextWeight.clear();
   }
 }

@@ -38,7 +38,7 @@ const rewriteTranscriptEntriesInSessionManagerMock = vi.fn((_params?: unknown) =
 }));
 const sessionManagerFixture = createMaintenanceSessionManagerOpenFixture();
 const sessionManagerOpenAsyncMock = sessionManagerFixture.openAsync;
-const resolveRuntimeTranscriptReadTargetMock = vi.fn(async (scope: Record<string, unknown>) => ({
+const resolveSessionTranscriptRuntimeTargetMock = vi.fn(async (scope: Record<string, unknown>) => ({
   agentId: scope.agentId ?? "main",
   sessionId: scope.sessionId,
   sessionKey: scope.sessionKey,
@@ -63,9 +63,15 @@ vi.mock("../sessions/index.js", () => ({
   },
 }));
 
-vi.mock("./transcript-runtime-state.js", () => ({
-  resolveRuntimeTranscriptReadTarget: (scope: Record<string, unknown>) =>
-    resolveRuntimeTranscriptReadTargetMock(scope),
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
+  resolveSessionTranscriptRuntimeTarget: (scope: Record<string, unknown>) =>
+    resolveSessionTranscriptRuntimeTargetMock(scope),
+}));
+
+vi.mock("../../config/sessions/session-cold-storage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-cold-storage.js")>()),
+  restoreSessionColdTranscript: vi.fn(),
 }));
 
 describe("runContextEngineMaintenance", () => {
@@ -73,7 +79,7 @@ describe("runContextEngineMaintenance", () => {
     vi.useRealTimers();
     rewriteTranscriptEntriesInSessionManagerMock.mockClear();
     sessionManagerFixture.reset();
-    resolveRuntimeTranscriptReadTargetMock.mockClear();
+    resolveSessionTranscriptRuntimeTargetMock.mockClear();
     ({
       runContextEngineMaintenance,
       waitForDeferredTurnMaintenanceForSession,
@@ -192,10 +198,74 @@ describe("runContextEngineMaintenance", () => {
     ).rejects.toBe(denied);
 
     expect(withSessionManagerRewriteLock).toHaveBeenCalledOnce();
-    expect(resolveRuntimeTranscriptReadTargetMock).not.toHaveBeenCalled();
+    expect(resolveSessionTranscriptRuntimeTargetMock).not.toHaveBeenCalled();
     expect(sessionManagerOpenAsyncMock).not.toHaveBeenCalled();
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
   });
+
+  it.each(["restore", "hydrate"] as const)(
+    "cancels a pending lazy transcript %s before rewriting",
+    async (stage) => {
+      const { executeContextEngineMaintenance } =
+        await import("./context-engine-maintenance-execution.js");
+      const coldStorage = await import("../../config/sessions/session-cold-storage.js");
+      const { SessionManager } = await import("../sessions/index.js");
+      const controller = new AbortController();
+      const entered = createDeferred();
+      const cancelled = new Error("maintenance cancelled during transcript read");
+      const waitForAbort = async (signal?: AbortSignal): Promise<never> => {
+        entered.resolve();
+        if (!signal) {
+          throw new Error("Transcript read is not cancellable");
+        }
+        return await new Promise<never>((_, reject) => {
+          signal.addEventListener("abort", () => reject(cancelled), { once: true });
+        });
+      };
+      const restore = vi.spyOn(coldStorage, "restoreSessionColdTranscript");
+      const open = vi.spyOn(SessionManager, "openAsync");
+      if (stage === "restore") {
+        restore.mockImplementationOnce((_scope, _assert, _prepared, _guard, signal) =>
+          waitForAbort(signal),
+        );
+      } else {
+        open.mockImplementationOnce((_target, _cwd, _limits, signal) => waitForAbort(signal));
+      }
+      try {
+        const pending = executeContextEngineMaintenance({
+          contextEngine: {
+            info: { id: "test", name: "Test Engine" },
+            ingest: async () => ({ ingested: true }),
+            assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+            compact: async () => ({ ok: true, compacted: false }),
+            maintain: async ({ runtimeContext }) =>
+              runtimeContext!.rewriteTranscriptEntries!({
+                replacements: [
+                  {
+                    entryId: "entry-1",
+                    message: { role: "user", content: "replacement", timestamp: 1 },
+                  },
+                ],
+              }),
+          },
+          sessionId: "cancelled-session",
+          sessionKey: "agent:main:cancelled-session",
+          sessionFile: "agent:main:cancelled-session",
+          reason: "compaction",
+          executionMode: "foreground",
+          abortSignal: controller.signal,
+        });
+        const rejected = expect(pending).rejects.toBe(cancelled);
+        await entered.promise;
+        controller.abort(cancelled);
+        await rejected;
+        expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
+      } finally {
+        restore.mockRestore();
+        open.mockRestore();
+      }
+    },
+  );
 
   it("retires a deferred worker's retained rewrite capability after disposal and settlement", async () => {
     await withStateDirEnv("openclaw-retired-maintenance-rewrite-", async () => {
@@ -250,14 +320,14 @@ describe("runContextEngineMaintenance", () => {
         expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledOnce();
         expect(published).toHaveBeenCalledOnce();
         rewriteTranscriptEntriesInSessionManagerMock.mockClear();
-        resolveRuntimeTranscriptReadTargetMock.mockClear();
+        resolveSessionTranscriptRuntimeTargetMock.mockClear();
         sessionManagerOpenAsyncMock.mockClear();
         published.mockClear();
 
         await expect(
           expectDefined(rewrite, "retained rewrite capability")(request),
         ).rejects.toMatchObject({ name: "AbortError" });
-        expect(resolveRuntimeTranscriptReadTargetMock).not.toHaveBeenCalled();
+        expect(resolveSessionTranscriptRuntimeTargetMock).not.toHaveBeenCalled();
         expect(sessionManagerOpenAsyncMock).not.toHaveBeenCalled();
         expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
         expect(published).not.toHaveBeenCalled();

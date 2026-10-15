@@ -10,6 +10,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import * as databaseExecution from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
@@ -30,6 +31,10 @@ it.for([
         ...(alias ? { path: state.path("relocated", "shared.sqlite") } : {}),
       };
       const database = openOpenClawAgentDatabase(options);
+      replaceSessionEntrySync(
+        { ...options, storePath: database.path, sessionKey: "agent:main:maintenance-stale" },
+        { sessionId: "maintenance-stale", updatedAt: 1 },
+      );
       const canonicalPath = fs.realpathSync.native(database.path);
       await closeOpenClawAgentDatabaseByPathAsync(database.path, "main");
       let requestedPath = canonicalPath;

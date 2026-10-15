@@ -1,4 +1,6 @@
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../../../packages/gateway-protocol/src/schema/canvas.ts";
 import { formatUiError } from "../format-error.ts";
+import { readResponseTextWithLimit } from "../response-body.ts";
 import { WidgetSandboxHost } from "../widget-sandbox-host.ts";
 import type { BoardWidget } from "./types.ts";
 import type { BoardWidgetFrameUrl } from "./view-types.ts";
@@ -58,7 +60,7 @@ export class BoardWidgetSandboxHost {
   private offeredTicket = "";
   private readonly documentHost: WidgetSandboxHost;
   private requestGeneration = 0;
-  private readonly pendingRequests = new Map<string, number>();
+  private readonly pendingRequests = new Set<string>();
 
   constructor(private options: BoardWidgetSandboxHostOptions) {
     this.documentHost = new WidgetSandboxHost(this.documentOptions());
@@ -251,7 +253,7 @@ export class BoardWidgetSandboxHost {
     }
     const generation = this.requestGeneration;
     const frame = this.options.frame;
-    this.pendingRequests.set(data.id, generation);
+    this.pendingRequests.add(data.id);
     void this.bridgeController
       .handle(data, {
         // Only the injected wrapper owns this port, and it posts prompt
@@ -274,7 +276,7 @@ export class BoardWidgetSandboxHost {
     result?: unknown,
     error?: string,
   ): void {
-    if (generation !== this.requestGeneration || this.pendingRequests.get(id) !== generation) {
+    if (generation !== this.requestGeneration || !this.pendingRequests.has(id)) {
       return;
     }
     this.pendingRequests.delete(id);
@@ -282,10 +284,8 @@ export class BoardWidgetSandboxHost {
   }
 
   private cancelPendingRequests(error: string): void {
-    for (const [id, generation] of this.pendingRequests) {
-      if (generation === this.requestGeneration) {
-        this.postResponse(id, false, undefined, error);
-      }
+    for (const id of this.pendingRequests) {
+      this.postResponse(id, false, undefined, error);
     }
     this.pendingRequests.clear();
   }
@@ -382,16 +382,28 @@ export class BoardWidgetSandboxHost {
     }
     options.onFrameUrl(sourceUrl.href);
     const response = await fetch(sourceUrl.href, { cache: "no-store", signal });
-    if (response.status === 401) {
-      throw new WidgetDocumentError("unauthorized", "widget content request failed (401)");
-    }
     if (!response.ok) {
+      void response.body?.cancel().catch(() => undefined);
+      if (response.status === 401) {
+        throw new WidgetDocumentError("unauthorized", "widget content request failed (401)");
+      }
       throw new WidgetDocumentError(
         response.status === 408 || response.status >= 500 ? "unavailable" : "rejected",
         `widget content request failed (${response.status})`,
       );
     }
-    return await response.text();
+    const tooLargeMessage = "widget HTML exceeds 10 MiB; regenerate a smaller widget";
+    try {
+      return await readResponseTextWithLimit(response, {
+        maxBytes: WIDGET_HTML_MAX_UTF8_BYTES,
+        tooLargeMessage,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === tooLargeMessage) {
+        throw new WidgetDocumentError("rejected", error.message);
+      }
+      throw error;
+    }
   }
 
   private postResponse(id: string, ok: boolean, result?: unknown, error?: string): void {

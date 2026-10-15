@@ -24,6 +24,9 @@ describe("formatTelegramRawUpdateForLog", () => {
           username: "private_chat",
         },
         text: "please inspect https://private.example/secret",
+        forward_origin: { type: "hidden_user", sender_user_name: "private forward sender" },
+        poll: { options: [{ text: "private poll option" }] },
+        sticker: { emoji: "private sticker emoji" },
         entities: [{ type: "url", offset: 15, length: 30, url: "https://private.example/entity" }],
         link_preview_options: { url: "https://private.example/preview" },
         new_chat_members: [
@@ -72,6 +75,9 @@ describe("formatTelegramRawUpdateForLog", () => {
       "Bob",
       "bob_private",
       "sensitive callback payload",
+      "private forward sender",
+      "private poll option",
+      "private sticker emoji",
     ]) {
       expect(rawLog).not.toContain(privateValue);
     }
@@ -174,19 +180,12 @@ describe("formatTelegramRawUpdateForLog", () => {
     }
   });
 
-  it("truncates long raw update strings without splitting UTF-16 surrogate pairs", () => {
-    const prefix = "a".repeat(499);
+  it("redacts strings in new Telegram fields instead of logging unknown content", () => {
     const rawLog = formatTelegramRawUpdateForLog({
       update_id: 123,
-      diagnostic: `${prefix}\uD83D\uDE80tail`,
+      future_content_field: "private future content 🚀",
     });
-    const parsed = JSON.parse(rawLog) as { diagnostic: string };
-
-    expect(parsed.diagnostic).toBe(`${prefix}...`);
-    expect(parsed.diagnostic).not.toContain("\uD83D");
-    expect(parsed.diagnostic).not.toContain("\uDE80");
-    expect(rawLog).not.toContain("\\ud83d");
-    expect(rawLog).not.toContain("\\ude80");
+    expect(JSON.parse(rawLog)).toEqual({ update_id: 123, future_content_field: "[redacted]" });
   });
 
   it("truncates the complete raw update log without splitting surrogate pairs", () => {

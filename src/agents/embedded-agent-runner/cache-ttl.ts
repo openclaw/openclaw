@@ -2,10 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  isAnthropicFamilyCacheTtlEligible,
-  isAnthropicModelRef,
-} from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
+import { isAnthropicFamilyCacheTtlEligible } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
 import type { ProviderCacheTtlEligibilityContext } from "../../plugins/provider-transport.types.js";
 import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
@@ -14,10 +11,8 @@ type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
-type CacheTtlEntryData = {
+type CacheTtlEntryData = CacheTtlContext & {
   timestamp: number;
-  provider?: string;
-  modelId?: string;
 };
 
 type CacheTtlContext = {
@@ -57,22 +52,9 @@ export function isCacheTtlEligibleProvider(
       modelId: normalizedModelId,
       modelApi,
     }) ||
-    (normalizedProvider === "kilocode" && isAnthropicModelRef(normalizedModelId)) ||
+    (normalizedProvider === "kilocode" && normalizedModelId.startsWith("anthropic/")) ||
     isGooglePromptCacheEligible({ modelApi, modelId: normalizedModelId })
   );
-}
-
-function matchesCacheTtlContext(
-  data: Partial<CacheTtlEntryData> | undefined,
-  context: CacheTtlContext | undefined,
-): boolean {
-  if (!context) {
-    return true;
-  }
-  return (["provider", "modelId"] as const).every((key) => {
-    const expected = normalizeOptionalLowercaseString(context[key]);
-    return !expected || normalizeOptionalLowercaseString(data?.[key]) === expected;
-  });
 }
 
 export function readLastCacheTtlTimestamp(
@@ -88,7 +70,13 @@ export function readLastCacheTtlTimestamp(
         continue;
       }
       const data = entry?.data as Partial<CacheTtlEntryData> | undefined;
-      if (!matchesCacheTtlContext(data, context)) {
+      if (
+        context &&
+        !(["provider", "modelId"] as const).every((key) => {
+          const expected = normalizeOptionalLowercaseString(context[key]);
+          return !expected || normalizeOptionalLowercaseString(data?.[key]) === expected;
+        })
+      ) {
         continue;
       }
       const ts = typeof data?.timestamp === "number" ? data.timestamp : null;

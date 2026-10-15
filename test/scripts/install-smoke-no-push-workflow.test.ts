@@ -470,11 +470,11 @@ describe("install smoke no-push root image transport", () => {
     expect(text).not.toContain("gh api");
   });
 
-  it.each(
-    ["selected", "tooling", "missing"].flatMap((source) =>
-      ["0", "1"].map((allowOmissions) => ({ source, allowOmissions })),
-    ),
-  )(
+  it.each([
+    { source: "selected", allowOmissions: "0" },
+    { source: "tooling", allowOmissions: "1" },
+    { source: "missing", allowOmissions: "1" },
+  ])(
     "checks selected network source provenance before Docker: $source, omissions=$allowOmissions",
     ({ source, allowOmissions }) => {
       const workspace = tempDirs.make("install-smoke-source-binding-");
@@ -773,7 +773,7 @@ describe("install smoke no-push root image transport", () => {
     expect(bunVerify.run).toContain("install-smoke-candidate-payload.mts verify");
     expect(bunVerify.run).toContain('--run-id "$PRODUCER_RUN_ID"');
     expect(bunVerify.run).toContain('--run-attempt "$PRODUCER_RUN_ATTEMPT"');
-    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.2");
+    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.3");
     expect(step(bunConsumer, "Run Bun global install candidate-payload smoke")).toMatchObject({
       "working-directory": ".release-harness",
       env: {

@@ -90,18 +90,15 @@ export function resolveInitialEmbeddedRunModel(params: {
   provider?: string;
   model?: string;
 }): { provider: string; modelId: string } {
-  const cfg = params.config ?? {};
   // Preliminary route identification stays static; prepared metadata owns
   // plugin and workspace normalization once the runtime context exists.
-  const staticPreliminaryNormalization = {
+  const resolutionContext = {
+    cfg: params.config ?? {},
+    agentId: params.agentId,
     allowManifestNormalization: false,
     allowPluginNormalization: false,
   } as const;
-  const configuredDefault = resolveDefaultModelForAgent({
-    cfg,
-    agentId: params.agentId,
-    ...staticPreliminaryNormalization,
-  });
+  const configuredDefault = resolveDefaultModelForAgent(resolutionContext);
   const explicitProvider = normalizeOptionalString(params.provider);
   const explicitModel = normalizeOptionalString(params.model);
   const defaultProvider = configuredDefault.provider || DEFAULT_PROVIDER;
@@ -112,18 +109,14 @@ export function resolveInitialEmbeddedRunModel(params: {
 
   if (explicitModel) {
     const aliasIndex = buildModelAliasIndex({
-      cfg,
-      agentId: params.agentId,
+      ...resolutionContext,
       defaultProvider,
-      ...staticPreliminaryNormalization,
     });
     const resolved = resolveModelRefFromString({
-      cfg,
-      agentId: params.agentId,
+      ...resolutionContext,
       raw: explicitModel,
       defaultProvider,
       aliasIndex,
-      ...staticPreliminaryNormalization,
     });
     return {
       provider: resolved?.ref.provider ?? defaultProvider,

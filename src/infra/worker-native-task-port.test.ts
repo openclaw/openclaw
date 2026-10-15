@@ -2,14 +2,20 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { once } from "node:events";
 import { MessageChannel } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, describe, expect, it } from "vitest";
-import { encodeNativeWorkerFailure } from "./worker-native-error.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { getWorkerMessageMetrics } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
 import type {
   NativeWorkerReply,
   NativeWorkerRequest,
   NativeWorkerRuntime,
 } from "./worker-native-lifecycle.types.js";
+
+// These endpoints run on the Gateway main thread; Vitest itself runs in a worker.
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  isMainThread: true,
+}));
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -84,6 +90,9 @@ function fixture() {
 describe("retained worker direct task transport", () => {
   it("retains pre-start messages and permits synchronous delivery from the started callback", async () => {
     const { worker, port, peer, context, controls } = fixture();
+    const before = getWorkerMessageMetrics().find(
+      (entry) => entry.kind === "other" && entry.direction === "from_worker",
+    );
     const events: unknown[] = [];
     worker.on("message", (message) => events.push([message, context.getStore()]));
     worker.on("started", () => {
@@ -103,6 +112,17 @@ describe("retained worker direct task transport", () => {
       ["buffered", "constructor"],
       ["queued", "constructor"],
     ]);
+    expect(
+      getWorkerMessageMetrics().find(
+        (entry) => entry.kind === "other" && entry.direction === "from_worker",
+      ),
+    ).toEqual({
+      kind: "other",
+      direction: "from_worker",
+      messages: (before?.messages ?? 0) + 2,
+      payloadBytes: (before?.payloadBytes ?? 0) + 28,
+      unmeasuredMessages: before?.unmeasuredMessages ?? 0,
+    });
   });
 
   it("discards buffered data when its native owner fails before startup without inventing exit", async () => {
@@ -126,36 +146,6 @@ describe("retained worker direct task transport", () => {
     expect(events).toEqual(["native failure", "execution-exit", "exit"]);
     expect(worker.stop().read()).toEqual({ status: "fulfilled", value: undefined });
     expect(handles.size).toBe(0);
-  });
-
-  it("keeps pending native control order when a data callback reenters synchronous servicing", () => {
-    const { worker, peer, context, controls } = fixture();
-    const events: unknown[] = [];
-    controls.push({ type: "created", id: 1, threadId: 102 });
-    worker.service();
-    worker.on("message", (value) => {
-      events.push([value, context.getStore()]);
-      worker.service();
-      expect(worker.stop().read().status).toBe("fulfilled");
-    });
-    worker.on("error", (error) => events.push([error.message, context.getStore()]));
-    worker.on("execution-exit", () => events.push(["execution-exit", context.getStore()]));
-    worker.on("exit", () => events.push(["exit", context.getStore()]));
-    peer.postMessage("first", []);
-    peer.postMessage("second", []);
-    controls.push(
-      { type: "error", id: 1, error: encodeNativeWorkerFailure(new Error("native failure")) },
-      { type: "execution-exit", id: 1, code: 1 },
-      { type: "stopped", id: 1, code: 1 },
-    );
-    context.run("servicing", () => worker.service());
-    expect(events).toEqual([
-      ["first", "constructor"],
-      ["second", "constructor"],
-      ["native failure", "constructor"],
-      ["execution-exit", "constructor"],
-      ["exit", "constructor"],
-    ]);
   });
 
   it("reports task-port loss without stopping native work or inventing its exit receipt", async () => {

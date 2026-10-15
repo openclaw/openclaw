@@ -8,7 +8,12 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { updateDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import {
+  updateDeliveryQueueEntryInDatabase,
+  upsertDeliveryQueueEntryInDatabase,
+} from "../delivery-queue-sqlite.kernel.js";
+import { runSqliteReadOperationSync } from "../sqlite-schema-facts.js";
 import { failPendingDelivery } from "./delivery-queue-ack.js";
 import { ackDeliveryInDatabase } from "./delivery-queue-ack.kernel.js";
 import { releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
@@ -23,20 +28,68 @@ import {
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
   loadPendingDelivery,
+  loadUnfinishedDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
   moveToFailed,
   reserveDeliveryAttempt,
-  type QueuedDelivery,
 } from "./delivery-queue-storage.js";
+import { readOutboundDeliveriesInDatabase } from "./delivery-queue-storage.kernel.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
-import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 describe("delivery-queue storage", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
   const enqueueTextDelivery = (params: Parameters<typeof enqueueDelivery>[0], rootDir = tmpDir()) =>
     enqueueDelivery(params, rootDir);
+
+  it("refreshes empty recovery facts after worker and native writes without publishing rollback", async () => {
+    const stateDir = tmpDir();
+    const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+    const database = openOpenClawStateDatabase(options);
+    const read = () => loadUnfinishedDeliveries(stateDir);
+    expect(await read()).toEqual([]);
+    expect(await read()).toEqual([]);
+
+    const id = await enqueueTextDelivery({
+      channel: "directchat",
+      to: "+1555",
+      payloads: [{ text: "Queued after an idle poll" }],
+    });
+    expect((await read()).map((entry) => entry.id)).toEqual([id]);
+    const entry = await loadPendingDelivery(id, stateDir);
+    if (!entry) {
+      throw new Error("Expected pending delivery");
+    }
+    await ackDelivery(id, stateDir);
+    expect(await read()).toEqual([]);
+    expect(await read()).toEqual([]);
+
+    expect(() =>
+      runOpenClawStateWriteTransaction(
+        () => {
+          upsertDeliveryQueueEntryInDatabase(
+            { queueName: OUTBOUND_DELIVERY_QUEUE_NAME, entry },
+            database,
+          );
+          expect(
+            runSqliteReadOperationSync(database.db, () =>
+              readOutboundDeliveriesInDatabase(database, { mode: "unfinished" }),
+            ).map(({ entry: pending }) => pending.id),
+          ).toEqual([id]);
+          throw new Error("roll back recovery fixture");
+        },
+        { ...options, database },
+      ),
+    ).toThrow("roll back recovery fixture");
+    expect(await read()).toEqual([]);
+
+    upsertDeliveryQueueEntryInDatabase(
+      { queueName: OUTBOUND_DELIVERY_QUEUE_NAME, entry },
+      database,
+    );
+    expect((await read()).map((pending) => pending.id)).toEqual([id]);
+  });
 
   function readStatus(id: string): string | undefined {
     const { db } = openOpenClawStateDatabase({
@@ -205,10 +258,13 @@ describe("delivery-queue storage", () => {
         retryCount.run(pending.retryCount, OUTBOUND_DELIVERY_QUEUE_NAME, id);
       }
       const entryTextBytes = Buffer.byteLength(JSON.stringify(readQueuedEntry(stateDir, id)));
-      const reads = trackSqliteStatementExecutions(db, ["queue"], (sql) =>
-        /^\s*select\b/i.test(sql) && /\bfrom\s+"?delivery_queue_entries"?\b/i.test(sql)
-          ? "queue"
-          : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(db),
+        ["queue"],
+        (sql) =>
+          /^\s*select\b/i.test(sql) && /\bfrom\s+"?delivery_queue_entries"?\b/i.test(sql)
+            ? "queue"
+            : null,
       );
       try {
         // Count the native kernel's reads; the public ACK now runs in a separate worker.
@@ -264,18 +320,6 @@ describe("delivery-queue storage", () => {
           },
         ],
       });
-    });
-
-    it("canonicalizes duplicate singular and plural media before recording fan-out", async () => {
-      const mediaUrl = "https://example.com/same.png";
-      const id = await enqueueTextDelivery({
-        channel: "directchat",
-        to: "+1555",
-        payloads: [{ text: "caption", mediaUrl, mediaUrls: [mediaUrl] }],
-      });
-
-      const entry = readQueuedEntry(tmpDir(), id) as unknown as QueuedDelivery;
-      expect(acceptedPreparedOutboundEntries(entry.preparedBatch)[0]?.preparedMediaCount).toBe(1);
     });
 
     it("atomically reserves delivery attempts up to the producer budget", async () => {

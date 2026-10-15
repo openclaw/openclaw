@@ -236,11 +236,10 @@ async function summarizeExisting(params: {
 }
 
 async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
-  const providers = [
+  const providers = uniqueStrings([
     manualTranscriptSourceProvider.id,
     ...listTranscriptSourceProviders(ctx.config).map((provider) => provider.id),
-  ];
-  const uniqueProviders = uniqueStrings(providers);
+  ]);
   const visibleEntries = (
     await Promise.all(
       [...activeSessions.values()].map(async (entry) =>
@@ -322,7 +321,7 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
   }
   return toolText(
     [
-      `Transcripts providers: ${uniqueProviders.length ? uniqueProviders.join(", ") : "none"}`,
+      `Transcripts providers: ${providers.length ? providers.join(", ") : "none"}`,
       `Active sessions: ${active.length}`,
       ...(pendingFinalization.length
         ? [
@@ -332,7 +331,7 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
       ...activeLines,
       ...selectorText,
     ].join("\n"),
-    { providers: uniqueProviders, active, pendingFinalization },
+    { providers, active, pendingFinalization },
   );
 }
 

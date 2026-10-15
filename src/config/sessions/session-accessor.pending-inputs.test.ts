@@ -1,8 +1,10 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
@@ -13,15 +15,14 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
-  appendTranscriptEventSync,
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
   readSessionSubmittedInput,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
@@ -33,16 +34,38 @@ import {
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
-import { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import { withSessionPendingInputRelocation } from "./session-accessor.sqlite-pending-inputs.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEvents,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
-import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
+import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
+import {
+  waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
+} from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+
+const custodyFault = useSqliteWorkerFault([
+  {
+    name: "reject_pending_consume",
+    match: /^delete from session_pending_inputs\b/u,
+    sql: `CREATE TEMP TRIGGER reject_pending_consume BEFORE DELETE ON main.session_pending_inputs
+      BEGIN SELECT RAISE(ABORT, 'consume failed'); END`,
+  },
+  {
+    name: "reject_collect_consume",
+    match: /^update session_pending_inputs\b/u,
+    sql: `CREATE TEMP TRIGGER reject_collect_consume BEFORE UPDATE OF consumed_event_id ON main.session_pending_inputs
+      WHEN OLD.run_id = 'atomic-b' BEGIN SELECT RAISE(ABORT, 'collect consume failed'); END`,
+  },
+]);
 
 describe("accepted input custody", () => {
   const fixture = useTempSessionsFixture("openclaw-pending-inputs-");
@@ -86,6 +109,9 @@ describe("accepted input custody", () => {
       );
 
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({ session: { store: fixture.storePath() } });
+    // Raw custody/savepoint fixtures need their native handle before worker writes start.
+    database();
     await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
   });
   afterEach(async () => {
@@ -94,7 +120,9 @@ describe("accepted input custody", () => {
       receipt.finish("interrupted");
     }
     await Promise.allSettled(retained.map(async (receipt) => receipt.settled?.()));
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   it("keeps accepted input outside the active transcript and applies its hook once across replay and promotion", async () => {
@@ -270,17 +298,11 @@ describe("accepted input custody", () => {
   it("rolls transcript promotion and custody consumption back together", async () => {
     const receipt = await stage("atomic");
     const before = await loadTranscriptEvents(scope());
-    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
-      database().db.exec(
-        "CREATE TRIGGER reject_pending_consume BEFORE DELETE ON session_pending_inputs BEGIN SELECT RAISE(ABORT, 'consume failed'); END",
-      );
-    });
+    custodyFault.enable();
     await expect(promote(receipt)).rejects.toThrow("consume failed");
     expect(await loadTranscriptEvents(scope())).toEqual(before);
     expect((await readSessionPendingInput(scope(), receipt.inputId))?.state).toBe("queued");
-    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
-      database().db.exec("DROP TRIGGER reject_pending_consume");
-    });
+    custodyFault.disable();
     expect(await promote(receipt)).toMatchObject({ appended: true, messageId: receipt.inputId });
     expect(await readSessionPendingInput(scope(), receipt.inputId)).toBeUndefined();
   });
@@ -338,6 +360,12 @@ describe("accepted input custody", () => {
     const receipt = await stage("relocation-observer");
     await promote(receipt);
     const appendCopy = createRelocation(receipt);
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => {
+      errorLog.mockRestore();
+      resetLogger();
+    });
 
     expect(() =>
       runOpenClawAgentWriteTransaction(
@@ -349,7 +377,10 @@ describe("accepted input custody", () => {
         },
         toDatabaseOptions(resolveSqliteScope(scope())),
       ),
-    ).toThrow("injected observer failure");
+    ).not.toThrow();
+    expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("SQLite post-commit notification failed"),
+    );
 
     expect(() =>
       receipt.run(() => appendCopy(receipt.inputId, "stale-source-after-observer")),
@@ -363,61 +394,54 @@ describe("accepted input custody", () => {
     const receipt = await stage("relocation-savepoints");
     await promote(receipt);
     const databaseOptions = toDatabaseOptions(resolveSqliteScope(scope()));
+    await waitForSessionTranscriptIndexReconcile(databaseOptions);
     const appendCopy = createRelocation(receipt);
 
-    expect(() =>
-      runOpenClawAgentWriteTransaction(() => {
-        receipt.run(() => appendCopy(receipt.inputId, "rolled-back-outer"));
-        throw new Error("outer rollback");
-      }, databaseOptions),
-    ).toThrow("outer rollback");
-
-    runOpenClawAgentWriteTransaction(() => {
-      receipt.run(() => {
-        expect(appendCopy(receipt.inputId, "first-savepoint-copy")).toMatchObject({
-          ok: true,
-          value: { appended: true, messageId: "first-savepoint-copy" },
-        });
+    await runExclusiveSqliteSessionWrite(
+      resolveSqliteScope(scope()),
+      async () => {
         expect(() =>
           runOpenClawAgentWriteTransaction(() => {
-            appendCopy("first-savepoint-copy", "rolled-back-savepoint");
-            throw new Error("savepoint rollback");
+            receipt.run(() => appendCopy(receipt.inputId, "rolled-back-outer"));
+            throw new Error("outer rollback");
           }, databaseOptions),
-        ).toThrow("savepoint rollback");
-        expect(appendCopy("first-savepoint-copy", "final-savepoint-copy")).toMatchObject({
-          ok: true,
-          value: { appended: true, messageId: "final-savepoint-copy" },
-        });
-      });
-    }, databaseOptions);
+        ).toThrow("outer rollback");
+
+        runOpenClawAgentWriteTransaction(() => {
+          receipt.run(() => {
+            expect(appendCopy(receipt.inputId, "first-savepoint-copy")).toMatchObject({
+              ok: true,
+              value: { appended: true, messageId: "first-savepoint-copy" },
+            });
+            expect(() =>
+              runOpenClawAgentWriteTransaction(() => {
+                appendCopy("first-savepoint-copy", "rolled-back-savepoint");
+                throw new Error("savepoint rollback");
+              }, databaseOptions),
+            ).toThrow("savepoint rollback");
+            expect(appendCopy("first-savepoint-copy", "final-savepoint-copy")).toMatchObject({
+              ok: true,
+              value: { appended: true, messageId: "final-savepoint-copy" },
+            });
+          });
+        }, databaseOptions);
+      },
+      "session.pending-input.stage",
+    );
 
     for (const eventId of ["rolled-back-outer", "rolled-back-savepoint"]) {
       expect(await loadTranscriptEvents(scope())).not.toContainEqual(
         expect.objectContaining({ id: eventId }),
       );
     }
-    expect(() =>
-      receipt.run(() => appendCopy("first-savepoint-copy", "stale-savepoint-source")),
-    ).toThrow("does not match");
-    expect(
-      receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
-    ).toMatchObject({ ok: true, value: { appended: false } });
-  });
-
-  it("does not use a dirty projection to excuse an inactive admitted user", async () => {
-    const receipt = await stage("dirty-off-path");
-    await promote(receipt);
-    expect(
-      appendTranscriptMessageSync(scope(), {
-        eventId: "other-root",
-        message: message("other-root"),
-        parentId: null,
-      }),
-    ).toMatchObject({ ok: true, value: { appended: true, messageId: "other-root" } });
-
-    expect(() =>
-      receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
-    ).toThrow("no longer active");
+    await runOpenClawAgentWriteAdmission(databaseOptions, () => {
+      expect(() =>
+        receipt.run(() => appendCopy("first-savepoint-copy", "stale-savepoint-source")),
+      ).toThrow("does not match");
+      expect(
+        receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
+      ).toMatchObject({ ok: true, value: { appended: false } });
+    });
   });
 
   it("rejects a split-cursor replay before and after projection reconciliation", async () => {
@@ -482,21 +506,17 @@ describe("accepted input custody", () => {
     const aggregate = bindSessionPendingInputSources([first, second], message("atomic-c"))!;
     receipts.push(aggregate);
     const before = await loadTranscriptEvents(scope());
-    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
-      database().db.exec(
-        "CREATE TRIGGER reject_collect_consume BEFORE UPDATE OF consumed_event_id ON session_pending_inputs WHEN OLD.run_id = 'atomic-b' BEGIN SELECT RAISE(ABORT, 'collect consume failed'); END",
-      );
-    });
+    custodyFault.enable(1);
     await expect(promote(aggregate)).rejects.toThrow("collect consume failed");
     expect(await loadTranscriptEvents(scope())).toEqual(before);
     expect((await listSessionPendingInputs(scope())).total).toBe(2);
-    expect(listSessionPendingInputReceipts(scope(), { runIds: ["atomic-a", "atomic-b"] })).toEqual([
+    expect(
+      await listSessionPendingInputReceipts(scope(), { runIds: ["atomic-a", "atomic-b"] }),
+    ).toEqual([
       { runId: "atomic-a", state: "pending" },
       { runId: "atomic-b", state: "pending" },
     ]);
-    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
-      database().db.exec("DROP TRIGGER reject_collect_consume");
-    });
+    custodyFault.disable();
     expect(await promote(aggregate)).toMatchObject({
       appended: true,
       messageId: aggregate.inputId,
@@ -526,7 +546,7 @@ describe("accepted input custody", () => {
   });
 
   it("binds lazy recorder collection to approved sources and reports consumed source retry without execution", async () => {
-    const target = { ...scope(), sessionEntry: undefined };
+    const target = { ...scope(), sessionEntry: undefined, config: {} };
     const hook = vi.fn(({ message: input }: { message: PersistedUserTurnMessage }) => ({
       ...input,
       content: "Approved source",
@@ -835,7 +855,7 @@ describe("accepted input custody", () => {
         });
         expect(duplicate?.state).toBe("consumed");
         expect(
-          listSessionPendingInputReceipts(destinationScope, { runIds: ["cross-agent"] }),
+          await listSessionPendingInputReceipts(destinationScope, { runIds: ["cross-agent"] }),
         ).toEqual([
           {
             runId: "cross-agent",

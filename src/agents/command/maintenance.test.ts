@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import {
   agentCommand,
   agentCommandFromGatewayIngress,
@@ -17,6 +18,7 @@ import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js
 
 const {
   replaceSessionEntry,
+  patchSessionEntryCore,
   loadSessionEntry,
   loadTranscriptEvents,
   acceptCompactionSuccessor,
@@ -26,9 +28,68 @@ const {
 registerAgentCommandCompactionTestHooks();
 
 describe("agent command foreground completion", () => {
-  it.each(["none", "compaction", "memory"] as const)(
-    "retains the accepted preflight successor (abort=%s)",
-    async (abortStage) => {
+  it("skips fresh-child preflight once and reads committed state on its next turn", async () => {
+    const sessionId = "fresh-child-preflight";
+    const sessionKey = `agent:main:subagent:${sessionId}`;
+    const storePath = requireStorePath();
+    const firstPrompt = "Remember the child's first-turn marker.";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
+    const runtimeContext = {
+      config: expectDefined(state.cfg, "command config"),
+      pluginGeneration: {
+        remoteCatalog: null,
+        pluginMetadataSnapshot: createPluginMetadataSnapshot({
+          manifestRegistry: { plugins: [], diagnostics: [] },
+        }),
+        inlineProviderModels: [],
+        configuredCatalogEntries: [],
+      },
+    };
+    state.runAgentAttemptMock.mockImplementation(async (params) => {
+      await params.userTurnTranscriptRecorder?.persistApproved();
+      return makeCompactionResult({ sessionId, text: "Child answer.", runner: "embedded" });
+    });
+
+    await agentCommandFromGatewayIngress(
+      { message: firstPrompt, sessionId, sessionKey, allowModelOverride: false },
+      ...GATEWAY_INGRESS_ARGS,
+      { ...runtimeContext, freshChild: true },
+    );
+    await waitForSessionMaintenance(sessionKey);
+    expect(state.runSessionPreflightCompactionMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(await loadTranscriptEvents({ sessionId, storePath }))).toContain(
+      firstPrompt,
+    );
+
+    await patchSessionEntryCore({ sessionKey, storePath }, () => ({
+      totalTokens: 90_000,
+      totalTokensFresh: true,
+    }));
+    state.runSessionPreflightCompactionMock.mockImplementationOnce(async (params) => {
+      expect(params.sessionEntry).toMatchObject({ sessionId, totalTokens: 90_000 });
+      expect(JSON.stringify(await loadTranscriptEvents({ sessionId, storePath }))).toContain(
+        firstPrompt,
+      );
+      return params.sessionEntry;
+    });
+    await agentCommandFromGatewayIngress(
+      { message: "Continue the child.", sessionId, sessionKey, allowModelOverride: false },
+      ...GATEWAY_INGRESS_ARGS,
+      runtimeContext,
+    );
+    expect(state.runSessionPreflightCompactionMock).toHaveBeenCalledOnce();
+    expect(findStoredSessionEntry(sessionKey)?.sessionId).toBe(sessionId);
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { abortStage: "none", preserveUserFacingSessionModelState: false },
+    { abortStage: "none", preserveUserFacingSessionModelState: true },
+    { abortStage: "compaction", preserveUserFacingSessionModelState: false },
+    { abortStage: "memory", preserveUserFacingSessionModelState: false },
+  ] as const)(
+    "retains the accepted preflight successor (abort=$abortStage, preserve=$preserveUserFacingSessionModelState)",
+    async ({ abortStage, preserveUserFacingSessionModelState }) => {
       const aborted = abortStage !== "none";
       const sessionId = "preflight-predecessor";
       const successorId = "preflight-successor";
@@ -101,6 +162,7 @@ describe("agent command foreground completion", () => {
         sessionId,
         sessionKey,
         oneShotCliRun: true,
+        preserveUserFacingSessionModelState,
         abortSignal: controller.signal,
         onSessionIdChanged,
       });

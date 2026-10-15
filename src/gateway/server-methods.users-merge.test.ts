@@ -1,8 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
-import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
 import { validateUsersMergeResult } from "../../packages/gateway-protocol/src/index.js";
-import { registerUsersCli } from "../cli/users-cli.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
@@ -20,15 +18,18 @@ import {
   setUserProfileAuthLink,
 } from "../state/user-model-accounts.js";
 import { getUserPreferences, setUserPreferences } from "../state/user-preferences.test-support.js";
-import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
+import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
+import {
+  prepareUserProfileCatalog,
+  prepareUserProfileIdentity,
+  readResidentUserProfileIdentity,
+} from "../state/user-profile-list.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { userProfilesDb } from "../state/user-profiles-internal.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
-  getUserProfileListItem,
-  resolveUserProfileId,
 } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createExpectedProfileBinding } from "./expected-profile.js";
@@ -39,9 +40,6 @@ import {
   invalidateGatewayPolicyClient,
   registerGatewayPolicyResponse,
 } from "./server/ws-policy-close.js";
-
-const callGatewayFromCli = vi.hoisted(() => vi.fn());
-vi.mock("../cli/gateway-rpc.js", () => ({ callGatewayFromCli }));
 
 const cfg: OpenClawConfig = {
   gateway: {
@@ -57,7 +55,6 @@ const cfg: OpenClawConfig = {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  callGatewayFromCli.mockReset();
 });
 
 function clientFor(profileId: string, scopes = ["operator.admin"]): GatewayClient {
@@ -75,9 +72,10 @@ function clientFor(profileId: string, scopes = ["operator.admin"]): GatewayClien
   } as GatewayClient;
 }
 
-function gateway() {
+async function gateway() {
   const admin = ensureProfileForEmail("admin@example.test");
   setUserProfileRole(admin.id, "admin");
+  const catalog = await prepareUserProfileCatalog();
   const context = {
     getRuntimeConfig: () => cfg,
     logGateway: { warn: vi.fn() },
@@ -103,6 +101,7 @@ function gateway() {
     return respond.mock.calls[0]!;
   };
   return {
+    [Symbol.dispose]: catalog.release,
     admin,
     context,
     dispatch,
@@ -124,7 +123,7 @@ function storedRedirect(profileId: string) {
 
 it("merges an email-less person through admin RPC without main-thread SQL and retires captured authority", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const rpc = gateway();
+    using rpc = await gateway();
     const providerIdentity = { login: "duplicate@github", name: "Duplicate" };
     const source = ensureProfileForTailscaleIdentity(providerIdentity);
     const target = ensureProfileForEmail("survivor@example.test");
@@ -182,7 +181,7 @@ it("merges an email-less person through admin RPC without main-thread SQL and re
         queries.mockRestore();
       }
       expect(storedRedirect(source.id)).toBe(target.id);
-      expect(resolveUserProfileId(source.id)).toBe(target.id);
+      expect(readResidentUserProfileIdentity(source.id)?.profileId).toBe(target.id);
       expect(ensureProfileForTailscaleIdentity(providerIdentity).id).toBe(target.id);
       expect(resolveUserChannelIdentity(identity)?.profileId).toBe(target.id);
       expect(getUserPreferences(target.id)).toEqual({ shared: "target", sourceOnly: true });
@@ -212,7 +211,7 @@ it("merges an email-less person through admin RPC without main-thread SQL and re
 
 it("flattens source cohorts, invalidates their cached roles, and rejects redirects and descendant cycles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const rpc = gateway();
+    using rpc = await gateway();
     const ancestor = ensureProfileForEmail("ancestor@example.test");
     const source = ensureProfileForEmail("duplicate@example.test");
     const target = ensureProfileForEmail("survivor@example.test");
@@ -262,7 +261,7 @@ it("flattens source cohorts, invalidates their cached roles, and rejects redirec
 
 it("rejects invalid pairs and both direct and redirected shared-owner identities without merging", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const rpc = gateway();
+    using rpc = await gateway();
     const owner = ensureGatewayOwnerProfile(null);
     const source = ensureProfileForEmail("duplicate@example.test");
     const ownerAlias = ensureProfileForEmail("legacy-owner-alias@example.test");
@@ -311,7 +310,7 @@ it("rejects invalid pairs and both direct and redirected shared-owner identities
 
 it("delivers the merge response before closing the initiating administrator's retired connection", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const rpc = gateway();
+    using rpc = await gateway();
     const target = ensureProfileForEmail("survivor@example.test");
     const events: string[] = [];
     const client = {
@@ -349,40 +348,5 @@ it("delivers the merge response before closing the initiating administrator's re
     expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls)).toBe(true);
     expect(events).toEqual(["disconnect", "response", "close"]);
     expect(storedRedirect(rpc.admin.id)).toBe(target.id);
-  });
-});
-
-it("runs users merge CLI arguments through the registered RPC and emits its survivor result", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const rpc = gateway();
-    const source = ensureProfileForTailscaleIdentity({ login: "cli-duplicate@github" });
-    const target = ensureProfileForEmail("cli-survivor@example.test");
-    callGatewayFromCli.mockImplementation(async (method, _options, params, rpcOptions) => {
-      const response = await rpc.dispatch(
-        method,
-        params,
-        clientFor(rpc.admin.id, rpcOptions.scopes),
-      );
-      if (!response[0]) {
-        throw new Error(response[2]?.message ?? "Gateway request failed");
-      }
-      return response[1];
-    });
-    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const program = new Command().exitOverride();
-    registerUsersCli(program);
-    await program.parseAsync([
-      "node",
-      "openclaw",
-      "users",
-      "merge",
-      source.id,
-      "--into",
-      target.id,
-      "--json",
-    ]);
-    const response = JSON.parse(output.mock.calls.map(([chunk]) => String(chunk)).join(""));
-    expect(response).toMatchObject({ profile: { id: target.id }, movedAliasKinds: ["provider"] });
-    expect(storedRedirect(source.id)).toBe(target.id);
   });
 });

@@ -6,6 +6,7 @@ import {
   claimEmbeddedPendingUserInputAnswer,
   steerActiveSessionWithOptionalDeliveryWait,
 } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
+import { expectPendingQuestionAnswerClaimable } from "../../agents/harness/gateway-question-claim.test-support.js";
 import type { AgentQuestionDispatcher } from "../../agents/harness/gateway-question-dispatch.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
@@ -34,6 +35,7 @@ import {
 import { withQuestionCreator } from "./reply-run-question.test-support.js";
 import type { ReplyBackendQueueMessageResult } from "./reply-run-registry.contracts.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { prepareSteeringDelivery } from "./steering-delivery-preparation.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
@@ -349,8 +351,20 @@ describe("question response custody through reply adoption", () => {
           expect(abandoned).not.toHaveBeenCalled();
           expect(settled).not.toHaveBeenCalled();
           expect(tryDuplicate()).toBe(false);
-          if (confirmation === "backend-error") {
-            delivery.reject(new Error("backend failed after accepting input"));
+          if (confirmation === "confirmed") {
+            delivery.resolve();
+            await expect(adoption).resolves.toBe("handled");
+            expect(state.admission).toEqual({ status: "accepted", mode: "steer" });
+          } else {
+            const errorMessage =
+              confirmation === "backend-error"
+                ? "backend failed after accepting input"
+                : "transcript confirmation lost";
+            if (confirmation === "backend-error") {
+              delivery.reject(new Error("backend failed after accepting input"));
+            } else {
+              delivery.resolve({ transcriptCommit: "unconfirmed", errorMessage });
+            }
             const result = await adoption;
             expect(state.admission).toEqual({
               status: "skipped",
@@ -358,26 +372,16 @@ describe("question response custody through reply adoption", () => {
             });
             expect(result).toMatchObject({
               isError: true,
-              text: "backend failed after accepting input",
+              text: errorMessage,
             });
-          } else {
-            delivery.resolve(
-              confirmation === "confirmed"
-                ? undefined
-                : {
-                    transcriptCommit: "unconfirmed",
-                    errorMessage: "transcript confirmation lost",
-                  },
-            );
-            await expect(adoption).resolves.toBe("handled");
-            expect(state.admission).toEqual({ status: "accepted", mode: "steer" });
           }
           expect(adopted).toHaveBeenCalledOnce();
           expect(settled).toHaveBeenCalledOnce();
           expect(abandoned).not.toHaveBeenCalled();
           expect(tryDuplicate()).toBe(false);
           expect(followup).not.toHaveBeenCalled();
-          expect(cancel).toHaveBeenCalledTimes(confirmation === "unconfirmed" ? 1 : 0);
+          expect(cancel).not.toHaveBeenCalled();
+          expect(operation.abortSignal.aborted).toBe(false);
         } finally {
           delivery.resolve();
           await adoption.catch(() => undefined);
@@ -483,7 +487,7 @@ describe("question response custody through reply adoption", () => {
             expect(adopted).not.toHaveBeenCalled();
             expect(settled).not.toHaveBeenCalled();
             expect(state.admission).toBeUndefined();
-            expect(claim.isResolving()).toBe(false);
+            await expectPendingQuestionAnswerClaimable(key, true);
           } else if (change === "next-model") {
             expect(result).toEqual({ handled: true, payload: undefined });
             expect(committed).toHaveBeenCalledOnce();
@@ -498,7 +502,7 @@ describe("question response custody through reply adoption", () => {
             expect(committed).not.toHaveBeenCalled();
             expect(adopted).not.toHaveBeenCalled();
             expect(settled).not.toHaveBeenCalled();
-            expect(claim.isResolving()).toBe(false);
+            await expectPendingQuestionAnswerClaimable(key, true);
           }
         } finally {
           claim.dispose();
@@ -609,7 +613,6 @@ describe("question response custody through reply adoption", () => {
             throw new Error("unexpected ordinary steering of an answered question");
           });
           const subscribe = vi.fn(() => () => {});
-          let finalAssertion: (() => void) | undefined;
           const queue = async (
             message: string,
             options: QueueOptions,
@@ -619,7 +622,6 @@ describe("question response custody through reply adoption", () => {
             try {
               if (receiptScope) {
                 assertCurrent();
-                finalAssertion = assertCurrent;
                 await updateSessionEntry(receiptScope, () => ({
                   restartRecoveryDeliveryReceiptState: "terminal-pending",
                 }));
@@ -788,7 +790,7 @@ describe("question response custody through reply adoption", () => {
                 setTimeout(resolve, 1_200);
               });
               expect(done).toBe(false);
-              expect(claim.isResolving()).toBe(true);
+              await expectPendingQuestionAnswerClaimable(key, false);
               expect(followup).not.toHaveBeenCalled();
               expect(cancel).not.toHaveBeenCalled();
             }
@@ -809,18 +811,19 @@ describe("question response custody through reply adoption", () => {
             expect.soft(adopted).toHaveBeenCalledOnce();
             expect.soft(settled).toHaveBeenCalledOnce();
             expect(nativeSteer).not.toHaveBeenCalled();
-            if (mode === "late-receipt") {
-              expect(finalAssertion).toBeDefined();
-              await expect(
-                queue(
-                  "ordinary input after the answer",
-                  undefined,
-                  finalAssertion!,
-                  "source-bound",
-                ),
-              ).rejects.toMatchObject({
-                cause: expect.any(MessageInjectionTargetUnavailableError),
+            if (receiptScope) {
+              const delivery = prepareSteeringDelivery({
+                ...receiptScope,
+                sessionId: run.run.sessionId,
+                assertCurrent,
               });
+              try {
+                await expect(delivery.prepareCurrent()).rejects.toBeInstanceOf(
+                  MessageInjectionTargetUnavailableError,
+                );
+              } finally {
+                delivery.release();
+              }
               expect(nativeSteer).not.toHaveBeenCalled();
             }
             if (confirmed) {

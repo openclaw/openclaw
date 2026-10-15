@@ -1,11 +1,22 @@
+import type { LookupAddress, LookupOneOptions } from "node:dns";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTelegramFetch, resolveTelegramTransport } from "./fetch.js";
 import { isSafeToRetrySendError, TelegramRequestNotStartedError } from "./network-errors.js";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const getDefaultResultOrder = vi.hoisted(() => vi.fn(() => "ipv4first"));
+const dnsLookup = vi.hoisted(() =>
+  vi.fn<
+    (
+      hostname: string,
+      options: LookupOneOptions,
+      callback: (error: NodeJS.ErrnoException | null, address: string, family: number) => void,
+    ) => void
+  >(),
+);
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
 const loggerInfo = vi.hoisted(() => vi.fn());
 const loggerDebug = vi.hoisted(() => vi.fn());
@@ -52,6 +63,7 @@ vi.mock("node:dns", async () => {
   const actual = await vi.importActual<typeof import("node:dns")>("node:dns");
   return {
     ...actual,
+    lookup: dnsLookup,
     getDefaultResultOrder,
     setDefaultResultOrder,
   };
@@ -124,6 +136,9 @@ beforeEach(() => {
     "OPENCLAW_PROXY_URL",
     "OPENCLAW_PROXY_ACTIVE",
     "OPENCLAW_PROXY_CA_FILE",
+    "OPENCLAW_TELEGRAM_DNS_RESULT_ORDER",
+    "OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY",
+    "OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY",
   ]) {
     vi.stubEnv(key, "");
   }
@@ -311,6 +326,70 @@ afterEach(() => {
 });
 
 describe("resolveTelegramFetch", () => {
+  it.each([
+    { network: { dnsResultOrder: "verbatim" as const }, expected: true },
+    { network: { dnsResultOrder: "ipv4first" as const, autoSelectFamily: true }, expected: true },
+    { network: { dnsResultOrder: "verbatim" as const, autoSelectFamily: false }, expected: false },
+  ])("preserves family selection overrides: $network", async ({ network, expected }) => {
+    const transport = resolveTelegramTransport(undefined, { network });
+    try {
+      expect(AgentCtor).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          connect: expect.objectContaining({
+            autoSelectFamily: expected,
+            autoSelectFamilyAttemptTimeout: 300,
+          }),
+        }),
+      );
+    } finally {
+      await transport.close();
+    }
+  });
+
+  it.each([
+    { source: "config", order: "ipv4first" },
+    { source: "environment", order: "ipv4first" },
+    { source: "process", order: "ipv4first" },
+    { source: "process", order: "ipv6first" },
+  ])("honors $source $order DNS ordering and family selection", async ({ source, order }) => {
+    const ipv4 = "192.0.2.1";
+    const ipv6 = "2001:db8::1";
+    const callback = vi.fn();
+    dnsLookup.mockImplementationOnce((_hostname, options, done) => {
+      const addresses: [LookupAddress, LookupAddress] = [
+        { address: ipv6, family: 6 },
+        { address: ipv4, family: 4 },
+      ];
+      if (options.order === "ipv4first") {
+        addresses.reverse();
+      }
+      done(null, addresses[0].address, addresses[0].family);
+    });
+    getDefaultResultOrder.mockReturnValue(source === "process" ? order : "verbatim");
+    if (source === "environment") {
+      vi.stubEnv("OPENCLAW_TELEGRAM_DNS_RESULT_ORDER", "ipv4first");
+    }
+    const transport = resolveTelegramTransport(
+      undefined,
+      source === "config" ? { network: { dnsResultOrder: "ipv4first" } } : undefined,
+    );
+    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+    try {
+      await transport.fetch("https://api.telegram.org/botfixture/sendMessage");
+      const connect = getDispatcherFromUndiciCall(1)?.options?.connect;
+      expect(connect?.autoSelectFamily).toBe(order !== "ipv4first");
+      const lookup = connect?.lookup as typeof import("node:dns").lookup;
+      lookup("api.telegram.org", { family: 0 }, callback);
+      expect(callback).toHaveBeenCalledWith(
+        null,
+        order === "ipv4first" ? ipv4 : ipv6,
+        order === "ipv4first" ? 4 : 6,
+      );
+    } finally {
+      await transport.close();
+    }
+  });
+
   it("preserves caller-provided custom fetch when OPENCLAW_PROXY_URL is present", async () => {
     vi.stubEnv("OPENCLAW_PROXY_URL", "http://127.0.0.1:7788");
     const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
@@ -516,7 +595,7 @@ describe("resolveTelegramFetch", () => {
       loggerWarn,
       "telegram transport attempt marked temporarily unhealthy",
     );
-    expectLoggerMessageContaining(loggerDebug, "fetch fallback: re-probing primary dispatcher");
+    expectLoggerMessageContaining(loggerDebug, "fetch fallback: rechecking primary dispatcher");
   });
 
   it("does not cool down transport attempts when the expiry exceeds the Date range", async () => {
@@ -609,6 +688,50 @@ describe("resolveTelegramFetch", () => {
   });
 
   describe("transport lifecycle", () => {
+    it.for([false, true])(
+      "does not retry a queued failure after close (caller dispatcher: %s)",
+      async (callerDispatcher, context) => {
+        const started = createDeferred<void>();
+        const failed = createDeferred<Response>();
+        const failure = buildFetchFallbackError("EHOSTUNREACH");
+        void failed.promise.catch(() => undefined);
+        undiciFetch
+          .mockImplementationOnce(() => {
+            started.resolve();
+            return failed.promise;
+          })
+          .mockResolvedValueOnce({ ok: true } as Response);
+        const transport = resolveTelegramTransport(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+        const init: RequestInit & { dispatcher?: unknown } = callerDispatcher
+          ? { dispatcher: { name: "caller" } }
+          : {};
+        const pending = transport.fetch("https://api.telegram.org/botx/getMe", init);
+        const outcome = pending.then(
+          () => ({ fulfilled: true }),
+          (error: unknown) => ({ error }),
+        );
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(started.promise, pending, "Telegram fetch did not start"),
+            context.signal,
+          );
+          // Destruction cannot replace a network failure whose rejection is already queued.
+          failed.reject(failure);
+          await withinTest(transport.close(), context.signal);
+          const settled = await withinTest(outcome, context.signal);
+          expect(settled).toEqual({ error: failure });
+          expect("error" in settled ? settled.error : undefined).toBe(failure);
+          expect(undiciFetch).toHaveBeenCalledTimes(1);
+          expect(AgentCtor).toHaveBeenCalledTimes(1);
+          expect(AgentCtor.mock.instances[0]?.destroy).toHaveBeenCalledTimes(1);
+        } finally {
+          failed.reject(failure);
+          await outcome;
+          await transport.close();
+        }
+      },
+    );
+
     it("close() destroys the default dispatcher and all lazily-created fallback dispatchers", async () => {
       undiciFetch
         .mockRejectedValueOnce(buildFetchFallbackError("EHOSTUNREACH"))

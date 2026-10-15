@@ -2,6 +2,15 @@ import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../../cron/agent-id.js";
 import { CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE } from "../../cron/store/delivery-codec.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
+export class CronJobConfigRevisionConflictError extends Error {
+  constructor(
+    readonly expectedConfigRevision: string,
+    readonly actualConfigRevision: string,
+  ) {
+    super("cron job definition no longer matches the loaded version");
+  }
+}
+
 export function isCronInvalidRequestError(err: unknown): boolean {
   const message = formatErrorMessage(err);
   return (
@@ -23,8 +32,7 @@ export function isCronInvalidRequestError(err: unknown): boolean {
     message.includes("cron trigger every interval") ||
     message.includes("cron job is missing sessionTarget") ||
     message.includes("invalid cron sessionTarget session id") ||
-    message.includes('main cron jobs require payload.kind="systemEvent"') ||
-    message.includes('isolated/current/session cron jobs require payload.kind="agentTurn"') ||
+    message.startsWith('cron sessionTarget "') ||
     message.includes("has no upcoming run time and would never fire") ||
     message.includes('sessionTarget "main" is only valid for the default agent') ||
     message.includes('cron.update payload.kind="systemEvent" requires text') ||

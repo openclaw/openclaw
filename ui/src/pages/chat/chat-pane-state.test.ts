@@ -4,7 +4,11 @@ import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { applySelectedSessionProjection, SessionParticipationTracker } from "./chat-pane-state.ts";
+import {
+  applySelectedSessionProjection,
+  SessionParticipationTracker,
+  createChatPaneRunRecoveryActions,
+} from "./chat-pane-state.ts";
 
 function projectionState(): Parameters<typeof applySelectedSessionProjection>[0] {
   return {
@@ -332,5 +336,52 @@ describe("SessionParticipationTracker", () => {
       expect(resolve(tracker, { sessionKey: "work\0global", listLoading: true })).toBe(false);
       expect(resolve(tracker, { sessionKey, listLoading: true })).toBe(true);
     }
+  });
+});
+
+describe("failed run recovery actions", () => {
+  it("continues once from the current failed run without replaying the original prompt", () => {
+    const state = {
+      sessionKey: "session-a",
+      connected: true,
+      chatRunId: null as string | null,
+      chatSending: false,
+      handleSendChat: vi.fn(async () => {
+        state.chatSending = true;
+      }),
+    };
+    let current = true;
+    const actions = createChatPaneRunRecoveryActions(state, {
+      canSend: true,
+      isCurrent: () => current,
+      latestFailedRunId: () => "run-a",
+    });
+    actions.onRetryRun?.("old-run");
+    expect(state.handleSendChat).not.toHaveBeenCalled();
+    actions.onRetryRun?.("run-a");
+    actions.onRetryRun?.("run-a");
+    expect(state.handleSendChat).toHaveBeenCalledExactlyOnceWith(
+      "Continue from where you stopped. Check which actions already completed before retrying anything.",
+    );
+    state.chatSending = false;
+    current = false;
+    actions.onRetryRun?.("run-a");
+    expect(state.handleSendChat).toHaveBeenCalledOnce();
+  });
+  it("does not expose actions without their capabilities", () => {
+    const state = {
+      sessionKey: "session-a",
+      connected: true,
+      chatRunId: null,
+      chatSending: false,
+      handleSendChat: vi.fn(async () => {}),
+    };
+    expect(
+      createChatPaneRunRecoveryActions(state, {
+        canSend: false,
+        isCurrent: () => true,
+        latestFailedRunId: () => "run-a",
+      }),
+    ).toEqual({ onRetryRun: undefined });
   });
 });

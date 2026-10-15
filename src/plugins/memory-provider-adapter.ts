@@ -1,10 +1,12 @@
 import { stripMemoryAnnotationCarriers } from "../../packages/memory-host-sdk/src/host/curated-annotations.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   isAutomaticMemoryEntryEligible,
+  readMemorySearchManagerStatus,
   type MemoryProviderStatus,
   type MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
-import { assertMemoryCallerCurrent } from "./memory-audience.js";
+import { assertMemoryCallerCurrent, prepareMemoryCallerRead } from "./memory-audience.js";
 import type {
   MemoryCallerContext,
   MemoryProviderHandle,
@@ -17,6 +19,23 @@ import type {
 } from "./memory-provider-types.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
+
+const refreshHandoffs = new WeakMap<
+  MemoryProviderHandle,
+  (onStarted: () => void) => Promise<void>
+>();
+
+/** Join caller admission before handing asynchronous refresh to the provider owner. */
+export function refreshMemoryProviderWithHandoff(
+  provider: MemoryProviderHandle,
+  onStarted: () => void,
+): Promise<void> {
+  const refresh = refreshHandoffs.get(provider);
+  if (!refresh) {
+    throw new Error("memory refresh requires a bound provider handle");
+  }
+  return refresh(onStarted);
+}
 
 /** Recheck both caller and provider lifetime after every asynchronous boundary. */
 export function bindMemoryProvider(
@@ -42,8 +61,16 @@ export function bindMemoryProvider(
     }
   };
   const invoke = async <T>(run: () => Promise<T>): Promise<T> => {
+    const before = prepareMemoryCallerRead(context);
+    if (before) {
+      await racePromiseWithAbortSignal(before, context.signal);
+    }
     assertCurrent();
     const result = await run();
+    const after = prepareMemoryCallerRead(context);
+    if (after) {
+      await racePromiseWithAbortSignal(after, context.signal);
+    }
     assertCurrent();
     return result;
   };
@@ -87,7 +114,15 @@ export function bindMemoryProvider(
       throw new Error("memory provider does not support the project filter capability");
     }
   };
-  return {
+  const refresh = provider.refresh
+    ? (onStarted?: () => void) =>
+        invoke(() => {
+          const pending = provider.refresh!();
+          onStarted?.();
+          return pending;
+        })
+    : undefined;
+  const bound: MemoryProviderHandle = {
     capabilities,
     search: (request) =>
       invoke(async () => {
@@ -122,7 +157,7 @@ export function bindMemoryProvider(
           },
         }
       : {}),
-    ...(provider.refresh ? { refresh: () => invoke(() => provider.refresh!()) } : {}),
+    ...(refresh ? { refresh: () => refresh() } : {}),
     async close() {
       if (closed) {
         return;
@@ -132,6 +167,10 @@ export function bindMemoryProvider(
       await runPluginCleanup(provider, () => provider.close());
     },
   };
+  if (refresh) {
+    refreshHandoffs.set(bound, refresh);
+  }
+  return bound;
 }
 
 // Health reaches every operator.read caller; host filesystem layout stays with local status tools.
@@ -264,7 +303,7 @@ export async function adaptLegacyMemoryProvider(
       };
     },
     async health() {
-      const status = manager.status();
+      const status = await readMemorySearchManagerStatus(manager);
       return {
         status: status.lastSyncError ? "degraded" : "ready",
         message: status.lastSyncError,

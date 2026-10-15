@@ -13,6 +13,10 @@ import { respondNotFound } from "./control-ui-http-utils.js";
 import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
 import { sendMethodNotAllowed } from "./http-common.js";
 import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
+import {
   encodeImageThumbnail,
   resolveManagedImageThumbnail,
 } from "./managed-image-thumbnail-cache.js";
@@ -46,8 +50,18 @@ export async function handleArtifactDownloadHttpRequest(
     respondNotFound(res);
     return true;
   }
-  const assertCurrent = () =>
+  const assertCurrent = () => {
+    const ingress = getRemoteControlUiIngressContext(req);
+    assertRemoteControlUiIngressCurrent(ingress);
+    if (
+      ingress &&
+      client.internal?.remoteIngressPrincipal?.assertCurrent !==
+        ingress.resolvePrincipal().assertCurrent
+    ) {
+      throw new Error("Artifact download belongs to another ingress grant");
+    }
     assertArtifactDownloadGrantCurrent(opts.clients, client, ticket, grant);
+  };
   let prepared: ArtifactDownloadResponse | undefined;
   const thumbnail = grant.image && url.searchParams.get("variant") === "thumbnail";
   try {
@@ -103,8 +117,7 @@ export async function handleArtifactDownloadHttpRequest(
       assertCurrent();
     }
   } catch {
-    respondNotFound(res);
-    return true;
+    prepared = undefined;
   }
   if (!prepared) {
     respondNotFound(res);

@@ -87,6 +87,46 @@ type ModelSetupWizardPhase =
 export type ModelSetupWizardState = ModelSetupWizardPhase & { authLabel?: string };
 export type ModelSetupWizardDraft = { stepId: string | null; value: unknown };
 
+export type ModelSetupState = {
+  pageState: ModelSetupPageState;
+  activationState: ModelSetupActivationState;
+  verifyState: ModelSetupVerifyState;
+  wizardState: ModelSetupWizardState;
+  wizardMode: "auth" | "prepare" | "activate";
+  wizardDraft: ModelSetupWizardDraft;
+  manualProviderId: string;
+  manualApiKey: string;
+  manualError: string | null;
+  moreSignInOpen: boolean;
+  nativeSessionCatalogsEnabled: boolean;
+  iconUrls: Record<string, string>;
+  setupRefreshWarning: string | null;
+  detectionError: string | null;
+  detectionRequest: object | null;
+  cancellationNotice: string | null;
+};
+
+export function createModelSetupState(): ModelSetupState {
+  return {
+    pageState: { phase: "loading" },
+    activationState: { phase: "idle" },
+    verifyState: { phase: "idle" },
+    wizardState: { phase: "idle" },
+    wizardMode: "auth",
+    wizardDraft: { stepId: null, value: undefined },
+    manualProviderId: "",
+    manualApiKey: "",
+    manualError: null,
+    moreSignInOpen: false,
+    nativeSessionCatalogsEnabled: false,
+    iconUrls: {},
+    setupRefreshWarning: null,
+    detectionError: null,
+    detectionRequest: null,
+    cancellationNotice: null,
+  };
+}
+
 export function updateModelSetupWizardDraft(
   draft: ModelSetupWizardDraft,
   state: ModelSetupWizardState,
@@ -172,10 +212,10 @@ export function wizardStateFromResult(
   if (result.done && result.status === "done") {
     return { phase: "done" };
   }
-  if (result.status === "cancelled") {
-    return { phase: "cancelled", message: formatUiExternalText(result.error, fallbackError) };
-  }
-  return { phase: "error", message: formatUiExternalText(result.error, fallbackError) };
+  return {
+    phase: result.status === "cancelled" ? "cancelled" : "error",
+    message: formatUiExternalText(result.error, fallbackError),
+  };
 }
 
 export function initialWizardValue(step: WizardStep): unknown {

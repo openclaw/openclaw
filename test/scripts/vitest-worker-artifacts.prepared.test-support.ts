@@ -9,6 +9,7 @@ import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../vitest/vitest.timeouts.js";
 import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import { writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 /** One real application build; borrowers still own independent, disposable generations. */
@@ -86,7 +87,7 @@ registerFixtureSourceTransform({
       const result = await lifetime.track(
         runNodeScript(
           [compiler, template],
-          env(process.env, "node"),
+          env(testRunnerFixtureEnv(), "node"),
           DEFAULT_VITEST_TEST_TIMEOUT_MS,
           {
             cwd: root,

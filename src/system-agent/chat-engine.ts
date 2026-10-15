@@ -26,13 +26,18 @@ import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
 } from "./inference-error.js";
+import {
+  requireSystemAgentInferenceRoute,
+  requireSystemAgentPersistentApplyInference,
+} from "./inference-guard.js";
 import type { SystemAgentOperation } from "./operations.js";
+import {
+  SYSTEM_AGENT_APPROVAL_APPLICATION_UNCONFIRMED_TEXT,
+  SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES,
+} from "./operator-approval.js";
 import { loadSystemAgentOverview, type SystemAgentOverview } from "./overview.js";
 import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
-import {
-  resolveSystemAgentVerifiedInferenceRoute,
-  type SystemAgentVerifiedInferenceBinding,
-} from "./verified-inference.js";
+import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 export { SystemAgentWizardAnswerError } from "./chat-wizard-host.js";
 
@@ -114,10 +119,10 @@ export class SystemAgentChatEngine {
         beforePersistentApply,
       );
       if (reply && terminalStatus && !reply.applied) {
-        reply.text = `OpenClaw change ${terminalStatus}. No change. Retry the request if it is still needed.`;
+        reply.text = SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES[terminalStatus];
       }
       if (reply && decision === "allow-once" && !reply.applied) {
-        reply.text += " Check the current settings and OpenClaw status before retrying.";
+        reply.text += ` ${SYSTEM_AGENT_APPROVAL_APPLICATION_UNCONFIRMED_TEXT}`;
       }
       if (reply?.text) {
         this.history.push({ role: "assistant", text: reply.text });
@@ -244,15 +249,12 @@ export class SystemAgentChatEngine {
     if (this.agentSession.verifiedInference !== binding) {
       return this.throwInferenceUnavailable();
     }
-    try {
-      const route = await resolveSystemAgentVerifiedInferenceRoute(binding, this.options.deps);
-      if (route) {
-        return route;
-      }
-    } catch (error) {
-      return this.throwInferenceUnavailable([error]);
-    }
-    return this.throwInferenceUnavailable();
+    return await requireSystemAgentInferenceRoute(
+      binding,
+      this.options.deps,
+      "conversation",
+      (failures) => this.throwInferenceUnavailable(failures),
+    );
   }
 
   private async requirePersistentApplyInference(runtime: RuntimeEnv) {
@@ -260,23 +262,14 @@ export class SystemAgentChatEngine {
     if (this.agentSession.verifiedInference !== binding) {
       return this.throwInferenceUnavailable();
     }
-    try {
-      const { resolvePersistentApplyInference } = await import("./setup-inference.js");
-      const route = await resolvePersistentApplyInference({
-        binding,
-        runtime,
-        deps: this.options.deps,
-      });
-      if (route) {
-        return route;
-      }
-    } catch (error) {
-      if (isSystemAgentInferenceUnavailableError(error)) {
-        return this.throwInferenceUnavailable(error.failures, false);
-      }
-      return this.throwInferenceUnavailable([error], false);
-    }
-    return this.throwInferenceUnavailable([], false);
+    return await requireSystemAgentPersistentApplyInference(
+      { binding, runtime, deps: this.options.deps },
+      (failures) =>
+        this.throwInferenceUnavailable(
+          isSystemAgentInferenceUnavailableError(failures[0]) ? failures[0].failures : failures,
+          false,
+        ),
+    );
   }
 
   private rebindVerifiedInference(binding: SystemAgentVerifiedInferenceBinding): void {
@@ -295,7 +288,7 @@ export class SystemAgentChatEngine {
       this.wizard.dispose();
     }
     this.history.splice(0);
-    throw new SystemAgentInferenceUnavailableError("conversation", failures);
+    throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
   }
 
   private async verifyConfigAfterWrite(): Promise<string | null> {

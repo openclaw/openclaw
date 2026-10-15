@@ -62,6 +62,20 @@ export function isWindowsAbsolutePath(value: string): boolean {
   return WINDOWS_ABS_RE.test(value);
 }
 
+/**
+ * Trimmed avatar values that config validation confines to the agent workspace.
+ * Data and HTTP(S) URLs are allowed anywhere; "~" and other URI-like values are rejected.
+ */
+export function isAvatarWorkspacePath(value: string): boolean {
+  return (
+    value !== "" &&
+    !isAvatarDataUrl(value) &&
+    !isAvatarHttpUrl(value) &&
+    !value.startsWith("~") &&
+    (!hasAvatarUriScheme(value) || isWindowsAbsolutePath(value))
+  );
+}
+
 /** Heuristically detects strings that look like local avatar file paths. */
 export function looksLikeAvatarPath(value: string): boolean {
   if (/[\\/]/.test(value)) {

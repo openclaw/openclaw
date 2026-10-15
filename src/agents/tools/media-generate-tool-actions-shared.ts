@@ -6,12 +6,55 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { isCapabilityProviderConfigured } from "./media-tool-shared.js";
+import type { AnyAgentTool } from "./common.js";
+import { isCapabilityProviderConfiguredAsync, resolveGenerateAction } from "./media-tool-shared.js";
+import { prepareToolAuthProfileStore } from "./model-config.helpers.js";
 
 export type MediaGenerateActionResult = {
   content: Array<{ type: "text"; text: string }>;
   details: Record<string, unknown>;
 };
+
+type MediaGenerateProviderAuth = {
+  workspaceDir?: string;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
+};
+
+export function createMediaGenerateExecute(params: {
+  options?: Parameters<typeof prepareToolAuthProfileStore>[0] & {
+    workspaceDir?: string;
+    agentSessionKey?: string;
+    requesterAgentId?: string;
+  };
+  list: (
+    auth: MediaGenerateProviderAuth,
+  ) => MediaGenerateActionResult | Promise<MediaGenerateActionResult>;
+  status: (sessionKey?: string, agentId?: string) => Promise<MediaGenerateActionResult>;
+  generate: (
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) => Promise<MediaGenerateActionResult>;
+}): AnyAgentTool["execute"] {
+  return async (_toolCallId, rawArgs: Record<string, unknown>, signal) => {
+    const args = rawArgs;
+    const action = resolveGenerateAction(args);
+    const options = params.options;
+    if (action === "list") {
+      const authStore = await prepareToolAuthProfileStore(options);
+      signal?.throwIfAborted();
+      return params.list({
+        workspaceDir: options?.workspaceDir,
+        agentDir: options?.agentDir,
+        authStore,
+      });
+    }
+    return action === "status"
+      ? params.status(options?.agentSessionKey, options?.requesterAgentId)
+      : params.generate(args, signal);
+  };
+}
 
 type TaskStatusTextBuilder<Task> = (task: Task, params?: { duplicateGuard?: boolean }) => string;
 type MediaGenerateTaskStatusParams<Task> = {
@@ -29,6 +72,7 @@ type MediaGenerateProvider = {
   capabilities: unknown;
   catalogByModel?: Readonly<Record<string, { capabilities?: unknown; modes?: readonly string[] }>>;
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
+  isConfiguredAsync?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => Promise<boolean>;
 };
 
 type MediaGenerateCapabilitySummaryOptions = {
@@ -36,7 +80,22 @@ type MediaGenerateCapabilitySummaryOptions = {
   includeModes?: boolean;
 };
 
-export function createMediaGenerateProviderListActionResult<
+export function createMediaGenerateProviderListAction<T extends MediaGenerateProvider>(
+  params: Pick<
+    Parameters<typeof createMediaGenerateProviderListActionResult<T>>[0],
+    "kind" | "emptyText" | "listModes" | "summarizeCapabilities"
+  > & { listProviders: (params: { config?: OpenClawConfig }) => T[] },
+) {
+  return (config?: OpenClawConfig, options?: MediaGenerateProviderAuth) =>
+    createMediaGenerateProviderListActionResult({
+      ...params,
+      ...options,
+      cfg: config,
+      providers: params.listProviders({ config }),
+    });
+}
+
+export async function createMediaGenerateProviderListActionResult<
   TProvider extends MediaGenerateProvider,
 >(params: {
   kind: MediaGenerationCatalogKind;
@@ -53,7 +112,7 @@ export function createMediaGenerateProviderListActionResult<
     options?: MediaGenerateCapabilitySummaryOptions,
   ) => string;
   formatAuthHint?: (provider: { id: string; authEnvVars: readonly string[] }) => string | undefined;
-}): MediaGenerateActionResult {
+}): Promise<MediaGenerateActionResult> {
   if (params.providers.length === 0) {
     return {
       content: [{ type: "text", text: params.emptyText }],
@@ -61,34 +120,36 @@ export function createMediaGenerateProviderListActionResult<
     };
   }
 
-  const providerDetails = params.providers.map((provider) => {
-    const modes = params.listModes(provider);
-    const models = listMediaGenerationProviderModels(provider);
-    return {
-      id: provider.id,
-      ...(provider.label ? { label: provider.label } : {}),
-      ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
-      models,
-      modes,
-      configured: isCapabilityProviderConfigured({
-        providers: params.providers,
-        provider,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-        authProfileStoreSource: params.authProfileStoreSource,
-      }),
-      authEnvVars: getProviderEnvVarsCore(provider.id),
-      capabilities: provider.capabilities,
-      // Catalog entries are generated for model browser/search without invoking provider code.
-      catalog: synthesizeMediaGenerationCatalogEntries({
-        kind: params.kind,
-        provider,
+  const providerDetails = await Promise.all(
+    params.providers.map(async (provider) => {
+      const modes = params.listModes(provider);
+      const models = listMediaGenerationProviderModels(provider);
+      return {
+        id: provider.id,
+        ...(provider.label ? { label: provider.label } : {}),
+        ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
+        models,
         modes,
-      }),
-    };
-  });
+        configured: await isCapabilityProviderConfiguredAsync({
+          providers: params.providers,
+          provider,
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          agentDir: params.agentDir,
+          authStore: params.authStore,
+          authProfileStoreSource: params.authProfileStoreSource,
+        }),
+        authEnvVars: getProviderEnvVarsCore(provider.id),
+        capabilities: provider.capabilities,
+        // Catalog entries are generated for model browser/search without invoking provider code.
+        catalog: synthesizeMediaGenerationCatalogEntries({
+          kind: params.kind,
+          provider,
+          modes,
+        }),
+      };
+    }),
+  );
 
   const lines = providerDetails.flatMap((details, index) => {
     const provider = params.providers[index]!;

@@ -1,3 +1,4 @@
+import type { NodePermissionRequest } from "../../packages/gateway-protocol/src/node-permissions.js";
 /**
  * Shared type contracts for bash exec tools.
  * Defines defaults, approval follow-up payloads, elevated policy defaults, and
@@ -91,6 +92,8 @@ export type ExecToolDefaults = {
   /** Reads current attempt context only when a command needs review. */
   reviewTranscript?: () => ExecAutoReviewTranscript | undefined;
   agentId?: string;
+  /** Credential owner when execution borrows another agent's tool policy. */
+  executionAgentId?: string;
   backgroundMs?: number;
   cleanupMs?: number;
   timeoutSec?: number;
@@ -144,6 +147,44 @@ export type ExecToolDefaults = {
   cwd?: string;
 };
 
+/** Request and approval context shared by Gateway and node execution hosts. */
+export type ExecHostCommandParams = {
+  command: string;
+  env: Record<string, string>;
+  requestedEnv?: Record<string, string>;
+  timeoutSec?: number;
+  defaultTimeoutSec: number;
+  security: ExecSecurity;
+  ask: ExecAsk;
+  bypassHostApprovalFloors?: boolean;
+  autoReview?: boolean;
+  autoReviewer?: ExecAutoReviewer;
+  signal?: AbortSignal;
+  strictInlineEval?: boolean;
+  commandHighlighting?: boolean;
+  trigger?: string;
+  agentId?: string;
+  sessionKey?: string;
+  toolCallId?: string;
+  /** Session UUID active when the approval was requested; pins the followup. */
+  sessionId?: string;
+  /** Session-store template, so the direct/denied followup can detect a rebind. */
+  sessionStore?: string;
+  bashElevated?: ExecElevatedDefaults;
+  approvalReviewerDeviceId?: string;
+  nonInteractiveApproval?: boolean;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
+  approvalFollowupMode?: "agent" | "direct";
+  warnings: string[];
+  notifySessionKey?: string;
+  approvalRunningNoticeMs: number;
+  processContinuationAvailable?: boolean;
+  trustedSafeBinDirs?: ReadonlySet<string>;
+};
+
 /** Outcome passed to approval follow-up factories after approved async exec. */
 export type ExecApprovalFollowupOutcome = {
   status: "completed" | "failed";
@@ -186,6 +227,7 @@ export type ExecToolApprovalReview = {
 
 /** Structured details returned by exec tool calls. */
 export type ExecToolDetails = {
+  permissionMissing?: NodePermissionRequest;
   approvalReviews?: readonly ExecToolApprovalReview[];
   approvalReviewOutcome?: "approved" | "denied" | "reviewing";
 } & (
@@ -203,7 +245,7 @@ export type ExecToolDetails = {
       exitCode: number | null;
       exitSignal?: NodeJS.Signals | number | null;
       failureKind?: string;
-      reason?: "not-dispatched" | "outcome-unknown" | "policy-denied";
+      reason?: "not-dispatched" | "outcome-unknown" | "policy-denied" | "permission-missing";
       nodeInvokeFailure?: {
         failureCode?: string;
         message: string;

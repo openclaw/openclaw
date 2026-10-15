@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
@@ -10,6 +11,7 @@ it.each(["off", "all"] as const)(
   "prepares both owners' global attachments with sandbox %s",
   async (mode) => {
     await withOpenClawTestState({ label: "gateway-media-owner" }, async (state) => {
+      await loadOrCreateProcessDeviceIdentityAsync();
       const cfg = {
         agents: {
           ownership: "explicit" as const,
@@ -33,7 +35,7 @@ it.each(["off", "all"] as const)(
       for (const agentId of ["main", "work"]) {
         const bytes = `${agentId} attachment contents`;
         const fileName = "notes café 雪 🦞.txt";
-        const request = normalizeChatSendRequest({
+        const request = await normalizeChatSendRequest({
           client: null,
           params: {
             agentId,

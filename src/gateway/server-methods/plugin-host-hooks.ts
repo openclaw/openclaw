@@ -8,7 +8,7 @@ import {
   validatePluginsSessionActionParams,
   validatePluginsSessionActionResult,
   validatePluginsUiDescriptorsParams,
-  validatePluginsUiDescriptorsResult,
+  type PluginsUiDescriptorsResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -49,7 +49,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         return;
       }
       const scopes = client?.connect.scopes ?? [];
-      const result = {
+      const result: PluginsUiDescriptorsResult = {
         ok: true,
         generation: getPluginRegistryVersion(getPluginRegistryForContext()),
         descriptors: listControlUiPluginDescriptors(scopes),
@@ -61,20 +61,6 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         controlUiLinkReaders: listControlUiLinkReaders(scopes, methods),
         pluginSurfaceUrls: client?.pluginSurfaceUrls ?? {},
       };
-      if (!validatePluginsUiDescriptorsResult(result)) {
-        log.warn("invalid plugins.uiDescriptors result", {
-          errors: validatePluginsUiDescriptorsResult.errors,
-        });
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `invalid plugins.uiDescriptors result: ${formatValidationErrors(validatePluginsUiDescriptorsResult.errors)}`,
-          ),
-        );
-        return;
-      }
       respond(true, result, undefined);
     },
   ),
@@ -82,6 +68,8 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     "plugins.sessionAction",
     validatePluginsSessionActionParams,
     async ({ params, client, respond, context }) => {
+      const reject = (message: string) =>
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
       const pluginId = normalizeOptionalString(params.pluginId);
       const actionId = normalizeOptionalString(params.actionId);
       const rawSessionKey = normalizeOptionalString(params.sessionKey);
@@ -105,14 +93,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
             })
           : undefined;
       if (!pluginId || !actionId) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "plugins.sessionAction pluginId and actionId must be non-empty",
-          ),
-        );
+        reject("plugins.sessionAction pluginId and actionId must be non-empty");
         return;
       }
       const registry = getPluginRegistryForContext();
@@ -149,14 +130,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       }
       try {
         if (params.payload !== undefined && !isPluginJsonValue(params.payload)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "plugin session action payload must be JSON-compatible",
-            ),
-          );
+          reject("plugin session action payload must be JSON-compatible");
           return;
         }
         if (registration.action.schema !== undefined) {
@@ -164,14 +138,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
             typeof registration.action.schema !== "boolean" &&
             !isRecord(registration.action.schema)
           ) {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                "plugin session action schema must be an object or boolean",
-              ),
-            );
+            reject("plugin session action schema must be an object or boolean");
             return;
           }
           // Schemas are plugin-provided data; validate their shape before passing
@@ -182,13 +149,8 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
             value: params.payload,
           });
           if (!validation.ok) {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                `plugin session action payload does not match schema: ${validation.errors.map((error) => error.text).join("; ")}`,
-              ),
+            reject(
+              `plugin session action payload does not match schema: ${validation.errors.map((error) => error.text).join("; ")}`,
             );
             return;
           }
@@ -205,25 +167,13 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           },
         });
         if (result !== undefined && !isRecord(result)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "plugin session action result must be an object",
-            ),
-          );
+          reject("plugin session action result must be an object");
           return;
         }
         const wireResult = result?.ok === false ? result : { ok: true as const, ...result };
         if (!validatePluginsSessionActionResult(wireResult)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `invalid plugin session action result: ${formatValidationErrors(validatePluginsSessionActionResult.errors)}`,
-            ),
+          reject(
+            `invalid plugin session action result: ${formatValidationErrors(validatePluginsSessionActionResult.errors)}`,
           );
           return;
         }
@@ -234,14 +184,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
             (field) => jsonResult[field] !== undefined && !isPluginJsonValue(jsonResult[field]),
           );
         if (invalidJsonField) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `plugin session action ${invalidJsonField} must be JSON-compatible`,
-            ),
-          );
+          reject(`plugin session action ${invalidJsonField} must be JSON-compatible`);
           return;
         }
         if (!wireResult.ok) {

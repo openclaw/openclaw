@@ -3,8 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resumeThread } from "../command-handler-bindings.js";
 import { resolveCodexCommandDeps } from "../command-handler-deps.js";
 import {
@@ -15,8 +19,10 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
-import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
-import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import {
+  createFakeCodexAppServerClient,
+  disabledMcpServerStatus,
+} from "./codex-app-server.test-fixtures.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type {
   CodexDynamicToolFunctionSpec,
@@ -43,7 +49,6 @@ import { retireCodexAppServerSessionGeneration } from "./session-retirement.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
-  resolveCodexNativeConfigFenceKey,
   retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
@@ -52,9 +57,10 @@ import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
 import { registerThreadPolicyRefreshTests } from "./thread-lifecycle-policy-refresh.test-support.js";
 import { registerRequiredRootThreadPolicyTests } from "./thread-lifecycle-rooted.test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
+import { registerThreadWebSearchBindingTests } from "./thread-lifecycle-web-search.test-support.js";
 import {
   createLeasedCodexLifecycleHarness,
-  startOrResumeAttemptThread,
+  startOrResumeAttemptThreadWithoutSkills as startOrResumeAttemptThread,
   twoStartsThenResumeMethods,
   type CodexAttemptThreadInput as LifecycleInput,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -161,17 +167,6 @@ function retainThread(
     undefined,
     binding.liveThreadConfigFingerprint,
   );
-}
-
-function disabledMcpServerStatus(name: string) {
-  return {
-    name,
-    serverInfo: null,
-    tools: {},
-    resources: [],
-    resourceTemplates: [],
-    authStatus: "unsupported",
-  };
 }
 
 function createThreadLifecycleAppServerOptions(): LifecycleInput["appServer"] {
@@ -376,7 +371,8 @@ async function createManualResumeFixture(
   }
   const response = threadStartResult(threadId, { cwd: workspaceDir });
   const thread = { ...response.thread, path: rolloutPath };
-  let resumes = 0;
+  const unsubscribed = createDeferred<void>();
+  let unloaded = false;
   const harness = createFakeCodexAppServerClient(async (method: string) => {
     if (method === "config/read") {
       return { config: {}, origins: {}, layers: [] };
@@ -399,15 +395,16 @@ async function createManualResumeFixture(
           ...thread,
           status: options.active
             ? { type: "active", activeFlags: [] }
-            : { type: options.cold ? "notLoaded" : "idle" },
+            : { type: options.cold || unloaded ? "notLoaded" : "idle" },
         },
       };
     }
     if (method === "thread/unsubscribe") {
-      return { status: "unsubscribed" };
-    }
-    if (method === "thread/resume") {
-      if (resumes++ > 0 && options.receipt !== "none" && options.receipt !== "stale") {
+      if (options.receipt === "unrelated" || options.receipt === "stale") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      if (options.receipt !== "none" && options.receipt !== "stale") {
+        unloaded = options.receipt !== "unrelated";
         await harness.notify({
           method: "thread/status/changed",
           params: {
@@ -416,6 +413,11 @@ async function createManualResumeFixture(
           },
         });
       }
+      unsubscribed.resolve();
+      return { status: "unsubscribed" };
+    }
+    if (method === "thread/resume") {
+      unloaded = false;
       return { ...response, thread };
     }
     if (method === "thread/inject_items") {
@@ -453,7 +455,6 @@ async function createManualResumeFixture(
       initialize: async () => undefined,
       // This fake closes and exits together; notify the pool's physical-client registry too.
       addTransportExitHandler: client.addCloseHandler.bind(client),
-      setThreadSessionRequestGuard: () => undefined,
       close: () => harness.close(),
     });
   }
@@ -537,6 +538,7 @@ async function createManualResumeFixture(
     common,
     sessionFile,
     threadId,
+    unsubscribed: unsubscribed.promise,
     identity: {
       kind: "session" as const,
       agentId: "main",
@@ -548,7 +550,9 @@ async function createManualResumeFixture(
   };
 }
 
-setupRunAttemptTestHooks();
+afterEach(() => clearRuntimeConfigSnapshot());
+setupRunAttemptTestHooks({ isolateNativeSkillHome: true });
+beforeEach(() => setRuntimeConfigSnapshot({}));
 
 async function createLeasedLifecycleWireClient(
   agentDir: string,
@@ -618,31 +622,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     createThreadLifecycleAppServerOptions,
     startOrResumeThread,
   });
-  it("inherits the effective native project-document budget", async () => {
-    const { sessionFile, workspaceDir } = createPaths();
-    const fixture = await createSequentialLifecycleHarness(
-      () => threadStartResult("thread-1"),
-      {
-        project_doc_max_bytes: 200_000,
-      },
-      {
-        project_doc_max_bytes: {
-          name: { type: "user", file: "/codex/config.toml", profile: null },
-          version: "sha256:authored-budget",
-        },
-      },
-    );
-
-    await startOrResumeThread({
-      client: fixture.client,
-      params: createParams(sessionFile, workspaceDir),
-    });
-
-    expect(
-      fixture.request.mock.calls.find(([method]) => method === "thread/start")?.[1],
-    ).toMatchObject({ config: { project_doc_max_bytes: 200_000 } });
-  });
-
   it("rejects a host-only rotation after recovering the predecessor before the lifecycle lease", async () => {
     const workspaceDir = path.join(tempDir, "recovered-workspace");
     const params = createParams(path.join(tempDir, "recovered.jsonl"), workspaceDir);
@@ -711,7 +690,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(bindingStore.read(current)).toEqual(binding);
   });
 
-  it("resumes idle A with current policy while B stays active and catalog leases come and go", async () => {
+  it("resumes unloaded A with current policy while B stays active and catalog leases come and go", async () => {
     const sessionFile = path.join(tempDir, "parallel-policy.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const threadId = "parallel-policy-a";
@@ -737,7 +716,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         throw new Error(`unexpected method: ${method}`);
       },
     });
-    fixture.seed(threadStartResult(threadId), { loaded: true, subscribed: false });
+    fixture.seed(threadStartResult(threadId));
     const siblingResponse = threadStartResult(siblingId);
     fixture.seed(
       {
@@ -779,6 +758,15 @@ describe("Codex app-server thread lifecycle bindings", () => {
       await siblingClaim?.release(siblingId);
       releaseLeasedSharedCodexAppServerClient(sibling);
     }
+  });
+
+  registerThreadWebSearchBindingTests({
+    createPaths,
+    createParams,
+    createSequentialLifecycleHarness,
+    startOrResumeThread,
+    createDeferredNamedDynamicTool,
+    preflightMethods: PREFLIGHT_METHODS,
   });
 
   registerThreadPolicyRefreshTests({
@@ -837,7 +825,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         params,
         userMcpServersEnabled: false,
         abandonClient,
-        nativeHookRelayGeneration: "original-relay",
+        buildFinalConfigPatch: () => ({ nativeHookRelayGeneration: "original-relay" }),
         pluginThreadConfig: {
           enabled: true,
           requiresCurrentPolicyCheck: true,
@@ -873,7 +861,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       warming = true;
       const pending = startOrResumeThread({
         ...common,
-        nativeHookRelayGeneration: "stale-refresh",
+        buildFinalConfigPatch: () => ({ nativeHookRelayGeneration: "stale-refresh" }),
       });
       await entered.promise;
       expect(isCodexAppServerLiveThreadClaimed(client, started.threadId)).toBe(true);
@@ -1137,7 +1125,12 @@ describe("Codex app-server thread lifecycle bindings", () => {
           userProfile: fixture.common.appServer.start.env?.USERPROFILE,
         });
         const handlers = [...fixture.notifications];
-        await expect(fixture.start()).rejects.toThrow(error);
+        const rejected = expect(fixture.start()).rejects.toThrow(error);
+        if (options.receipt) {
+          await fixture.unsubscribed;
+          await vi.advanceTimersByTimeAsync(2_000);
+        }
+        await rejected;
         expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
         expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(
           false,
@@ -1219,78 +1212,22 @@ describe("Codex app-server thread lifecycle bindings", () => {
     },
   );
 
-  it.each(["reader", "retired"] as const)(
-    "checks physical ownership after a %s interleaves behind the native config fence",
-    async (interleaving) => {
-      const fixture = await createManualResumeFixture({ wireClient: true });
-      const before = await readCodexAppServerBinding(fixture.sessionFile);
-      const fenceKey = resolveCodexNativeConfigFenceKey({ client: fixture.client });
-      expect(fenceKey).toBeTypeOf("string");
-      const releaseFence = await acquireCodexNativeConfigFence(fenceKey!);
-      const guardEntered = createDeferred<void>();
-      const abort = new AbortController();
-      fixture.client.setThreadSessionRequestGuard(async (options) => {
-        guardEntered.resolve();
-        return await acquireCodexNativeConfigFence(fenceKey!, options);
-      });
-      const starting = fixture.start({ signal: abort.signal });
-      const settled = starting.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      try {
-        await Promise.race([
-          guardEntered.promise,
-          settled.then(() => {
-            throw new Error("manual resume settled before reaching its native config fence");
-          }),
-        ]);
-        const releaseSibling = retainSharedCodexAppServerClientIfCurrent(fixture.client);
-        expect(releaseSibling).toBeTypeOf("function");
-        releaseSibling?.();
-        if (interleaving === "retired") {
-          retireSharedCodexAppServerClientIfCurrent(fixture.client);
-        }
-        releaseFence();
-
-        if (interleaving === "retired") {
-          await expect(starting).rejects.toThrow("connection changed");
-          expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
-        } else {
-          await expect(starting).resolves.toMatchObject({ threadId: fixture.threadId });
-          expect(
-            (await readCodexAppServerBinding(fixture.sessionFile))?.pendingResumeConfiguration,
-          ).toBeUndefined();
-        }
-        expect(fixture.client.getCloseError()).toBeUndefined();
-        expect(
-          fixture
-            .wire!.writes.map((message) => (JSON.parse(message) as RpcRequest).method)
-            .filter((method) => method === "thread/resume"),
-        ).toEqual(
-          interleaving === "retired" ? ["thread/resume"] : ["thread/resume", "thread/resume"],
-        );
-      } finally {
-        abort.abort();
-        releaseFence();
-        await settled;
-        fixture.close();
-      }
-    },
-  );
-
   it.each(["attach", "release", "reset"] as const)(
     "queues same-thread %s behind ordinary preparation without blocking siblings",
     async (operation) => {
       const fixture = await createManualResumeFixture({ wireClient: true });
       await fixture.start();
+      await fixture.client.request("thread/unsubscribe", { threadId: fixture.threadId });
       fixture.wire!.writes.length = 0;
       const entered = createDeferred<void>();
       const proceed = createDeferred<void>();
-      fixture.client.setThreadSessionRequestGuard(async () => {
-        entered.resolve();
-        await proceed.promise;
-        return () => {};
+      const respond = fixture.request.getMockImplementation()!;
+      fixture.request.mockImplementation(async (method) => {
+        if (method === "thread/resume") {
+          entered.resolve();
+          await proceed.promise;
+        }
+        return respond(method);
       });
       const starting = fixture.start();
       const settledStart = Promise.allSettled([starting]);
@@ -1299,7 +1236,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         await Promise.race([
           entered.promise,
           settledStart.then(() => {
-            throw new Error("resume failed before its write fence");
+            throw new Error("resume failed before its response was held");
           }),
         ]);
         mutation =
@@ -1386,11 +1323,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
         await release.promise;
       });
       await entered.promise;
-      const readBinding = testCodexAppServerBindingStore.read.bind(testCodexAppServerBindingStore);
-      const read = vi.spyOn(testCodexAppServerBindingStore, "read");
+      const readBinding = testCodexAppServerBindingStore.readAsync.bind(
+        testCodexAppServerBindingStore,
+      );
+      const read = vi.spyOn(testCodexAppServerBindingStore, "readAsync");
       const pendingRead = createDeferred<void>();
-      read.mockImplementationOnce((identity) => {
-        const binding = readBinding(identity);
+      read.mockImplementationOnce(async (identity) => {
+        const binding = await readBinding(identity);
         pendingRead.resolve();
         return binding;
       });
@@ -1721,8 +1660,202 @@ describe("Codex app-server thread lifecycle bindings", () => {
   });
 
   it.each([
+    {
+      name: "leaving Ultrafast with an inherited lower limit",
+      fastMode: "ultrafast",
+      nextFastMode: true,
+      nativeLimit: 120_000,
+      nativeScope: "total",
+      retained: true,
+      expectedLimit: 120_000,
+      nativeLoaded: null,
+    },
+    {
+      name: "leaving Ultrafast with the native default scope",
+      fastMode: "ultrafast",
+      nextFastMode: true,
+      nativeLimit: 120_000,
+      nativeScope: undefined,
+      retained: true,
+      expectedLimit: 120_000,
+      nativeLoaded: null,
+    },
+    {
+      name: "entering Ultrafast with unchanged inherited settings",
+      fastMode: true,
+      nextFastMode: "ultrafast",
+      nativeLimit: 120_000,
+      nativeScope: "total",
+      retained: true,
+      expectedLimit: 120_000,
+      nativeLoaded: null,
+    },
+    {
+      name: "replacing an unavailable Ultrafast thread",
+      fastMode: "ultrafast",
+      nextFastMode: "ultrafast",
+      nativeLimit: 700_000,
+      nativeScope: "total",
+      retained: false,
+      expectedLimit: 260_000,
+      nativeLoaded: null,
+    },
+    {
+      name: "deferring unloaded native-owned threads to replacement authority",
+      fastMode: "ultrafast",
+      nextFastMode: "ultrafast",
+      nativeLimit: 700_000,
+      nativeScope: "total",
+      retained: false,
+      expectedLimit: 260_000,
+      nativeLoaded: false,
+    },
+    {
+      name: "preserving unknown creation settings on a live native-owned thread",
+      fastMode: true,
+      nextFastMode: "ultrafast",
+      nativeLimit: 700_000,
+      nativeScope: "total",
+      retained: false,
+      expectedLimit: 700_000,
+      nativeLoaded: true,
+    },
+  ] as const)("continues incognito compaction when $name", async (testCase) => {
+    const { sessionFile, workspaceDir } = createPaths();
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionKey = "agent:main:dashboard:incognito-compaction";
+    params.fastMode = testCase.fastMode;
+    params.agentDir = path.join(tempDir, "agent");
+    let starts = 0;
+    let catalogLookups = 0;
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: params.agentDir,
+      respond: async (method) => {
+        if (method === "config/read") {
+          return {
+            config: {
+              model_auto_compact_token_limit: testCase.nativeLimit,
+              ...(testCase.nativeScope
+                ? { model_auto_compact_token_limit_scope: testCase.nativeScope }
+                : {}),
+            },
+            origins: {},
+            layers: [],
+          };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (method === "model/list") {
+          if (++catalogLookups > 2) {
+            throw new Error("Synthetic catalog unavailable during replacement");
+          }
+          return {
+            data: [
+              {
+                id: params.modelId,
+                model: params.modelId,
+                displayName: "Synthetic model",
+                description: "Synthetic model",
+                hidden: false,
+                isDefault: false,
+                supportedReasoningEfforts: [],
+                defaultReasoningEffort: "medium",
+                serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }],
+              },
+            ],
+            nextCursor: null,
+          };
+        }
+        if (method === "thread/start") {
+          return threadStartResult(`incognito-${++starts}`);
+        }
+        throw new Error(`unexpected method: ${method}`);
+      },
+    });
+    const common = { client: fixture.client, params, userMcpServersEnabled: false };
+    const first = await startOrResumeThread(common);
+    expect(first.liveThreadEphemeralPolicy).toMatchObject({
+      autoCompactTokenLimit: testCase.expectedLimit,
+      autoCompactTokenLimitScope: "total",
+    });
+    if (testCase.retained) {
+      await retainCodexAppServerLiveThread(
+        fixture.client,
+        first.threadId,
+        undefined,
+        first.liveThreadConfigFingerprint,
+        null,
+        first.liveThreadEphemeralPolicy,
+      );
+    }
+    if (testCase.nativeLoaded !== null) {
+      const binding = (await readCodexAppServerBinding(sessionFile))!;
+      await writeRawCodexAppServerBinding(sessionFile, { ...binding, preserveNativeModel: true });
+      fixture.seed(threadStartResult(first.threadId), {
+        loaded: testCase.nativeLoaded,
+        subscribed: testCase.nativeLoaded,
+      });
+      params.expectedSessionRuntimeOwnership = {
+        model: "native",
+        auth: "host",
+        modelRef: { model: first.model!, provider: first.modelProvider! },
+      };
+    }
+    params.fastMode = testCase.nextFastMode;
+    if (testCase.nativeLoaded !== null) {
+      const before = await readCodexAppServerBinding(sessionFile);
+      await expect(startOrResumeThread(common)).rejects.toThrow(
+        testCase.nativeLoaded
+          ? "compaction settings"
+          : "native model ownership prevents rotating an unavailable ephemeral thread",
+      );
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
+      expect(
+        fixture.request.mock.calls.filter(([method]) => method === "thread/start"),
+      ).toHaveLength(1);
+      return;
+    }
+    const second = await startOrResumeThread(common);
+    expect(second).toMatchObject({
+      threadId: testCase.retained ? first.threadId : "incognito-2",
+      lifecycle: { action: testCase.retained ? "resumed" : "started" },
+    });
+    if (!testCase.retained) {
+      expect(second.preparedServiceTier).toBe("ultrafast");
+      expect(catalogLookups).toBe(2);
+      expect(
+        fixture.request.mock.calls.filter(([method]) => method === "thread/start")[1]?.[1],
+      ).toMatchObject({
+        config: {
+          model_auto_compact_token_limit: 260_000,
+          model_auto_compact_token_limit_scope: "total",
+        },
+      });
+    }
+    expect(
+      fixture.request.mock.calls
+        .filter(([method]) => method === "thread/start" || method === "thread/resume")
+        .map(([method, requestParams]) => [method, requestParams]),
+    ).toEqual(
+      testCase.retained
+        ? [["thread/start", expect.objectContaining({ ephemeral: true })]]
+        : [
+            ["thread/start", expect.objectContaining({ ephemeral: true })],
+            ["thread/start", expect.objectContaining({ ephemeral: true })],
+          ],
+    );
+  });
+
+  it.each([
     { change: "policy", policy: "generic policy v2", skills: "## OpenClaw Skills\n\nweather" },
     { change: "skills", policy: "generic policy", skills: undefined },
+    { change: "compaction", policy: "generic policy", skills: "## OpenClaw Skills\n\nweather" },
+    {
+      change: "compaction-scope",
+      policy: "generic policy",
+      skills: "## OpenClaw Skills\n\nweather",
+    },
   ] as const)(
     "refreshes live incognito instructions but refuses generic policy drift ($change: $skills)",
     async ({ change, policy, skills }) => {
@@ -1764,8 +1897,20 @@ describe("Codex app-server thread lifecycle bindings", () => {
         ...common,
         developerInstructions: "generic policy",
         refreshableInstructions: firstSkills,
+        ...(change === "compaction-scope"
+          ? {
+              config: {
+                model_auto_compact_token_limit: 120_000,
+                model_auto_compact_token_limit_scope: "body_after_prefix",
+              },
+            }
+          : {}),
       });
       expect(first.liveThreadEphemeralPolicy).toEqual({
+        autoCompactTokenLimitScope: "total",
+        ...(change === "compaction-scope"
+          ? { autoCompactTokenLimit: 120_000, autoCompactTokenLimitScope: "body_after_prefix" }
+          : {}),
         developerInstructions: "generic policy",
         refreshableInstructions: firstSkills,
         // Creation carries the catalog natively, so compaction restores this one.
@@ -1789,13 +1934,23 @@ describe("Codex app-server thread lifecycle bindings", () => {
         request.mock.calls
           .filter(([method]) => method.startsWith("thread/"))
           .map(([method, requestParams]) => [method, requestParams]);
-      const secondTurn = {
+      const secondTurn: Parameters<typeof startOrResumeThread>[0] = {
         ...common,
         developerInstructions: policy,
         refreshableInstructions: skills,
+        ...(change === "compaction"
+          ? { config: { model_auto_compact_token_limit: 260_000 } }
+          : change === "compaction-scope"
+            ? {
+                config: {
+                  model_auto_compact_token_limit: 120_000,
+                  model_auto_compact_token_limit_scope: "total",
+                },
+              }
+            : {}),
       };
 
-      if (change === "policy") {
+      if (change === "policy" || change === "compaction" || change === "compaction-scope") {
         await expect(startOrResumeThread(secondTurn)).rejects.toBeInstanceOf(
           CodexIncognitoPolicyChangeError,
         );
@@ -1957,7 +2112,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-parent");
     const threadRequests = request.mock.calls.filter(([method]) => method === "thread/start");
     expect(threadRequests).toHaveLength(2);
-    const resumeRequest = buildThreadResumeParams(params, {
+    const resumeRequest = await buildThreadResumeParams(params, {
       threadId: first.threadId,
       appServer: common.appServer,
       dynamicTools: common.dynamicTools,
@@ -2757,57 +2912,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(binding.modelProvider).toBe("lmstudio");
   });
 
-  it("uses a transient Codex thread when runtime toolsAllow denies web_search", async () => {
-    const { sessionFile, workspaceDir } = createPaths();
-    const params = createParams(sessionFile, workspaceDir);
-    params.disableTools = false;
-
-    const fixture = await createSequentialLifecycleHarness(() => threadStartResult("thread-1"));
-    const { client, request } = fixture;
-
-    await startOrResumeThread({
-      client,
-      params,
-      dynamicTools: [createDeferredNamedDynamicTool("web_search")],
-      webSearchAllowed: true,
-    });
-    params.toolsAllow = ["message"];
-    await fixture.endTurn("thread-1");
-    const restrictedBinding = await startOrResumeThread({
-      client,
-      params,
-      dynamicTools: [createDeferredNamedDynamicTool("web_search")],
-      webSearchAllowed: false,
-    });
-    const savedAfterRestriction = await readCodexAppServerBinding(sessionFile);
-    params.toolsAllow = undefined;
-    await fixture.endTurn("thread-2");
-    const resumedBinding = await startOrResumeThread({
-      client,
-      params,
-      dynamicTools: [createDeferredNamedDynamicTool("web_search")],
-      webSearchAllowed: true,
-    });
-
-    expect(restrictedBinding.threadId).toBe("thread-2");
-    expect(restrictedBinding).not.toHaveProperty("liveThreadConfigFingerprint");
-    expect(savedAfterRestriction?.threadId).toBe("thread-1");
-    expect(resumedBinding.threadId).toBe("thread-1");
-    expect(request.mock.calls.map(([method]) => method)).toEqual(
-      twoStartsThenResumeMethods(PREFLIGHT_METHODS),
-    );
-    expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toMatchObject({
-      config: { web_search: "cached" },
-    });
-    expect(
-      request.mock.calls.filter(
-        ([method]) => method === "thread/start" || method === "thread/resume",
-      )[1]?.[1],
-    ).toMatchObject({
-      config: { web_search: "disabled" },
-    });
-  });
-
   it("keeps the retained primary subscribed across a transient report-only turn", async () => {
     const { sessionFile, workspaceDir } = createPaths();
     const params = createParams(sessionFile, workspaceDir);
@@ -2917,58 +3021,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     ).toMatchObject({
       config: { web_search: "disabled" },
     });
-  });
-
-  it("persists config-denied search when runtime toolsAllow also excludes web_search", async () => {
-    const { sessionFile, workspaceDir } = createPaths();
-    const params = createParams(sessionFile, workspaceDir);
-
-    const fixture = await createSequentialLifecycleHarness((requestParams) =>
-      threadStartResult((requestParams as { threadId: string }).threadId),
-    );
-    const { client, request } = fixture;
-
-    await startOrResumeThread({
-      client,
-      params,
-      dynamicTools: [createDeferredNamedDynamicTool("web_search")],
-      persistentWebSearchAllowed: true,
-      webSearchAllowed: true,
-    });
-    params.config = { tools: { deny: ["web_search"] } };
-    params.toolsAllow = ["message"];
-    await fixture.endTurn("thread-1");
-    const restrictedBinding = await startOrResumeThread({
-      client,
-      params,
-      nativeCodeModeEnabled: false,
-      persistentWebSearchAllowed: false,
-      webSearchAllowed: false,
-    });
-    await fixture.endTurn("thread-2");
-    const resumedRestrictedBinding = await startOrResumeThread({
-      client,
-      params,
-      nativeCodeModeEnabled: false,
-      persistentWebSearchAllowed: false,
-      webSearchAllowed: false,
-    });
-
-    expect(restrictedBinding.threadId).toBe("thread-2");
-    expect(resumedRestrictedBinding.threadId).toBe("thread-2");
-    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-2");
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      ...PREFLIGHT_METHODS,
-      "thread/start",
-      "thread/unsubscribe",
-      "config/read",
-      "thread/start",
-      "thread/unsubscribe",
-      "config/read",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-    ]);
   });
 
   it("starts a fresh Codex thread for hosted search restrictions on a legacy binding", async () => {

@@ -48,6 +48,26 @@ export const SessionGitHubPublishParamsSchema = closedObject({
   selection: Type.Optional(GitHubPublicationSelectionSchema),
 });
 
+export const GitHubPublicationActionSchema = closedObject({
+  action: Type.Union([
+    Type.Literal("inspect"),
+    Type.Literal("ready"),
+    Type.Literal("merge"),
+    Type.Literal("close"),
+  ]),
+  publishingSessionKey: Type.Optional(NonEmptyString),
+  requestId: Type.Optional(PersonalGitHubGenerationSchema),
+  expectedHeadCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}$" })),
+  mergeMethod: Type.Optional(
+    Type.Union([Type.Literal("merge"), Type.Literal("squash"), Type.Literal("rebase")]),
+  ),
+});
+export const SessionGitHubActionParamsSchema = closedObject({
+  ...GitHubPublicationActionSchema.properties,
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
+
 const SessionGitHubPublicationBaseSchema = {
   requestId: NonEmptyString,
   // Optional for responses from older shared workers; every current Gateway response includes it.
@@ -79,6 +99,20 @@ export const SessionGitHubPublicationPublishedSchema = closedObject({
   repository: NonEmptyString,
   branch: NonEmptyString,
   headCommit: NonEmptyString,
+});
+export const SessionGitHubActionResultSchema = closedObject({
+  publication: SessionGitHubPublicationPublishedSchema,
+  publishingSessionKey: NonEmptyString,
+  state: Type.Union([
+    Type.Literal("draft"),
+    Type.Literal("open"),
+    Type.Literal("closed"),
+    Type.Literal("merged"),
+  ]),
+  headCommit: NonEmptyString,
+  mergeCommit: Type.Union([Type.String(), Type.Null()]),
+  mergeable: Type.Union([Type.Boolean(), Type.Null()]),
+  mergeState: Type.String(),
 });
 export const SessionGitHubPublicationFailedSchema = closedObject({
   ...SessionGitHubPublicationBaseSchema,
@@ -151,15 +185,29 @@ export const SessionGitHubStatusResultSchema = closedObject({
 });
 
 export const SessionGitHubOptionsResultSchema = closedObject({
+  stale: Type.Optional(Type.Boolean()),
   personal: Type.Union([PersonalGitHubStatusSchema, Type.Null()]),
   shared: Type.Union([SharedGitHubPublicationPublisherSchema, Type.Null()]),
+  sharedUnavailableReason: Type.Optional(
+    Type.Union([
+      Type.Literal("unavailable"),
+      Type.Literal("changed"),
+      Type.Literal("rate_limited"),
+      Type.Literal("unverified"),
+      Type.Literal("unsupported_workspace"),
+    ]),
+  ),
   pendingPersonal: Type.Union([SessionGitHubStatusResultSchema, Type.Null()]),
   latestShared: Type.Union([SessionGitHubStatusResultSchema, Type.Null()]),
 });
 
 export type GitHubPublicationPublisher = Static<typeof GitHubPublicationPublisherSchema>;
+export type GitHubPublicationAction = Static<typeof GitHubPublicationActionSchema>;
+export type SessionGitHubActionParams = Static<typeof SessionGitHubActionParamsSchema>;
+export type SessionGitHubActionResult = Static<typeof SessionGitHubActionResultSchema>;
 export type GitHubPublicationSelection = Static<typeof GitHubPublicationSelectionSchema>;
 export type SessionGitHubConfirmParams = Static<typeof SessionGitHubConfirmParamsSchema>;
+export type SessionGitHubOptionsResult = Static<typeof SessionGitHubOptionsResultSchema>;
 export type SessionGitHubStatusResult = Static<typeof SessionGitHubStatusResultSchema>;
 
 export type SessionGitHubPublishParams = Static<typeof SessionGitHubPublishParamsSchema>;

@@ -1,6 +1,10 @@
 import { MODEL_APIS } from "../config/types.models.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
+import {
+  readModelServingContextWindow,
+  type ModelServingContextLimit,
+} from "./model-serving-context.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 
 function isCatalogModelApi(
@@ -11,9 +15,17 @@ function isCatalogModelApi(
 
 /** Shared metadata projection; keep transport headers and authoring fields out of catalog entries. */
 export function modelCatalogRowToEntry(
-  row: Omit<ModelCatalogEntry, "api"> & { api?: string },
+  row: Omit<ModelCatalogEntry, "api"> & {
+    api?: string;
+    servingContextLimit?: ModelServingContextLimit;
+  },
 ): ModelCatalogEntry {
   const contextWindow = row.contextWindow ?? row.contextTokens;
+  const servingWindow = readModelServingContextWindow(row);
+  const contextTokens =
+    servingWindow === undefined
+      ? row.contextTokens
+      : Math.min(servingWindow, row.contextTokens ?? contextWindow ?? Infinity);
   return {
     id: row.id,
     name: row.name,
@@ -21,11 +33,13 @@ export function modelCatalogRowToEntry(
     ...(isCatalogModelApi(row.api) ? { api: row.api } : {}),
     ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(row.contextWindowSource ? { contextWindowSource: row.contextWindowSource } : {}),
+    ...(row.contextCapacitySource ? { contextCapacitySource: row.contextCapacitySource } : {}),
     ...(row.contextWindows
       ? { contextWindows: row.contextWindows.map((option) => ({ ...option })) }
       : {}),
     ...(row.contextWindowDefault ? { contextWindowDefault: row.contextWindowDefault } : {}),
-    ...(row.contextTokens !== undefined ? { contextTokens: row.contextTokens } : {}),
+    ...(contextTokens !== undefined ? { contextTokens } : {}),
     reasoning: row.reasoning,
     ...(row.thinkingLevelMap ? { thinkingLevelMap: { ...row.thinkingLevelMap } } : {}),
     ...(row.input ? { input: [...row.input] } : {}),
@@ -80,7 +94,7 @@ export function enrichHarnessRows(
   let donorsPrepared = false;
   return rows.map((entry) => {
     // Native discovery owns these capabilities; host donors cannot invent its transport.
-    if (entry.nativeRuntime) {
+    if (entry.nativeRuntime && entry.name !== entry.id) {
       return entry;
     }
     if (!donorsPrepared) {
@@ -113,6 +127,9 @@ export function enrichHarnessRows(
         : undefined);
     if (!donor) {
       return entry;
+    }
+    if (entry.nativeRuntime) {
+      return { ...entry, name: donor.name };
     }
     const compat = mergeHarnessCompat(entry.compat, donor.compat);
     const mergedParams =

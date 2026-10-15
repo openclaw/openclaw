@@ -53,6 +53,15 @@ export function createTelegramInboundPipeline({
     message: messageRuntime,
   });
   const getChat: TelegramGetChat = bot.api.getChat.bind(bot.api);
+  const resolveForumFlag = (msg: Message, isGroup: boolean) =>
+    resolveTelegramForumFlag({
+      chatId: msg.chat.id,
+      chatType: msg.chat.type,
+      isGroup,
+      isForum: msg.chat.is_forum,
+      isTopicMessage: msg.is_topic_message,
+      getChat,
+    });
   const resolveBotUserId = (ctx: { me?: { id?: number } }): number => {
     const botUserId = ctx.me?.id ?? opts.botInfo?.id;
     if (botUserId == null) {
@@ -87,16 +96,7 @@ export function createTelegramInboundPipeline({
       return { kind: "ignored" };
     }
     const isGroup = isChannelPost || msg.chat.type === "group" || msg.chat.type === "supergroup";
-    const isForum = isChannelPost
-      ? false
-      : await resolveTelegramForumFlag({
-          chatId: msg.chat.id,
-          chatType: msg.chat.type,
-          isGroup,
-          isForum: msg.chat.is_forum,
-          isTopicMessage: msg.is_topic_message,
-          getChat,
-        });
+    const isForum = isChannelPost ? false : await resolveForumFlag(msg, isGroup);
     const normalizedMsg = isChannelPost
       ? normalizeChannelPostMessage(msg)
       : withResolvedTelegramForumFlag(msg, isForum);
@@ -153,7 +153,7 @@ export function createTelegramInboundPipeline({
       const promptContextMinTimestampMs = asFiniteNumber(
         sessionState.sessionEntry?.sessionStartedAt,
       );
-      const promptContextAmbientWatermark = resolvePromptContextAmbientWatermark({
+      const promptContextAmbientWatermark = await resolvePromptContextAmbientWatermark({
         chatId,
         isGroup,
         resolvedThreadId,
@@ -237,14 +237,7 @@ export function createTelegramInboundPipeline({
       return { kind: "recorded" };
     }
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
-    const isForum = await resolveTelegramForumFlag({
-      chatId: msg.chat.id,
-      chatType: msg.chat.type,
-      isGroup,
-      isForum: msg.chat.is_forum,
-      isTopicMessage: msg.is_topic_message,
-      getChat,
-    });
+    const isForum = await resolveForumFlag(msg, isGroup);
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
     const gate = await authorizeInboundMessage({
       msg: normalizedMsg,
@@ -296,8 +289,5 @@ export function registerTelegramInboundHandlers({
   bot: RegisterTelegramHandlerParams["bot"];
   pipeline: Pick<TelegramInboundPipeline, "handle">;
 }): void {
-  bot.on("message", pipeline.handle);
-  bot.on("edited_message", pipeline.handle);
-  bot.on("channel_post", pipeline.handle);
-  bot.on("edited_channel_post", pipeline.handle);
+  bot.on(["message", "edited_message", "channel_post", "edited_channel_post"], pipeline.handle);
 }

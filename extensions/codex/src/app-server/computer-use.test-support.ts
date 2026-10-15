@@ -27,7 +27,7 @@ export async function expectSetupErrorStatus(
   expectStatusFields(status, fields);
 }
 
-export const requireRecord = createRequireRecord("object", "label-not-object");
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 export function requestCalls(
   request: CodexComputerUseRequest,

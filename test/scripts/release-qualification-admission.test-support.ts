@@ -53,13 +53,14 @@ function zip(bytes: Buffer) {
 export function request(
   overrides: Record<string, string | number | boolean> = {},
   selectedSha = candidateSha,
+  selectedTransportRef = "release-ci/" + selectedSha.slice(0, 12) + "-123",
 ) {
   return buildQualificationAdmissionRequest({
     repository,
     candidateSha: selectedSha,
     qualificationSha: selectedSha,
     requestId,
-    transportRef: "release-ci/" + selectedSha.slice(0, 12) + "-123",
+    transportRef: selectedTransportRef,
     reviewed: true,
     inputs: {
       ref: candidateSha,
@@ -92,11 +93,12 @@ export function fixture(
     policy?: unknown;
     workflowSource?: string;
     candidateSha?: string;
+    transportRef?: string;
     candidateVersion?: string;
     oldestSupportedBaseline?: string | null;
   } = {},
 ) {
-  const selected = request(options.inputs, options.candidateSha);
+  const selected = request(options.inputs, options.candidateSha, options.transportRef);
   const sourceSha = selected.candidateSha;
   const ref = protectedTag ? "release-publish/bbbbbbbbbbbb-10" : "main";
   const producer = {

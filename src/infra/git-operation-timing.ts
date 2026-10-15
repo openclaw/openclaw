@@ -31,7 +31,6 @@ const operations = {
 
 const removalStages = [
   ["preparation", "preparationMs"],
-  ["packRepair", "packRepairMs"],
   ["snapshot", "snapshotMs"],
   ["checkoutRemoval", "checkoutRemovalMs"],
   ["finalization", "bodyFinalizeMs"],
@@ -146,7 +145,7 @@ export function startGitOperationTiming(
           };
           runWithDiagnosticTraceContext(trace, () =>
             log.info(
-              kind === "worktree-removal"
+              kind !== "ref-mutation"
                 ? `${operation.message} ${JSON.stringify(fields)}`
                 : operation.message,
               fields,

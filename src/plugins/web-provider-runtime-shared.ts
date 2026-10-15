@@ -1,16 +1,23 @@
 import { withActivatedPluginIds } from "./activation-context.js";
-import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import {
+  getLoadedRuntimePluginRegistry,
+  registryContainsRuntimePluginIds,
+} from "./active-runtime-registry.js";
 import { normalizePluginId } from "./config-state.js";
 import { isPluginRegistryLoadInFlight, loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { hasCompletedPluginRuntimeRegistration } from "./plugin-runtime-artifact-binding.js";
 import { hasExplicitPluginIdScope, normalizePluginIdScope } from "./plugin-scope.js";
 import type { PluginRegistry } from "./registry.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-state.js";
 import {
   buildPluginRuntimeLoadOptions,
   createPluginRuntimeLoaderLogger,
 } from "./runtime/load-context.js";
+import { getCurrentPluginToolInspection, samePluginToolSource } from "./tool-inspection-state.js";
 
 export type ResolvePluginWebProvidersParams = {
   config?: PluginLoadOptions["config"];
@@ -60,6 +67,31 @@ export type WebProviderRuntimeResolution<TEntry> = {
     > & { onlyPluginIds: readonly string[] },
   ) => TEntry[] | null;
 };
+
+function mergeInspectedProviderEntries<T extends { pluginId: string; provider: { id: string } }>(
+  manifests: readonly PluginManifestRecord[],
+  retainedPluginIds: ReadonlySet<string>,
+  inspected: readonly T[],
+  supplemental: readonly T[],
+): T[] {
+  const order = new Map(manifests.map((manifest, index) => [manifest.id, index]));
+  const providers = [
+    ...inspected.filter((entry) => retainedPluginIds.has(entry.pluginId)),
+    ...supplemental,
+  ].toSorted(
+    (left, right) =>
+      (order.get(left.pluginId) ?? Number.MAX_SAFE_INTEGER) -
+      (order.get(right.pluginId) ?? Number.MAX_SAFE_INTEGER),
+  );
+  const ids = new Set<string>();
+  return providers.filter(({ provider }) => {
+    if (ids.has(provider.id.trim())) {
+      return false;
+    }
+    ids.add(provider.id);
+    return true;
+  });
+}
 
 /** Resolves plugin web providers from setup, active runtime, or a scoped load. */
 export function resolvePluginWebProviders<TEntry>(
@@ -151,6 +183,11 @@ export function resolvePluginWebProviders<TEntry>(
     ? allowlistedPluginIds
     : discoveredPluginIds;
   const onlyPluginIds = shouldFilterProviders ? candidatePluginIds : undefined;
+  const generationRegistry = getPluginRuntimeGenerationRegistry();
+  const current = getCurrentPluginToolInspection(params.config, env, params.workspaceDir);
+  if (generationRegistry && !current) {
+    return deps.mapRegistryProviders({ registry: generationRegistry, onlyPluginIds });
+  }
   const loadOptions = buildPluginRuntimeLoadOptions(
     {
       config,
@@ -171,21 +208,44 @@ export function resolvePluginWebProviders<TEntry>(
         : {}),
     },
   );
-  const compatible = getLoadedRuntimePluginRegistry({
-    env,
-    loadOptions,
-    workspaceDir,
-    requiredPluginIds: candidatePluginIds,
-  });
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const compatible = current
+    ? undefined
+    : scopedRegistry
+      ? registryContainsRuntimePluginIds(scopedRegistry, candidatePluginIds)
+        ? scopedRegistry
+        : undefined
+      : getLoadedRuntimePluginRegistry({
+          env,
+          loadOptions,
+          workspaceDir,
+          requiredPluginIds: candidatePluginIds,
+        });
   const hasExplicitEmptyScope = onlyPluginIds !== undefined && onlyPluginIds.length === 0;
-  // Candidate coverage is checked before reuse. An empty compatible registry is
-  // authoritative only for an explicit empty scope; otherwise load below.
+  // Unknown candidates require a complete inspected inventory before absence is authoritative.
   if (compatible) {
     const providers = deps.mapRegistryProviders({
       registry: compatible,
       onlyPluginIds,
     });
-    if (providers.length > 0 || hasExplicitEmptyScope) {
+    if (compatible === scopedRegistry) {
+      const inspectedPluginIds = new Set(
+        compatible.plugins
+          .filter(
+            (plugin) =>
+              hasCompletedPluginRuntimeRegistration(plugin) ||
+              plugin.status === "error" ||
+              plugin.status === "disabled",
+          )
+          .map((plugin) => plugin.id),
+      );
+      if (
+        candidatePluginIds !== undefined ||
+        manifestRecords?.every((plugin) => inspectedPluginIds.has(plugin.id))
+      ) {
+        return providers;
+      }
+    } else if (providers.length > 0 || hasExplicitEmptyScope) {
       return providers;
     }
   }
@@ -206,6 +266,63 @@ export function resolvePluginWebProviders<TEntry>(
     if (bundledArtifactProviders) {
       return bundledArtifactProviders;
     }
+  }
+  const inspectedManifests = manifestRecords ?? current?.loadContext.manifestRegistry?.plugins;
+  if (current && inspectedManifests) {
+    const candidates = candidatePluginIds && new Set(candidatePluginIds);
+    const retainedPluginIds = new Set(
+      inspectedManifests
+        .filter(
+          (manifest) =>
+            (!candidates || candidates.has(manifest.id)) &&
+            samePluginToolSource(current.inspection.manifests.get(manifest.id), manifest),
+        )
+        .map((manifest) => manifest.id),
+    );
+    // Undefined candidates retain legacy discovery, including undeclared external providers.
+    const missingPluginIds = (
+      candidatePluginIds ?? inspectedManifests.map((manifest) => manifest.id)
+    ).filter((id) => !retainedPluginIds.has(id));
+    const supplementalOptions: PluginLoadOptions = {
+      ...loadOptions,
+      onlyPluginIds: missingPluginIds,
+      manifestRegistry: {
+        plugins: [...inspectedManifests],
+        diagnostics: current.loadContext.manifestRegistry?.diagnostics ?? [],
+      },
+      installRecords: current.loadContext.installRecords,
+      preferBuiltPluginArtifacts: current.loadContext.preferBuiltPluginArtifacts,
+      expectedSourceDigests: current.loadContext.expectedSourceDigests,
+    };
+    const supplemental = missingPluginIds.length
+      ? current.inspection.withSupplementalCache(() =>
+          isPluginRegistryLoadInFlight(supplementalOptions)
+            ? undefined
+            : loadOpenClawPlugins(supplementalOptions),
+        )
+      : undefined;
+    current.inspection.assertCurrent();
+    // Registration order, not inspection selection order, decides duplicate provider ids.
+    const registry: PluginRegistry = {
+      ...current.registry,
+      plugins: [
+        ...current.registry.plugins.filter((plugin) => retainedPluginIds.has(plugin.id)),
+        ...(supplemental?.plugins ?? []),
+      ],
+      webSearchProviders: mergeInspectedProviderEntries(
+        inspectedManifests,
+        retainedPluginIds,
+        current.registry.webSearchProviders,
+        supplemental?.webSearchProviders ?? [],
+      ),
+      webFetchProviders: mergeInspectedProviderEntries(
+        inspectedManifests,
+        retainedPluginIds,
+        current.registry.webFetchProviders,
+        supplemental?.webFetchProviders ?? [],
+      ),
+    };
+    return deps.mapRegistryProviders({ registry, onlyPluginIds });
   }
   const registry = loadOpenClawPlugins(loadOptions);
   return deps.mapRegistryProviders({

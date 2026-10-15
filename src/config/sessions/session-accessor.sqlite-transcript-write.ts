@@ -1,3 +1,4 @@
+import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
@@ -5,10 +6,9 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { clearAllCliSessions } from "./cli-session-binding.js";
+import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type {
   SessionTranscriptAccessScope,
-  SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
   TranscriptEvent,
@@ -19,24 +19,24 @@ import type {
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
-import { assertLifecycleTargetSnapshotUnchanged } from "./session-accessor.sqlite-entry-equality.js";
 import {
   readSessionEntryRow,
-  readSessionEntrySelectionSnapshot,
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
+import { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
 import {
+  assertSqliteTranscriptSnapshotUnchanged,
+  isSqliteTranscriptSnapshotUnchanged,
   readTranscriptEventRows,
   readTranscriptSnapshot,
-  type SqliteTranscriptSnapshotRow,
+  type SqliteTranscriptSnapshotState,
 } from "./session-accessor.sqlite-read.js";
 import {
+  captureLifecycleDatabaseScope,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
-  transcriptWriteScopeIsCurrent,
 } from "./session-accessor.sqlite-scope.js";
 import {
   appendTranscriptMessageInTransaction,
@@ -69,107 +69,27 @@ import {
   runTranscriptWriteSnapshotSync,
   type TranscriptWriteViewGuard,
 } from "./session-accessor.sqlite-transcript-write-snapshot.js";
-import type {
-  SessionTranscriptRuntimeTarget,
-  SessionTranscriptWriteLockAccessorContext,
-} from "./session-accessor.types.js";
-import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "./session-entry-projection.js";
+import type { SessionTranscriptWriteLockAccessorContext } from "./session-accessor.types.js";
+import {
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import {
+  readTranscriptAppendPostimage,
+  retainTranscriptAppendPostimage,
+} from "./session-transcript-append-postimage.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
+import { assertLegacyTranscriptPreparation } from "./session-transcript-preparation.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import {
   assertOwnedTranscriptWriteCommit,
-  SessionTranscriptWriterClaimReboundError,
+  captureOwnedTranscriptWriteAssertion,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
 
-export { withTranscriptWriteTransaction } from "./session-accessor.sqlite-transcript-write-snapshot.js";
-
-type SqliteTranscriptSnapshotState =
-  | { kind: "current"; rows: SqliteTranscriptSnapshotRow[] }
-  | { kind: "stale" };
-
-export async function replaceTranscriptEvents(
-  scope: SessionTranscriptAccessScope,
-  events: TranscriptEvent[],
-): Promise<void> {
-  const resolved = resolveSqliteTranscriptScope(scope);
-  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-  await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
-  await runExclusiveSqliteSessionWrite(
-    resolved,
-    async () => {
-      runOpenClawAgentWriteTransaction(
-        (database) => {
-          replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
-        },
-        toDatabaseOptions(resolved),
-        { operationLabel: "session.transcript.replace" },
-      );
-    },
-    "session.transcript.replace",
-  );
-}
-
-/** Replaces the active session identity and its prepared branch in one commit. */
-export async function replaceSessionWithBranchedTranscript(
-  scope: SessionTranscriptRuntimeTarget,
-  branch: { sessionId: string; events: TranscriptEvent[] },
-  onCommitted: (
-    target: SessionTranscriptRuntimeTarget,
-    version: SessionTranscriptContextVersion,
-  ) => void,
-  assertActive?: () => void,
-): Promise<void> {
-  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
-  const resolved = resolveSqliteTranscriptScope(fencedScope);
-  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-  await restoreSessionColdTranscript({ ...fencedScope, sessionId: resolved.sessionId });
-  const databaseOptions = toDatabaseOptions(resolved);
-  const expectedLifecycleRevision = readSessionEntryRow(
-    openOpenClawAgentDatabase(databaseOptions),
-    resolved.sessionKey,
-  )?.entry.lifecycleRevision;
-  const nextScope = { ...fencedScope, sessionId: branch.sessionId };
-  await runExclusiveSqliteSessionWrite(
-    resolved,
-    async () => {
-      assertActive?.();
-      const committed = runOpenClawAgentWriteTransaction(
-        (database) => {
-          assertActive?.();
-          const result = replaceSessionWithBranchedTranscriptInTransaction(
-            database,
-            fencedScope,
-            branch,
-            expectedLifecycleRevision,
-            assertActive,
-          );
-          return {
-            version: result.version,
-            publish: prepareSessionIdentityPublication(
-              database,
-              resolved.agentId,
-              result.identity.previous,
-              result.identity.current,
-            ),
-          };
-        },
-        databaseOptions,
-        { operationLabel: "session.transcript.branch" },
-      );
-      try {
-        onCommitted(nextScope, committed.version);
-      } finally {
-        committed.publish();
-      }
-    },
-    "session.transcript.branch",
-  );
-}
-
-/** One transaction kernel for the retained adapter and the canonical worker. */
+/** Replaces the active session identity and branch inside the maintenance worker transaction. */
 export function replaceSessionWithBranchedTranscriptInTransaction(
   database: OpenClawAgentDatabase,
   scope: SessionTranscriptWriteScope,
@@ -252,135 +172,43 @@ export async function rewriteTranscriptEventRowsExact(
   );
 }
 
-/** Fully replaces rows for one transcript synchronously for sync session runtimes. */
-export function replaceTranscriptEventsSync(
-  scope: SessionTranscriptWriteScope,
-  events: TranscriptEvent[],
-): boolean {
-  // Every sync replacement inherits and enforces the admitted writer claim.
-  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
-  const resolved = resolveSqliteTranscriptScope(fencedScope);
-  const replaced = runOpenClawAgentWriteTransaction(
-    (database) => {
-      assertOwnedTranscriptWriteCommit(fencedScope);
-      const fresh = readSessionEntryRow(database, resolved.sessionKey);
-      if (!transcriptWriteScopeIsCurrent(fresh?.entry, resolved.sessionId, fencedScope)) {
-        return false;
-      }
-      replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
-      return true;
-    },
-    toDatabaseOptions(resolved),
-    { operationLabel: "session.transcript.replace" },
-  );
-  if (fencedScope.expectedWriterRunId !== undefined && !replaced) {
-    throw new SessionTranscriptWriterClaimReboundError();
-  }
-  return replaced;
-}
-
 export { replaceTranscriptSuffixEventsSync } from "./session-accessor.sqlite-transcript-suffix-write.js";
-
-export async function trimTranscriptForManualCompact(
-  scope: SessionTranscriptAccessScope,
-  selectRetainedLines: (lines: readonly string[]) => readonly string[] | null,
-  options: { nowMs?: number } = {},
-): Promise<{ trimmed: false } | { kept: number; trimmed: true }> {
-  const resolved = resolveSqliteTranscriptScope(scope);
-  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-  await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
-  return await runExclusiveSqliteSessionWrite(
-    resolved,
-    async () => {
-      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-      const snapshotRows = readTranscriptEventRows(database, resolved.sessionId);
-      const sessionSnapshot = readSessionEntrySelectionSnapshot(
-        database,
-        resolved.sessionKey,
-        true,
-      );
-      const lines = snapshotRows.map((row) => row.eventJson);
-      const retainedLines = selectRetainedLines(lines);
-      if (!retainedLines) {
-        return { trimmed: false };
-      }
-      if (sessionSnapshot[0]?.entry.sessionId !== resolved.sessionId) {
-        throw new Error(
-          `Cannot compact SQLite transcript ${resolved.sessionId} without its current session entry`,
-        );
-      }
-      const retainedEvents = retainedLines.map((line) => JSON.parse(line) as TranscriptEvent);
-      const publish = runOpenClawAgentWriteTransaction(
-        (writeDatabase) => {
-          assertSqliteTranscriptSnapshotUnchanged(writeDatabase, resolved.sessionId, snapshotRows);
-          const freshSessionSnapshot = readSessionEntrySelectionSnapshot(
-            writeDatabase,
-            resolved.sessionKey,
-            true,
-          );
-          assertLifecycleTargetSnapshotUnchanged(
-            sessionSnapshot,
-            freshSessionSnapshot,
-            "session.transcript.manual-compact",
-          );
-          const freshEntry = freshSessionSnapshot[0]?.entry;
-          if (!freshEntry || freshEntry.sessionId !== resolved.sessionId) {
-            throw new Error(`SQLite session changed before compacting ${resolved.sessionId}`);
-          }
-          const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
-          const previousIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
-          replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, retainedEvents);
-          const nextEntry = structuredClone(freshEntry);
-          delete nextEntry.contextBudgetStatus;
-          Object.assign(nextEntry, COMPACTION_RUN_USAGE_CLEAR_PATCH);
-          delete nextEntry.totalTokens;
-          delete nextEntry.totalTokensFresh;
-          delete nextEntry.totalTokensVersion;
-          clearAllCliSessions(nextEntry);
-          nextEntry.updatedAt = options.nowMs ?? Date.now();
-          // The transcript rewrite, binding clear, and token invalidation describe one generation.
-          // Keep them in this transaction so either both become visible or neither does.
-          writeSessionEntry(writeDatabase, resolved.sessionKey, nextEntry, {
-            previousEntry: freshEntry,
-          });
-          const currentIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
-          return prepareSessionIdentityPublication(
-            writeDatabase,
-            resolved.agentId,
-            previousIdentity,
-            currentIdentity,
-          );
-        },
-        toDatabaseOptions(resolved),
-        { operationLabel: "session.transcript.manual-compact" },
-      );
-      publish();
-      return { kept: retainedLines.length, trimmed: true };
-    },
-    "session.transcript.compact",
-  );
-}
 
 /** Appends one raw transcript event to the additive SQLite transcript store. */
 export async function appendTranscriptEvent(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions = {},
-): Promise<void> {
+): Promise<boolean> {
   assertNonMessageTranscriptEvent(event);
   const resolved = resolveSqliteTranscriptScope(scope);
+  if (isMainThread && supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved))) {
+    if (options.beforeCommitInTransaction) {
+      throw new Error(
+        "Transcript transaction callbacks require worker-local execution; use a prepared transcript event",
+      );
+    }
+    const { appendTranscriptEventInWorker } = await import("./session-transcript-event.js");
+    return appendTranscriptEventInWorker({
+      scope: captureLifecycleDatabaseScope(resolved),
+      event,
+      appendIntent: options.appendIntent,
+    });
+  }
   const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
   await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
-  await runExclusiveSqliteSessionWrite(
+  return runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
-      runOpenClawAgentWriteTransaction(
+      return runOpenClawAgentWriteTransaction(
         (database) => {
           options.beforeCommitInTransaction?.();
-          appendTranscriptEventInTransaction(
-            database,
-            resolved,
-            resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+          return (
+            appendTranscriptEventInTransaction(
+              database,
+              resolved,
+              resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+            ) !== false
           );
         },
         toDatabaseOptions(resolved),
@@ -389,16 +217,6 @@ export async function appendTranscriptEvent(
     },
     "session.transcript.event-append",
   );
-}
-
-/** Appends one raw non-message transcript event synchronously for sync session runtimes. */
-export function appendTranscriptEventSync(
-  scope: SessionTranscriptWriteScope,
-  event: TranscriptEvent,
-  options: TranscriptEventAppendOptions = {},
-): Result<boolean, TranscriptAppendRefusal> {
-  const snapshot = appendTranscriptEventSnapshotSync(scope, event, options);
-  return snapshot.ok ? ok(snapshot.value.result.appended) : snapshot;
 }
 
 export function appendTranscriptEventSnapshotSync(
@@ -411,9 +229,10 @@ export function appendTranscriptEventSnapshotSync(
     eventJson?: string;
   },
   view?: TranscriptWriteViewGuard,
+  transaction?: OpenClawAgentDatabase,
 ): Result<TranscriptWriteSnapshot<TranscriptEventAppendResult>, TranscriptAppendRefusal> {
   assertNonMessageTranscriptEvent(event);
-  return runTranscriptWriteSnapshotSync(
+  return runTranscriptWriteSnapshotSync<TranscriptEventAppendResult>(
     scope,
     (database, resolved) => {
       const resolvedEvent = resolveTranscriptEventAppendParent(
@@ -443,6 +262,7 @@ export function appendTranscriptEventSnapshotSync(
     options.expectedMutationAt,
     view,
     { eventType: isRecord(event) && typeof event.type === "string" ? event.type : "unknown" },
+    transaction,
   );
 }
 
@@ -461,7 +281,10 @@ export async function appendTranscriptMessage<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
 ): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
-  return await withTranscriptWriteLock(scope, (transcript) => transcript.appendMessage(options));
+  assertLegacyTranscriptPreparation(scope, options);
+  return await withTranscriptWriteSequence(scope, (transcript) =>
+    transcript.appendMessage(options),
+  );
 }
 
 /** Appends one transcript message synchronously for sync session runtimes. */
@@ -478,34 +301,38 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
   options: TranscriptMessageAppendOptions<TMessage>,
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
   workerOptions?: {
-    messageAlreadyRedacted?: true;
     scheduleProjectionReconcile?: boolean;
     onProjectionReconcileNeeded?: () => void;
   },
   view?: TranscriptWriteViewGuard,
+  transaction?: OpenClawAgentDatabase,
 ): Result<TranscriptMessageWriteSnapshot<TMessage>, TranscriptAppendRefusal> {
   const snapshot = runTranscriptWriteSnapshotSync(
     scope,
     (database, resolved) => {
-      const result = appendTranscriptMessageInTransaction(
+      const committed = appendTranscriptMessageInTransaction(
         database,
         resolved,
-        workerOptions?.messageAlreadyRedacted
-          ? { ...options, messageAlreadyRedacted: true }
-          : options,
+        options,
         preparedMessage,
         workerOptions,
       );
-      return {
-        result,
-        visibleTailEntryId: result
-          ? readTranscriptVisibleTailEntryIdInTransaction(
-              database,
-              resolved.sessionId,
-              result.messageId,
-            )
-          : null,
-      };
+      const result = committed?.result;
+      return retainTranscriptAppendPostimage(
+        {
+          result,
+          visibleTailEntryId:
+            committed?.visibleTailEntryId ??
+            (result
+              ? readTranscriptVisibleTailEntryIdInTransaction(
+                  database,
+                  resolved.sessionId,
+                  result.messageId,
+                )
+              : null),
+        },
+        readTranscriptAppendPostimage(committed),
+      );
     },
     undefined,
     options.expectedMutationAt,
@@ -517,6 +344,7 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
           ? options.message.role
           : "unknown",
     },
+    transaction,
   );
   if (!snapshot.ok) {
     return snapshot;
@@ -536,16 +364,81 @@ export async function withTranscriptWriteLock<T>(
   scope: SessionTranscriptWriteScope,
   run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
 ): Promise<T> {
-  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
-  const resolved = resolveSqliteTranscriptScope(fencedScope);
-  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-  await restoreSessionColdTranscript({ ...fencedScope, sessionId: resolved.sessionId });
+  assertLegacyTranscriptPreparation(scope);
+  return withHostTranscriptWriteLock(scope, run);
+}
+
+/** Memory sequences retain their actor; durable sequences use the existing worker route. */
+export async function withTranscriptWriteSequence<T>(
+  scope: SessionTranscriptWriteScope,
+  run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
+): Promise<T> {
+  const assertCurrent = captureOwnedTranscriptWriteAssertion(scope);
+  const authority = { assertCurrent, authorize: assertCurrent };
+  if (!captureSessionActorStorageOwner(scope, authority)) {
+    return withHostTranscriptWriteLock(scope, run);
+  }
+  const { withActorTranscriptWriteSequence } =
+    await import("./session-actor-transcript-sequence.js");
+  const result = await withSessionActorStorage(
+    scope,
+    { authority, lifetime: { assertCurrent, assertReadable: assertCurrent } },
+    async (memory) => ({ value: await withActorTranscriptWriteSequence(scope, memory, run) }),
+  );
+  if (!result) {
+    throw new Error("Session transcript window is unavailable");
+  }
+  return result.value;
+}
+
+async function withHostTranscriptWriteLock<T>(
+  scope: SessionTranscriptWriteScope,
+  run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
+): Promise<T> {
+  const fenced = withOwnedSessionTranscriptWriterFence(scope);
+  const resolved = resolveSqliteTranscriptScope(fenced);
+  if (!isMainThread || !supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved))) {
+    return runNativeTranscriptWriteLock(fenced, run);
+  }
+  const captured = captureLifecycleDatabaseScope(resolved);
+  const { withWorkerTranscriptWriteLock } = await import("./session-transcript-locked-write.js");
+  // Physical admission uses captured.path; writer authority retains the captured selector.
+  return withWorkerTranscriptWriteLock(
+    { ...fenced, ...captured, storePath: captured.path },
+    { ...fenced, ...captured, storePath: captured.ownerStorePath ?? captured.path },
+    run,
+    runNativeTranscriptWriteLock,
+  );
+}
+
+async function runNativeTranscriptWriteLock<T>(
+  scope: SessionTranscriptWriteScope,
+  run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
+  alreadyLocked = false,
+  initialSnapshot?: SqliteTranscriptSnapshotState,
+  onSnapshot?: (snapshot: SqliteTranscriptSnapshotState | undefined) => void,
+  ownerScope: SessionTranscriptWriteScope = scope,
+): Promise<T> {
+  const fencedScope = withOwnedSessionTranscriptWriterFence(ownerScope);
+  const resolved = resolveSqliteTranscriptScope(scope);
+  // Nested compatibility appends share the worker callback's initial cold restoration.
+  if (!alreadyLocked) {
+    const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+    await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
+  }
   const databaseOptions = toDatabaseOptions(resolved);
-  return await runExclusiveSqliteSessionWrite(
+  const acquire: typeof runExclusiveSqliteSessionWrite = alreadyLocked
+    ? async (_scope, operation) => operation()
+    : runExclusiveSqliteSessionWrite;
+  return await acquire(
     resolved,
     async () => {
-      let transcriptSnapshot: SqliteTranscriptSnapshotState | undefined;
+      let transcriptSnapshot = initialSnapshot;
       const context: SessionTranscriptWriteLockAccessorContext = {
+        publishUpdate: async (update) => {
+          assertOwnedTranscriptWriteCommit(fencedScope);
+          await publishTranscriptUpdate(scope, update);
+        },
         readEvents: async () => {
           // openclaw-agent-db.ts cache rule: LRU eviction closes idle handles across caller awaits.
           const database = openOpenClawAgentDatabase(databaseOptions);
@@ -584,9 +477,11 @@ export async function withTranscriptWriteLock<T>(
           transcriptSnapshot = { kind: "current", rows: nextSnapshot };
         },
         appendMessage: async (requested) => {
-          const prepare = requested.prepareMessageAfterIdempotencyCheckAsync
-            ? await prepareNativeLockedAppend(fencedScope, requested)
-            : undefined;
+          assertLegacyTranscriptPreparation(fencedScope, requested);
+          const prepare =
+            requested.prepareMessageAfterIdempotencyCheckAsync || requested.preparation
+              ? await prepareNativeLockedAppend(scope, requested)
+              : undefined;
           let result: TranscriptMessageAppendResult<unknown> | undefined;
           const snapshotState = transcriptSnapshot;
           let nextSnapshotState = snapshotState;
@@ -602,7 +497,11 @@ export async function withTranscriptWriteLock<T>(
                       snapshotState.rows,
                     )
                   : false;
-              result = appendTranscriptMessageInTransaction(writeDatabase, resolved, options);
+              result = appendTranscriptMessageInTransaction(
+                writeDatabase,
+                resolved,
+                options,
+              )?.result;
               if (snapshotState?.kind === "current") {
                 nextSnapshotState = snapshotStillCurrent
                   ? {
@@ -617,12 +516,15 @@ export async function withTranscriptWriteLock<T>(
             { operationLabel: "session.transcript.locked-append" },
           );
           transcriptSnapshot = nextSnapshotState;
+          onSnapshot?.(transcriptSnapshot);
           return result as TranscriptMessageAppendResult<typeof requested.message> | undefined;
         },
         appendMessageWithMessageSequence: async (requested) => {
-          const prepare = requested.prepareMessageAfterIdempotencyCheckAsync
-            ? await prepareNativeLockedAppend(fencedScope, requested)
-            : undefined;
+          assertLegacyTranscriptPreparation(fencedScope, requested);
+          const prepare =
+            requested.prepareMessageAfterIdempotencyCheckAsync || requested.preparation
+              ? await prepareNativeLockedAppend(scope, requested)
+              : undefined;
           let result: TranscriptMessageAppendResult<unknown> | undefined;
           let lifecycleRevision: string | undefined;
           let messageSeq: number | undefined;
@@ -634,12 +536,18 @@ export async function withTranscriptWriteLock<T>(
                 fencedScope,
               )?.lifecycleRevision;
               const options = prepare?.(writeDatabase) ?? requested;
-              result = appendTranscriptMessageInTransaction(writeDatabase, resolved, options);
+              const appended = appendTranscriptMessageInTransaction(
+                writeDatabase,
+                resolved,
+                options,
+              );
+              result = appended?.result;
               if (result) {
                 rememberCommittedTranscriptMessageSequencesInTransaction(
                   writeDatabase,
                   resolved.sessionId,
                   [result],
+                  readTranscriptAppendPostimage(appended),
                 );
                 messageSeq = readCommittedTranscriptMessageSequence(result);
               }
@@ -657,6 +565,7 @@ export async function withTranscriptWriteLock<T>(
       };
       return await withTranscriptLockSettlement((queue) =>
         run({
+          publishUpdate: (update) => queue(() => context.publishUpdate(update)),
           readEvents: () => queue(context.readEvents),
           readMessageFacts: (params) => queue(() => context.readMessageFacts(params)),
           replaceEvents: (events) => queue(() => context.replaceEvents(events)),
@@ -668,29 +577,4 @@ export async function withTranscriptWriteLock<T>(
     },
     "session.transcript.locked-write",
   );
-}
-
-function isSqliteTranscriptSnapshotUnchanged(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-  expected: readonly SqliteTranscriptSnapshotRow[],
-): boolean {
-  const current = readTranscriptEventRows(database, sessionId);
-  return (
-    current.length === expected.length &&
-    current.every(
-      (row, index) =>
-        row.seq === expected[index]?.seq && row.eventJson === expected[index]?.eventJson,
-    )
-  );
-}
-
-function assertSqliteTranscriptSnapshotUnchanged(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-  expected: readonly SqliteTranscriptSnapshotRow[],
-): void {
-  if (!isSqliteTranscriptSnapshotUnchanged(database, sessionId, expected)) {
-    throw new SqliteTranscriptMutationConflictError(sessionId);
-  }
 }

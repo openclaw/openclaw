@@ -1,4 +1,5 @@
 import { getAgentToolAssistantTurnId } from "../../../../packages/agent-core/src/tool-execution-context.js";
+import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   getPluginToolMeta,
   getPluginToolSideEffectOwnerKey,
@@ -178,7 +179,13 @@ export function prepareEmbeddedAttemptClientTools(params: {
     });
     clientToolDefs = clientToolSearch.tools;
     if (clientToolSearch.compacted) {
-      log.info(
+      emitTrustedDiagnosticEvent({
+        type: "tool.catalog",
+        source: "client",
+        mode: params.codeModeControlsEnabledForRun ? "code-mode" : "tool-search",
+        toolCount: clientToolSearch.catalogToolCount,
+      });
+      log.debug(
         params.codeModeControlsEnabledForRun
           ? `code-mode: cataloged ${clientToolSearch.catalogToolCount} client tools behind exec/wait`
           : `tool-search: cataloged ${clientToolSearch.catalogToolCount} client tools behind compact prompt surface`,
@@ -212,13 +219,17 @@ export function prepareEmbeddedAttemptClientTools(params: {
     ...current,
     refreshTools: () => {
       const next = buildSurface();
-      current.allCustomTools.splice(0, current.allCustomTools.length, ...next.allCustomTools);
-      current.clientToolDefs.splice(0, current.clientToolDefs.length, ...next.clientToolDefs);
-      current.sessionToolAllowlist.splice(
-        0,
-        current.sessionToolAllowlist.length,
-        ...next.sessionToolAllowlist,
-      );
+      const replaceItems = <T>(target: T[], source: T[]) =>
+        target.splice(0, target.length, ...source);
+      replaceItems(current.allCustomTools, next.allCustomTools);
+      replaceItems(current.clientToolDefs, next.clientToolDefs);
+      replaceItems(current.sessionToolAllowlist, next.sessionToolAllowlist);
+      const replaceSet = <T>(target: Set<T>, source: Set<T>) => {
+        target.clear();
+        for (const item of source) {
+          target.add(item);
+        }
+      };
       for (const key of [
         "builtinToolNames",
         "coreBuiltinToolNames",
@@ -227,15 +238,9 @@ export function prepareEmbeddedAttemptClientTools(params: {
         "sourceReplyCapableToolNames",
         "trustedLocalMediaToolNames",
       ] as const) {
-        current[key].clear();
-        for (const name of next[key]) {
-          current[key].add(name);
-        }
+        replaceSet(current[key], next[key]);
       }
-      current.replaySafeTools.clear();
-      for (const tool of next.replaySafeTools) {
-        current.replaySafeTools.add(tool);
-      }
+      replaceSet(current.replaySafeTools, next.replaySafeTools);
       current.sideEffectToolOwners.clear();
       for (const [name, owner] of next.sideEffectToolOwners) {
         current.sideEffectToolOwners.set(name, owner);

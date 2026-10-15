@@ -50,7 +50,7 @@ describe("nextcloud-talk doctor", () => {
       webhookPath: "/ready?tenant=a",
       legacyWebhook: false,
       expectedNote:
-        '- channels.nextcloud-talk.default: Webhook path "/ready?tenant=a" is reserved for Gateway probes and cannot receive Nextcloud callbacks on the Gateway port. Set webhookPath to "/nextcloud-talk-webhook" and update the Nextcloud bot callback and reverse-proxy upstream to Gateway port 19801/nextcloud-talk-webhook. This account cannot start until the callback path is changed.',
+        '- channels.nextcloud-talk.default: Webhook path "/ready?tenant=a" is reserved for Gateway checks and cannot receive Nextcloud callbacks on the Gateway port. Set webhookPath to "/nextcloud-talk-webhook" and update the Nextcloud bot callback and reverse-proxy upstream to Gateway port 19801/nextcloud-talk-webhook. This account cannot start until the callback path is changed.',
     },
     {
       label: "explicit legacy probe path",
@@ -58,7 +58,7 @@ describe("nextcloud-talk doctor", () => {
       webhookPath: "/healthz?tenant=a",
       legacyWebhook: { port: 8788 },
       expectedNote:
-        '- channels.nextcloud-talk.default: Webhook path "/healthz?tenant=a" is reserved for Gateway probes and cannot receive Nextcloud callbacks on the Gateway port. Set webhookPath to "/nextcloud-talk-webhook" and update the Nextcloud bot callback and reverse-proxy upstream to Gateway port 19801/nextcloud-talk-webhook. Legacy webhook listener 0.0.0.0:8788 remains available; verify the new route before removing the legacyWebhook pin.',
+        '- channels.nextcloud-talk.default: Webhook path "/healthz?tenant=a" is reserved for Gateway checks and cannot receive Nextcloud callbacks on the Gateway port. Set webhookPath to "/nextcloud-talk-webhook" and update the Nextcloud bot callback and reverse-proxy upstream to Gateway port 19801/nextcloud-talk-webhook. Legacy webhook listener 0.0.0.0:8788 remains available; verify the new route before removing the legacyWebhook pin.',
     },
     {
       label: "blocked Gateway-authenticated path",

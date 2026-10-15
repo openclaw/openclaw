@@ -7,18 +7,17 @@ import type { Client } from "../internal/discord.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import type { DiscordAudioFrame } from "./audio-worker-protocol.js";
 import {
-  beginVoiceCapture,
   clearVoiceCaptureFinalizeTimer,
   finishVoiceCapture,
   scheduleVoiceCaptureFinalize,
   waitForVoiceCaptureAdmission,
+  type VoiceCaptureEntry,
 } from "./capture-state.js";
 import {
   type DiscordVoiceIngressContext,
   runDiscordVoiceAgentTurn,
   resolveDiscordVoiceIngressContext,
 } from "./ingress.js";
-import { formatVoiceLogPreview } from "./log-preview.js";
 import type { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceIngressContextWithParticipants } from "./participant-context.js";
 import { DiscordRealtimeRecordingInput } from "./realtime-recording.js";
@@ -139,7 +138,8 @@ export class DiscordVoiceReceive {
     }
     // A recorder can promote this reservation while native conversation admission
     // waits, without repeating admission or subscribing before either authority exists.
-    const reservation = beginVoiceCapture(entry.capture, userId);
+    const reservation: VoiceCaptureEntry = {};
+    entry.capture.set(userId, reservation);
     try {
       let realtimeIngress: Promise<DiscordVoiceIngressContext | null> | undefined;
       if (realtime && !capture) {
@@ -181,16 +181,9 @@ export class DiscordVoiceReceive {
 
   private responseContext(entry: VoiceSessionEntry, userId: string) {
     return {
-      readPolicy: this.params.readPolicy,
+      ...this.params,
       entry,
       userId,
-      accountId: this.params.accountId,
-      cfg: this.params.cfg,
-      discordConfig: this.params.discordConfig,
-      admissionAllowFrom: this.params.admissionAllowFrom,
-      runtime: this.params.runtime,
-      speakerContext: this.params.speakerContext,
-      client: this.params.client,
       enqueuePlayback: (playbackEntry: VoiceSessionEntry, task: () => Promise<void>) => {
         playbackEntry.playbackQueue = playbackEntry.playbackQueue
           .then(task)
@@ -204,7 +197,7 @@ export class DiscordVoiceReceive {
   private async receiveSpeaker(
     entry: VoiceSessionEntry,
     userId: string,
-    reservation: ReturnType<typeof beginVoiceCapture>,
+    reservation: VoiceCaptureEntry,
     conversationAllowed: boolean,
     admittedIngress?: Promise<DiscordVoiceIngressContext | null>,
   ): Promise<void> {
@@ -430,7 +423,7 @@ export class DiscordVoiceReceive {
         }
       }
     } finally {
-      realtimeRecording?.sealBatch();
+      realtimeRecording?.seal("batch");
       if (conversationCompletion) {
         void conversationCompletion.catch((error: unknown) =>
           logger.warn(`discord voice: conversation failed: ${formatErrorMessage(error)}`),
@@ -486,22 +479,17 @@ export class DiscordVoiceReceive {
     userId: string,
   ): Promise<DiscordVoiceIngressContext | null> {
     return await resolveDiscordVoiceIngressContextWithParticipants({
-      readPolicy: this.params.readPolicy,
-      client: this.params.client,
+      ...this.params,
       entry,
       userId,
-      cfg: this.params.cfg,
-      discordConfig: this.params.discordConfig,
-      admissionAllowFrom: this.params.admissionAllowFrom,
       botUserId: this.params.botUserId(),
-      speakerContext: this.params.speakerContext,
     });
   }
 
   async runDiscordRealtimeAgentTurn(
     params: VoiceRealtimeAgentTurnParams & { entry: VoiceSessionEntry },
   ): Promise<string> {
-    const { context, entry, message, toolsAllow, userId } = params;
+    const { context, entry, message, userId } = params;
     params.signal?.throwIfAborted();
     const currentContext = await this.resolveDiscordVoiceIngressContext(entry, userId);
     params.signal?.throwIfAborted();
@@ -518,19 +506,12 @@ export class DiscordVoiceReceive {
       );
     }
     logger.info(
-      `discord voice: agent turn start guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId} user=${userId} speaker=${context.speakerLabel} owner=${context.senderIsOwner} model=${this.params.discordConfig.voice?.model ?? "route-default"} message=${formatVoiceLogPreview(message)}`,
+      `discord voice: agent turn start guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId} user=${userId} owner=${context.senderIsOwner} model=${this.params.discordConfig.voice?.model ?? "route-default"} chars=${message.length}`,
     );
     const text = await runDiscordVoiceAgentTurn({
-      entry,
-      accountId: this.params.accountId,
-      userId,
-      message,
-      discordConfig: this.params.discordConfig,
-      runtime: this.params.runtime,
+      ...this.params,
+      ...params,
       context: currentContext,
-      toolsAllow,
-      voiceSelection: params.voiceSelection,
-      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (text === null) {
       logVoiceVerbose(
@@ -539,7 +520,7 @@ export class DiscordVoiceReceive {
       return "";
     }
     logger.info(
-      `discord voice: agent turn answer (${text.length} chars) guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}: ${formatVoiceLogPreview(text)}`,
+      `discord voice: agent turn answer (${text.length} chars) guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}`,
     );
     return text;
   }

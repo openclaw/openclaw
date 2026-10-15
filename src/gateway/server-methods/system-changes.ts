@@ -22,6 +22,13 @@ const CHANGE_SCAN_BATCH_SIZE = MAX_CHANGE_LIMIT + 1;
 export const SYSTEM_CHANGE_MAX_RAW_SCAN_PER_SCOPE = 1_000;
 const COLLAPSE_MAX_DELAY_MS = 60_000;
 const MAX_PENDING_COLLAPSES = MAX_CHANGE_LIMIT;
+const CONFIG_WRITE_PREFIXES = new Map<SystemChangeEntry["source"], string>([
+  ["doctor", "Doctor updated configuration"],
+  ["config-rpc", "Settings updated configuration"],
+  ["plugin-install", "Plugin installation updated configuration"],
+  ["system-agent", "OpenClaw updated configuration"],
+  ["cli", "CLI updated configuration"],
+]);
 
 type PendingCollapse = {
   transition: string;
@@ -148,25 +155,6 @@ function summarizePaths(prefix: string, changedPaths: readonly string[] | undefi
   return `${prefix}: ${changedPaths.join(", ")}`;
 }
 
-function configWriteSummary(
-  source: SystemChangeEntry["source"],
-  changedPaths: readonly string[] | undefined,
-): string {
-  const prefix =
-    source === "doctor"
-      ? "Doctor updated configuration"
-      : source === "config-rpc"
-        ? "Settings updated configuration"
-        : source === "plugin-install"
-          ? "Plugin installation updated configuration"
-          : source === "system-agent"
-            ? "OpenClaw updated configuration"
-            : source === "cli"
-              ? "CLI updated configuration"
-              : "Configuration updated";
-  return summarizePaths(prefix, changedPaths);
-}
-
 function toSystemAgentCandidate(
   record: SequencedSqliteAuditRecordEntry<SystemAgentAuditEntry>,
 ): ChangeCandidate {
@@ -188,40 +176,31 @@ function toConfigCandidate(
   record: SequencedSqliteAuditRecordEntry<ConfigAuditRecord>,
 ): ChangeCandidate | null {
   const value = record.value;
-  if (value.event === "config.observe") {
-    return null;
-  }
-  if (value.event === "config.external") {
-    const changedPaths = value.changedPaths?.length ? value.changedPaths : undefined;
-    return {
-      entry: {
-        id: `${CONFIG_AUDIT_SCOPE}:${record.sequence}`,
-        at: parseDateStringTimestampMs(value.ts) ?? record.createdAt,
-        kind: "external-edit",
-        source: "external",
-        summary: summarizePaths("Configuration edited outside OpenClaw", changedPaths),
-        ...(changedPaths ? { changedPaths } : {}),
-        ...(!value.valid ? { invalid: true } : {}),
-        ...(value.opaqueChange ? { opaqueChange: true } : {}),
-      },
-      transition: transitionKey(value.previousHash, value.nextHash),
-      recordedAt: record.createdAt,
-      position: { scope: CONFIG_AUDIT_SCOPE, sequence: record.sequence },
-    };
-  }
-  if (value.result !== "rename" && value.result !== "copy-fallback") {
+  if (
+    value.event === "config.observe" ||
+    (value.event !== "config.external" &&
+      value.result !== "rename" &&
+      value.result !== "copy-fallback")
+  ) {
     return null;
   }
   const changedPaths = value.changedPaths?.length ? value.changedPaths : undefined;
-  const source = classifyConfigWriteSource(value);
+  const source = value.event === "config.external" ? "external" : classifyConfigWriteSource(value);
   return {
     entry: {
       id: `${CONFIG_AUDIT_SCOPE}:${record.sequence}`,
       at: parseDateStringTimestampMs(value.ts) ?? record.createdAt,
-      kind: "config-write",
+      kind: value.event === "config.external" ? "external-edit" : "config-write",
       source,
-      summary: configWriteSummary(source, changedPaths),
+      summary: summarizePaths(
+        value.event === "config.external"
+          ? "Configuration edited outside OpenClaw"
+          : (CONFIG_WRITE_PREFIXES.get(source) ?? "Configuration updated"),
+        changedPaths,
+      ),
       ...(changedPaths ? { changedPaths } : {}),
+      ...(value.event === "config.external" && !value.valid ? { invalid: true } : {}),
+      ...(value.event === "config.external" && value.opaqueChange ? { opaqueChange: true } : {}),
     },
     transition: transitionKey(value.previousHash, value.nextHash),
     recordedAt: record.createdAt,
@@ -257,7 +236,6 @@ async function scanCandidates<T>(params: {
       break;
     }
     loadedRawEntries += page.length;
-    let stoppedAt = -1;
     for (let index = 0; index < page.length; index += 1) {
       const entry = page[index]!;
       // The cursor tracks every scanned raw row, including filtered records.
@@ -266,13 +244,12 @@ async function scanCandidates<T>(params: {
       if (candidate) {
         entries.push(candidate);
         if (entries.length >= params.target) {
-          stoppedAt = index;
+          exhausted = index === page.length - 1 && page.length < pageLimit;
           break;
         }
       }
     }
     if (entries.length >= params.target) {
-      exhausted = stoppedAt === page.length - 1 && page.length < pageLimit;
       break;
     }
     if (page.length < pageLimit) {
@@ -306,7 +283,6 @@ function planConfigMatches(
   }
 
   const planned = new Map<ChangeCandidate, ChangeCandidate>();
-  const usedConfig = new Set<ChangeCandidate>();
   let lastMatchedConfigSequence = Number.POSITIVE_INFINITY;
   for (const operation of systemCandidates) {
     if (!operation.transition) {
@@ -317,7 +293,6 @@ function planConfigMatches(
       ?.filter((candidate) => {
         const configSequence = candidate.position.sequence;
         return (
-          !usedConfig.has(candidate) &&
           configSequence < lastMatchedConfigSequence &&
           isWithinCollapseWindow(operation.entry.at, candidate.entry.at)
         );
@@ -327,7 +302,6 @@ function planConfigMatches(
       continue;
     }
     planned.set(operation, write);
-    usedConfig.add(write);
     lastMatchedConfigSequence = write.position.sequence;
   }
   return planned;
@@ -350,26 +324,13 @@ function isWithinCollapseWindow(operationAt: number, configAt: number): boolean 
   return delay >= 0 && delay <= COLLAPSE_MAX_DELAY_MS;
 }
 
-function appendPendingCollapse(
-  pending: readonly PendingCollapse[],
-  marker: PendingCollapse,
-): PendingCollapse[] {
-  const next = [...pending, marker];
-  // Keep the cursor bounded. A dropped marker can reveal a rare duplicate
-  // config-write row, but never hides a newer visible history entry.
-  return next.length <= MAX_PENDING_COLLAPSES ? next : next.slice(-MAX_PENDING_COLLAPSES);
-}
-
-function consumePendingCollapse(
-  pending: readonly PendingCollapse[],
-  candidate: ChangeCandidate,
-): { pending: PendingCollapse[]; suppressed: boolean } {
+function consumePendingCollapse(pending: PendingCollapse[], candidate: ChangeCandidate): boolean {
   if (
     candidate.entry.kind !== "config-write" ||
     candidate.entry.source !== "system-agent" ||
     !candidate.transition
   ) {
-    return { pending: [...pending], suppressed: false };
+    return false;
   }
   const sequence = candidate.position.sequence;
   let markerIndex = -1;
@@ -387,12 +348,10 @@ function consumePendingCollapse(
     }
   }
   if (markerIndex < 0) {
-    return { pending: [...pending], suppressed: false };
+    return false;
   }
-  return {
-    pending: pending.filter((_, index) => index !== markerIndex),
-    suppressed: true,
-  };
+  pending.splice(markerIndex, 1);
+  return true;
 }
 
 function mergeCandidates(params: {
@@ -405,7 +364,6 @@ function mergeCandidates(params: {
   systemBefore?: number;
   configBefore?: number;
   pendingCollapse: PendingCollapse[];
-  hasBufferedEntries: boolean;
   hasBufferedSystemEntries: boolean;
   hasBufferedConfigEntries: boolean;
 } {
@@ -413,7 +371,7 @@ function mergeCandidates(params: {
   let configIndex = 0;
   let systemBefore: number | undefined;
   let configBefore: number | undefined;
-  let pendingCollapse = [...params.pendingCollapse];
+  const pendingCollapse = [...params.pendingCollapse];
   const entries: ChangeCandidate[] = [];
 
   while (true) {
@@ -429,14 +387,10 @@ function mergeCandidates(params: {
       break;
     }
 
-    if (next === config) {
-      const collapse = consumePendingCollapse(pendingCollapse, config);
-      pendingCollapse = collapse.pending;
-      if (collapse.suppressed) {
-        configBefore = config.position.sequence;
-        configIndex += 1;
-        continue;
-      }
+    if (next === config && consumePendingCollapse(pendingCollapse, config)) {
+      configBefore = config.position.sequence;
+      configIndex += 1;
+      continue;
     }
     if (entries.length >= params.limit) {
       break;
@@ -447,7 +401,11 @@ function mergeCandidates(params: {
       systemBefore = system.position.sequence;
       systemIndex += 1;
       if (system.pendingCollapse) {
-        pendingCollapse = appendPendingCollapse(pendingCollapse, system.pendingCollapse);
+        pendingCollapse.push(system.pendingCollapse);
+        // Dropped markers can reveal duplicate config rows, never hide newer history.
+        if (pendingCollapse.length > MAX_PENDING_COLLAPSES) {
+          pendingCollapse.shift();
+        }
       }
     } else {
       configBefore = config!.position.sequence;
@@ -460,8 +418,6 @@ function mergeCandidates(params: {
     systemBefore,
     configBefore,
     pendingCollapse,
-    hasBufferedEntries:
-      systemIndex < params.systemCandidates.length || configIndex < params.configCandidates.length,
     hasBufferedSystemEntries: systemIndex < params.systemCandidates.length,
     hasBufferedConfigEntries: configIndex < params.configCandidates.length,
   };
@@ -529,21 +485,16 @@ export async function listSystemChanges(
       continue;
     }
     const write = plannedMatches.get(operation);
-    if (write) {
+    const maxConfigSequence = write?.position.sequence ?? unseenConfigMaxSequence;
+    if (maxConfigSequence !== undefined) {
       operation.pendingCollapse = {
         transition: operation.transition,
-        maxConfigSequence: write.position.sequence,
+        maxConfigSequence,
         operationAt: operation.entry.at,
       };
-      if (write.entry.changedPaths?.length) {
-        operation.entry.changedPaths = [...write.entry.changedPaths];
-      }
-    } else if (unseenConfigMaxSequence !== undefined) {
-      operation.pendingCollapse = {
-        transition: operation.transition,
-        maxConfigSequence: unseenConfigMaxSequence,
-        operationAt: operation.entry.at,
-      };
+    }
+    if (write?.entry.changedPaths?.length) {
+      operation.entry.changedPaths = [...write.entry.changedPaths];
     }
   }
   const merged = mergeCandidates({
@@ -556,24 +507,23 @@ export async function listSystemChanges(
   // remaining config record has passed the cursor and none was a partner.
   const pendingCollapse =
     configScan.exhausted && !merged.hasBufferedConfigEntries ? [] : merged.pendingCollapse;
-  const next = { ...cursor };
-  if (!merged.hasBufferedSystemEntries) {
-    next.systemAgentBefore = systemScan.nextBeforeSequence;
-  } else if (merged.systemBefore !== undefined) {
-    next.systemAgentBefore = merged.systemBefore;
-  }
-  if (!merged.hasBufferedConfigEntries) {
-    next.configBefore = configScan.nextBeforeSequence;
-  } else if (merged.configBefore !== undefined) {
-    next.configBefore = merged.configBefore;
-  }
+  const next = {
+    ...cursor,
+    systemAgentBefore: merged.hasBufferedSystemEntries
+      ? (merged.systemBefore ?? cursor.systemAgentBefore)
+      : systemScan.nextBeforeSequence,
+    configBefore: merged.hasBufferedConfigEntries
+      ? (merged.configBefore ?? cursor.configBefore)
+      : configScan.nextBeforeSequence,
+  };
   if (pendingCollapse.length > 0) {
     next.pendingCollapse = pendingCollapse;
   } else {
     delete next.pendingCollapse;
   }
   const hasMore =
-    merged.hasBufferedEntries ||
+    merged.hasBufferedSystemEntries ||
+    merged.hasBufferedConfigEntries ||
     pendingCollapse.length > 0 ||
     !systemScan.exhausted ||
     !configScan.exhausted;

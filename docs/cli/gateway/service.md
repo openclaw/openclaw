@@ -28,6 +28,21 @@ not rewrite configuration. Restart preserves the installed service definition wh
 config needs repair; its health check still reports whether the Gateway came back.
 `gateway start` continues to validate configuration before starting the Gateway.
 
+If a Gateway holds state ownership for more than five minutes without recording
+that its listener bound, `openclaw gateway stop` can recover the stalled startup,
+including one frozen before publishing its owner identity. Recovery verifies the
+recorded PID and process start time before termination, then confirms process exit
+and state ownership release. A fresh worker heartbeat does not extend this startup
+budget. Ownership contention names the stalled PID, startup age, and stop command;
+you do not need to delete lock files manually.
+
+`gateway status` reports service process state separately from Gateway readiness.
+When its connection check fails, inspect the service logs even if the process is
+running. Recent log errors are matching evidence from the bounded log tail, may
+belong to an earlier run, and do not establish the current process's startup phase.
+Routine startup and shutdown messages are not reported as errors. Doctor and
+onboarding use the same error selection.
+
 On Windows, Scheduled Task stop and restart first ask the verified Gateway to drain
 and exit. Older or unresponsive Gateways fall back to termination of the captured
 process tree; a replacement instance is preserved. Transient SQLite sharing errors
@@ -38,6 +53,10 @@ If task settlement inspection remains unavailable
 within the stop budget, restart still attempts the captured task after confirming
 the Gateway exited, then reports that restart is unverified. An observed replacement
 is preserved and the restart is refused.
+
+`gateway start` checks readiness even when the service process is already running.
+It reports `already-running` only after the selected Gateway passes the health and
+readiness checks; it does not restart a process that is still warming up.
 
 If `gateway start` reaches its readiness deadline while the managed Gateway is
 still starting, it reports `still-starting` and exits with code `2`. The service
@@ -236,11 +255,11 @@ openclaw gateway restart
   <Accordion title="Service runtime">
     - Node is the primary and recommended managed Gateway runtime and the default for fresh installations; with no explicit runtime, pin, or wrapper, an install running under supported Bun uses that executable without creating a pin if no supported Node is found. Implicit reinstalls retain a supported recorded Node or Bun runtime as described above.
     - For unpinned services, `gateway install` checks the Node executable recorded in the managed service. If it is missing, non-executable, or unsupported, installation refreshes the service without requiring `--force` and reports the replacement path. This also applies when an installer or update refreshes the service. Repair prefers the current CLI's supported Node, retaining stable Homebrew paths, then checks supported system installations. Custom wrappers keep control of their runtime; protected service definitions still require their deployment owner to repair them.
-    - Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `gateway install --runtime bun`.
+    - Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `gateway install --runtime bun`.
 
   </Accordion>
   <Accordion title="Lifecycle behavior">
-    - `gateway start` is idempotent: when the managed service is already running, it reports the running process and leaves it untouched. A loaded but stopped service is started as before.
+    - When the managed service is already running, `gateway start` reports the running process and leaves it untouched. A loaded but stopped service is started as before.
     - On Windows, an explicit `gateway start` re-enables a disabled Scheduled Task after verifying its selected profile and command. It preserves the registered launcher and trigger settings. If enablement succeeds but launch fails, the Task may remain enabled; inspect the same profile with `gateway status --deep` before retrying. `update repair` leaves a Gateway that was already stopped offline; run `gateway start` afterward when you intend to bring it online.
     - If no managed service is installed, `gateway start` prints install hints and exits nonzero. `gateway restart` can first recover an installed-but-unloaded LaunchAgent or a verified unmanaged Gateway; if neither a managed service nor recovery handles the action, it prints the same hints and exits nonzero. Stopping an absent service remains a successful no-op.
     - If `gateway start` or `gateway restart` needs to repair a stale service definition, the command refuses when the invoking shell resolves a different state directory, config path, or port than the installed service. Match or unset the conflicting environment overrides, or use `openclaw gateway install --force` to retarget the service intentionally.
@@ -271,7 +290,7 @@ openclaw gateway restart
   <Accordion title="Auth and SecretRefs at install time">
     - When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `gateway install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
     - Reinstall and update preserve existing service values for active env SecretRefs, including Gateway tokens and passwords. On Linux and macOS, legacy inline values move into the generated owner-only env file before the unit or LaunchAgent is rewritten. This does not make service credentials available to interactive CLI commands.
-    - If token auth requires a token and the configured token SecretRef is unresolved, install fails closed instead of persisting fallback plaintext.
+    - If token auth requires a token and the configured token SecretRef is unresolved, install stops instead of persisting fallback plaintext.
     - For password auth on `gateway run`, prefer `OPENCLAW_GATEWAY_PASSWORD`, `--password-file`, or a SecretRef-backed `gateway.auth.password` over inline `--password`.
     - In inferred auth mode, shell-only `OPENCLAW_GATEWAY_PASSWORD` does not relax install token requirements; use durable config (`gateway.auth.password` or config `env`) when installing a managed service.
     - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install is blocked until mode is set explicitly.

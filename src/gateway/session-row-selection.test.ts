@@ -7,11 +7,14 @@ import {
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
+  assignSessionOwner,
   deleteSessionEntryLifecycle,
+  patchSessionEntryCore,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as sessionKeys from "../sessions/session-key-utils.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -23,6 +26,8 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
+import { registerChatAbortController } from "./chat-abort.js";
+import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { create as createSessionRow } from "./session-row-projection-record.js";
@@ -32,6 +37,7 @@ import * as childOwners from "./session-utils-core.js";
 import {
   filterAndSortSessionEntries,
   listProjectedSessions,
+  prepareProjectedSessionList,
   prepareSessionRowSelection,
 } from "./session-utils-list.js";
 
@@ -100,6 +106,24 @@ it("maintains list order across metadata changes and archived-row rematerializat
       expect((await list())[0]?.key).toBe(second);
       const archived = await listProjectedSessions({ projection, opts: { archived: true } });
       expect(archived.sessions.map((row) => row.key)).toEqual([third]);
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: third },
+        { sessionId: third, updatedAt: 4, lastInteractionAt: 3 },
+      );
+      expect((await list())[0]?.key).toBe(third);
+      expect(await listProjectedSessions({ projection, opts: { archived: true } })).toMatchObject({
+        sessions: [],
+        totalCount: 0,
+      });
+      // Archive membership is presence, including a zero timestamp.
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: third },
+        { sessionId: third, updatedAt: 4, lastInteractionAt: 3, archivedAt: 0 },
+      );
+      expect((await list())[0]?.key).toBe(second);
+      expect(
+        await listProjectedSessions({ projection, opts: { archived: true, limit: 1 } }),
+      ).toMatchObject({ sessions: [{ key: third }], totalCount: 1, hasMore: false });
       const archivedQuery = { agentId: "main", key: third };
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
@@ -157,6 +181,72 @@ it("maintains list order across metadata changes and archived-row rematerializat
       scan.mockRestore();
       projection.dispose();
       release();
+    }
+  });
+});
+
+it("refreshes agent owner facets when the sidebar roster changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    let cfg: OpenClawConfig = {
+      agents: { entries: { main: {}, owner: {} } },
+      acp: { allowedAgents: ["transport"] },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const key = "agent:main:owned";
+    const entry = {
+      sessionId: "owned",
+      updatedAt: 1,
+    };
+    replaceSessionEntrySync({ agentId: "main", sessionKey: key }, entry);
+    assignSessionOwner(
+      { agentId: "main", sessionKey: key },
+      { owner: { type: "agent", id: "owner" }, assignedBy: { type: "system", id: "test" } },
+    );
+    const acpKey = "agent:main:acp-owner";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: acpKey },
+      { sessionId: "acp-owner", updatedAt: 2, archivedAt: 3 },
+    );
+    assignSessionOwner(
+      { agentId: "main", sessionKey: acpKey },
+      { owner: { type: "agent", id: "transport" }, assignedBy: { type: "system", id: "test" } },
+    );
+    const projection = await createSessionRowProjection({
+      cfg,
+      getConfig: () => cfg,
+      modelCatalog: [],
+    });
+    try {
+      const list = (scoped = true) =>
+        listProjectedSessions({
+          projection,
+          opts: {
+            agentId: scoped ? "main" : undefined,
+            configuredAgentsOnly: true,
+            includeGlobal: true,
+            includeUnknown: true,
+            rowMode: "sidebar",
+            limit: 200,
+            archived: "all",
+          },
+        });
+      // Read the cold ACP row before a scoped read can populate its owner projection.
+      expect((await list(false)).owners?.map(({ id }) => id)).toEqual(["owner"]);
+      expect((await list()).owners?.map(({ id }) => id)).toEqual(["owner"]);
+      await patchSessionEntryCore({ agentId: "main", sessionKey: key }, () => ({
+        label: "Metadata changed",
+      }));
+      expect((await list()).owners?.map(({ id }) => id)).toEqual(["owner"]);
+      cfg = { ...cfg, agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      expect((await list()).owners).toEqual([]);
+      expect((await list(false)).owners).toEqual([]);
+      cfg = { ...cfg, agents: { entries: { main: {}, owner: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      expect((await list()).owners?.map(({ id }) => id)).toEqual(["owner"]);
+      expect((await list(false)).owners?.map(({ id }) => id)).toEqual(["owner"]);
+    } finally {
+      projection.dispose();
     }
   });
 });
@@ -344,10 +434,22 @@ it.each([false, true])(
           entry,
         };
       });
-      projection.selectEntries = (query) =>
-        query?.parentSessionKey
+      projection.selectEntries = (query) => {
+        if (query?.sessionIdOrKey) {
+          const keys = new Set(
+            rows
+              .filter(
+                (row) =>
+                  row.key === query.sessionIdOrKey || row.entry.sessionId === query.sessionIdOrKey,
+              )
+              .map((row) => row.key),
+          );
+          return rows.filter((row) => keys.has(row.key));
+        }
+        return query?.parentSessionKey
           ? rows.filter((row) => row.entry.spawnedBy === query.parentSessionKey)
           : rows;
+      };
       projection.state.scope = () => ({
         paths: new Map([
           ["primary", 0],
@@ -356,6 +458,7 @@ it.each([false, true])(
         path: "(multiple)",
         agentId: undefined,
         configuredAgentIds: new Set(["main", "ops"]),
+        ownerAgentIds: new Set(["main", "ops"]),
       });
       try {
         const prepared = prepareSessionRowSelection(projection, {
@@ -364,12 +467,12 @@ it.each([false, true])(
           includeGlobal: true,
           includeUnknown: true,
         });
-        expect(prepared.entries.map(([, entry]) => entry.sessionId)).toEqual(
+        expect(prepared.entries("all").map(([, entry]) => entry.sessionId)).toEqual(
           activeOnly
             ? ["ordinary", "main-global", "ops-global", "unknown-winner", "unknown-shadow"]
             : ["ordinary", "main-global", "unknown-winner"],
         );
-        for (const [key, entry] of prepared.entries) {
+        for (const [key, entry] of prepared.entries("all")) {
           const target = prepared.getTarget(key)!;
           const original = rows.find((row) => row.entry === entry)!;
           expect(target.entry).toBe(entry);
@@ -395,6 +498,41 @@ it.each([false, true])(
           prepareSessionRowSelection(projection, { ...prepared.opts, spawnedBy: parent }),
         );
         expect(children.map(([, entry]) => entry.sessionId)).toEqual(["ordinary"]);
+        if (activeOnly) {
+          const context = requestContext(cfg);
+          const registrations = [
+            ["main", "shadow-global"],
+            ["ops", "ops-global"],
+            ["main", "unknown-shadow"],
+          ].map(([agentId, sessionId]) =>
+            registerChatAbortController({
+              chatAbortControllers: context.chatAbortControllers,
+              runId: sessionId!,
+              agentId,
+              sessionId: sessionId!,
+              sessionKey: `agent:${agentId}:run-alias`,
+              timeoutMs: 60_000,
+            }),
+          );
+          try {
+            const { filters } = prepareProjectedSessionList({
+              projection,
+              context,
+              opts: prepared.opts,
+              now,
+              metadataPrepared: true,
+            });
+            // The live fallback ID cannot displace its inactive physical winner.
+            // Other agents' sentinel rows and same-ID aliases remain independently visible.
+            expect(
+              filterAndSortSessionEntries(filters).map(([, entry]) => entry.sessionId),
+            ).toEqual(["ops-global", "unknown-shadow"]);
+          } finally {
+            for (const registration of registrations) {
+              registration.cleanup();
+            }
+          }
+        }
       } finally {
         projection.dispose();
       }

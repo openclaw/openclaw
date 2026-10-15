@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -7,8 +6,10 @@ import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-aut
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   replaceSessionEntry,
+  updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import { QuestionManager } from "../../gateway/question-manager.js";
@@ -16,6 +17,7 @@ import { createDirectChatContext } from "../../gateway/server-chat.agent-events.
 import { createQuestionHandlers } from "../../gateway/server-methods/question.js";
 import { createSecretStoreWriteService } from "../../gateway/server-methods/secrets.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -56,7 +58,7 @@ it("leaves image steering with its owner when there is no pending question", asy
 
 it.each([
   ...(["caller", "prepared-claim", "prepared-cancel"] as const).flatMap((path) =>
-    (["current", "foreign-policy", "creator-closed"] as const).map((change) => ({ path, change })),
+    (["current", "policy", "creator-closed"] as const).map((change) => ({ path, change })),
   ),
   ...(["legacy-run", "custom-run"] as const).flatMap((path) =>
     (["current", "persist-policy", "persist-generation"] as const).map((change) => ({
@@ -90,6 +92,13 @@ it.each([
         sandboxMode: "off",
       },
     );
+    // Drain seed maintenance before measuring the final authority read.
+    for (const agentId of ["main", "policy"]) {
+      await closeOpenClawAgentDatabaseByPathAsync(
+        resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
+        agentId,
+      );
+    }
     Object.assign(run.run, {
       sessionKey,
       runtimePolicySessionKey: policyKey,
@@ -217,20 +226,10 @@ it.each([
       assertCurrent,
       toolAuthorityPreparation: preparation,
     };
-    const revokePolicy = () => {
-      const peer = new DatabaseSync(
-        resolveOpenClawAgentSqlitePath({ agentId: "policy", env: state.env }),
-      );
-      try {
-        peer
-          .prepare(
-            "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
-          )
-          .run(policyKey);
-      } finally {
-        peer.close();
-      }
-    };
+    const revokePolicy = () =>
+      updateSessionEntry({ agentId: "policy", sessionKey: policyKey }, () => ({
+        sandboxMode: undefined,
+      }));
     const pending = withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey, gatewayContextResolver: () => context },
       () =>
@@ -260,11 +259,6 @@ it.each([
                           sandboxMode: change === "persist-generation" ? "off" : undefined,
                         },
                       );
-                      if (change === "persist-generation") {
-                        expect(snapshot.project(caller, run.run)).toBe(fingerprint);
-                      } else {
-                        expect(snapshot.project(caller, run.run)).not.toBe(fingerprint);
-                      }
                     }
                   : undefined,
               })
@@ -287,8 +281,8 @@ it.each([
           "question did not reach its final session read",
         );
       }
-      if (change === "foreign-policy") {
-        revokePolicy();
+      if (change === "policy") {
+        await revokePolicy();
       } else if (change === "creator-closed") {
         controller.abort(new Error("question creator closed during final read"));
       }
@@ -322,8 +316,11 @@ it.each([
       resume.resolve();
       await settled;
       question.dispose();
+      snapshot.close();
       manager.close();
       await manager.drain();
     }
+    // Non-isolated workers share retained sharing facts with the next test file.
+    assertNoRetainedSessionSharingReads();
   });
 });

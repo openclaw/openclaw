@@ -7,8 +7,9 @@ import type { SessionsUsageResult } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI usage proxy reconnect lifecycle",
@@ -213,7 +214,7 @@ suite.define(() => {
       const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
       await agentScope.locator(".agent-select__trigger").click();
       await agentScope
-        .locator("wa-dropdown-item[data-agent-option]")
+        .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: "All agents" })
         .click();
       await gateway.waitForRequest("sessions.usage", { match: { agentScope: "all" } });
@@ -319,9 +320,7 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-identity-card").click();
-      await sidebar
-        .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
-        .click();
+      await sidebar.locator('.sidebar-identity-menu [data-value="command:usage"]').click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
       await waitForRequestCount(gateway, "sessions.usage", 1);
       await page.locator(".daily-chart-compact").waitFor({ timeout: 10_000 });

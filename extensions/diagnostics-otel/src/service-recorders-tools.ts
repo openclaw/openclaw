@@ -10,6 +10,7 @@ import type {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { assignOptionalNumberAttrs } from "./service-attributes.js";
 import {
   assignOtelToolContentAttributes,
   assignOtelToolIdentityAttributes,
@@ -34,7 +35,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     "openclaw.tool.source": normalizeDiagnosticValue(evt.toolSource, "core"),
     "gen_ai.tool.name": evt.toolName,
     ...(evt.toolOwner ? { "openclaw.tool.owner": normalizeDiagnosticValue(evt.toolOwner) } : {}),
-    ...runtime.paramsSummaryAttrs(evt.paramsSummary),
+    ...(evt.paramsSummary ? { "openclaw.tool.params.kind": evt.paramsSummary.kind } : {}),
   });
   const toolTimestampMs = (evt: { sourceTimestampMs?: number; ts: number }) =>
     evt.sourceTimestampMs ?? evt.ts;
@@ -47,7 +48,15 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       if (!metadata.trusted && !isInternalDiagnosticEventMetadata(metadata)) {
         return;
       }
-      runtime.gcDurationHistogram.record(evt.durationMs, undefined, ROOT_CONTEXT);
+      runtime.gcDurationHistogram.record(
+        evt.durationMs,
+        {
+          "openclaw.gc.kind": evt.kind ?? "unknown",
+          "openclaw.gc.thread": evt.thread ?? "main",
+          ...(evt.workerSlot === undefined ? {} : { "openclaw.gc.worker_slot": evt.workerSlot }),
+        },
+        ROOT_CONTEXT,
+      );
     },
     recordGatewayEventLoopSample(
       evt: Extract<DiagnosticEventPayload, { type: "gateway.event_loop.sample" }>,
@@ -100,10 +109,13 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       if (trackedSpan) {
         return trackedSpan.spanContext();
       }
-      const spanAttrs = toolExecutionBaseAttrs(evt);
+      const spanAttrs = {
+        ...toolExecutionBaseAttrs(evt),
+        ...runtime.paramsSummaryAttrs(evt.paramsSummary),
+      };
       assignOtelToolIdentityAttributes(spanAttrs, evt);
       return runtime
-        .trackTrustedSpan(
+        .trackInternalOrTrustedSpan(
           evt,
           metadata,
           runtime.spanWithDuration("openclaw.tool.execution", spanAttrs, undefined, {
@@ -129,7 +141,10 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       if (!runtime.tracesEnabled) {
         return;
       }
-      const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
+      const spanAttrs: Record<string, string | number | boolean> = {
+        ...attrs,
+        ...runtime.paramsSummaryAttrs(evt.paramsSummary),
+      };
       runtime.addRunAttrs(spanAttrs, evt);
       assignOtelToolIdentityAttributes(spanAttrs, evt);
       if (evt.type === "tool.execution.error" && evt.errorCode) {
@@ -164,6 +179,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       }
       const spanAttrs: Record<string, string | number | boolean> = {
         ...toolExecutionBaseAttrs(evt),
+        ...runtime.paramsSummaryAttrs(evt.paramsSummary),
         "openclaw.outcome": "blocked",
         "openclaw.deniedReason": normalizeDiagnosticValue(evt.deniedReason, "other"),
       };
@@ -252,17 +268,15 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       };
       runtime.livenessWarningCounter.add(1, attrs);
       runtime.queueDepthHistogram.record(evt.queued, { "openclaw.channel": "liveness" });
-      if (evt.eventLoopDelayP99Ms !== undefined) {
-        runtime.livenessEventLoopDelayP99Histogram.record(evt.eventLoopDelayP99Ms, attrs);
-      }
-      if (evt.eventLoopDelayMaxMs !== undefined) {
-        runtime.livenessEventLoopDelayMaxHistogram.record(evt.eventLoopDelayMaxMs, attrs);
-      }
-      if (evt.eventLoopUtilization !== undefined) {
-        runtime.livenessEventLoopUtilizationHistogram.record(evt.eventLoopUtilization, attrs);
-      }
-      if (evt.cpuCoreRatio !== undefined) {
-        runtime.livenessCpuCoreRatioHistogram.record(evt.cpuCoreRatio, attrs);
+      for (const [histogram, value] of [
+        [runtime.livenessEventLoopDelayP99Histogram, evt.eventLoopDelayP99Ms],
+        [runtime.livenessEventLoopDelayMaxHistogram, evt.eventLoopDelayMaxMs],
+        [runtime.livenessEventLoopUtilizationHistogram, evt.eventLoopUtilization],
+        [runtime.livenessCpuCoreRatioHistogram, evt.cpuCoreRatio],
+      ] as const) {
+        if (value !== undefined) {
+          histogram.record(value, attrs);
+        }
       }
       if (!runtime.tracesEnabled) {
         return;
@@ -273,26 +287,16 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
         "openclaw.liveness.waiting": evt.waiting,
         "openclaw.liveness.queued": evt.queued,
         "openclaw.liveness.interval_ms": evt.intervalMs,
-        ...(evt.eventLoopDelayP99Ms !== undefined
-          ? { "openclaw.liveness.event_loop_delay_p99_ms": evt.eventLoopDelayP99Ms }
-          : {}),
-        ...(evt.eventLoopDelayMaxMs !== undefined
-          ? { "openclaw.liveness.event_loop_delay_max_ms": evt.eventLoopDelayMaxMs }
-          : {}),
-        ...(evt.eventLoopUtilization !== undefined
-          ? { "openclaw.liveness.event_loop_utilization": evt.eventLoopUtilization }
-          : {}),
-        ...(evt.cpuUserMs !== undefined ? { "openclaw.liveness.cpu_user_ms": evt.cpuUserMs } : {}),
-        ...(evt.cpuSystemMs !== undefined
-          ? { "openclaw.liveness.cpu_system_ms": evt.cpuSystemMs }
-          : {}),
-        ...(evt.cpuTotalMs !== undefined
-          ? { "openclaw.liveness.cpu_total_ms": evt.cpuTotalMs }
-          : {}),
-        ...(evt.cpuCoreRatio !== undefined
-          ? { "openclaw.liveness.cpu_core_ratio": evt.cpuCoreRatio }
-          : {}),
       };
+      assignOptionalNumberAttrs(spanAttrs, "openclaw.liveness.", {
+        event_loop_delay_p99_ms: evt.eventLoopDelayP99Ms,
+        event_loop_delay_max_ms: evt.eventLoopDelayMaxMs,
+        event_loop_utilization: evt.eventLoopUtilization,
+        cpu_user_ms: evt.cpuUserMs,
+        cpu_system_ms: evt.cpuSystemMs,
+        cpu_total_ms: evt.cpuTotalMs,
+        cpu_core_ratio: evt.cpuCoreRatio,
+      });
       const span = runtime.spanWithDuration("openclaw.liveness.warning", spanAttrs, 0, {
         endTimeMs: evt.ts,
       });
@@ -311,15 +315,13 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       }
       const spanAttrs: Record<string, string | number> = {
         "openclaw.phase": normalizeDiagnosticValue(evt.name, "unknown"),
-        ...(evt.cpuUserMs !== undefined ? { "openclaw.phase.cpu_user_ms": evt.cpuUserMs } : {}),
-        ...(evt.cpuSystemMs !== undefined
-          ? { "openclaw.phase.cpu_system_ms": evt.cpuSystemMs }
-          : {}),
-        ...(evt.cpuTotalMs !== undefined ? { "openclaw.phase.cpu_total_ms": evt.cpuTotalMs } : {}),
-        ...(evt.cpuCoreRatio !== undefined
-          ? { "openclaw.phase.cpu_core_ratio": evt.cpuCoreRatio }
-          : {}),
       };
+      assignOptionalNumberAttrs(spanAttrs, "openclaw.phase.", {
+        cpu_user_ms: evt.cpuUserMs,
+        cpu_system_ms: evt.cpuSystemMs,
+        cpu_total_ms: evt.cpuTotalMs,
+        cpu_core_ratio: evt.cpuCoreRatio,
+      });
       for (const [key, value] of Object.entries(evt.details ?? {})) {
         spanAttrs[`openclaw.phase.detail.${key}`] =
           typeof value === "boolean" ? String(value) : value;

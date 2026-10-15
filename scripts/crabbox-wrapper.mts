@@ -65,6 +65,11 @@ import {
   loadManagedChildSpawner,
 } from "./lib/managed-child-process.mts";
 import {
+  claimManagedCleanup,
+  failManagedCleanup,
+  ManagedCleanupCancelled,
+} from "./lib/managed-cleanup-handoff.mts";
+import {
   prepareTestboxLeaseFreshness,
   recordTestboxLeaseFreshness,
 } from "./testbox-lease-freshness.mts";
@@ -318,7 +323,7 @@ const jsRuntimeEntrypoints = new Set([
 ]);
 const awsMacosCorepackEntrypoints = new Set(["pnpm", "yarn", "corepack"]);
 const awsMacosBunEntrypoints = new Set(["bun", "bunx"]);
-const awsMacosBunVersion = "1.4.2";
+const awsMacosBunVersion = "1.4.3";
 const awsMacosSwiftEntrypoints = new Set(["swift", "xcodebuild"]);
 const awsMacosSwiftScriptTargets = new Set([
   "mac:package",
@@ -1310,9 +1315,6 @@ function restoreTemporaryLeaseClaimPath(claimPath: string) {
       encoding: "utf8",
       mode: 0o600,
     });
-    if (readFileSync(claimPath, "utf8") !== original) {
-      return;
-    }
     renameSync(temporaryPath, claimPath);
   } finally {
     rmSync(temporaryPath, { force: true });
@@ -1446,7 +1448,7 @@ function replaceRunPayload(invocation: CommandInvocation, payload: string[]) {
 
 function renderRunShellCommand(invocation: CommandInvocation, join = shellJoin) {
   return invocation.options.has("shell") && invocation.commandArgs.length === 1
-    ? invocation.commandArgs[0]
+    ? (invocation.commandArgs[0] ?? "")
     : join(invocation.commandArgs);
 }
 
@@ -3656,7 +3658,11 @@ function injectFullCheckoutLeaseReclaim(commandArgs: string[]) {
   return normalizedArgs;
 }
 
-function injectRemoteTestboxCi(commandArgs: string[], providerName: string) {
+function injectRemoteTestboxCi(
+  commandArgs: string[],
+  providerName: string,
+  sourceBootstrap: string,
+) {
   if (commandArgs[0] !== "run" || canonicalProviderName(providerName) !== "blacksmith-testbox") {
     return commandArgs;
   }
@@ -3666,7 +3672,7 @@ function injectRemoteTestboxCi(commandArgs: string[], providerName: string) {
   }
   return replaceRunCommandWithShell(
     invocation,
-    `export CI=true; ${renderRunShellCommand(invocation)}`,
+    `export CI=true; ${sourceBootstrap ? `${sourceBootstrap} || exit $?; ` : ""}exec node scripts/crabbox-remote-redact.mjs -- bash -c ${shellQuote(renderRunShellCommand(invocation))}`,
   );
 }
 
@@ -3720,6 +3726,7 @@ async function applyRunTransforms(
         transformedArgs = replaceRunScript(invocation, scriptPath);
       } else if (
         invocation.start >= 0 &&
+        !testboxWorkspace &&
         !isAwsMacosRemoteTarget(transformedArgs, options.provider)
       ) {
         transformedArgs = replaceRunCommandWithShell(
@@ -3749,7 +3756,7 @@ async function applyRunTransforms(
       options.provider,
     );
     return {
-      args: injectRemoteTestboxCi(transformedArgs, options.provider),
+      args: injectRemoteTestboxCi(transformedArgs, options.provider, sourceBootstrap),
       wsl2ScriptBootstrap: {
         ...wsl2ScriptBootstrap,
         cleanup() {
@@ -3912,13 +3919,8 @@ if (canonicalProvider === "blacksmith-testbox") {
     : envProviderLocal
       ? "from CRABBOX_PROVIDER"
       : "from config";
-  const fallback = commandProviderValue
-    ? "rerun without --provider to use .crabbox.yaml"
-    : envProviderLocal
-      ? "unset CRABBOX_PROVIDER to use .crabbox.yaml"
-      : "pass another --provider to override it";
   console.error(
-    `[crabbox] provider=blacksmith-testbox ${source}; if Testbox is queued or down, ${fallback}`,
+    `[crabbox] provider=blacksmith-testbox ${source}; if queued or unavailable, stop this task's allocation and use PR CI or a safe local scope. Keep platform-specific proof pending; do not chain providers.`,
   );
   console.error(
     "[crabbox] delegated Testbox proof uses the wrapper exitCode and timing JSON; the linked Actions run can show cancelled during external lease cleanup",
@@ -4148,6 +4150,7 @@ function cleanupOnce() {
   }
   cleanupSucceeded = false;
   if (!childTreeSettled) {
+    failManagedCleanup();
     try {
       sourceStaging?.hold("writers");
     } catch {
@@ -4325,8 +4328,7 @@ const FAST_FAIL_HINT_WINDOW_MS = 15_000;
 const spawnManagedChild = await loadManagedChildSpawner();
 await preparationCheckpoint();
 try {
-  // Preparation can yield while a receipt or source changes. Keep the original
-  // capsule provenance and refuse before native Testbox I/O if it no longer matches.
+  // Verify the allocation still belongs to this caller before native Testbox I/O.
   testboxLeaseFreshness?.assertCurrent();
 } catch (error) {
   cleanupOnce();
@@ -4345,6 +4347,17 @@ if (sourceStaging?.recorded) {
   }
   const leaseId = optionValue(normalizedArgs, "--id");
   sourceStaging.admitted(namespace, leaseId ? [leaseId] : undefined);
+}
+try {
+  await claimManagedCleanup();
+  await preparationCheckpoint();
+} catch (error) {
+  if (error instanceof ManagedCleanupCancelled) {
+    cancellationSignal ??= error.signal;
+  }
+  await preparationCheckpoint(error);
+  cleanupOnce();
+  throw error;
 }
 const child = spawnManagedChild(childInvocation.command, childInvocation.args, {
   cwd: childCwd,

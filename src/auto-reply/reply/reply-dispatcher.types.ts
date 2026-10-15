@@ -27,10 +27,10 @@ export type ReplyDispatchReceipt = {
   hasPendingDelivery?: true;
 };
 
-export function mapReplyDispatchCounts<T>(
+export function mapReplyDispatchCounts<T, R>(
   counts: Record<ReplyDispatchKind, T>,
-  select: (counts: T) => number,
-): Record<ReplyDispatchKind, number> {
+  select: (counts: T) => R,
+): Record<ReplyDispatchKind, R> {
   return { tool: select(counts.tool), block: select(counts.block), final: select(counts.final) };
 }
 
@@ -57,7 +57,7 @@ export type ReplyDispatchRuntimeInfo = {
   /**
    * @deprecated The 2026.9.8 receipt handoff. The host never offers it, so adapters
    * that check for it keep ordinary waiting-reply delivery. Use `adoptProgressDraft`;
-   * removal waits for the next Plugin SDK major.
+   * removal requires an announced ordinary stable release window.
    */
   adoptProgressContinuation?: (
     this: void,
@@ -93,11 +93,11 @@ export type ReplyDispatcher = {
   ) => void;
   supportsSettledReceipt?: true;
   waitForIdle: () => Promise<void | ReplyDispatchReceipt>;
-  /** @deprecated Remove in the next Plugin SDK major; retains admission-time counts. */
+  /** @deprecated Use settled delivery receipts; this retains admission-time counts. */
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
-  /** @deprecated Remove in the next Plugin SDK major; derived from settled receipts. */
+  /** @deprecated Read cancellation counts from settled delivery receipts. */
   getCancelledCounts?: () => Record<ReplyDispatchKind, number>;
-  /** @deprecated Remove in the next Plugin SDK major; derived from settled receipts. */
+  /** @deprecated Read failure counts from settled delivery receipts. */
   getFailedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
   /** Owner-declared deadline for holding queued follow-ups behind all queued deliveries. */

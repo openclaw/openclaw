@@ -93,21 +93,9 @@ async function collectReferencedAddedOverridePaths(params: {
       .filter((change) => change.kind === "modified")
       .map((change) => [change.path, change]),
   );
-  const queue: Array<
-    | { path: string; rootPath: string; sourcePath: string }
-    | { path: string; rootPath: string; packageRelativePath: string }
-  > = [
-    ...params.changes.flatMap((change) =>
-      change.kind === "modified"
-        ? [{ path: change.path, rootPath: change.path, sourcePath: change.savedPath }]
-        : [],
-    ),
-    ...params.standaloneAddedPaths.map((relativePath) => ({
-      path: relativePath,
-      rootPath: relativePath,
-      packageRelativePath: relativePath,
-    })),
-  ];
+  const queue = [...modifiedChangesByPath.keys(), ...params.standaloneAddedPaths].map(
+    (relativePath) => ({ path: relativePath, rootPath: relativePath }),
+  );
 
   for (const current of queue) {
     // Shared added files are rescanned per override root to retain each
@@ -117,16 +105,16 @@ async function collectReferencedAddedOverridePaths(params: {
       continue;
     }
     scannedPathsByRoot.add(scanKey);
-    const source =
-      "packageRelativePath" in current
-        ? await params.packageFs
-            .readText(current.packageRelativePath, {
-              hardlinks: "allow",
-              maxBytes: Number.POSITIVE_INFINITY,
-              symlinks: "reject",
-            })
-            .catch(() => "")
-        : await fs.readFile(current.sourcePath, "utf8").catch(() => "");
+    const modified = modifiedChangesByPath.get(current.path);
+    const source = modified
+      ? await fs.readFile(modified.savedPath, "utf8").catch(() => "")
+      : await params.packageFs
+          .readText(current.path, {
+            hardlinks: "allow",
+            maxBytes: Number.POSITIVE_INFINITY,
+            symlinks: "reject",
+          })
+          .catch(() => "");
     for (const match of source.matchAll(BEST_EFFORT_LOCAL_PATH_LITERAL_PATTERN)) {
       const specifier = match[1] ?? "";
       const referencedPath = resolveReferencedDistPath({
@@ -149,19 +137,7 @@ async function collectReferencedAddedOverridePaths(params: {
       }
       const referencedScanKey = `${current.rootPath}\0${referencedPath}`;
       if (!scannedPathsByRoot.has(referencedScanKey)) {
-        queue.push(
-          referencedModifiedChange
-            ? {
-                path: referencedPath,
-                rootPath: current.rootPath,
-                sourcePath: referencedModifiedChange.savedPath,
-              }
-            : {
-                path: referencedPath,
-                rootPath: current.rootPath,
-                packageRelativePath: referencedPath,
-              },
-        );
+        queue.push({ path: referencedPath, rootPath: current.rootPath });
       }
     }
   }

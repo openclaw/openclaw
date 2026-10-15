@@ -6,9 +6,9 @@ import type { CommandFixture } from "../helpers/command-fixture.js";
 
 const owner = ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs";
 const wrapperAnchor =
-  "e3f305bc784a2bc89f5ad3b6138889470fae8d2af5f36b61216ec91c2c3d64089775f9de38aac331044ea40f245cb0d5666392dfdf65824e1907ef6a2c62de5f";
+  "ba40a37eb1a370d60fea8c4cf1d364c13bcccef518e98ad2bcee954f539d38da37458e58261a3fa55e06523450ea0ffff9f497b135be41f2c15c1642bacace6c";
 const nativeAnchor =
-  "dcf914058a39cf8760b659d3348163ed01a9703500baa5f3f561958a03c309e71c127846891916980e75d364e66091edc093f72df984f9917d3c6796867f29f5";
+  "641c95d034605b319a0d28d3e5d75104049dc33fabfea3cc621ee8e911a63d08ed4463456d297de316360dc00cf26a82399254503b405d0fb0a415dc7692a592";
 
 export function createPnpmArchiveFixture(
   command: CommandFixture,
@@ -27,14 +27,14 @@ export function createPnpmArchiveFixture(
   function archive(name: string, native: boolean) {
     const stage = path.join(root, native ? "native" : "wrapper");
     fs.mkdirSync(stage);
-    fs.writeFileSync(path.join(stage, "package.json"), JSON.stringify({ version: "12.5.1" }));
+    fs.writeFileSync(path.join(stage, "package.json"), JSON.stringify({ version: "12.10.1" }));
     fs.writeFileSync(path.join(stage, "pnpm"), native ? "native-fixture\n" : "wrapper-fixture\n");
     const dest = path.join(registry, name);
     create({ cwd: root, file: dest, gzip: true, sync: true }, [path.basename(stage)]);
     return createHash("sha512").update(fs.readFileSync(dest)).digest("hex");
   }
-  const wrapperHash = archive("pnpm-12.5.1.tgz", false);
-  const nativeHash = archive("exe.linux-x64-12.5.1.tgz", true);
+  const wrapperHash = archive("pnpm-12.10.1.tgz", false);
+  const nativeHash = archive("exe.linux-x64-12.10.1.tgz", true);
   const calls = path.join(root, "curl-calls");
   const curl = path.join(bin, "curl");
   fs.writeFileSync(
@@ -50,8 +50,8 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 case "$url" in
-  https://registry.npmjs.org/pnpm/-/pnpm-12.5.1.tgz) name=pnpm-12.5.1.tgz ;;
-  https://registry.npmjs.org/@pnpm/exe.linux-x64/-/exe.linux-x64-12.5.1.tgz) name=exe.linux-x64-12.5.1.tgz ;;
+  https://registry.npmjs.org/pnpm/-/pnpm-12.10.1.tgz) name=pnpm-12.10.1.tgz ;;
+  https://registry.npmjs.org/@pnpm/exe.linux-x64/-/exe.linux-x64-12.10.1.tgz) name=exe.linux-x64-12.10.1.tgz ;;
   *) exit 91 ;;
 esac
 cp "$FIXTURE_REGISTRY/$name" "$out"
@@ -78,7 +78,7 @@ cp "$FIXTURE_REGISTRY/$name" "$out"
     .replaceAll(nativeAnchor, nativeHash);
   const scriptPath = path.join(root, "seed.mjs");
   fs.writeFileSync(scriptPath, script);
-  const spec = `pnpm@12.5.1+sha512.${wrapperHash}`;
+  const spec = `pnpm@12.10.1+sha512.${wrapperHash}`;
   return {
     root,
     image,

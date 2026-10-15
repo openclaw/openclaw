@@ -9,6 +9,12 @@ describe("provider model id normalization", () => {
     expect(normalizeGooglePreviewModelId("gemini-3.1-pro")).toBe("gemini-3.1-pro-preview");
   });
 
+  it("routes the Gemini 4 shorthand to Gemini 4 Argon", () => {
+    expect(normalizeGooglePreviewModelId("gemini-4")).toBe("gemini-4-argon");
+    expect(normalizeGooglePreviewModelId("google/gemini-4")).toBe("google/gemini-4-argon");
+    expect(normalizeGooglePreviewModelId("gemini-4-argon")).toBe("gemini-4-argon");
+  });
+
   it("does not rewrite already-current Gemini replacement ids", () => {
     expect(normalizeGooglePreviewModelId("gemini-3.1-pro-preview")).toBe("gemini-3.1-pro-preview");
     expect(normalizeGooglePreviewModelId("gemini-2.5-flash")).toBe("gemini-2.5-flash");

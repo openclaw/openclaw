@@ -1,6 +1,11 @@
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
+import { hasRememberedNativeRuntimeConsent } from "../../config/native-runtime-consent.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { resolveSessionEntry } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -8,8 +13,15 @@ import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { resolveExecConfigState } from "../exec-defaults.js";
-import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
+import {
+  resolveSandboxRuntimeStatus,
+  withSandboxRuntimeStatusInWorker,
+} from "../sandbox/runtime-status.js";
 import { resolveScheduledToolCallerContext } from "../scheduled-tool-policy.js";
+import {
+  withPreparedSessionCapabilityRead,
+  type PreparedSessionCapabilityEntry,
+} from "../subagents/spawn/subagent-session-store.js";
 import { isKnownCoreToolId } from "../tool-catalog.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
 import { isToolAllowedByPolicies } from "../tool-policy-match.js";
@@ -48,64 +60,48 @@ function resolveAgentHarnessExecutionRestriction(
     return undefined;
   }
   const label = harness.label;
-  if (facts.sandboxRequired) {
-    return {
-      reason: "sandbox-required",
-      message:
-        label +
-        " runs on the Gateway host, but this chat requires a sandbox. Choose another runtime; this requirement cannot be removed.",
-    };
-  }
-  if (facts.remoteExecution) {
-    return {
-      reason: "remote-execution",
-      message:
-        label +
-        " runs on the Gateway host and cannot use this chat's remote execution environment. Choose another runtime or a local chat.",
-    };
-  }
-  if (facts.workspaceRequired) {
-    return {
-      reason: "workspace-only",
-      message:
-        label + " cannot enforce this run's required workspace boundary. Choose another runtime.",
-    };
-  }
-  if (facts.nativeRuntimeConsent === harness.id) {
-    return undefined;
-  }
-  if (facts.workspaceOnly) {
-    return {
-      reason: "workspace-only",
-      message:
-        label +
-        " cannot enforce this chat's workspace-only file access. Choose another runtime or ask an administrator to review the file-access policy.",
-    };
-  }
-  if (facts.sandboxed) {
-    return {
-      reason: "sandbox",
-      message:
-        label +
-        " runs on the Gateway host, outside the sandbox. Use its own permissions for this chat, or choose another runtime.",
-    };
-  }
-  if (facts.permissionMode && facts.permissionMode !== "full") {
-    return {
-      reason: "permission-mode",
-      message:
-        label +
-        " uses its own permissions and requires Full access. Change this chat's permissions explicitly, or choose another runtime.",
-    };
-  }
-  if (facts.toolPolicyRestricted) {
-    return {
-      reason: "tool-policy",
-      message:
-        label + " uses its own tools and cannot enforce this chat's OpenClaw tool restrictions.",
-    };
-  }
-  return undefined;
+  const consented = facts.nativeRuntimeConsent === harness.id;
+  const restrictions: Array<
+    [applies: boolean | undefined, reason: ExecutionRestriction["reason"], message: string]
+  > = [
+    [
+      facts.sandboxRequired,
+      "sandbox-required",
+      " runs on the Gateway host, but this chat requires a sandbox. Choose another runtime; this requirement cannot be removed.",
+    ],
+    [
+      facts.remoteExecution,
+      "remote-execution",
+      " runs on the Gateway host and cannot use this chat's remote execution environment. Choose another runtime or a local chat.",
+    ],
+    [
+      facts.workspaceRequired,
+      "workspace-only",
+      " cannot enforce this run's required workspace boundary. Choose another runtime.",
+    ],
+    [
+      !consented && facts.workspaceOnly,
+      "workspace-only",
+      " cannot enforce this chat's workspace-only file access. Choose another runtime or ask an administrator to review the file-access policy.",
+    ],
+    [
+      !consented && facts.sandboxed,
+      "sandbox",
+      " runs on the Gateway host, outside the sandbox. Use its own permissions for this chat, or choose another runtime.",
+    ],
+    [
+      !consented && Boolean(facts.permissionMode && facts.permissionMode !== "full"),
+      "permission-mode",
+      " uses its own permissions and requires Full access. Change this chat's permissions explicitly, or choose another runtime.",
+    ],
+    [
+      !consented && facts.toolPolicyRestricted,
+      "tool-policy",
+      " uses its own tools and cannot enforce this chat's OpenClaw tool restrictions.",
+    ],
+  ];
+  const restriction = restrictions.find(([applies]) => applies);
+  return restriction ? { reason: restriction[1], message: label + restriction[2] } : undefined;
 }
 
 /** Classifies stored or prospective session policy without selecting runtime availability. */
@@ -123,6 +119,7 @@ export function resolveAgentHarnessSessionExecutionRestriction(params: {
     | "execHost"
     | "nativeRuntimeConsent"
   > & { sessionId?: string };
+  preparedSessionCapabilityEntry?: PreparedSessionCapabilityEntry;
   provider: string;
   modelId: string;
 }): ExecutionRestriction | undefined {
@@ -139,7 +136,8 @@ export function resolveAgentHarnessSessionExecutionRestriction(params: {
   const exec = resolveExecConfigState({ cfg, agentId, sessionKey, sessionEntry: entry });
   const nativeRuntimeConsent =
     entry.permissionMode === "full" && entry.sandboxMode === "off"
-      ? entry.nativeRuntimeConsent
+      ? (entry.nativeRuntimeConsent ??
+        (hasRememberedNativeRuntimeConsent(cfg, agentId, harness.id) ? harness.id : undefined))
       : undefined;
   return resolveAgentHarnessExecutionRestriction(harness, {
     sandboxed: sandbox.sandboxed || exec.host === "sandbox",
@@ -158,6 +156,7 @@ export function resolveAgentHarnessSessionExecutionRestriction(params: {
           sessionKey,
           sessionId: entry.sessionId,
           preparedSessionEntry: entry,
+          preparedSessionCapabilityEntry: params.preparedSessionCapabilityEntry,
           provider: params.provider,
           modelId: params.modelId,
         },
@@ -184,10 +183,10 @@ type ExecutionEnvironmentParams = Pick<
 >;
 
 /** Revalidates execution policy and returns whether this run has native permission consent. */
-export function assertAgentHarnessExecutionEnvironment(
+export async function assertAgentHarnessExecutionEnvironment(
   harness: AgentHarness,
   params: ExecutionEnvironmentParams,
-): boolean {
+): Promise<boolean> {
   if (harness.executionEnvironment !== "host-only") {
     return false;
   }
@@ -196,44 +195,111 @@ export function assertAgentHarnessExecutionEnvironment(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  const entry = params.sessionKey
-    ? resolveSessionEntry(
+  const source = params.sessionKey
+    ? captureSessionActorStorageOwner(
         {
           agentId,
           sessionKey: params.sessionKey,
-          storePath: resolveSessionStorePathCore(params.config?.session?.store, { agentId }),
-          clone: false,
+          storePath: params.config?.session?.store
+            ? resolveSessionStorePathCore(params.config.session.store, { agentId })
+            : undefined,
         },
-        { readOnly: true },
-      ).existing
+        { assertCurrent() {}, authorize() {} },
+      )
     : undefined;
-  // Consent belongs to this incarnation, never a parent or classification session.
-  const nativeRuntimeConsent =
-    entry?.sessionId === params.sessionId &&
-    entry.agentRuntimeOverride === harness.id &&
-    entry.permissionMode === "full" &&
-    entry.sandboxMode === "off" &&
-    !params.disableTools &&
-    params.toolsAllow === undefined &&
-    !params.swarmCollector
-      ? entry.nativeRuntimeConsent
+  const entry = source
+    ? readCapturedSessionActorEntry(source, params.sessionKey!)
+    : params.sessionKey
+      ? await readSessionEntryReadOnlyInWorker({
+          agentId,
+          sessionKey: params.sessionKey,
+          storePath: resolveSessionStorePathCore(params.config?.session?.store, { agentId }),
+        })
       : undefined;
-  const runtime = resolveSandboxRuntimeStatus({
+  const runtimeParams = {
     cfg: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     classificationSessionKey: params.sandboxSessionKey,
     classificationAgentId: params.sandboxAgentId,
-    ...((!params.sandboxSessionKey || params.sandboxSessionKey === params.sessionKey) &&
+  };
+  if (
+    (!params.sandboxSessionKey || params.sandboxSessionKey === params.sessionKey) &&
     (!params.sandboxAgentId || params.sandboxAgentId === agentId)
-      ? { preparedSessionEntry: entry ?? null }
-      : {}),
-  });
+  ) {
+    return assertPreparedAgentHarnessExecutionEnvironment(
+      harness,
+      params,
+      entry,
+      source !== undefined,
+      resolveSandboxRuntimeStatus({ ...runtimeParams, preparedSessionEntry: entry ?? null }),
+    );
+  }
+  return withSandboxRuntimeStatusInWorker(
+    runtimeParams,
+    { env: process.env, cwd: process.cwd(), assertCurrent() {} },
+    async (runtime) =>
+      assertPreparedAgentHarnessExecutionEnvironment(
+        harness,
+        params,
+        entry,
+        source !== undefined,
+        runtime,
+      ),
+  );
+}
+
+function assertPreparedAgentHarnessExecutionEnvironment(
+  harness: AgentHarness,
+  params: ExecutionEnvironmentParams,
+  entry:
+    | Pick<
+        SessionEntry,
+        | "sessionId"
+        | "agentRuntimeOverride"
+        | "permissionMode"
+        | "sandbox"
+        | "sandboxMode"
+        | "createdActor"
+        | "execHost"
+        | "execNode"
+        | "execCwd"
+        | "nativeRuntimeConsent"
+      >
+    | undefined,
+  nativeSource: boolean,
+  runtime: ReturnType<typeof resolveSandboxRuntimeStatus>,
+): boolean {
+  const remembered = hasRememberedNativeRuntimeConsent(
+    params.config,
+    resolveSessionAgentId({
+      config: params.config,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    }),
+    harness.id,
+  );
+  // Per-chat consent belongs to this incarnation; agent consent authorizes the selected harness.
+  const nativeRuntimeConsent =
+    entry?.sessionId === params.sessionId &&
+    (entry.agentRuntimeOverride === harness.id || remembered) &&
+    entry.permissionMode === "full" &&
+    params.permissionMode === "full" &&
+    !params.sandbox?.enabled &&
+    entry.sandboxMode === "off" &&
+    !params.disableTools &&
+    params.toolsAllow === undefined &&
+    !params.swarmCollector
+      ? remembered
+        ? harness.id
+        : entry.nativeRuntimeConsent
+      : undefined;
   const exec = resolveExecConfigState({
     cfg: params.config,
     agentId: runtime.classificationAgentId,
     sessionKey: params.sessionKey,
     execOverrides: params.execOverrides,
+    sessionEntry: nativeSource ? entry : undefined,
   });
   const restriction = resolveAgentHarnessExecutionRestriction(harness, {
     sandboxed: params.sandbox?.enabled === true || runtime.sandboxed || exec.host === "sandbox",
@@ -246,7 +312,10 @@ export function assertAgentHarnessExecutionEnvironment(
         cfg: params.config,
         agentId: runtime.classificationAgentId,
       }),
-    permissionMode: params.permissionMode,
+    permissionMode:
+      nativeSource && params.permissionMode === "full" && entry?.sessionId === params.sessionId
+        ? (entry.permissionMode ?? params.permissionMode)
+        : params.permissionMode,
     remoteExecution: exec.host === "node",
   });
   if (restriction) {
@@ -297,6 +366,7 @@ type PluginHarnessToolPolicyContext = Pick<
 > & {
   sessionId?: string;
   preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
+  preparedSessionCapabilityEntry?: PreparedSessionCapabilityEntry;
 };
 
 type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
@@ -307,13 +377,14 @@ export type ResolvedPluginHarnessToolPolicies = {
   groupPolicy?: PluginHarnessToolPolicy;
   runtimePolicies: Array<PluginHarnessToolPolicy | undefined>;
   safeDeniedToolNames: string[];
+  requiresLiveToolAuthority: boolean;
   toolPolicyRestricted: boolean;
 };
 
-export function resolvePluginHarnessPolicyToolsAllow(
+export async function preparePluginHarnessPolicyToolsAllow(
   params: PluginHarnessToolPolicyContext,
-): [] | undefined {
-  const policies = resolvePluginHarnessToolPolicies(params);
+): Promise<[] | undefined> {
+  const policies = await preparePluginHarnessToolPolicies(params);
   return [policies.senderPolicy, policies.groupPolicy, ...policies.runtimePolicies].some(
     toolPolicyRestrictsTools,
   )
@@ -321,8 +392,56 @@ export function resolvePluginHarnessPolicyToolsAllow(
     : undefined;
 }
 
+export async function prepareAgentHarnessNativeToolPolicyRestricted(
+  params: PluginHarnessToolPolicyContext,
+  harness: AgentHarness,
+): Promise<boolean> {
+  const policies = await preparePluginHarnessToolPolicies(
+    params,
+    harness.conversationToolPolicySupport === "exact"
+      ? harness.conversationToolPolicySafeDenyTools
+      : undefined,
+    harness.conversationToolPolicyNativeTools,
+  );
+  return policies.toolPolicyRestricted;
+}
+
+export async function preparePluginHarnessToolPolicies(
+  params: PluginHarnessToolPolicyContext,
+  safeDenyToolNames?: readonly string[],
+  nativeToolNames?: readonly string[],
+): Promise<ResolvedPluginHarnessToolPolicies> {
+  const consume = (sandbox: ReturnType<typeof resolveSandboxRuntimeStatus>) =>
+    withPreparedSessionCapabilityRead(() =>
+      resolvePluginHarnessToolPolicies(params, safeDenyToolNames, nativeToolNames, sandbox),
+    );
+  if (params.preparedSessionEntry !== undefined) {
+    return consume(
+      resolveSandboxRuntimeStatus({
+        cfg: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey ?? (params.agentId ? undefined : params.sandboxSessionKey),
+        classificationSessionKey: params.sandboxSessionKey ?? params.sessionKey,
+        classificationAgentId: params.sandboxAgentId,
+        preparedSessionEntry: params.preparedSessionEntry,
+      }),
+    );
+  }
+  return withSandboxRuntimeStatusInWorker(
+    {
+      cfg: params.config,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey ?? (params.agentId ? undefined : params.sandboxSessionKey),
+      classificationSessionKey: params.sandboxSessionKey ?? params.sessionKey,
+      classificationAgentId: params.sandboxAgentId,
+    },
+    { env: process.env, cwd: process.cwd(), assertCurrent() {} },
+    consume,
+  );
+}
+
 /** Resolves whether a harness operation must remove its ambient native tool surface. */
-export function resolveAgentHarnessNativeToolPolicyRestricted(
+function resolveAgentHarnessNativeToolPolicyRestricted(
   params: PluginHarnessToolPolicyContext,
   harness: AgentHarness,
 ): boolean {
@@ -338,39 +457,40 @@ export function resolveAgentHarnessNativeToolPolicyRestricted(
 export function resolvePluginHarnessDenyAllToolPolicyPrompt(
   policies: ResolvedPluginHarnessToolPolicies,
 ): string | undefined {
-  if (
-    policyDeniesAllTools(policies.senderPolicy) ||
-    policyDeniesAllTools(policies.senderScopedGroupPolicy)
-  ) {
-    return PLUGIN_HARNESS_SENDER_DENY_ALL_PROMPT;
-  }
-  if (policyDeniesAllTools(policies.groupPolicy)) {
-    return PLUGIN_HARNESS_GROUP_DENY_ALL_PROMPT;
-  }
-  return policies.runtimePolicies.some(policyDeniesAllTools)
-    ? PLUGIN_HARNESS_RUNTIME_DENY_ALL_PROMPT
-    : undefined;
+  const sources = [
+    [
+      [policies.senderPolicy, policies.senderScopedGroupPolicy],
+      PLUGIN_HARNESS_SENDER_DENY_ALL_PROMPT,
+    ],
+    [[policies.groupPolicy], PLUGIN_HARNESS_GROUP_DENY_ALL_PROMPT],
+    [policies.runtimePolicies, PLUGIN_HARNESS_RUNTIME_DENY_ALL_PROMPT],
+  ] as const;
+  return sources.find(([candidates]) => candidates.some(policyDeniesAllTools))?.[1];
 }
 
 export function resolvePluginHarnessToolPolicies(
   params: PluginHarnessToolPolicyContext,
   safeDenyToolNames?: readonly string[],
   nativeToolNames?: readonly string[],
+  preparedSandbox?: ReturnType<typeof resolveSandboxRuntimeStatus>,
 ): ResolvedPluginHarnessToolPolicies {
   const messageProvider = params.messageProvider ?? params.messageChannel;
   const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
-  const sandboxRuntime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
-    agentId: params.agentId,
-    // Compaction can supply an execution owner without its own session key.
-    sessionKey: params.sessionKey ?? (params.agentId ? undefined : sandboxSessionKey),
-    classificationSessionKey: sandboxSessionKey,
-    classificationAgentId: params.sandboxAgentId,
-    preparedSessionEntry: params.preparedSessionEntry,
-  });
+  const sandboxRuntime =
+    preparedSandbox ??
+    resolveSandboxRuntimeStatus({
+      cfg: params.config,
+      agentId: params.agentId,
+      // Compaction can supply an execution owner without its own session key.
+      sessionKey: params.sessionKey ?? (params.agentId ? undefined : sandboxSessionKey),
+      classificationSessionKey: sandboxSessionKey,
+      classificationAgentId: params.sandboxAgentId,
+      preparedSessionEntry: params.preparedSessionEntry,
+    });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const capabilityProfile = resolveConversationCapabilityProfile({
     config: params.config,
+    preparedSessionEntry: params.preparedSessionCapabilityEntry,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sandboxSessionKey,
@@ -466,9 +586,12 @@ export function resolvePluginHarnessToolPolicies(
       requestedToolPolicy,
     ],
     safeDeniedToolNames: collectHarnessSafeDeniedToolNames(explicitPolicies, safeDenyToolNameSet),
+    requiresLiveToolAuthority: Boolean(policy.delegatedToolPolicy),
     // Native tools bypass the collector's noninteractive OpenClaw wrappers.
     // Keep policy-allowed host replacements, without ambient input or approval surfaces.
     toolPolicyRestricted:
+      // Delegated tools require OpenClaw’s live pre-effect grant checks.
+      Boolean(policy.delegatedToolPolicy) ||
       params.swarmCollector === true ||
       nativeToolNames?.some((toolName) => !isToolAllowedByPolicies(toolName, profilePolicies)) ===
         true ||
@@ -499,10 +622,7 @@ function toolPolicyRestrictsHarnessNativeTools(
   policy: PluginHarnessToolPolicy | undefined,
   safeDenyToolNames: ReadonlySet<string> | undefined,
 ): boolean {
-  if (!safeDenyToolNames) {
-    return toolPolicyRestrictsTools(policy);
-  }
-  if (!policy || toolPolicyRestrictsTools({ allow: policy.allow })) {
+  if (!safeDenyToolNames || !policy || toolPolicyRestrictsTools({ allow: policy.allow })) {
     return toolPolicyRestrictsTools(policy);
   }
   return expandToolGroups(policy.deny ?? []).some((deniedName) => {

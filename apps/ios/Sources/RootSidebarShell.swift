@@ -224,3 +224,48 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
             style: .continuous)
     }
 }
+
+/// UIKit grants a navigation controller its system minimum layout margins only
+/// while its view touches the screen edge. The sidebar shell slides the detail card away
+/// from that edge, which zeroes the margins and pins native large titles flush
+/// against the card. Owning the margins explicitly keeps them stable at any offset.
+struct SidebarNavigationMarginAnchor: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        AnchorView()
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
+
+    private final class AnchorView: UIView {
+        private var positionObservation: NSKeyValueObservation?
+
+        /// UIKit recomputes the margins whenever the controller view moves, so the
+        /// override follows the view's position instead of running once.
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            self.positionObservation = nil
+            var responder: UIResponder? = self
+            while let current = responder, !(current is UINavigationController) {
+                responder = current.next
+            }
+            guard let navigation = responder as? UINavigationController else { return }
+            Self.applyMargins(to: navigation)
+            // Layer position only changes on the main thread, where UIKit drives layout.
+            self.positionObservation = navigation.view.layer.observe(\.position) { [weak navigation] _, _ in
+                MainActor.assumeIsolated {
+                    guard let navigation else { return }
+                    Self.applyMargins(to: navigation)
+                }
+            }
+        }
+
+        private static func applyMargins(to navigation: UINavigationController) {
+            navigation.viewRespectsSystemMinimumLayoutMargins = false
+            // The displaced controller reports zero; the window root sits at the edge.
+            guard let margins = navigation.view.window?.rootViewController?.systemMinimumLayoutMargins
+            else { return }
+            guard navigation.view.directionalLayoutMargins != margins else { return }
+            navigation.view.directionalLayoutMargins = margins
+        }
+    }
+}

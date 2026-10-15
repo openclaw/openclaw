@@ -3,7 +3,7 @@ import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-c
 import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
 
-const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream"] as const;
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream", "event"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script", "command"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
@@ -37,6 +37,8 @@ const CRON_FLAT_SCHEDULE_KEYS = [
   "match",
   "batchMs",
   "maxBatchBytes",
+  "source",
+  "options",
 ] as const;
 const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "name",
@@ -201,6 +203,8 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
     "match",
     "batchMs",
     "maxBatchBytes",
+    "source",
+    "options",
   ] as const) {
     moveDefinedField(value, schedule, key);
   }
@@ -398,11 +402,9 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
   value: Record<string, unknown>;
 } {
   const value: Record<string, unknown> = {};
-  let found = false;
   for (const key of Object.keys(params)) {
     if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
       value[key] = params[key];
-      found = true;
     }
   }
   // Dotted keys run as a second pass so a canonical sibling always wins,
@@ -413,16 +415,13 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
       continue;
     }
     const outcome = nestDottedCronKey(value, key, params[key], canonicalRoots);
-    if (outcome === "recovered") {
-      found = true;
-    } else if (outcome === "conflict") {
+    if (outcome === "conflict") {
       // Ambiguous input: preserve the literal key so strict gateway validation
       // rejects the conflict instead of one value silently winning.
       value[key] = params[key];
-      found = true;
     }
   }
-  return { found, value: canonicalizeCronToolObject(value) };
+  return { found: Object.keys(value).length > 0, value: canonicalizeCronToolObject(value) };
 }
 
 /** Checks whether a recovered flat object has enough schedule/payload signal to create a job. */

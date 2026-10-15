@@ -34,7 +34,6 @@ import {
 } from "../../system-prompt.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
-import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { hasWhatsAppAudioBody, transcribeWhatsAppAudioMessage } from "./audio-preflight.js";
 import {
@@ -324,7 +323,7 @@ export async function processMessage(params: {
       correlationId,
       from: conversationId,
       to: params.msg.platform.recipientJid,
-      body: elide(combinedBody, 240),
+      bodyLength: combinedBody.length,
       mediaType: params.msg.payload.media?.type ?? null,
       mediaPath: params.msg.payload.media?.path ?? null,
     },
@@ -335,9 +334,6 @@ export async function processMessage(params: {
   whatsappInboundLog.info(
     `Inbound message ${conversationId} -> ${params.msg.platform.recipientJid} (${conversationKind}${kindLabel}, ${combinedBody.length} chars)`,
   );
-  if (shouldLogVerbose()) {
-    whatsappInboundLog.debug(`Inbound body: ${elide(combinedBody, 400)}`);
-  }
 
   const sender = getSenderIdentity(params.msg);
   const commandBody = params.msg.payload.commandBody ?? params.msg.payload.body;

@@ -592,12 +592,13 @@ jobs:
               --run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" --source-sha "$EXPECTED_SHA" \
               --workflow-sha "$(jq -r .workflowSha "$full_manifest")")"
             PREFLIGHT_RUN_ID="$(jq -r .producer.runId <<<"$resolution")"
+            preflight_attempt="$(jq -r .producer.runAttempt <<<"$resolution")"
             preflight_run="$(jq -c .run <<<"$resolution")"
             full_release_preflight=true
           else
             preflight_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}")"
+            preflight_attempt="$(jq -r '.run_attempt // ""' <<<"$preflight_run")"
           fi
-          preflight_attempt="$(jq -r '.run_attempt // ""' <<<"$preflight_run")"
           if [[ ! "$preflight_attempt" =~ ^[1-9][0-9]*$ ]]; then
             echo "OpenClaw npm preflight run has an invalid attempt: ${preflight_attempt:-<missing>}." >&2
             exit 1
@@ -657,6 +658,7 @@ jobs:
           const env = process.env;
           const producer = JSON.parse(process.argv[2]);
           const qualified = process.argv[3] ? JSON.parse(process.argv[3]) : null;
+          const producerAttempt = qualified?.producer.runAttempt ?? String(producer.run_attempt);
           const deadlineMs = Date.now() + 4 * 60_000;
           const pages = JSON.parse(execFileSync('gh', [
             'api', `repos/${env.GITHUB_REPOSITORY}/actions/runs/${producer.id}/artifacts?per_page=100`,
@@ -672,7 +674,7 @@ jobs:
           // FRV records the exact independent producer and artifact. Historical
           // aliases are discovery-only; a failed transfer never selects other bytes.
           const preflight = qualified ? [qualified.artifact] : preferred.length > 0 ? preferred : candidates;
-          const sdkName = `plugin-sdk-api-release-diff-${producer.id}-${producer.run_attempt}`;
+          const sdkName = `plugin-sdk-api-release-diff-${producer.id}-${producerAttempt}`;
           const sdk = artifacts.filter((artifact) => artifact.expired === false && artifact.name === sdkName);
           if (preflight.length !== 1 || sdk.length !== 1) {
             throw new Error(`Expected ${preferredName} or one historical preflight, and exactly one ${sdkName}.`);
@@ -713,7 +715,7 @@ jobs:
                 artifactExpiresAt: artifact.expires_at,
                 repository: env.GITHUB_REPOSITORY,
                 runId: producer.id,
-                runAttempt: producer.run_attempt,
+                runAttempt: Number(producerAttempt),
                 workflowSha: producer.head_sha,
                 workflowPath: producer.path.split('@')[0],
                 workflowEvent: 'workflow_dispatch',
@@ -2469,7 +2471,8 @@ jobs:
     needs: [resolve_release_target, finalize_github_release]
     if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && inputs.npm_dist_tag != 'extended-stable' && !contains(inputs.tag, '-beta.') }}
     continue-on-error: true
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    # App-token minting stays on GitHub-hosted runners.
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2489,9 +2492,20 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
+      - name: Create Linux release request token
+        id: linux_request_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: openclaw
+          permission-actions: write
+          permission-contents: read
+
       - name: Dispatch detached Linux release request
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.linux_request_token.outputs.token }}
           PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}

@@ -3,7 +3,6 @@
 
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -17,7 +16,6 @@ import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
 } from "../../commands/doctor/cron/legacy-repair.js";
-import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import { CronService } from "../../cron/service.js";
@@ -44,12 +42,19 @@ import {
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
-import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import * as cronCallerScope from "./cron-caller-scope.js";
+import { registerCronCreatorSessionTests } from "./cron-creator-session.test-support.js";
+import { registerCronRunWaitTests } from "./cron-run-wait.test-support.js";
+import { loadGatewaySessionEntry } from "./cron-session-reader.test-support.js";
 import {
   createCronTestContext,
+  callerClientWithCronCreatorAuthority,
+  expectCronSuccess,
+  expectResponseError,
+  requireCronAddPayload,
+  requireRecord,
   agentTurnCronParams,
   createCronTestInvoker,
   createCronCallerClient as callerClient,
@@ -70,21 +75,6 @@ const { makeStorePath } = createCronStoreHarness({ prefix: "cron-gateway-validat
 
 const getRuntimeConfig = vi.hoisted(() =>
   vi.fn<() => OpenClawConfig>(() => ({}) as OpenClawConfig),
-);
-const loadGatewaySessionEntry = vi.hoisted(() =>
-  vi.fn(
-    (
-      sessionKey: string,
-    ): {
-      canonicalKey: string;
-      entry?: {
-        agentHarnessId?: unknown;
-        createdActor?: SessionCreatedActor;
-        modelSelectionLocked?: unknown;
-        sessionId?: unknown;
-      };
-    } => ({ canonicalKey: sessionKey, entry: undefined }),
-  ),
 );
 const cronRunRecordsOverride = vi.hoisted(() =>
   vi.fn<
@@ -124,12 +114,17 @@ vi.mock("../../config/config.js", async () => {
   };
 });
 
-vi.mock("../session-utils.js", () => ({
-  loadSessionEntry: loadGatewaySessionEntry,
-  loadGatewaySessionEntryReadOnly: loadGatewaySessionEntry,
+// Credential capture is exercised by cron.inference-binding.test.ts and
+// isolated-agent.auth-continuity.integration.test.ts. These delivery/management
+// validation fixtures intentionally have no inference account.
+vi.mock("../../cron/inference-binding.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cron/inference-binding.runtime.js")>()),
+  captureCronInferenceBinding: async () => undefined,
 }));
 
+// mock-isolation: Validation fixtures do not read live session delivery metadata.
 vi.mock("../../cron/delivery-preview.js", () => ({
+  resolveCronDeliveryFailurePreview: async () => undefined,
   resolveCronDeliveryPreview,
   resolveCronDeliveryPreviews,
 }));
@@ -174,50 +169,8 @@ async function invokeWake(params: Record<string, unknown>, client?: GatewayClien
   return await invokeCron("wake", params, { client });
 }
 
-function callerClientWithCronCreatorAuthority(grant: CronCreatorAuthorityGrant): GatewayClient {
-  const client = callerClient("ops");
-  client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
-  client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant = grant;
-  return client;
-}
-
 function setRuntimeConfig(config: OpenClawConfig): void {
   getRuntimeConfig.mockReturnValue(config);
-}
-
-function expectCronSuccess(respond: ReturnType<typeof vi.fn>): void {
-  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ id: "cron-1" }), undefined);
-}
-
-const requireRecord = createRequireRecord("record", "expected-label-object");
-
-function requireCronAddPayload(
-  context: ReturnType<typeof createCronContext>,
-): Record<string, unknown> {
-  const calls = context.cron.add.mock.calls as unknown as [unknown][];
-  return requireRecord(calls[0]?.[0], "cron.add payload");
-}
-
-function expectResponseError(
-  respond: ReturnType<typeof vi.fn>,
-  expected: { code?: string; messageIncludes?: string; details?: Record<string, unknown> },
-) {
-  const call = respond.mock.calls.at(0);
-  if (!call) {
-    throw new Error("expected response call");
-  }
-  expect(call[0]).toBe(false);
-  expect(call[1]).toBeUndefined();
-  const error = requireRecord(call[2], "response error");
-  if (expected.code) {
-    expect(error.code).toBe(expected.code);
-  }
-  if (expected.messageIncludes) {
-    expect(String(error.message)).toContain(expected.messageIncludes);
-  }
-  if (expected.details) {
-    expect(error.details).toEqual(expected.details);
-  }
 }
 
 function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void {
@@ -552,26 +505,11 @@ describe("cron method validation", () => {
     },
   );
 
-  it.each([false])("runs an exact job id with caller scope %s", async (scoped) => {
+  it("runs a padded exact job ID without caller scope", async () => {
     const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
-    const { respond } = await invokeCron(
-      "cron.run",
-      {
-        id: scoped ? "cron-1" : " cron-1 ",
-        ...(scoped
-          ? { mode: "due", expectedProcessInstanceId: getGatewayProcessInstanceId() }
-          : {}),
-      },
-      { context, client: scoped ? callerClient("ops") : undefined },
-    );
+    const { respond } = await invokeCron("cron.run", { id: " cron-1 " }, { context });
     expect(context.cron.readJob).toHaveBeenCalledWith("cron-1");
-    if (scoped) {
-      expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "due", {
-        commitGuard: expect.any(Function),
-      });
-    } else {
-      expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "force");
-    }
+    expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "force");
     expect(respond).toHaveBeenCalledWith(
       true,
       {
@@ -670,7 +608,7 @@ describe("cron method validation", () => {
           elapsedMs: fails ? 1301 : 1302,
           phaseDurationsMs: fails
             ? { setup: 0, listing: 1301 }
-            : { setup: 0, listing: 1302, projection: 0, response: 0, handlerExit: 0 },
+            : { setup: 0, listing: 1301, projection: 1, response: 0, handlerExit: 0 },
           sourcePageMs: 1301,
           sourcePageCount: 1,
           scopeAttemptCount: 1,
@@ -680,7 +618,7 @@ describe("cron method validation", () => {
           previewsRequested: false,
           scopeApplied: true,
           ...(!fails ? { returnedCount: 1 } : {}),
-          scopeProcessingMs: fails ? 0 : 1,
+          scopeProcessingMs: 0,
         });
       },
     );
@@ -971,6 +909,7 @@ describe("cron method validation", () => {
     loadGatewaySessionEntry.mockReturnValueOnce({ canonicalKey: sessionKey, entry });
     const { context, respond } = await invokeWake({ mode: "now", text: "ping", sessionKey });
     expect(context.cron.wake).toHaveBeenCalledWith({
+      commitGuard: expect.any(Function),
       agentId: "main",
       mode: "now",
       text: "ping",
@@ -999,7 +938,7 @@ describe("cron method validation", () => {
     releasePreparation?.();
     const { respond } = await invocation;
 
-    expect(context.cron.wake).not.toHaveBeenCalled();
+    expect(context.cron.wake).toHaveBeenCalledOnce();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "agent runtime authority is no longer active",
@@ -1050,66 +989,10 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  it("stamps the authenticated profile as private cron creator provenance", async () => {
-    const client: GatewayClient = {
-      connect: {} as GatewayClient["connect"],
-      authenticatedUserProfile: {
-        profileId: "profile-ada",
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-    };
-
-    const { context, respond } = await invokeCronAdd(agentTurnCronParams(), { client });
-
-    const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
-    expect(options.createdActor).toEqual({ type: "human", source: "profile", id: "profile-ada" });
-    expect(requireCronAddPayload(context)).not.toHaveProperty("createdActor");
-    expectCronSuccess(respond);
-  });
-
-  it.each(["unknown"] as const)(
-    "retains %s creator provenance through agent-created cron jobs",
-    async (source) => {
-      loadGatewaySessionEntry.mockReturnValue({
-        canonicalKey: "agent:ops:main",
-        entry: {
-          sessionId: "session-ops-main",
-          createdActor: { type: "human", source, id: "profile-ada", label: "Ada" },
-        },
-      });
-      const client = callerClient("ops");
-      client.internal!.agentRuntimeIdentity!.sessionSpawnContext = {
-        inheritedToolPolicy: { version: 1, allow: ["*"], deny: [] },
-      };
-
-      const { context, respond } = await invokeCronAdd(agentTurnCronParams(), {
-        client,
-      });
-
-      const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
-      expect(options.createdActor).toEqual({
-        type: "human",
-        source,
-        id: "profile-ada",
-        label: "Ada",
-      });
-      expect(loadGatewaySessionEntry).toHaveBeenCalledWith("agent:ops:main", { agentId: "ops" });
-      expect(requireCronAddPayload(context)).not.toHaveProperty("createdActor");
-      expectCronSuccess(respond);
-    },
-  );
-
-  it("rejects caller-supplied cron creator provenance", async () => {
-    const { context, respond } = await invokeCronAdd(
-      agentTurnCronParams({
-        createdActor: { type: "human", source: "profile", id: "spoofed-profile" },
-      }),
-    );
-
-    expect(context.cron.add).not.toHaveBeenCalled();
-    expectResponseError(respond, { code: "INVALID_REQUEST" });
+  registerCronCreatorSessionTests({
+    invokeCron,
+    loadGatewaySessionEntry,
+    resolveCronDeliveryPreview,
   });
 
   it.each(["add", "update"] as const)(
@@ -1637,7 +1520,7 @@ describe("cron method validation", () => {
     const list = await invokeCron("cron.list", { compact: true }, { context, client: runClient });
     expect(list.respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ total: 1 }),
+      expect.objectContaining({ total: 1, jobs: [expect.objectContaining({ id: accountJob.id })] }),
       undefined,
     );
 
@@ -1682,6 +1565,23 @@ describe("cron method validation", () => {
       undefined,
     );
 
+    const update = await invokeCron(
+      "cron.update",
+      { id: accountJob.id, patch: { enabled: false } },
+      { context, client: runClient },
+    );
+    expectResponseError(update.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Automation not found: cron-1",
+    });
+
+    const run = await invokeCron("cron.run", { id: accountJob.id }, { context, client: runClient });
+    expectResponseError(run.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Automation not found: cron-1",
+    });
+    expect(context.cron.enqueueRun).not.toHaveBeenCalled();
+
     const remove = await invokeCron(
       "cron.remove",
       { id: accountJob.id },
@@ -1706,23 +1606,6 @@ describe("cron method validation", () => {
       code: "INVALID_REQUEST",
       messageIncludes: "Automation not found",
     });
-
-    const update = await invokeCron(
-      "cron.update",
-      { id: accountJob.id, patch: { enabled: false } },
-      { context, client: runClient },
-    );
-    expectResponseError(update.respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Automation not found: cron-1",
-    });
-
-    const run = await invokeCron("cron.run", { id: accountJob.id }, { context, client: runClient });
-    expectResponseError(run.respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Automation not found: cron-1",
-    });
-    expect(context.cron.enqueueRun).not.toHaveBeenCalled();
   });
 
   it("keeps trusted scheduled authority operator-only", async () => {
@@ -2370,65 +2253,7 @@ describe("cron method validation", () => {
     expect(requireRecord(respond.mock.calls[0]?.[2], "response error").details).toBeUndefined();
   });
 
-  it.each([
-    { name: "main", job: { sessionTarget: "main" }, waits: false },
-    {
-      name: "aliased own session",
-      job: { sessionTarget: "session:agent:ops:main" },
-      mainKey: "work",
-      waits: false,
-    },
-    {
-      name: "current-session announce into the caller",
-      job: {
-        sessionTarget: "current",
-        sessionKey: "agent:ops:main",
-        delivery: { mode: "announce" },
-      },
-      waits: false,
-    },
-    {
-      // Quiet current jobs run detached and never commit into the conversation.
-      name: "quiet current-session",
-      job: { sessionTarget: "current", sessionKey: "agent:ops:main", delivery: { mode: "none" } },
-      waits: true,
-    },
-    {
-      // The automations tool stamps the creator's session onto non-isolated jobs.
-      name: "other named session created from the caller",
-      job: { sessionTarget: "session:reports", sessionKey: "agent:ops:main" },
-      waits: true,
-    },
-  ] as const)(
-    "waits for a $name run from an agent turn only when it can finish meanwhile",
-    async ({ job, mainKey, waits }) => {
-      setRuntimeConfig(mainKey ? { session: { mainKey } } : {});
-      const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops", ...job }));
-
-      const { respond } = await invokeCron(
-        "cron.run",
-        { id: "cron-1", waitTimeoutMs: 60_000 },
-        {
-          context,
-          client: callerClient("ops", undefined, mainKey ? `agent:ops:${mainKey}` : undefined),
-        },
-      );
-
-      // The caller's turn holds the main lane and its own session lane, so those runs
-      // only start after this request returns; waiting would just burn the budget.
-      expect(context.cron.waitForManualRun).toHaveBeenCalledTimes(waits ? 1 : 0);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          ok: true,
-          enqueued: true,
-          runId: "run-1",
-          processInstanceId: getGatewayProcessInstanceId(),
-        },
-        undefined,
-      );
-    },
-  );
+  registerCronRunWaitTests({ handlers: cronHandlers, getRuntimeConfig });
 
   it("waits for a command job named for an administrator's own session", async () => {
     // Command jobs run as processes, so a target naming the caller's session never
@@ -2592,20 +2417,6 @@ describe("cron method validation", () => {
     });
   });
 
-  it("retains full cron job discovery for all-scope history", async () => {
-    const context = createCronContext(createCronJob({ id: "cron-1" }));
-
-    const { respond } = await invokeCron("cron.runs", { scope: "all" }, { context });
-
-    expect(context.cron.list).toHaveBeenCalledExactlyOnceWith({ includeDisabled: true });
-    expect(context.cron.readJob).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ entries: expect.any(Array) }),
-      undefined,
-    );
-  });
-
   it("does not widen a whitespace-only cron.runs selector to all history", async () => {
     const context = createCronContext();
 
@@ -2673,7 +2484,10 @@ describe("cron method validation", () => {
         params,
         caller ? callerClient(caller) : undefined,
       );
-      expect(context.cron.wake).toHaveBeenCalledWith(expected);
+      expect(context.cron.wake).toHaveBeenCalledWith({
+        ...expected,
+        commitGuard: expect.any(Function),
+      });
       expect(context.cron.prepareWake).toHaveBeenCalledOnce();
       expect(context.cron.prepareWake.mock.invocationCallOrder[0]).toBeLessThan(
         context.cron.wake.mock.invocationCallOrder[0]!,

@@ -12,8 +12,8 @@ export type ConfigSnapshotPreparationContext = {
   options: {
     pluginValidation?: "full" | "skip" | "core-only";
     preservedLegacyRootKeys?: readonly string[];
+    deferredPluginMigrations?: readonly DeferredPluginMigration[];
   };
-  resolveDeferredPluginMigrationsAsync: () => Promise<readonly DeferredPluginMigration[]>;
 };
 
 export type ConfigSnapshotMetadataLoader = {
@@ -43,7 +43,7 @@ export type MetadataRequest = {
   config: OpenClawConfig;
 };
 export type PreparedValidation = {
-  deferredPluginMigrations: readonly DeferredPluginMigration[];
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   validated: ValidateConfigWithPluginsResult;
 };
 

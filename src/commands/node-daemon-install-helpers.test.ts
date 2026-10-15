@@ -1,5 +1,6 @@
 // Node daemon install helper tests cover node daemon install plans and runtime warnings.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type * as NodeHostConfigModule from "../node-host/config.js";
 
 const mocks = vi.hoisted(() => ({
   resolvePreferredBunPath: vi.fn(),
@@ -8,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   resolveSystemNodeInfo: vi.fn(),
   renderSystemNodeWarning: vi.fn(),
   buildNodeServiceEnvironment: vi.fn(),
+  loadNodeHostConfig: vi.fn(async () => null),
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
@@ -24,6 +26,10 @@ vi.mock("../daemon/program-args.js", () => ({
 
 vi.mock("../daemon/service-env.js", () => ({
   buildNodeServiceEnvironment: mocks.buildNodeServiceEnvironment,
+}));
+vi.mock("../node-host/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof NodeHostConfigModule>()),
+  loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
 
 import { buildNodeInstallPlan } from "./node-daemon-install-helpers.js";

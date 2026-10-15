@@ -98,7 +98,7 @@ it.each([true, false])(
 
 it.each(["error", "abort"])("settles a pending local publication after %s", async (outcome) => {
   const f = fixture();
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
   const result = observe(f.list());
   try {
     await f.started.promise;

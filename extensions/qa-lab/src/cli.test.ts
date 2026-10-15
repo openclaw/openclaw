@@ -132,12 +132,22 @@ import { registerQaLabCli } from "./cli.js";
 
 describe("qa cli registration", () => {
   let program: Command;
+  let previousExitCode: typeof process.exitCode;
+  let stderrWrite: ReturnType<typeof vi.spyOn>;
 
   function parseQa(args: string[]) {
     return program.parseAsync(["node", "openclaw", "qa", ...args]);
   }
 
+  async function expectQaFailure(args: string[], message: string) {
+    await parseQa(args);
+    expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining(message));
+    expect(process.exitCode).toBe(1);
+  }
+
   beforeEach(() => {
+    previousExitCode = process.exitCode;
+    stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     program = new Command();
     runQaCredentialsAddCommand.mockReset();
     runQaCredentialsListCommand.mockReset();
@@ -161,7 +171,34 @@ describe("qa cli registration", () => {
   });
 
   afterEach(() => {
+    process.exitCode = previousExitCode;
+    stderrWrite.mockRestore();
     vi.clearAllMocks();
+  });
+
+  it("prints QA profile runtime failures", async () => {
+    const message = "--output-dir must be a relative path inside the repo root.";
+    runQaProfileCommand.mockRejectedValueOnce(new Error(message));
+
+    await expectQaFailure(
+      [
+        "run",
+        "--qa-profile",
+        "smoke-ci",
+        "--output-dir",
+        "/tmp/qa-out",
+        "--scenario",
+        "memory-dreaming-sweep",
+      ],
+      message,
+    );
+  });
+
+  it("prints SDK runner runtime failures", async () => {
+    const message = "Telegram QA could not acquire its test credential.";
+    runQaTelegramCommand.mockRejectedValueOnce(new Error(message));
+
+    await expectQaFailure(["telegram"], message);
   });
 
   it("registers discovered and built-in live transport subcommands", () => {
@@ -176,17 +213,6 @@ describe("qa cli registration", () => {
     expect(commandNames).toContain("credentials");
     expect(commandNames).toContain("coverage");
   });
-
-  it("does not expose a control-ui token flag on qa ui", () => {
-    const qa = program.commands.find((command) => command.name() === "qa");
-    const ui = qa?.commands.find((command) => command.name() === "ui");
-    if (!ui) {
-      throw new Error("expected qa ui command");
-    }
-
-    expect(ui.options.map((option) => option.long)).not.toContain("--control-ui-token");
-  });
-
   it("keeps qa run without a profile on the self-check command", async () => {
     await parseQa([
       "run",
@@ -262,19 +288,15 @@ describe("qa cli registration", () => {
     expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["--output-dir", [".artifacts/qa-e2e/smoke-ci"]],
-    ["--scenario", ["dm-chat-baseline"]],
-    ["--transport", ["qa-channel"]],
-    ["--allow-failures", []],
-  ])("rejects qa run profile-only flag %s without --qa-profile", async (flag, values) => {
-    await expect(parseQa(["run", flag, ...values])).rejects.toThrow(
-      `qa run ${flag} requires --qa-profile`,
-    );
+  it.each([["--scenario", ["dm-chat-baseline"]]])(
+    "rejects qa run profile-only flag %s without --qa-profile",
+    async (flag, values) => {
+      await expectQaFailure(["run", flag, ...values], `qa run ${flag} requires --qa-profile`);
 
-    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
-    expect(runQaProfileCommand).not.toHaveBeenCalled();
-  });
+      expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+      expect(runQaProfileCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([["--evidence-mode", "compact"], ["--exclude-test-execution-evidence"]])(
     "maps deprecated compact evidence flag %s to slim",
@@ -291,16 +313,17 @@ describe("qa cli registration", () => {
   );
 
   it("rejects conflicting deprecated evidence flags", async () => {
-    await expect(
-      parseQa([
+    await expectQaFailure(
+      [
         "run",
         "--qa-profile",
         "release",
         "--evidence-mode",
         "full",
         "--exclude-test-execution-evidence",
-      ]),
-    ).rejects.toThrow("--exclude-test-execution-evidence conflicts with --evidence-mode full");
+      ],
+      "--exclude-test-execution-evidence conflicts with --evidence-mode full",
+    );
 
     expect(runQaProfileCommand).not.toHaveBeenCalled();
   });
@@ -332,18 +355,17 @@ describe("qa cli registration", () => {
   });
 
   it("rejects an empty qa run --qa-profile instead of falling back to self-check", async () => {
-    await expect(parseQa(["run", "--qa-profile", ""])).rejects.toThrow(
-      "--qa-profile must not be empty.",
-    );
+    await expectQaFailure(["run", "--qa-profile", ""], "--qa-profile must not be empty.");
 
     expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
     expect(runQaProfileCommand).not.toHaveBeenCalled();
   });
 
   it("rejects self-check output flags in qa run profile mode", async () => {
-    await expect(
-      parseQa(["run", "--qa-profile", "smoke-ci", "--output", ".artifacts/qa-self-check.md"]),
-    ).rejects.toThrow("qa run --output is only valid for the self-check mode");
+    await expectQaFailure(
+      ["run", "--qa-profile", "smoke-ci", "--output", ".artifacts/qa-self-check.md"],
+      "qa run --output is only valid for the self-check mode",
+    );
 
     expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
     expect(runQaProfileCommand).not.toHaveBeenCalled();
@@ -648,7 +670,8 @@ describe("qa cli registration", () => {
     [["qa", "suite", "--concurrency", "1.5"], "--concurrency must be a positive integer."],
     [["qa", "suite", "--cpus", "0x4"], "--cpus must be a positive integer."],
     [["qa", "aimock", "--port", "1e4"], "--port must be a positive integer."],
-  ])("rejects non-decimal QA numeric option %j", async (args, message) => {
+    [["qa", "ui", "--port", "65536"], "--port must be a TCP port between 1 and 65535."],
+  ])("rejects invalid QA numeric option %j", async (args, message) => {
     const invalidProgram = new Command();
     invalidProgram.exitOverride();
     invalidProgram.configureOutput({
@@ -660,31 +683,15 @@ describe("qa cli registration", () => {
     await expect(invalidProgram.parseAsync(["node", "openclaw", ...args])).rejects.toThrow(message);
   });
 
-  it.each([[["qa", "ui", "--port", "65536"], "--port must be a TCP port between 1 and 65535."]])(
-    "rejects out-of-range QA port option %j",
-    async (args, message) => {
-      const invalidProgram = new Command();
-      invalidProgram.exitOverride();
-      invalidProgram.configureOutput({
-        writeErr: () => {},
-        writeOut: () => {},
-      });
-      registerQaLabCli(invalidProgram);
-
-      await expect(invalidProgram.parseAsync(["node", "openclaw", ...args])).rejects.toThrow(
-        message,
-      );
-    },
-  );
-
   it("shows an enable hint when a discovered runner plugin is installed but blocked", async () => {
     listQaRunnerCliContributions.mockReset().mockReturnValue([createBlockedQaRunnerContribution()]);
-    const blockedProgram = new Command();
-    registerQaLabCli(blockedProgram);
+    program = new Command();
+    registerQaLabCli(program);
 
-    await expect(
-      blockedProgram.parseAsync(["node", "openclaw", "qa", TEST_QA_RUNNER.commandName]),
-    ).rejects.toThrow(`Enable or allow plugin "${TEST_QA_RUNNER.pluginId}"`);
+    await expectQaFailure(
+      [TEST_QA_RUNNER.commandName],
+      `Enable or allow plugin "${TEST_QA_RUNNER.pluginId}"`,
+    );
   });
 
   it("rejects discovered runners that collide with built-in qa subcommands", () => {

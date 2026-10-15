@@ -12,6 +12,7 @@ import {
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultTelegramAccountId } from "./account-selection.js";
 
 type CredentialUnavailableDiagnostic = Extract<
@@ -25,6 +26,28 @@ export type TelegramTokenResolution = BaseTokenResolution & {
   source: TelegramTokenSource;
   credentialDiagnostics?: CredentialUnavailableDiagnostic[];
 };
+
+export function readTelegramTokenFile(
+  tokenFile: string,
+  configPath: string,
+  logMissingFile?: (message: string) => void,
+): TelegramTokenResolution & { source: "tokenFile" } {
+  const result = tryReadSecretFileSync(
+    tokenFile,
+    "Telegram bot token",
+    { rejectSymlink: true },
+    { configPath },
+  );
+  if (result.status === "available") {
+    return { token: result.value, source: "tokenFile" };
+  }
+  logMissingFile?.(`${configPath} is configured but unavailable`);
+  return {
+    token: "",
+    source: "tokenFile",
+    credentialDiagnostics: [result.diagnostic],
+  };
+}
 
 type RuntimeTokenValueResolution =
   | { status: "available"; value: string }
@@ -67,14 +90,8 @@ function resolveRuntimeTokenValue(params: {
     defaults: params.cfg?.secrets?.defaults,
     mode: "inspect",
   });
-  if (resolved.status === "available") {
-    return {
-      status: "available",
-      value: resolved.value,
-    };
-  }
-  if (resolved.status === "missing") {
-    return { status: "missing" };
+  if (resolved.status === "available" || resolved.status === "missing") {
+    return resolved;
   }
   if (resolved.ref.source === "env") {
     const envValue = resolveEnvSecretRefValue({
@@ -82,13 +99,9 @@ function resolveRuntimeTokenValue(params: {
       provider: resolved.ref.provider,
       id: resolved.ref.id,
     });
-    if (envValue) {
-      return {
-        status: "available",
-        value: envValue,
-      };
-    }
-    return { status: "configured_unavailable" };
+    return envValue
+      ? { status: "available", value: envValue }
+      : { status: "configured_unavailable" };
   }
   // Runtime resolution stays strict for non-env SecretRefs.
   resolveSecretInputString({
@@ -123,19 +136,15 @@ export function resolveTelegramToken(
 
   // Unknown accounts may inherit the single-bot token, but must not select
   // another bot's credentials in a multi-bot setup (#53876).
-  if (accountId !== DEFAULT_ACCOUNT_ID && !accountCfg) {
-    const accounts = telegramCfg?.accounts;
-    const hasConfiguredAccounts =
-      Boolean(accounts) &&
-      typeof accounts === "object" &&
-      !Array.isArray(accounts) &&
-      Object.keys(accounts).length > 0;
-    if (hasConfiguredAccounts) {
-      opts.logMissingFile?.(
-        `channels.telegram.accounts: unknown accountId "${accountId}" — not found in config, refusing channel-level fallback`,
-      );
-      return { token: "", source: "none" };
-    }
+  if (
+    accountId !== DEFAULT_ACCOUNT_ID &&
+    !accountCfg &&
+    Object.keys(asNonArrayRecord(telegramCfg?.accounts)).length > 0
+  ) {
+    opts.logMissingFile?.(
+      `channels.telegram.accounts: unknown accountId "${accountId}" — not found in config, refusing channel-level fallback`,
+    );
+    return { token: "", source: "none" };
   }
 
   for (const { config, path } of [
@@ -144,21 +153,7 @@ export function resolveTelegramToken(
   ]) {
     const tokenFile = config?.tokenFile?.trim();
     if (tokenFile) {
-      const result = tryReadSecretFileSync(
-        tokenFile,
-        "Telegram bot token",
-        { rejectSymlink: true },
-        { configPath: `${path}.tokenFile` },
-      );
-      if (result.status === "available") {
-        return { token: result.value, source: "tokenFile" };
-      }
-      opts.logMissingFile?.(`${path}.tokenFile is configured but unavailable`);
-      return {
-        token: "",
-        source: "tokenFile",
-        credentialDiagnostics: [result.diagnostic],
-      };
+      return readTelegramTokenFile(tokenFile, `${path}.tokenFile`, opts.logMissingFile);
     }
     const token = resolveRuntimeTokenValue({
       cfg,

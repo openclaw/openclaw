@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createNodeWorkspaceTestTransport,
@@ -10,6 +9,10 @@ import { getAgentWorkspaceAccess } from "../../../../src/agents/workspace-access
 import { requireGit } from "../../../../src/agents/worktrees/git.js";
 import { ManagedWorktreeService } from "../../../../src/agents/worktrees/service.js";
 import { ensureSkillSnapshot } from "../../../../src/auto-reply/reply/session-updates.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../../src/config/runtime-snapshot.js";
 import type { SessionEntry } from "../../../../src/config/sessions/types.js";
 import {
   createTestPluginApi,
@@ -30,30 +33,12 @@ import {
 } from "../../../../src/state/openclaw-state-db.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
-vi.mock("openclaw/plugin-sdk/agent-workspace-runtime", async (importOriginal) => {
-  const original =
-    await importOriginal<typeof import("../../../../src/plugin-sdk/agent-workspace-runtime.js")>();
-  return {
-    ...original,
-    resolveWorkspaceWorkerArgv(kind: "memory" | "skills") {
-      const argv = original.resolveWorkspaceWorkerArgv(kind);
-      const register =
-        "import { register } from " +
-        JSON.stringify(import.meta.resolve("tsx/esm/api")) +
-        "; register({ tsconfig: " +
-        JSON.stringify(fileURLToPath(new URL("../../../../tsconfig.json", import.meta.url))) +
-        " });";
-      return argv[0] === "--import"
-        ? ["--import", "data:text/javascript," + encodeURIComponent(register), ...argv.slice(2)]
-        : argv;
-    },
-  };
-});
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await closeSkillsWatchers(true);
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -103,7 +88,12 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
     const worktree =
       kind === "empty"
         ? await worktrees.createEmpty(owner)
-        : await worktrees.create({ ...owner, repoRoot: source, runSetupScript: false });
+        : await worktrees.create({
+            ...owner,
+            repoRoot: source,
+            baseRef: "HEAD",
+            runSetupScript: false,
+          });
     await writeSkill({
       dir: path.join(remote, "skills", "agent-only"),
       name: "agent-only",
@@ -130,6 +120,7 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
       agents: { entries: { main: { workspace: local, agentDir: path.join(stateDir, "agent") } } },
       plugins: { enabled: false, entries: { "file-transfer": { config: pluginConfig } } },
     };
+    setRuntimeConfigSnapshot(config);
     let service!: Parameters<OpenClawPluginApi["registerService"]>[0];
     const api = createTestPluginApi({
       registrationMode: "full",

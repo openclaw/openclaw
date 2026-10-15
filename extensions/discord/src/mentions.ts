@@ -4,6 +4,7 @@ import {
   normalizeDiscordSnowflake,
   resolveDiscordDirectoryUserId,
 } from "./directory-cache.js";
+import { findDiscordUrlRanges } from "./url-ranges.js";
 
 type DiscordMentionAliasesConfig = Record<string, string>;
 
@@ -46,13 +47,7 @@ function resolveConfiguredMentionAlias(
       continue;
     }
     const aliasWithoutDiscriminator = alias.replace(DISCORD_DISCRIMINATOR_SUFFIX, "");
-    if (
-      alias === key ||
-      (withoutDiscriminator && withoutDiscriminator !== key && alias === withoutDiscriminator) ||
-      (aliasWithoutDiscriminator &&
-        aliasWithoutDiscriminator !== alias &&
-        aliasWithoutDiscriminator === key)
-    ) {
+    if (alias === key || alias === withoutDiscriminator || aliasWithoutDiscriminator === key) {
       const userId = normalizeDiscordSnowflake(rawUserId);
       if (userId) {
         return userId;
@@ -69,26 +64,32 @@ function rewritePlainTextMentions(
     mentionAliases?: DiscordMentionAliasesConfig | null;
   },
 ): string {
-  if (!text.includes("@")) {
-    return text;
-  }
+  const urlRanges = findDiscordUrlRanges(text);
   return text.replace(
     MENTION_CANDIDATE_PATTERN,
-    (match: string, prefix: string, handle: string) => {
-      const lookup = handle.toLowerCase();
-      if (DISCORD_RESERVED_MENTIONS.has(lookup)) {
+    (match: string, prefix: string, handle: string, offset: number) => {
+      const mentionStart = offset + prefix.length;
+      if (urlRanges.some(({ start, end }) => start <= mentionStart && mentionStart < end)) {
         return match;
       }
-      const userId =
-        resolveConfiguredMentionAlias(handle, params.mentionAliases) ??
-        resolveDiscordDirectoryUserId({
-          accountId: params.accountId,
-          handle,
-        });
-      if (!userId) {
-        return match;
+      for (let candidate = handle; candidate.length >= 2; candidate = candidate.slice(0, -1)) {
+        if (DISCORD_RESERVED_MENTIONS.has(candidate.toLowerCase())) {
+          return match;
+        }
+        const userId =
+          resolveConfiguredMentionAlias(candidate, params.mentionAliases) ??
+          resolveDiscordDirectoryUserId({
+            accountId: params.accountId,
+            handle: candidate,
+          });
+        if (userId) {
+          return `${prefix}${formatMention({ userId })}${handle.slice(candidate.length)}`;
+        }
+        if (!candidate.endsWith(".")) {
+          return match;
+        }
       }
-      return `${prefix}${formatMention({ userId })}`;
+      return match;
     },
   );
 }

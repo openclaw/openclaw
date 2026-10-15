@@ -120,8 +120,10 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
     withServiceHome(async (home) => {
       const { platform, identity, phase, splitRoot } = scenario;
       const authorized = identity === "current updater";
-      const external = "ancestry" in scenario && scenario.ancestry === "inherited environment";
       const unresolved = "ancestry" in scenario && scenario.ancestry === "unavailable ancestry";
+      const external =
+        ("ancestry" in scenario && scenario.ancestry === "inherited environment") ||
+        (platform === "darwin" && unresolved);
       const inherited = external || unresolved;
       const reparented = "membership" in scenario;
       const gatewayPid = external || reparented ? 2 : process.ppid;

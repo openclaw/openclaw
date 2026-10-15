@@ -30,11 +30,24 @@ In practice:
 
 Page metadata reads stop at the end of the HTML head or after 64 KiB, whichever
 comes first; metadata beyond that limit is omitted. The Gateway streams the head
-without building a page DOM. Anonymous previews share a bounded URL cache for one
-hour when available, or five minutes when unavailable; URL fragments share the
-same entry. Disabling automatic favicons also suppresses cached previews.
+without building a page DOM. Anonymous previews use a bounded cache per requesting
+principal and runtime config revision for one hour when available, or five minutes
+when unavailable; URL fragments share the same entry. Repeated links share pending
+requests, and a page that declares the same social image and favicon downloads it
+once. The 15-second preview deadline includes queue wait, fetching, and image work.
+Disabling automatic favicons or retiring the request's authority suppresses cached
+previews too.
 
 The browser-side CSP restriction itself is always on and not configurable.
+
+## Connection permissions
+
+The Control UI uses the granted scopes returned by the Gateway handshake.
+Session readers can open shared chats without polling operator-only dashboards,
+scheduled tasks, voice catalogs, or provider authentication status. Restricted
+surfaces are hidden or show an access message. A dashboard `FORBIDDEN` response
+stops automatic retries; reconnecting replaces the connection's granted scopes.
+The Gateway continues to authorize every request and subscription.
 
 ## Public transcript boundary
 
@@ -45,9 +58,23 @@ to that thread with the person's existing permissions. Identity headers on the
 anonymous thread path do not authorize private access. Private and missing
 threads have the same anonymous unavailable response.
 
+In token/password deployments, the reader can recognize a browser-held session
+token or paired-device credential scoped to the current Gateway address and base
+path. After the protected probe returns `401`, that presence is only a navigation
+hint to open the app shell; the reader never sends the credential or authorizes
+session data. The app's existing WebSocket and bootstrap checks still apply.
+A `204` probe continues into the app, while `403` keeps the public reader even
+when local credentials exist. Trusted-proxy and external-login handoffs retain
+their existing authentication and permission checks.
+
+Loopback HTTP retains its public-reader support. On non-secure ingress where
+publication is unavailable, token/password chat links serve the app shell
+directly, without looking up or disclosing a transcript. Serving the shell grants
+no Gateway or session access.
+
 The public renderer includes only user messages and assistant final-answer text.
 It omits tools, reasoning, files, images, widgets, hidden messages, and internal
-metadata, and applies best-effort credential-pattern redaction. A restrictive
+metadata. Included text preserves credentials; review it before publishing. A restrictive
 content security policy permits only the fixed reader script; transcript HTML
 cannot execute. Responses retain `Cache-Control: no-store` and
 `Referrer-Policy: no-referrer`. Server-side representation reuse never substitutes
@@ -124,7 +151,8 @@ ticket; replacing the file or restarting the Gateway requires a new allowance.
 When gateway auth is configured, assistant local-media previews use a two-step route:
 
 - `GET /__openclaw__/assistant-media?meta=1&source=<path>&sessionKey=<key>&agentId=<id>` requires the normal Control UI operator auth and access to the selected session; the browser sends the gateway token as a bearer header when checking availability.
-- Successful metadata responses include a short-lived `mediaTicket` scoped to the file and session. Explicit outside-image allowances use an authenticated administrator `POST` to the same route with `meta=1&allow=1`.
+- Saved message attachments also carry `messageId`. Readers with `operator.sessions.read` can open an attachment only when its current, visible message belongs to a conversation they can read, including retained queued or stopped inputs. The Gateway verifies the source against that message’s saved attachment references or supported assistant media directives; a session key or filename alone never grants file access. These reads retain the same filesystem restrictions. Standalone file reads still require `operator.read`.
+- Successful metadata responses include a short-lived `mediaTicket` scoped to the file, session, and message when applicable. Explicit outside-image allowances use an authenticated administrator `POST` to the same route with `meta=1&allow=1`.
 - Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
 
 Tickets remain bound to the issuing reader's current access. Losing session
@@ -134,6 +162,8 @@ before they expire.
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 
 Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. That failure tolerance applies only to the mounted image; it does not extend its media ticket or authorize fresh reads. Scrolling can reuse a successfully decoded image from the bounded in-memory preview cache while its existing metadata and ticket remain valid, without another image download or loading placeholder. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image. When the UI receives a sharing invalidation, a role-configuration change, or the connection close for a role reassignment, cached previews must pass fresh admission before remounting.
+
+If uploaded or local image bytes fail to load or decode after the availability check succeeds, the broken preview becomes an **Unavailable** card with **Retry**. Native image errors do not reveal the HTTP status, so the UI does not automatically repeat the byte request. **Retry** checks current availability and access before loading the image again; it does not grant an outside-folder allowance or extend an existing ticket.
 
 Uploaded images also stay visible while a new session's workspace or worktree details arrive. Media access is rechecked in the background without replacing the loaded preview with a loading card.
 

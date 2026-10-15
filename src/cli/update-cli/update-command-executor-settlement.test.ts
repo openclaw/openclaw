@@ -36,8 +36,9 @@ vi.mock("../../daemon/runtime-paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-paths.js")>()),
   resolveNodeRuntimeInfo: boundaries.runtime,
 }));
-vi.mock("../../infra/update-managed-service-handoff-lease.js", () => ({
-  createManagedHandoffLeaseStore: boundaries.store,
+vi.mock("../../infra/update-managed-service-handoff-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-managed-service-handoff-lease.js")>()),
+  prepareManagedHandoffLeaseStore: boundaries.store,
   resolveManagedUpdateLeaseDatabasePath: () => boundaries.databasePath,
 }));
 vi.mock("../../infra/update-managed-service-handoff-database.js", () => ({
@@ -64,6 +65,7 @@ type SettlementStore = Pick<
   | "release"
   | "releaseAll"
   | "bindUpdateChildren"
+  | "processIdentity"
   | "cancelUpdate"
   | "current"
   | "owns"
@@ -128,6 +130,7 @@ beforeEach(() => {
     release: (candidate: ManagedHandoffLease) => current(candidate) && rows.delete(candidate.key),
     releaseAll,
     bindUpdateChildren: (children) => (children.every(current) ? children : null),
+    processIdentity: (pid) => ({ pid: pid ?? process.pid, startIdentity: "synthetic" }),
     cancelUpdate: (original, retained) =>
       current(original) && (!retained || current(retained))
         ? {
@@ -143,7 +146,7 @@ beforeEach(() => {
     isProcessIdentityCurrent: () => true,
     acceptParentBoundExecutor: current,
   };
-  boundaries.store.mockReturnValue(store);
+  boundaries.store.mockResolvedValue(store);
 });
 
 function runWithExecutorFence<T>(
