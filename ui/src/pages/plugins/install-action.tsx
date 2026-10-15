@@ -20,6 +20,8 @@ export type PluginInstallActionProps = {
   pluginName?: string;
   buttonClass?: string;
   primary?: boolean;
+  actionLabel?: string;
+  busyLabel?: string;
   onInstall?: () => void;
 };
 
@@ -161,15 +163,15 @@ function InstallActionContent(
         }}
       >
         {active() && !failed() ? <span class="btn__spinner" aria-hidden="true" /> : undefined}
-        {t(
-          canInstall()
-            ? failed()
-              ? "pluginsPage.retryInstall"
-              : "pluginsPage.install"
-            : failed()
-              ? "pluginsPage.installProgress.viewStatus"
-              : "pluginsPage.installing",
-        )}
+        {canInstall() && !failed()
+          ? (props.actionLabel ?? t("pluginsPage.install"))
+          : active() && !failed()
+            ? (props.busyLabel ?? t("pluginsPage.installing"))
+            : t(
+                failed() && canInstall()
+                  ? "pluginsPage.retryInstall"
+                  : "pluginsPage.installProgress.viewStatus",
+              )}
         {progress() ? <Icon name="chevronDown" /> : undefined}
       </button>
       {progress() && button() ? (
@@ -267,6 +269,8 @@ export const PluginInstallAction = defineSolidBridge<
     pluginName: { default: "", attribute: false },
     buttonClass: { default: "", attribute: false },
     primary: { default: false, attribute: false },
+    actionLabel: { default: undefined, attribute: false },
+    busyLabel: { default: undefined, attribute: false },
     onInstall: { default: undefined, attribute: false },
   },
   methods: { dismiss: (host) => dismissers.get(host)?.() },

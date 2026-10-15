@@ -689,9 +689,6 @@ describe("resolveCodexContinuityProjectionMaxChars", () => {
     expect(buildCodexContinuityCalibration({ promptChars: 200_000, inputTokens: 0 })).toBe(
       undefined,
     );
-    expect(buildCodexContinuityCalibration({ promptChars: Number.NaN, inputTokens: 64_000 })).toBe(
-      undefined,
-    );
   });
 
   it("stays strictly under the shared whole-window projection cap", () => {

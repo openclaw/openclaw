@@ -2,7 +2,6 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
@@ -59,15 +58,12 @@ async function fixture(
   const readNative = vi.fn(async (params: CodexThreadListParams) => {
     const offset = Number(params.cursor ?? 0);
     const limit = params.limit ?? 64;
-    return projectCodexCatalogPage(
-      {
-        data: structuredClone(threads.slice(offset, offset + limit)).map((entry) =>
-          setCodexCatalogSource(entry, codexCatalogSourceForClient(harness.client)),
-        ),
-        nextCursor: offset + limit < threads.length ? String(offset + limit) : null,
-      },
-      { sanitize: sanitizeTerminalText },
-    );
+    return projectCodexCatalogPage({
+      data: structuredClone(threads.slice(offset, offset + limit)).map((entry) =>
+        setCodexCatalogSource(entry, codexCatalogSourceForClient(harness.client)),
+      ),
+      nextCursor: offset + limit < threads.length ? String(offset + limit) : null,
+    });
   });
   const index = new CodexCatalogIndex({
     homeId,
@@ -217,7 +213,7 @@ describe("resident Codex catalog notifications", () => {
       thread({ id: `stored-${i}`, recencyAt: 1_000 - i }),
     );
     const { index, harness, readNative } = await fixture(inventory);
-    inventory[64]!.name = "Renamed without new activity";
+    inventory[16]!.name = "Renamed without new activity";
     inventory[220]!.name = "Silent tail rename";
     inventory.pop();
     inventory.unshift(thread({ id: "missed-start", recencyAt: 1_999 }));
@@ -227,16 +223,16 @@ describe("resident Codex catalog notifications", () => {
     await vi.waitFor(() => expect(index.get(newer.id)).toBeDefined());
     await vi.advanceTimersByTimeAsync(30_000);
     await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-    expect(readNative).toHaveBeenCalledTimes(7);
+    expect(readNative).toHaveBeenCalledTimes(19);
     expect(index.get("missed-start")).toBeDefined();
-    expect(index.get("stored-64")?.page.sessions[0]?.name).toBe("Renamed without new activity");
+    expect(index.get("stored-16")?.page.sessions[0]?.name).toBe("Renamed without new activity");
     expect(index.get("stored-220")?.page.sessions[0]?.name).toBeNull();
     expect(index.get("stored-255")).toBeDefined();
     await vi.advanceTimersByTimeAsync(14 * 60_000 + 30_000);
-    expect(readNative).toHaveBeenCalledTimes(7);
+    expect(readNative).toHaveBeenCalledTimes(19);
     await index.list({ limit: 64 });
     await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-    expect(readNative).toHaveBeenCalledTimes(12);
+    expect(readNative).toHaveBeenCalledTimes(36);
     expect(index.get("stored-220")?.page.sessions[0]?.name).toBe("Silent tail rename");
     expect(index.get("stored-255")).toBeUndefined();
   });
@@ -386,20 +382,17 @@ describe("resident Codex catalog notifications", () => {
       initialize: false,
       local: true,
     });
-    const page = await projectCodexCatalogPage(
-      {
-        data: [
-          setCodexCatalogSource(
-            thread({
-              cwd: "/workspace/fresh",
-              status: { type: "active", activeFlags: ["staleStatus"] },
-            }),
-            codexCatalogSourceForClient(harness.client),
-          ),
-        ],
-      },
-      { sanitize: sanitizeTerminalText },
-    );
+    const page = await projectCodexCatalogPage({
+      data: [
+        setCodexCatalogSource(
+          thread({
+            cwd: "/workspace/fresh",
+            status: { type: "active", activeFlags: ["staleStatus"] },
+          }),
+          codexCatalogSourceForClient(harness.client),
+        ),
+      ],
+    });
     const response = createDeferred<typeof page>();
     const started = createDeferred<void>();
     readNative.mockImplementation(() => {
@@ -463,10 +456,7 @@ describe("resident Codex catalog notifications", () => {
       delete: async () => false,
     };
     const { index, harness, readNative } = await fixture([], { initialize: false, state });
-    const page = await projectCodexCatalogPage(
-      { data: [thread({ name: "Saved title" })] },
-      { sanitize: sanitizeTerminalText },
-    );
+    const page = await projectCodexCatalogPage({ data: [thread({ name: "Saved title" })] });
     const listing = index.list({});
     try {
       await started.promise;

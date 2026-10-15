@@ -14,7 +14,7 @@ import { isBoundaryTestFile } from "../../test/vitest/vitest.unit-paths.mjs";
 import {
   detectChangedScope,
   isCiDocumentationPath as isDocumentationPath,
-  isNodeTestDataOnlyPath,
+  isIndependentlyCheckedDocumentation,
 } from "../ci-changed-scope.mjs";
 import {
   buildVitestRunPlans,
@@ -84,7 +84,7 @@ import {
 
 // The manifest protocol also reads this policy from historical target planners.
 export { hasQaSmokeAffectingChange } from "./ci-qa-smoke-scope.mts";
-export { isCiDocumentationPath } from "../ci-changed-scope.mjs";
+export { isCiDocumentationPath, resolveReleaseFastLaneScope } from "../ci-changed-scope.mjs";
 
 type ChangedNodeTestShard = NodeTestShard & {
   targets?: string[];
@@ -286,9 +286,6 @@ const PROMPT_SNAPSHOT_SURFACE_RE =
 // plugin-sdk agent harness, codex catalog fixtures).
 const PROMPT_SNAPSHOT_ENTRY = "test/helpers/agents/happy-path-prompt-snapshots.ts";
 
-const GLOBAL_NODE_TEST_INPUT_RE =
-  /^(?:pnpm-workspace\.yaml|\.npmrc|node-version\.mjs|tsconfig(?:\.[^/]+)?\.json|vitest\.config\.ts|test\/setup(?:\.shared|\.extensions|-openclaw-runtime)?\.ts|test\/vitest\/vitest\.(?:shared\.config|scoped-config|performance-config)\.ts|scripts\/run-vitest\.(?:mjs|mts)|scripts\/test-projects\.mts|scripts\/lib\/vitest-process-env\.mts|\.github\/actions\/(?:setup-node-env|setup-pnpm-store-cache)\/action\.yml)$|^patches\//u;
-
 /**
  * True when a changed path can influence generated prompt snapshots: it
  * touches the snapshot surface directly, or the generator's import graph
@@ -371,46 +368,6 @@ function createBoundaryShard() {
     runner: DEFAULT_NODE_TEST_RUNNER,
     shardName: "changed-boundary",
   };
-}
-
-function isIndependentlyCheckedDocumentation(changedPath: string, cwd: string) {
-  if (
-    changedPath !== changedPath.trim() ||
-    path.posix.normalize(changedPath) !== changedPath ||
-    !isNodeTestDataOnlyPath(changedPath)
-  ) {
-    return false;
-  }
-  // Docs/instruction routing owns these pages; packaged templates retain runtime proof.
-  // Missing pages are deletions, but symlinks (including dangling ones) are not pages.
-  const entry = lstatSync(path.join(cwd, changedPath), { throwIfNoEntry: false });
-  return entry === undefined || entry.isFile();
-}
-
-export function resolveReleaseFastLaneScope(
-  changedPaths: readonly string[] | null,
-  options: CwdOptions = {},
-): { eligible: true } | { eligible: false; reason: string } {
-  if (!changedPaths?.length) {
-    return { eligible: false, reason: "missing changed paths" };
-  }
-  const globalInput = changedPaths.find((file) => GLOBAL_NODE_TEST_INPUT_RE.test(file));
-  if (globalInput) {
-    return { eligible: false, reason: `global execution or resolution input: ${globalInput}` };
-  }
-  const cwd = options.cwd ?? process.cwd();
-  const outsideScope = changedPaths.find(
-    (file) =>
-      !file.startsWith(".github/workflows/") &&
-      !file.startsWith("scripts/") &&
-      !file.startsWith("test/scripts/") &&
-      !/^\.agents\/skills\/release-[^/]+\//u.test(file) &&
-      file !== "docs/reference/RELEASING.md" &&
-      !isIndependentlyCheckedDocumentation(file, cwd),
-  );
-  return outsideScope === undefined
-    ? { eligible: true }
-    : { eligible: false, reason: `outside the release tooling scope: ${outsideScope}` };
 }
 
 /** The fixed cross-area smoke travels through the same exact-file owners as changed tests. */

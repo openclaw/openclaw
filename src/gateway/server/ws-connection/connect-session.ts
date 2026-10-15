@@ -20,7 +20,7 @@ import {
   isBrowserCopilotClient,
   isEphemeralGatewayClient,
 } from "../../../utils/message-channel.js";
-import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
+import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
 import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
@@ -65,7 +65,6 @@ import {
   resolveGatewayConnectProfileAdmission,
   scheduleGatewayConnectProfileSync,
 } from "./connect-user-profile.js";
-import { resolveControlUiBuildMismatch } from "./control-ui-build-admission.js";
 import type {
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
@@ -97,8 +96,6 @@ export async function attachAuthenticatedGatewayConnect(
     setCloseCause,
     logGateway,
     logWsControl,
-    requestHost,
-    requestOrigin,
   } = context.handler;
   const {
     connectParams,
@@ -222,6 +219,7 @@ export async function attachAuthenticatedGatewayConnect(
   if (!profileAdmission.ok) {
     return;
   }
+  context.setConnectPhase?.("registration");
   const preparedProfile = profileAdmission.prepared;
   const authenticatedUserProfile =
     remoteIngressPrincipal?.authenticatedUserProfile ?? preparedProfile?.profile;
@@ -336,37 +334,6 @@ export async function attachAuthenticatedGatewayConnect(
       close(1008, message);
       return;
     }
-  }
-  const controlUiBuildMismatch = resolveControlUiBuildMismatch({
-    clientId: connectParams.client.id,
-    clientBuildId: connectParams.client.buildId,
-    gatewayBuildId: resolveRuntimeServiceBuildId(),
-    configuredControlUiRoot: context.configSnapshot.gateway?.controlUi?.root,
-    requestHost,
-    requestOrigin,
-  });
-  if (controlUiBuildMismatch) {
-    // Build identity predates this rejection. Frozen clients recognize the shipped
-    // protocol-mismatch signal and surface its literal reload guidance.
-    const message = "protocol mismatch: Control UI updated; reload this page to continue";
-    markHandshakeFailure("control-ui-build-mismatch", {
-      clientBuildId: controlUiBuildMismatch.clientBuildId ?? "legacy",
-      gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
-    });
-    sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, message, {
-      retryable: false,
-      details: {
-        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
-        gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
-        reloadRequired: true,
-      },
-    });
-    logWsControl.warn(
-      `control ui build rejected conn=${connId} clientBuild=${formatForLog(controlUiBuildMismatch.clientBuildId ?? "legacy")} gatewayBuild=${formatForLog(controlUiBuildMismatch.gatewayBuildId)}; reload required`,
-    );
-    await releasePendingNodePairingCleanup();
-    close(1008, truncateCloseReason(message));
-    return;
   }
   // Record the authenticated ingress after device and role scope restrictions.
   // Later turns must not infer management authority from names or session routing.

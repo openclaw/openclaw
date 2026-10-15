@@ -76,12 +76,13 @@ async function withReplica(
     reacquire: () => ReturnType<typeof createSessionActorReplica>;
     retireGeneration: () => void;
   }) => void | Promise<void>,
+  sessionKey = "agent:main:actor-replica",
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const scope = {
       agentId: "main",
-      sessionKey: "agent:main:actor-replica",
+      sessionKey,
       storePath: database.path,
       env,
     };
@@ -338,14 +339,7 @@ it("keeps actor facts after usage cache writes and pruning", async () => {
       expect(await usage.acquire()).toBe(true);
       const snapshot = hydrate(fixture);
       const valueJson = new TextEncoder().encode("{}");
-      expect(
-        await usage.writeRollup({
-          rollupId: "usage-rollup",
-          valueJson,
-          blob: null,
-          updatedAt: 1,
-        }),
-      ).toBe(true);
+      await usage.writeRollup([{ rollupId: "usage-rollup", valueJson, blob: null, updatedAt: 1 }]);
       expect(replica.read()).toEqual(snapshot);
       await usage.pruneRows([{ key: "usage-rollup", valueJson, updatedAt: 1 }]);
       expect(replica.read()).toEqual(snapshot);
@@ -476,6 +470,13 @@ it("returns a newer committed replica when a receipt arrives during a worker rea
 
 it("shares committed facts across released handles and retires them for writes and worker loss", async () => {
   await withReplica((fixture) => {
+    hydrate(fixture);
+    const change = { ...fixture.scope, sessionKey: fixture.scope.sessionKey.toLowerCase() };
+    sessionChanges.invalidate({ ...change, factsInvalidated: true });
+    expect(fixture.replica.read()).toBeUndefined();
+    hydrate(fixture);
+    sessionChanges.invalidate({ all: true, scope: { storePath: change.storePath } });
+    expect(fixture.replica.read()).toBeUndefined();
     const first = hydrate(fixture);
     const replacement = fixture.reacquire();
     fixture.replica.close();
@@ -515,7 +516,7 @@ it("shares committed facts across released handles and retires them for writes a
     } finally {
       replacement.close();
     }
-  });
+  }, "agent:main:matrix:group:!Room:server");
 });
 
 it("retains unrelated session postimages but invalidates a shared physical session window", async () => {

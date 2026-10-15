@@ -351,6 +351,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       const runInspector = document.querySelector("#activity-run-panel");
       const diagnostics: ReturnType<ControlUiReadiness["hook"]["diagnostics"]> | undefined =
         window.openclawControlUi?.diagnostics();
+      const readiness = window.openclawControlUi?.snapshot();
       const agentsState = diagnostics?.roster;
       const gatewaySnapshot = diagnostics?.gateway;
       const customElementCounts: Record<string, number> = {};
@@ -382,37 +383,40 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
         /^\/settings\/agents\/([^/]+)\/(overview|files|tools|skills|channels|cron)$/u,
       );
       const groupMode = document.querySelector<HTMLElement>(
-        "wa-dropdown.session-group-defaults__mode-dropdown",
+        ".session-group-defaults__mode-dropdown",
       );
-      const groupMenu = groupMode?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-      const groupPopup = groupMode?.shadowRoot?.querySelector<HTMLElement>("wa-popup");
-      const groupPopupSurface =
-        groupPopup?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
+      const groupMenu = groupMode?.querySelector<HTMLElement>(".session-group-defaults__mode-menu");
       const groupFolderPicker = document.querySelector<HTMLElement>(
-        "wa-popover.session-group-defaults__folder-popover",
+        ".session-group-defaults__folder-popover",
       );
       return {
         failureSummary: {
+          readiness: readiness
+            ? {
+                generation: readiness.generation,
+                booted: readiness.booted,
+                gatewayPhase: readiness.gatewayPhase,
+                routeReady: readiness.routeReady,
+                rosterReady: readiness.rosterReady,
+                ready: readiness.ready,
+                settlementFailed: diagnostics?.settlementError != null,
+              }
+            : null,
           sessionGroupDefaults: groupMode
             ? {
-                open: Reflect.get(groupMode, "open") === true,
+                open: groupMenu?.matches(":popover-open") ?? false,
                 expanded: safeValue(
-                  groupMode.querySelector('[slot="trigger"]')?.getAttribute("aria-expanded"),
+                  groupMode
+                    .querySelector(".session-group-defaults__mode-trigger")
+                    ?.getAttribute("aria-expanded"),
                   ["true", "false"],
                 ),
                 menuInert: groupMenu?.inert ?? null,
                 menuVisible: groupMenu?.checkVisibility({ visibilityProperty: true }) ?? null,
-                popupActive: groupPopup ? Reflect.get(groupPopup, "active") === true : null,
-                nativePopupOpen: groupPopupSurface?.matches(":popover-open") ?? null,
-                folderPickerOpen: groupFolderPicker
-                  ? Reflect.get(groupFolderPicker, "open") === true
-                  : null,
-                folderDialogOpen:
-                  groupFolderPicker?.shadowRoot?.querySelector<HTMLDialogElement>("dialog")?.open ??
-                  null,
+                folderPickerOpen: groupFolderPicker?.matches(":popover-open") ?? null,
                 items: ["local", "worktree"].map((value) => {
                   const item = groupMode.querySelector<HTMLElement>(
-                    `wa-dropdown-item[value="${value}"]`,
+                    `[data-environment-mode="${value}"]`,
                   );
                   return {
                     value,
@@ -424,7 +428,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
                     ]),
                     visible: item?.checkVisibility({ visibilityProperty: true }) ?? null,
                     rectCount: item?.getClientRects().length ?? 0,
-                    iconCount: item?.querySelectorAll('[slot="icon"]').length ?? 0,
+                    iconCount: item?.querySelectorAll(".oc-menu-item__icon").length ?? 0,
                   };
                 }),
               }
