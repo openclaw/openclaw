@@ -202,7 +202,8 @@ export function createVitestWorkerRun(
       void ownedCompletion.catch(() => {});
       return joined;
     },
-    dispose(): Promise<void> {
+    /** `interrupted`: the invocation is exiting by signal, so its outcome cannot change. */
+    dispose({ interrupted = false }: { interrupted?: boolean } = {}): Promise<void> {
       return (disposal ??= (async () => {
         compilerAbort.abort();
         const settled = await Promise.allSettled(borrowers);
@@ -219,11 +220,17 @@ export function createVitestWorkerRun(
               if (channelError) {
                 throw channelError;
               }
+              // Only the owner's completed run needs this: it can still fail the run
+              // or retain outputs. Borrowers leave the generation to that owner, and
+              // an interrupted run must not delay its signal exit with a full scan.
+              if (parent || interrupted) {
+                return;
+              }
               if (fs.existsSync(path.join(directory, "manifest.json"))) {
                 console.error("[vitest-workers] verifying completed generation before cleanup");
                 await verifyVitestWorkerArtifacts(directory, manifest);
               }
-              if (!parent && manifest?.cacheSignature) {
+              if (manifest?.cacheSignature) {
                 if (await retainArtifacts?.(root, directory, manifest)) {
                   console.error("[vitest-workers] retained completed compiler outputs for reuse");
                 }
