@@ -1,12 +1,18 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import {
+  getPreparedModelRuntimeTestApi,
+  usePreparedModelRuntimeHarness,
+} from "./prepared-model-runtime.test-harness.js";
 import { isDeepStrictEqual } from "node:util";
-import { describe, expect, it } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { publishConfiguredModelRuntimeSnapshots } from "../gateway/server-startup-model-runtime.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { retireAgentDeleteRuntime } from "./agent-delete-databases.js";
 import { withAgentDeletion } from "./agent-lifecycle-registry.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -17,6 +23,7 @@ import {
   retirePreparedModelRuntimeAgent,
 } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
+import { getPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
@@ -33,6 +40,115 @@ function holdNextCatalogWrite() {
 }
 
 describe("prepared model runtime owner selection", () => {
+  it.for(["success", "failure", "shutdown", "foreground grace"] as const)(
+    "follows active startup acquisition through a scoped replacement's %s",
+    async (outcome, { signal }) => {
+      mocks.configuredAgentIds = ["default", "deferred"];
+      const initial = { messages: { responsePrefix: "initial" } };
+      const latest = { messages: { responsePrefix: "latest" } };
+      const started = createDeferred();
+      const successorStarted = createDeferred();
+      const release = createDeferred();
+      const escape = createDeferred();
+      const successorError = new Error("replacement catalog acquisition failed");
+      if (outcome === "foreground grace") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(120_000);
+      }
+      let cancellation: unknown;
+      mocks.prepareStaticCatalog.mockImplementation(async (input) => {
+        const options = input as { config: OpenClawConfig; signal: AbortSignal };
+        if (options.config.messages?.responsePrefix === "initial") {
+          const aborted = createDeferred();
+          const onAbort = () => {
+            cancellation = options.signal.reason;
+            aborted.resolve();
+          };
+          options.signal.addEventListener("abort", onAbort, { once: true });
+          started.resolve();
+          try {
+            await Promise.race([aborted.promise, escape.promise]);
+            options.signal.throwIfAborted();
+          } finally {
+            options.signal.removeEventListener("abort", onAbort);
+          }
+        } else {
+          successorStarted.resolve();
+          await release.promise;
+          options.signal.throwIfAborted();
+          if (outcome === "failure") {
+            throw successorError;
+          }
+        }
+        return { entries: [] };
+      });
+      const startup = publishConfiguredModelRuntimeSnapshots({ cfg: initial });
+      let settled = false;
+      const observed = startup.then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      let successor: Promise<void> | undefined;
+      let closing: Promise<void> | undefined;
+      let reader: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+      try {
+        await withinTest(started.promise, signal);
+        expect(getPreparedModelRuntimeStartupStatus()?.pendingAgents.length).toBeGreaterThan(0);
+        if (outcome === "foreground grace") {
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        successor = refreshPreparedModelRuntimeSnapshots(latest, {
+          gatewayLifecycle: true,
+          catalogMode: "static",
+          agentIds: new Set(["deferred"]),
+        });
+        void successor.catch(() => undefined);
+        expect(getPreparedModelRuntimeStartupStatus()).toBeUndefined();
+        await withinTest(successorStarted.promise, signal);
+        expect(cancellation).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
+        const settledBeforeSuccessor = settled;
+        if (outcome === "shutdown") {
+          closing = closePreparedModelRuntimeSnapshots();
+        } else if (outcome === "foreground grace") {
+          await vi.advanceTimersByTimeAsync(119_000);
+          expect(settled).toBe(true);
+          expect(await withinTest(observed, signal)).toBeUndefined();
+          expect(getPreparedModelRuntimeStartupStatus()).toBeUndefined();
+        }
+        release.resolve();
+        const result = await withinTest(observed, signal);
+        if (outcome === "success" || outcome === "foreground grace") {
+          expect(result).toBeUndefined();
+          for (const agentId of mocks.configuredAgentIds) {
+            reader = loadPublishedGatewayReplyDispatchRuntime({ agentId });
+            await expect(withinTest(reader, signal)).resolves.toMatchObject({
+              agentId,
+              config: latest,
+            });
+          }
+        } else if (outcome === "failure") {
+          expect(result).toBe(successorError);
+        } else {
+          expect(result).toMatchObject({ message: expect.stringContaining("closed") });
+        }
+        expect(getPreparedModelRuntimeStartupStatus()).toBeUndefined();
+        expect(settledBeforeSuccessor).toBe(false);
+      } finally {
+        escape.resolve();
+        release.resolve();
+        closing ??= closePreparedModelRuntimeSnapshots();
+        await Promise.allSettled([startup, observed, successor, closing, reader]);
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("retires only the deleted agent's physical owners", async () => {
     mocks.configuredAgentIds = ["worker"];
     mocks.configuredAgentDirs.set("worker", fixture.state.agentDir("isolated-worker"));
