@@ -78,6 +78,20 @@ describe("isPidAlive", () => {
     expect(isPidAlive(42)).toBe(false);
     expect(process["kill"]).toHaveBeenCalledWith(42, 0);
   });
+
+  it("treats unreadable linux proc status as non-zombie when kill succeeds", async () => {
+    const readFileSyncSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation(() => {
+      throw new Error("no proc status");
+    });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await withMockedPlatform("linux", async () => {
+      expect(isPidAlive(42)).toBe(true);
+    });
+
+    expect(readFileSyncSpy).toHaveBeenCalledWith("/proc/42/status", "utf8");
+    expect(killSpy).toHaveBeenCalledWith(42, 0);
+  });
 });
 
 describe("isPidDefinitelyDead", () => {
@@ -246,15 +260,19 @@ describe("native process identity policy", () => {
     nativeIdentity.mockReset().mockReturnValue(identity());
   });
 
-  it("keeps legacy seconds and fresh custody precision", () => {
-    const shell = vi.spyOn(childProcess, "execFileSync");
-    expect(getFileLockProcessStartTime(42)).toBe(seconds);
-    expect(getProcessInstanceStartTime(42)).toBe(seconds * 1_000_000 + 123_456);
-    nativeIdentity.mockReturnValue({ ...identity(seconds * 1_000_000 + 123_457), parentPid: 8 });
-    expect(getFileLockProcessStartTime(42)).toBe(seconds);
-    expect(getProcessInstanceStartTime(42)).toBe(seconds * 1_000_000 + 123_457);
-    expect(shell).not.toHaveBeenCalled();
-  });
+  it.each(["arm64", "x64"] as const)(
+    "keeps legacy seconds and fresh custody precision on %s",
+    (arch) => {
+      vi.spyOn(process, "arch", "get").mockReturnValue(arch);
+      const shell = vi.spyOn(childProcess, "execFileSync");
+      expect(getFileLockProcessStartTime(42)).toBe(seconds);
+      expect(getProcessInstanceStartTime(42)).toBe(seconds * 1_000_000 + 123_456);
+      nativeIdentity.mockReturnValue({ ...identity(seconds * 1_000_000 + 123_457), parentPid: 8 });
+      expect(getFileLockProcessStartTime(42)).toBe(seconds);
+      expect(getProcessInstanceStartTime(42)).toBe(seconds * 1_000_000 + 123_457);
+      expect(shell).not.toHaveBeenCalled();
+    },
+  );
 
   it("refuses custody signaling after a same-second process replacement", async () => {
     const { settleCommandProcessGroups } = await import("../process/command-process-custody.js");
@@ -299,22 +317,26 @@ describe("native process identity policy", () => {
     });
   });
 
-  it("never declares a hidden native process dead", async () => {
-    nativeIdentity.mockImplementation(() => {
-      throw new ProcSafeError("access-denied", "hidden", {
-        details: { reason: "visibility-policy" },
+  it.each(["darwin", "freebsd", "win32"] as const)(
+    "never declares a hidden %s process dead",
+    async (platform) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      nativeIdentity.mockImplementation(() => {
+        throw new ProcSafeError("access-denied", "hidden", {
+          details: { reason: "visibility-policy" },
+        });
       });
-    });
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-      throw Object.assign(new Error("hidden"), { code: "ESRCH" });
-    });
-    expect(isPidAlive(42)).toBe(true);
-    expect(isPidDefinitelyDead(42)).toBe(false);
-    expect(kill.mock.calls).toEqual([
-      [42, 0],
-      [42, 0],
-    ]);
-  });
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("hidden"), { code: "ESRCH" });
+      });
+      expect(isPidAlive(42)).toBe(true);
+      expect(isPidDefinitelyDead(42)).toBe(false);
+      expect(kill.mock.calls).toEqual([
+        [42, 0],
+        [42, 0],
+      ]);
+    },
+  );
 
   it("keeps sealed helpers on the bounded shell path", () => {
     vi.stubGlobal("SEALED_RUNTIME_BUILD", true);

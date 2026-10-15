@@ -846,6 +846,22 @@ describe("runSetupWizard", () => {
     expect(finalizeSetupWizard).toHaveBeenCalledOnce();
   });
 
+  it("persists the optional memory choice before classic setup finalization", async () => {
+    runMemorySetupFlow.mockImplementationOnce(async (config) => ({
+      ...config,
+      memory: { search: { provider: "openai", model: "embedding-model" } },
+    }));
+    await runWizard();
+    expect(runMemorySetupFlow).toHaveBeenCalledOnce();
+    expect(persistedWizardConfigs().at(-1)?.memory?.search).toEqual({
+      provider: "openai",
+      model: "embedding-model",
+    });
+    expect(runMemorySetupFlow.mock.invocationCallOrder[0]).toBeLessThan(
+      finalizeSetupWizard.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("persists classic channel setup before hooks and Gateway finalization", async () => {
     const beforeConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
     const configured = {

@@ -303,6 +303,50 @@ describe("Claw package removal", () => {
     },
   );
 
+  it("requires separate selection before invoking the canonical plugin lifecycle", async () => {
+    const ref = packageRef();
+    const store = packageRefStore(ref);
+    const uninstallPlugin = vi.fn().mockResolvedValue(
+      ok({
+        pluginId: "audit",
+        requestedPluginId: "audit",
+        pluginIds: ["audit"],
+        removed: [],
+        warnings: [],
+      }),
+    );
+    const decisions = await planClawPackageRemovals(install, [ref], {
+      deps: {
+        ...store,
+        resolvePlugin: vi.fn().mockResolvedValue(installedPlugin()),
+      },
+      referencedCleanup: {
+        mode: "remove-selected",
+        selected: ["plugin:audit@1.0.0"],
+      },
+    });
+
+    expect(decisions).toMatchObject([{ action: "uninstall", pluginId: "audit" }]);
+    await expect(
+      applyClawPackageRemovals(decisions, {
+        deps: {
+          ...store,
+          uninstallPlugin,
+          resolvePlugin: vi.fn().mockResolvedValue(installedPlugin()),
+        },
+      }),
+    ).resolves.toMatchObject({ packages: [{ action: "uninstalled" }] });
+    expect(uninstallPlugin).toHaveBeenCalledWith({
+      pluginId: "audit",
+      caller: "cli",
+      invalidateRuntimeCache: false,
+      clawManaged: true,
+      applyRuntime: undefined,
+      beforePersistentApply: expect.any(Function),
+      onWarning: expect.any(Function),
+    });
+  });
+
   it("excludes plugins from generic remove-if-unused cleanup", async () => {
     const ref = packageRef();
     const resolvePlugin = vi.fn();

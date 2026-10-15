@@ -337,6 +337,33 @@ describe("installClawMcpServers", () => {
     expect(refs[1]).toMatchObject({ name: "linear", status: "complete" });
   });
 
+  it("retries an ambiguous write that did not reach source config", async () => {
+    const current = await fixture();
+    const setMcpServer = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("write result unknown"))
+      .mockResolvedValue(listedMcpServers());
+    await expect(
+      installClawMcpServers(current.plan, {
+        env: current.env,
+        setMcpServer,
+        listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
+      }),
+    ).rejects.toMatchObject({ code: "mcp_install_uncertain" });
+
+    const refs = await installClawMcpServers(current.plan, {
+      env: current.env,
+      setMcpServer,
+      listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
+    });
+
+    expect(setMcpServer).toHaveBeenCalledTimes(3);
+    expect(refs).toEqual([
+      expect.objectContaining({ name: "docs", status: "complete" }),
+      expect.objectContaining({ name: "linear", status: "complete" }),
+    ]);
+  });
+
   it("repairs complete ownership when the configured servers disappeared", async () => {
     const current = await fixture();
     await installClawMcpServers(current.plan, {

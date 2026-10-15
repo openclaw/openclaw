@@ -221,6 +221,30 @@ describe("worker transcript provider replay", () => {
       "Worker transcript message exceeds the protocol payload limit",
     );
   });
+  it.each(["unsupported"])("projects %s content with opaque replay state", (type) => {
+    const message = assistantWithReplay();
+    Object.assign(message.content[0]!, { type });
+    Object.assign(message.providerReplay!, { providerScratch: "private" });
+
+    const result = toWorkerTranscriptMessage(message, "transcript");
+    expect(result?.kind).toBe("complete");
+    if (!result || result.kind !== "complete" || result.message.role !== "assistant") {
+      throw new Error("expected projected assistant message");
+    }
+    const projected = result.message;
+    expect(projected.providerReplay).toEqual(providerReplay);
+    expect(JSON.stringify(projected)).not.toContain("providerScratch");
+    expect(isWorkerTranscriptMessageFrameSafe(projected)).toBe(true);
+    expect(
+      validateWorkerTranscriptCommitParams({
+        runEpoch: 1,
+        seq: 1,
+        baseLeafId: null,
+        messages: [projected],
+      }),
+    ).toBe(type === "text");
+  });
+
   it.each([
     {
       name: "raw UTF-8 data over the replay field budget",
