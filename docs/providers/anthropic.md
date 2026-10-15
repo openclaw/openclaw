@@ -163,11 +163,12 @@ OpenClaw release:
         through OpenClaw's direct CLI transport. OpenClaw uses a non-secret route
         marker and never reads, persists, refreshes, selects, or forwards the
         native login tokens. Claude owns the login and token refresh lifecycle.
-        Gateway startup shares the native login availability check across agent
-        workspaces using the same config and environment. Explicit catalog/auth
-        captures recheck availability for their own generation. Model lists also
-        recheck it in the background at most once a minute, so `claude auth login`
-        or logout after Gateway startup reaches the model picker without a restart.
+        Gateway startup shares the native login check across agent workspaces using
+        the same config and environment. Checks use `claude auth status --json`;
+        an explicit logged-out response blocks the native route, while a timeout
+        or unreadable response allows Claude to try the request. Captures expire
+        after one minute. If a selected native login is unavailable, spawn admission
+        rechecks it immediately, so signing in does not require a Gateway restart.
 
         For native-login users, the model picker reads Claude Code's own model menu
         in the background, without sending a prompt or using an inference turn.

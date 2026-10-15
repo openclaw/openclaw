@@ -74,7 +74,7 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
               )}
             </Show>
           </div>
-          <footer class="exec-approval-actions connect-machine-dialog__actions">
+          <openclaw-modal-actions class="exec-approval-actions connect-machine-dialog__actions">
             {props.setup?.command || props.error ? (
               <button
                 class="btn"
@@ -91,7 +91,7 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
             <button class="btn btn--ghost" type="button" onClick={() => props.onManageDevices()}>
               {t("newSession.connectMachineManageDevices")}
             </button>
-          </footer>
+          </openclaw-modal-actions>
         </section>
       </openclaw-modal-dialog>
     </Show>

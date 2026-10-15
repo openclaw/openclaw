@@ -210,27 +210,29 @@ export function updateSessionEntryMaintenanceAgeFact(
     previousEntry &&
     (!isMonotoneSessionEntryMaintenanceAgeChange(update) ||
       previousEntry.sessionId !== entry.sessionId ||
-      previousEntry.parentSessionKey !== entry.parentSessionKey ||
-      ((previousEntry.preserved ??
-        shouldPreserveMaintenanceEntry({
-          key: update.sessionKey,
-          entry: previousEntry,
-          preserveRecentMs: null,
-        })) &&
-        !(
-          entry.preserved ??
-          shouldPreserveMaintenanceEntry({ key: update.sessionKey, entry, preserveRecentMs: null })
-        )))
+      previousEntry.parentSessionKey !== entry.parentSessionKey)
   ) {
     // Exact replacement/lifecycle writers also own backdates and archive restores.
     return undefined;
   }
-  // A newly inserted historical entry must retain already-due transitions too.
+  const protectionReleased =
+    previousEntry &&
+    (previousEntry.preserved ??
+      shouldPreserveMaintenanceEntry({
+        key: update.sessionKey,
+        entry: previousEntry,
+        preserveRecentMs: null,
+      })) &&
+    !(
+      entry.preserved ??
+      shouldPreserveMaintenanceEntry({ key: update.sessionKey, entry, preserveRecentMs: null })
+    );
+  // Newly eligible historical entries must retain already-due transitions too.
   const at = nextEntryAgeAt(
     update.sessionKey,
     entry,
     fact.maintenance,
-    previousEntry ? Date.now() : -Infinity,
+    previousEntry && !protectionReleased ? Date.now() : -Infinity,
   );
   return {
     ...fact,
@@ -379,12 +381,6 @@ export function capturePendingSessionMaintenanceAgeChanges(
   const changes = [...pending.values()];
   return {
     changes,
-    isCurrent() {
-      return (
-        pending.size === changes.length &&
-        changes.every((change) => pending.get(change.sessionKey) === change)
-      );
-    },
     acknowledge() {
       for (const change of changes) {
         if (pending.get(change.sessionKey) === change) {

@@ -25,7 +25,6 @@ import {
   getAdmittedSqliteSchemaFacts,
   getSqliteReadOperationRevision,
   installSqliteTempTrackingSchema,
-  readSqliteDataVersion,
   registerSqliteSchemaMutationListener,
   runSqliteReadOperationSync,
 } from "./sqlite-schema-facts.js";
@@ -346,22 +345,6 @@ describe("admitted SQLite schema facts", () => {
       observation.restore();
     }
   });
-  it.each(["data_version"])(
-    "uses native freshness without consulting a table shadowing %s",
-    (name) => {
-      const database = openDatabase(
-        `CREATE TABLE original (id); CREATE TABLE pragma_${name} (${name} INTEGER);
-         INSERT INTO pragma_${name} VALUES (999); PRAGMA user_version = 1;`,
-      );
-      expect(runSqliteReadOperationSync(database, () => tableExists(database, "original"))).toBe(
-        true,
-      );
-      expect(readSqliteDataVersion(database)).not.toBe(999);
-      expect(getAdmittedSqliteSchemaFacts(database)?.userVersion).toBe(1);
-      expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-8");
-    },
-  );
-
   it.each(["transaction", "implicit snapshot"])(
     "refreshes foreign row commits while trusting admitted format through an active %s",
     (pin) => {

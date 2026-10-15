@@ -18,6 +18,7 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import { heartbeatOutcomeFacts, recordHeartbeatOutcomeFact } from "./heartbeat-outcome-facts.js";
 import type {
   HeartbeatOutcomeInput,
   HeartbeatOutcomeRow,
@@ -144,13 +145,13 @@ export async function claimHeartbeatOutcomeForRun(params: {
   assertCurrent?: () => void;
   sessionActor?: SessionActorStorageBinding;
 }): Promise<PersistedHeartbeatOutcome | undefined> {
-  const { assertCurrent } = params;
+  const { assertCurrent, runId } = params;
   const row = await runHeartbeatOutcomeOperation(
     params,
-    { type: "claim", input: { sessionKey: params.sessionKey, runId: params.runId } },
+    { type: "claim", input: { sessionKey: params.sessionKey, runId } },
     assertCurrent,
   );
-  return row ? rowToOutcome(row) : undefined;
+  return row?.context_run_id === runId ? rowToOutcome(row) : undefined;
 }
 
 async function runHeartbeatOutcomeOperation(
@@ -198,6 +199,16 @@ async function runHeartbeatOutcomeOperation(
     return await runOpenClawAgentWriteAdmission(
       options,
       async () => {
+        if (command.type === "claim") {
+          const known = heartbeatOutcomeFacts(execution)?.get(command.input.sessionKey);
+          if (
+            known === null ||
+            (known && known.context_run_id !== null && known.context_claimed_at !== null)
+          ) {
+            assertQueuedCurrent();
+            return known ?? undefined;
+          }
+        }
         const worker = await openOpenClawAgentSqliteWorkerStore<HeartbeatOutcomeWorkerOperations>(
           options,
           { execution },
@@ -208,7 +219,13 @@ async function runHeartbeatOutcomeOperation(
         );
         try {
           // An absent database has no durable base session or outcome to claim.
-          return (await worker.executeExisting(command, assertQueuedCurrent))?.value;
+          const row = (await worker.executeExisting(command, assertQueuedCurrent))?.value;
+          recordHeartbeatOutcomeFact(
+            execution,
+            command.type === "persist" ? command.input.session_key : command.input.sessionKey,
+            row,
+          );
+          return row;
         } finally {
           await worker.close();
         }

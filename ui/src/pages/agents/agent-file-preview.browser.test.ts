@@ -151,10 +151,12 @@ describe.runIf(browserMode)("agent file preview", () => {
       );
       expect(actions.map((button) => button.getAttribute("aria-label"))).toEqual([
         "Expand preview",
-        "Edit file",
         "Close preview",
       ]);
-      expect(actions.map((button) => button.textContent?.trim())).toEqual(["", "", ""]);
+      expect(actions.map((button) => button.textContent?.trim())).toEqual(["", ""]);
+      const footer = container.querySelector("openclaw-modal-actions.md-preview-dialog__footer");
+      expect(footer?.parentElement?.lastElementChild).toBe(footer);
+      expect(footer?.querySelector("button")?.textContent?.trim()).toBe("Edit file");
       const closed = afterOwnTransition(modal, "overlay-after-hide");
       await userEvent.keyboard("{Escape}");
       await closed;
@@ -262,6 +264,8 @@ describe.runIf(browserMode)("agent file preview", () => {
       expect(secondaryMetadata).toHaveLength(4);
       const body = container.querySelector<HTMLElement>(".md-preview-dialog__body")!;
       const normalInset = getComputedStyle(body).paddingInlineStart;
+      const footer = container.querySelector<HTMLElement>(".md-preview-dialog__footer")!;
+      const edit = footer.querySelector<HTMLButtonElement>("button")!;
       for (const mode of ["normal", "fullscreen", "return"]) {
         if (mode !== "normal") {
           await userEvent.click(requireButton(".md-preview-expand-btn"));
@@ -284,7 +288,17 @@ describe.runIf(browserMode)("agent file preview", () => {
           }
         }
         expect(getComputedStyle(body).paddingInlineStart).toBe(normalInset);
+        const footerTop = footer.getBoundingClientRect().top;
+        expect(footerTop).toBeGreaterThanOrEqual(body.getBoundingClientRect().bottom - 1);
+        expect(edit.getBoundingClientRect().right).toBeLessThanOrEqual(
+          dialog.getBoundingClientRect().right,
+        );
+        expect(footer.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+          dialog.getBoundingClientRect().bottom + 1,
+        );
+        await expect.element(edit).toBeVisible();
         body.scrollTop = body.scrollHeight;
+        expect(footer.getBoundingClientRect().top).toBe(footerTop);
         expect(body.scrollTop).toBeGreaterThan(0);
         body.scrollTop = 0;
       }

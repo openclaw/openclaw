@@ -153,10 +153,11 @@ Shared pin/stager changes select macOS, Linux companion, and Bun test lanes.
 See [the shared pin schema and regeneration](/platforms/mac/dev-setup#shared-bun-pin-and-repin-gate).
 
 Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The
-ordinary unit-fast lane partitions its existing file inventory: files with known
-Bun failures or additional skips stay on Node, and the compatible remainder runs
-on Bun. Those Node files still execute; they are not excluded from CI. The
-isolated unit-fast lane runs completely on Bun.
+ordinary unit-fast lane partitions its existing file inventory: Node diagnostic
+reports, transferable pipe-handle contracts, and the native Node/SQLite history
+benchmark stay on Node; the compatible remainder runs on Bun. Those Node files
+still execute; they are not excluded from CI. The isolated unit-fast lane
+runs completely on Bun.
 
 Bun test processes disable the Node-compatible bytecode cache because the pinned
 fork generates bytecode during Vitest teardown. Bun's transpiler cache and the
@@ -198,10 +199,12 @@ joined descendant cleanup. Release validation runs the complete Node selection
 before the compatible Bun/Vitest and native Bun portions in that same slot;
 every result remains required. Native execution adds no CI jobs or worker fanout.
 
-The process lane runs `terminal-pty-bun.test.ts` and the spawn-broker
-`event-order.test.ts` and `group-custody.test.ts` files on Bun. The broker tests
-exercise inherited `NODE_OPTIONS` preloads; their Windows exclusions remain.
-Other process files retain Node. The pinned fork supports `Bun.Terminal.pause()` and `resume()`,
+The process lane defaults to Bun. Node retains the transferable pipe-handle
+broker contracts, including mixed suites with broker assertions, and the
+Node-specific subreaper and two-process relay retirement cases. Existing config
+exclusions still keep unit-fast and database-worker files with their owners.
+The broker event-order and group-custody tests exercise inherited `NODE_OPTIONS`
+preloads; their Windows exclusions remain. The pinned fork supports `Bun.Terminal.pause()` and `resume()`,
 so its native real-PTY cases run on Linux. macOS and Linux select the native PTY
 without Node on builds with that capability, including the pinned fork's macOS
 child-exit fix. Other Bun
@@ -211,12 +214,15 @@ The qualified TypeScript compiler analysis files and `src/library.test.ts` run
 on Bun. The pinned fork exposes the child-process pipe handles and stream
 reference controls used by TypeScript's synchronous native API. Compiler
 assertions in mixed runtime suites remain enabled.
-The worker connection-closing-window test is also qualified in the aggregate
-and src-only unit owners.
+The src-only unit owner also defaults to Bun. The state-lease retention test
+keeps its separate infra owner on Node: the completed worker-heartbeat case still
+retains its caller's async context. The aggregate unit owner shares the Bun
+admission for src-only files and retains Node for the separate ACP, security,
+and package inventories, apart from the previously qualified normalization-core
+grapheme test.
 The Code Mode executor runs with Vitest on Bun using the fork's
 copy-on-write diagnostics-channel subscriber handling. Markdown render-aware
-chunking stays on Node because the pinned WebKit lacks the `Intl.Segmenter`
-surrogate-boundary fix needed by that suite.
+chunking runs on the pinned fork as part of unit-fast.
 The complete fake-timer lane, plugin and proxy retention tests, and other
 Control UI tests support Bun. Control UI WeakRef-collection proofs in
 `desktop-mobile-keyboard.test.ts`, `chat-pane-retention.test.ts`,

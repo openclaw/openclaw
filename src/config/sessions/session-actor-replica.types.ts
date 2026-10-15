@@ -21,6 +21,7 @@ export type ReplicaCell = {
   snapshot?: SessionActorHotState;
   entry?: SessionActorEntryFacts;
   transcript?: SessionActorTranscriptReplica;
+  transcriptBytes: number;
   generation?: string;
   handles: number;
   bytes: number;

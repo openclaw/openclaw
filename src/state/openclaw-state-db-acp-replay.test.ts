@@ -72,12 +72,7 @@ function estimates(db: EngineConnection) {
 async function withoutHistoricalPayloadReads<T>(
   pathname: string,
   operation: () => T | Promise<T>,
-): Promise<T> {
-  const open = nodeSqlite.openNodeSqliteDatabase;
-  const databaseLocation = path.toNamespacedPath(fs.realpathSync(pathname));
-  const opened = new Set<DatabaseSync>();
-  const historicalReads: string[] = [];
-  const historicalColumns = new Set([
+  columns = [
     "acp_replay_events.update_json",
     "acp_replay_sessions.estimated_bytes",
     "subagent_runs.payload_json",
@@ -85,7 +80,13 @@ async function withoutHistoricalPayloadReads<T>(
     "operator_approvals.resolution_ref",
     "cron_jobs.job_json",
     "delivery_queue_entries.entry_json",
-  ]);
+  ],
+): Promise<T> {
+  const open = nodeSqlite.openNodeSqliteDatabase;
+  const databaseLocation = path.toNamespacedPath(fs.realpathSync(pathname));
+  const opened = new Set<DatabaseSync>();
+  const historicalReads: string[] = [];
+  const historicalColumns = new Set(columns);
   const spy = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
     const database = open(...args);
     const location = database.location();
@@ -119,6 +120,34 @@ async function withoutHistoricalPayloadReads<T>(
 
 describe("ACP replay accounting repair", () => {
   afterEach(() => closeOpenClawStateDatabaseForTest());
+
+  it("reuses completed accounting repair and repairs newly restored legacy columns", async () => {
+    await withTestDir({ prefix: "openclaw-acp-repair-complete-" }, async (dir) => {
+      const options = { path: path.join(dir, "state.sqlite") };
+      seedLegacyReplay(openOpenClawStateDatabase(options).db);
+      closeOpenClawStateDatabaseForTest();
+      expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+      const repaired = openOpenClawStateDatabase(options).db;
+      const before = canonicalReplay(repaired);
+      expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(repaired));
+      closeOpenClawStateDatabaseForTest();
+
+      const repeated = await withoutHistoricalPayloadReads(
+        options.path,
+        () => repairOpenClawStateDatabaseSchema(options),
+        ["acp_replay_events.update_json", "acp_replay_sessions.estimated_bytes"],
+      );
+      expect(repeated.warnings).toEqual([]);
+      {
+        using legacy = new DatabaseSync(options.path);
+        legacy.exec(`ALTER TABLE acp_replay_events DROP COLUMN estimated_bytes;
+          ALTER TABLE acp_replay_sessions DROP COLUMN estimated_bytes;`);
+      }
+      const restored = openOpenClawStateDatabase(options).db;
+      expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(restored));
+      expect(canonicalReplay(restored)).toEqual(before);
+    });
+  });
 
   it.each(["runtime", "automatic"])(
     "populates newly added accounting columns through %s without changing canonical rows",

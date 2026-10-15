@@ -30,7 +30,6 @@ import {
   summarizeConnectionPing,
   type ConnectionPingSummary,
 } from "./latency.ts";
-import { isUnknownSystemInfoMethodError } from "./system-info.ts";
 import { ConnectionView } from "./view.tsx";
 
 const CONNECTION_DOCS_URL = "https://docs.openclaw.ai/gateway/remote";
@@ -220,7 +219,7 @@ class ConnectionDraft {
         this.pingFailed = true;
       } else {
         this.statusFailed = true;
-        if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
+        if (isMissingOperatorReadScopeError(error)) {
           this.systemInfo = null;
           this.systemInfoUnavailable = true;
         }
