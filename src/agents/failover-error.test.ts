@@ -282,6 +282,34 @@ describe("failover-error", () => {
     expect(coerceToFailoverError(err)?.reason).toBe("rate_limit");
   });
 
+  it.each([undefined, "429 raw provider detail. Retry in 221ms."])(
+    "preserves provider text when enriching exhaustion (rawError=%s)",
+    (rawError) => {
+      const message = "429 rate limit exceeded. Retry in 221ms.";
+      const cause = new Error("provider request failed");
+      const original = new FailoverError(message, {
+        reason: "rate_limit",
+        status: 429,
+        code: "rate_limit_exceeded",
+        rawError,
+        cause,
+      });
+      const enriched = coerceToFailoverError(original, { rateLimitRetriesExhausted: 9 });
+      expect(enriched?.message).toContain("9 automatic retries");
+      expect(describeFailoverError(enriched)).toMatchObject({
+        rawError: rawError ?? message,
+        status: 429,
+        code: "rate_limit_exceeded",
+        reason: "rate_limit",
+        rateLimitRetriesExhausted: 9,
+      });
+      expect(enriched?.cause).toBe(cause);
+      expect(original.message).toBe(message);
+      expect(original.rawError).toBe(rawError);
+      expect(original.rateLimitRetriesExhausted).toBeUndefined();
+    },
+  );
+
   it("preserves typed failure facts and diagnostics when adding the active auth mode", () => {
     const cause = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
     const facts = {

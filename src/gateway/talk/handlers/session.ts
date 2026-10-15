@@ -60,11 +60,7 @@ import {
   rememberUnifiedTalkSession,
   requireUnifiedTalkSessionConn,
 } from "../session-registry.js";
-import {
-  assertTalkSessionStorageTarget,
-  prepareTalkSessionTarget,
-  requirePreparedTalkSessionTarget,
-} from "../session-target.js";
+import { prepareTalkSessionTarget, requirePreparedTalkSessionTarget } from "../session-target.js";
 import {
   createTalkTranscriptionRelaySession,
   sendTalkTranscriptionRelayAudio,
@@ -407,7 +403,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         const assertCurrent = () => {
           requester.assertCurrent();
           if (target) {
-            assertTalkSessionStorageTarget(context.getRuntimeConfig(), target);
+            target.assertCurrent(context.getRuntimeConfig());
           }
         };
         const transcriptionConfig = await buildTalkTranscriptionConfig(
@@ -621,7 +617,11 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       const session = getUnifiedTalkSession(params.sessionId);
       if (session.kind === "realtime-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
-        await stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId });
+        await stopTalkRealtimeRelaySession({
+          relaySessionId: session.relaySessionId,
+          connId,
+          disposition: params.disposition,
+        });
       } else if (session.kind === "transcription-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
         await stopTalkTranscriptionRelaySession({

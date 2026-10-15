@@ -3,6 +3,7 @@ import path from "node:path";
 import { constants, type DatabaseSync } from "node:sqlite";
 import { MessageChannel } from "node:worker_threads";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { createSqlPublicationTestConnection } from "../../../test/helpers/sql-publication-connection.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import {
@@ -14,11 +15,16 @@ import {
 import { createSqliteCommitReceipt } from "../../infra/sqlite-commit-receipt.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import { currentSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import {
+  currentSqliteWorkerOperationAdmission,
+  type SqliteWorkerOperationContext,
+} from "../../infra/sqlite-worker-operation-settlement.js";
 import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { saveAuthProfileStore as saveSdkAuthProfileStore } from "../../plugin-sdk/agent-runtime.js";
 import { upsertAuthProfile as upsertSdkAuthProfile } from "../../plugin-sdk/provider-auth.js";
 import { runSqliteImmediateTransactionSync } from "../../plugin-sdk/sqlite-runtime.js";
+import * as machineStateWrites from "../../state/config-machine-state-write.js";
+import { machineStateOperations } from "../../state/config-machine-state.worker.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import {
@@ -31,8 +37,11 @@ import {
   authProfileCredentialPublication,
   beginAuthProfileCredentialBatch,
   captureAuthProfileCredentialAuthority,
+  withAuthProfileCredentialWrite,
 } from "../../state/user-model-account-authority.js";
+import type { WorkerWriteOperationContext } from "../../state/worker-operation-registry.js";
 import { withEnv } from "../../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { createExternalAuthRuntime } from "./external-auth.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { coercePersistedAuthProfileStore } from "./persisted-store.js";
@@ -82,7 +91,7 @@ function fixture(
     agentDir,
     (owner) => {
       writeAuthProfileJsonCell(owner.db, "store", kind, store("original"));
-      return owner;
+      return { ...owner, db: requireNativeSqliteDatabase(owner.db) };
     },
     { env },
   );
@@ -176,27 +185,6 @@ function failAfterNativeWrite(db: DatabaseSync, assertDenied: () => void) {
 }
 
 describe.each(["shared-state", "agent"] as const)("%s credential authority", (kind) => {
-  it("denies before native commit and publishes the postimage before commit observers run", () => {
-    const current = fixture(kind);
-    const commit = observePhysicalCommit(current.database.db, () => {
-      expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
-    });
-    let observed: AuthProfileCredential | undefined;
-    try {
-      current.transact(({ db }) => {
-        writeAuthProfileJsonCell(db, "store", kind, store("committed"));
-        expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
-        deferSqlitePostCommitPublication(db, () => {
-          observed = current.authority.readCurrentCredential();
-        });
-      });
-    } finally {
-      commit.mockRestore();
-    }
-    expect(observed).toEqual(credential("committed"));
-    expect(current.readPersisted()).toEqual(credential("committed"));
-  });
-
   it("releases a known rollback with its original credential and rejects an overtaken cold result", () => {
     const current = fixture(kind);
     expect(() =>
@@ -230,16 +218,6 @@ describe.each(["shared-state", "agent"] as const)("%s credential authority", (ki
       expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
     });
     expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
-  });
-
-  it("publishes deletion and restoration with the same credential semantics as a cold read", () => {
-    const current = fixture(kind);
-    current.transact(({ db }) => deleteAuthProfileJsonCell(db, "store", kind));
-    expect(current.authority.readCurrentCredential()).toBeUndefined();
-    expect(current.readPersisted()).toBeUndefined();
-    current.write("original");
-    expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
-    expect(current.authority.readCurrentCredential()).toEqual(current.readPersisted());
   });
 
   it("keeps an unacknowledged native write denied after a later successful commit", () => {
@@ -311,7 +289,7 @@ describe("credential authority captured before local database creation", () => {
       return owner;
     });
     expect(current.authority.readCurrentCredential()).toBeUndefined();
-    const commit = observePhysicalCommit(database.db, () => {
+    const commit = observePhysicalCommit(requireNativeSqliteDatabase(database.db), () => {
       expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
     });
     let observed: AuthProfileCredential | undefined;
@@ -368,7 +346,7 @@ describe("credential authority captured before local database creation", () => {
   it("keeps an unknown native outcome denied on the captured absent source", () => {
     const current = absentAgentFixture();
     const database = current.transact((owner) => owner);
-    const restore = failAfterNativeWrite(database.db, () => {
+    const restore = failAfterNativeWrite(requireNativeSqliteDatabase(database.db), () => {
       expect(() => current.authority.readCurrentCredential()).toThrow();
     });
     try {
@@ -864,3 +842,95 @@ describe("prepared persisted credential readers", () => {
     }
   });
 });
+
+it.each(["commit", "rollback"])(
+  "settles credential facts on a distinct connection anchor after %s",
+  (outcome) => {
+    const current = fixture("shared-state");
+    const connection = createSqlPublicationTestConnection(current.database.db);
+    const next = store("anchored");
+    const transact = () =>
+      current.transact(({ db }) => {
+        const captured = authProfileCredentialPublication.capture(db, () => {
+          withAuthProfileCredentialWrite(connection, next, () => {
+            db.prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?").run(
+              JSON.stringify(next),
+              "authProfiles.store",
+            );
+          });
+        });
+        expect(captured.receipt.facts.get("store")).toEqual({ kind: "postimage", value: next });
+        expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
+        if (outcome === "rollback") {
+          throw new Error("synthetic rollback");
+        }
+      });
+    if (outcome === "rollback") {
+      expect(transact).toThrow("synthetic rollback");
+      expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
+    } else {
+      transact();
+      expect(current.authority.readCurrentCredential()).toEqual(credential("anchored"));
+      expect(current.readPersisted()).toEqual(credential("anchored"));
+    }
+  },
+);
+
+it.each(["commit", "rollback"])(
+  "settles machine-state worker credential receipts on the anchor after %s",
+  (outcome) => {
+    const current = fixture("shared-state");
+    const database = openOpenClawStateDatabase({ env: current.env });
+    const db = requireNativeSqliteDatabase(database.db);
+    const connection = createSqlPublicationTestConnection(db);
+    const next = store("worker-anchored");
+    const writeInDatabase = machineStateWrites.writeConfigMachineStateInDatabase;
+    // Exercise the real writer on SQLite while the worker receives a distinct engine handle.
+    const writer = vi
+      .spyOn(machineStateWrites, "writeConfigMachineStateInDatabase")
+      .mockImplementation((_db, key, value) => writeInDatabase(database.db, key, value));
+    const write: WorkerWriteOperationContext["write"] = (operation) =>
+      runSqliteImmediateTransactionSync(db, () => {
+        const result = operation({ ...database, db: connection });
+        if (outcome === "rollback") {
+          throw new Error("synthetic rollback");
+        }
+        return result;
+      });
+    const { port1, port2 } = new MessageChannel();
+    const owner: SqliteWorkerOperationContext = { port: port1 };
+    try {
+      const transact = () =>
+        currentSqliteWorkerOperationAdmission.run({ active: true, port: port1, owner }, () =>
+          runWithSqliteWorkerStateContext(current.context, () =>
+            machineStateOperations["machineState.write"](
+              { key: "authProfiles.store", value: next },
+              {
+                open: () => database,
+                stateOptions: () => ({ path: database.path, env: current.env }),
+                write,
+                writeAdmitted: write,
+              },
+            ),
+          ),
+        );
+      if (outcome === "rollback") {
+        expect(transact).toThrow("synthetic rollback");
+        expect(owner.committed).toBeUndefined();
+        expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
+      } else {
+        transact();
+        expect(owner.committed).toMatchObject({
+          facts: {
+            authCredentials: { facts: new Map([["store", { kind: "postimage", value: next }]]) },
+          },
+        });
+        expect(current.authority.readCurrentCredential()).toEqual(credential("worker-anchored"));
+      }
+    } finally {
+      writer.mockRestore();
+      port1.close();
+      port2.close();
+    }
+  },
+);

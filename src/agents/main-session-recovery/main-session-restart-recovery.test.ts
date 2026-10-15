@@ -113,6 +113,7 @@ import {
   mockCallArg,
   waitForFast,
 } from "../subagent-test-fixtures.test-helpers.js";
+import { resolveRequesterRecoveryDelivery } from "../subagents/announce/subagent-announce-completion-delivery.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { registerHarnessCompletionRecoveryCases } from "./main-session-harness-completion.test-harness.js";
 import { registerParentRestartRecoveryCases } from "./main-session-parent-recovery.test-harness.js";
@@ -122,6 +123,8 @@ import {
   claimMainSessionRecoveryOwner,
   commitMainSessionRecovery,
 } from "./main-session-recovery-store.js";
+import { registerCheckpointReceiptTests } from "./main-session-restart-checkpoint.test-support.js";
+import { registerAcceptedRecoveryStopCase } from "./main-session-restart-command.test-support.js";
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import {
@@ -3714,75 +3717,13 @@ describe("main-session-restart-recovery", () => {
     }
   });
 
-  it("restores an accepted recovery that fails before execution starts", async () => {
-    const { sessionsDir, storePath, readEntry } = await makeMainSessionFixture({
-      restartRecoveryDeliveryRunId: "recovery-main",
-      restartRecoveryDeliverySourceRunId: "source-main",
-    });
-    await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "recover without losing the owner" },
-    ]);
-    const scheduleSpy = vi
-      .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
-      .mockImplementation(() => {});
-    let acceptedObserver: ((payload: unknown) => void) | undefined;
-    const dispatchAgent = vi.fn<GatewayRecoveryRuntime["dispatchAgent"]>(
-      async (request, _timeoutMs, options) => {
-        const runId = request.idempotencyKey!;
-        await commitMainSessionRecovery({
-          command: {
-            kind: "admit_recovery",
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-            now: Date.now(),
-            runId,
-            sessionId: "main-session",
-          },
-          requireWriteSuccess: true,
-          target: { sessionKey: "agent:main:main", storePath },
-        });
-        acceptedObserver = options?.onAccepted;
-        acceptedObserver?.({ runId, status: "accepted" });
-        throw new Error("detached execution failed before provider start");
-      },
-    );
-
-    try {
-      const result = await retryRestartAbortedMainSessionRecovery({
-        cfg: {},
-        expectedRecoveryRunId: "recovery-main",
-        expectedRecoverySourceRunId: "source-main",
-        expectedSessionId: "main-session",
-        sessionKey: "agent:main:main",
-        storePath,
-        gatewayRuntime: createMockGatewayRecoveryRuntime({
-          dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
-          waitForAgent: vi.fn(async () => ({
-            runId: "recovery-main",
-            status: "timeout",
-            timeoutPhase: "queue",
-            providerStarted: false,
-          })) as GatewayRecoveryRuntime["waitForAgent"],
-        }),
-      });
-
-      expect(result).toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
-      expect(acceptedObserver).toBeTypeOf("function");
-      expect(scheduleSpy).toHaveBeenCalledWith({
-        agentId: "main",
-        sessionId: "main-session",
-        sessionKey: "agent:main:main",
-        storePath,
-      });
-      expect(readEntry()).toMatchObject({
-        status: "interrupted",
-        abortedLastRun: true,
-        restartRecoveryDeliverySourceRunId: "source-main",
-        mainRestartRecovery: { chargedAttempts: 1 },
-      });
-      expect(readEntry()?.restartRecoveryDeliveryRunId).toBeUndefined();
-    } finally {
-      scheduleSpy.mockRestore();
-    }
+  registerAcceptedRecoveryStopCase({
+    getStateDir: () => tmpDir,
+    makeMainSessionFixture,
+    writeTranscript,
+    recoverRestartAbortedMainSessions,
+    retryRestartAbortedMainSessionRecovery,
+    sendRecoveryNotice,
   });
 
   it.each([
@@ -4121,41 +4062,13 @@ describe("main-session-restart-recovery", () => {
     expect(readEntry()).toMatchObject({ abortedLastRun: false });
   });
 
-  it("reconciles a receipt delivered during a restart-recovery continuation", async () => {
-    const { sessionsDir, storePath, sessionKey, readEntry } =
-      await makeDeliveredReceiptFixture("message-call-recovered");
-    await writeTranscript(
-      sessionsDir,
-      "main-session",
-      makeMessageDeliveryTranscript({
-        toolCallId: "message-call-recovered",
-        beforeCall: [
-          makeAssistantTextMessage("starting"),
-          makeUserMessage("[System] continue after restart", {
-            idempotencyKey: "recovery-1:user",
-          }),
-        ],
-      }),
-    );
-
-    await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
-
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(readEntry()).toMatchObject({
-      status: "done",
-      abortedLastRun: false,
-      restartRecoveryTerminalRunIds: ["discord-message-1"],
-    });
-    const transcript = await loadTestTranscript(sessionKey, storePath);
-    expect(
-      transcript
-        .map((event) => event.message)
-        .some(
-          (message) =>
-            message?.idempotencyKey ===
-            "restart-recovery:message-tool-result:discord-message-1:message-call-recovered",
-        ),
-    ).toBe(true);
+  registerCheckpointReceiptTests({
+    makeMainSessionFixture,
+    makeDeliveredReceiptFixture,
+    writeTranscript,
+    expectRecovery,
+    loadTestTranscript,
+    discordDeliveryContext,
   });
 
   it.each([
@@ -4249,6 +4162,10 @@ describe("main-session-restart-recovery", () => {
       abortedLastRun: false,
       lastRunId: "control-ui-run",
       restartRecoveryTerminalRunIds: ["control-ui-run"],
+    });
+    expect(resolveRequesterRecoveryDelivery(readEntry(), "control-ui-run")).toMatchObject({
+      kind: "result",
+      result: { captured: true, meta: { terminalReply: { disposition: "silent" } } },
     });
   });
 

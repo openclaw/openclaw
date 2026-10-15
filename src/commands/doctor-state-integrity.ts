@@ -14,9 +14,9 @@ import {
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import {
-  resolveSharedAuthStoreOwnership,
-  resolveSharedAuthStorePath,
-} from "../agents/auth-profiles/path-resolve.js";
+  prepareSharedAuthStoreOwnershipForNative as resolveSharedAuthStoreOwnership,
+  resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.native.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import {
   clearWedgedSubagentRecoveryAbort,
@@ -539,7 +539,7 @@ export function stateIntegrityIssueToHealthFinding(
         "error",
       );
   }
-  return assertNeverStateIntegrityIssue(issue);
+  return issue satisfies never;
 }
 
 export function stateIntegrityIssueToRepairEffect(
@@ -568,13 +568,7 @@ export function stateIntegrityIssueToRepairEffect(
     case "runtime-dir-not-writable":
       return effect("would-repair-runtime-state-dir-permissions");
   }
-  return assertNeverStateIntegrityIssue(issue);
-}
-
-function assertNeverStateIntegrityIssue(issue: never): never {
-  throw new Error(
-    `Unhandled state integrity issue kind: ${String((issue as { kind?: unknown }).kind)}`,
-  );
+  return issue satisfies never;
 }
 
 /** Emits state integrity warnings and applies selected runtime repairs. */

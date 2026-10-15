@@ -31,6 +31,7 @@ import {
   pollLocatorText,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
+import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -139,11 +140,31 @@ suite.define(() => {
         .poll(() => page.locator(".new-session-page__starting").textContent())
         .toContain("Session created");
       await page.getByRole("button", { name: "Open session", exact: true }).waitFor();
+      if (label === "mobile") {
+        expect(
+          await page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
+        ).toBe(0);
+        await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+        await waitForMobileSidebarDrawerOpen(page);
+      }
       await expect
         .poll(() =>
           page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
         )
         .toBe(1);
+      if (label === "mobile") {
+        expect(
+          await page
+            .locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`)
+            .isVisible(),
+        ).toBe(true);
+        await page
+          .locator(".shell-nav-backdrop")
+          .click({ position: { x: viewport.width - 10, y: 100 } });
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .not.toContain("shell--nav-drawer-open");
+      }
       if (captureProofEnabled) {
         await page.waitForTimeout(600);
       }
@@ -335,7 +356,7 @@ suite.define(() => {
     );
     const pendingPreviewModule = await holdModuleResponse(
       page,
-      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.ts"),
+      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.tsx"),
     );
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-sol",
@@ -709,7 +730,7 @@ suite.define(() => {
           await gateway.deferNext("sessions.create");
 
           const message = page.locator(".new-session-page__message");
-          const placeSelect = page.locator("wa-popover.new-session-page__project-popover");
+          const placeSelect = page.locator(".oc-popover.new-session-page__project-popover");
           const placeSummary = page.locator("#new-session-project-trigger");
           const startup = page.locator(".new-session-page__starting");
           const submittedPrompt = startup.locator(".chat-group.user");
@@ -730,7 +751,9 @@ suite.define(() => {
           });
           await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(2);
           await placeSummary.click();
-          expect(await placeSelect.getAttribute("open")).not.toBeNull();
+          expect(await placeSelect.evaluate((element) => element.matches(":popover-open"))).toBe(
+            true,
+          );
           await page.getByRole("button", { name: "Start session" }).dblclick();
 
           const create = await gateway.waitForRequest("sessions.create");

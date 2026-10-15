@@ -68,8 +68,12 @@ export async function runBtwSideQuestion(
   // prevents caller correlation IDs from replacing the parent's live authority.
   let params = {
     ...paramsInput,
+    sessionEntry: { ...paramsInput.sessionEntry },
     authorityRunId: paramsInput.authorityRunId ?? `btw-${randomUUID()}`,
   };
+  if (params.sessionStore && params.sessionKey) {
+    params.sessionStore[params.sessionKey] = params.sessionEntry;
+  }
   const sessionId = params.sessionEntry.sessionId?.trim();
   if (!sessionId) {
     throw new Error("No active session context.");

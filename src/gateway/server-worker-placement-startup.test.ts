@@ -128,6 +128,8 @@ describe("worker placement startup health lifetime", () => {
       subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
+      isStopping: () => false,
+      beginClose: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
     };
     const warn = vi.fn();
@@ -225,6 +227,8 @@ describe("worker placement startup health lifetime", () => {
         subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
         installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
         start: vi.fn(),
+        isStopping: () => false,
+        beginClose: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
       };
       const runtime = createGatewayWorkerPlacementRuntime({
@@ -273,7 +277,7 @@ describe("worker placement startup health lifetime", () => {
     },
   );
 
-  it("immediately retires absent sessions after readiness and drains retirement on stop", async () => {
+  it("defers unaccepted retirement when shutdown begins during its evidence read", async () => {
     const evidence = createDeferredCore<"absent">();
     const reconcileActive = vi.fn().mockResolvedValue(undefined);
     const retireSessionPlacementAsync = vi.fn(async () => {});
@@ -313,8 +317,9 @@ describe("worker placement startup health lifetime", () => {
       subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
+      isStopping: () => false,
       stop: vi.fn().mockResolvedValue(undefined),
-      stopNodeEnrollmentWaits: vi.fn(),
+      beginClose: vi.fn(),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
       initialPlacements: [],
@@ -355,11 +360,11 @@ describe("worker placement startup health lifetime", () => {
 
       await Promise.resolve();
       expect(repeatedStop).toBe(stopping);
-      expect(environments.stopNodeEnrollmentWaits).toHaveBeenCalledOnce();
+      expect(environments.beginClose).toHaveBeenCalledOnce();
       expect(environments.stop).not.toHaveBeenCalled();
       evidence.resolve("absent");
       await Promise.all([stopping, repeatedStop]);
-      expect(retireSessionPlacementAsync).toHaveBeenCalledOnce();
+      expect(retireSessionPlacementAsync).not.toHaveBeenCalled();
       expect(environments.stop).toHaveBeenCalledOnce();
       expect(unregisterSidecar).not.toHaveBeenCalled();
     } finally {
@@ -381,6 +386,8 @@ describe("worker placement startup health lifetime", () => {
       subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
+      isStopping: () => false,
+      beginClose: vi.fn(),
       stop: vi.fn().mockRejectedValueOnce(stopError).mockResolvedValueOnce(undefined),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
@@ -475,6 +482,8 @@ describe("worker placement startup health lifetime", () => {
                 return vi.fn();
               }),
               start: vi.fn(),
+              isStopping: () => false,
+              beginClose: vi.fn(),
               stop: vi.fn().mockResolvedValue(undefined),
             };
             const runtime = createGatewayWorkerPlacementRuntime({
@@ -594,11 +603,12 @@ describe("worker placement startup health lifetime", () => {
       }),
       start: vi.fn(),
       isStopping: () => environmentStopping,
-      stopNodeEnrollmentWaits: vi.fn(() => {
+      beginClose: vi.fn(() => {
         expect(dispatchOptions.isShuttingDown?.()).toBe(true);
         expect(environmentStopping).toBe(false);
         expect(environments.stop).not.toHaveBeenCalled();
-        events.push("enrollment:cancel");
+        environmentStopping = true;
+        events.push("environments:begin-close");
       }),
       stop: vi.fn(async () => {
         environmentStopping = true;
@@ -668,7 +678,7 @@ describe("worker placement startup health lifetime", () => {
     await Promise.all([guardedRecovery, stopping]);
     expect(events).toEqual([
       "recovery:start",
-      "enrollment:cancel",
+      "environments:begin-close",
       "environments:stop",
       "reconcile:core",
       "recovery:end",

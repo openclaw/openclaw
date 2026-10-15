@@ -291,7 +291,7 @@ suite.define(() => {
     await identityCard.waitFor();
     await identityCard.click();
     await sidebar
-      .locator("wa-dropdown.sidebar-identity-menu")
+      .locator(".sidebar-identity-menu")
       .getByRole("menuitem", { exact: true, name: "Settings" })
       .click();
     await waitForControlUiSettingsTakeover(page);

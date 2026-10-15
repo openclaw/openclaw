@@ -64,7 +64,7 @@ async function withOpenClawTestState(
   options: Parameters<typeof withRawTestState>[0],
   fn: Parameters<typeof withRawTestState>[1],
 ) {
-  return withRawTestState(options, async (state) => {
+  return withRawTestState({ ...options, prepareProfileCatalog: true }, async (state) => {
     try {
       return await fn(state);
     } finally {

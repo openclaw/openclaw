@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { runWorkboardPortTask } from "./port-command.worker.js";
+import { runDatabasePortTask as runWorkboardPortTask } from "./port-command.worker.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

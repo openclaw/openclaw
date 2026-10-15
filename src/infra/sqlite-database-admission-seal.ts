@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasPendingAgentStartupColumns } from "../state/openclaw-agent-db-additive-columns.js";
 import { sqliteDatabaseSealSchemaFor } from "../state/openclaw-database-seal-schema.js";
 import {
   invalidateSqliteCleanCloseSeal,
@@ -129,6 +130,11 @@ export class SqliteDatabaseCleanCloseSeals {
         ) ||
         !facts.some(([name, , value]) => name === "sqlite-schema" && isRecord(value))
       ) {
+        return;
+      }
+      const schema = facts.find(([name]) => name === "sqlite-schema")?.[2];
+      // Reject old completed-validation receipts before publishing any reader-visible facts.
+      if (!(schema.tableSql instanceof Map) || hasPendingAgentStartupColumns(schema.tableSql)) {
         return;
       }
       for (const [name, schemaDependent, value] of facts) {

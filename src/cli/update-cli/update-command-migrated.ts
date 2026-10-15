@@ -69,6 +69,7 @@ export async function inspectActivatedUpdateState(
       root: result.root ?? null,
       nodeRunner: params.packageUpdateNodeRunner,
       timeoutMs: params.timeoutMs,
+      includeRetainedAgentPaths: true,
     });
     const shared = current.find((entry) => entry.path === resolveOpenClawStateSqlitePath(env));
     const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : undefined;
@@ -76,6 +77,7 @@ export async function inspectActivatedUpdateState(
       ? current.filter(
           (entry) =>
             entry !== shared &&
+            !shared?.retainedAgentPaths?.includes(entry.path) &&
             entry.userVersion !== null &&
             entry.userVersion !== candidateSchemaVersions.agent,
         )
@@ -134,10 +136,9 @@ export async function continueMigratedUpdateInFreshProcess(
   params: FinishUpdateParams,
   bufferedSteps: UpdateRunStep[],
 ): Promise<
-  Pick<
-    MigratedUpdateFinalizationResult,
-    "result" | "exitCode" | "automaticTriage" | "candidateStartAttempted"
-  > & { databaseRollbackAvailable?: true }
+  Pick<MigratedUpdateFinalizationResult, "result" | "exitCode" | "candidateStartAttempted"> & {
+    databaseRollbackAvailable?: true;
+  }
 > {
   if (params.opts.recovery) {
     throw new UpdateCommandRecoveryPendingError("Full-state checkpoint recovery is deferred.");
@@ -329,7 +330,6 @@ export async function continueMigratedUpdateInFreshProcess(
     const finalization = {
       result: response.result,
       exitCode: response.exitCode,
-      automaticTriage: response.automaticTriage,
       candidateStartAttempted: response.candidateStartAttempted,
     };
     const restoreDatabases =

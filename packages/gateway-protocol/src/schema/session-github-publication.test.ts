@@ -5,10 +5,24 @@ import {
   SessionGitHubOptionsResultSchema,
   SessionGitHubPublicationResultSchema,
   SessionGitHubPublishParamsSchema,
+  SessionGitHubActionParamsSchema,
 } from "./session-github-publication.js";
 import { UsersGitHubAuthorizeStartParamsSchema, UsersGitHubStatusParamsSchema } from "./users.js";
 
 describe("session GitHub publication protocol", () => {
+  it("keeps session PR actions closed to arbitrary targets, credentials and auto-merge", () => {
+    const inspect = { sessionKey: "agent:main:publication", action: "inspect" };
+    expect(Value.Check(SessionGitHubActionParamsSchema, inspect)).toBe(true);
+    for (const extra of [
+      { action: "auto_merge" },
+      { url: "https://github.com/another/repository/pull/1" },
+      { token: "synthetic" },
+      { admin: true },
+      { mergeMethod: "admin" },
+    ]) {
+      expect(Value.Check(SessionGitHubActionParamsSchema, { ...inspect, ...extra })).toBe(false);
+    }
+  });
   it("accepts typed publication unavailability without accepting arbitrary diagnostics", () => {
     const options = { personal: null, shared: null, pendingPersonal: null, latestShared: null };
     for (const sharedUnavailableReason of [

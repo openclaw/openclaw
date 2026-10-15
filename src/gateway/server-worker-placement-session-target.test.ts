@@ -570,6 +570,69 @@ test("resolves consecutive placement workspaces without decoding unrelated sessi
   });
 });
 
+test("resolves a device folder without consulting Git or the managed-worktree registry", async () => {
+  await withStateDirEnv("device-folder-target-", async () => {
+    setRuntimeConfigSnapshot({});
+    const identity = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-device-folder",
+      sessionId: "device-folder-session",
+    };
+    const owner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
+    const actor = await owner.acquire(
+      { database: owner.identity, sessionKey: identity.sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    expect(
+      (
+        await actor.storage!.mutate(
+          {
+            type: "session.entry.create",
+            input: {
+              entry: {
+                sessionId: identity.sessionId,
+                updatedAt: 1,
+                lifecycleRevision: "folder-generation",
+                incognito: true,
+                deviceFolder: { deviceId: "paired-device", path: "/existing/non-git" },
+              },
+            },
+          },
+          { assertCurrent() {}, authorize() {} },
+        )
+      ).kind,
+    ).toBe("committed");
+    const findLiveByOwner = vi.fn(async () => undefined);
+    try {
+      using resolved = await resolveWorkerPlacementSessionTarget({
+        ...identity,
+        config: {},
+        errorMessage: "folder binding changed",
+        sessionRuntime: {
+          managedWorktrees: { findLiveByOwner },
+          resolveGatewaySessionStoreTargetInWorker,
+          resolveCanonicalSessionEntryFromStoreKeys,
+        },
+      });
+      expect(resolved.workspace).toEqual({
+        kind: "device-folder",
+        deviceId: "paired-device",
+        path: "/existing/non-git",
+      });
+      expect(findLiveByOwner).not.toHaveBeenCalled();
+      await patchSessionEntryCore({ ...identity, storePath: owner.path }, () => ({
+        deviceFolder: { deviceId: "another-device", path: "/existing/non-git" },
+      }));
+      expect(() => resolved.assertCurrent()).toThrow("folder binding changed");
+    } finally {
+      await actor.release();
+    }
+  });
+});
+
 test("reclaim keeps its session generation through its own workspace metadata commit", async () => {
   await withStateDirEnv("worker-reclaim-metadata-", async () => {
     const config: OpenClawConfig = { agents: { entries: { main: {} } } };

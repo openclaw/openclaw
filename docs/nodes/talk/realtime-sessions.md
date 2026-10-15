@@ -26,7 +26,11 @@ a final transcript after the utterance ends. The catalog marks file transcriptio
 ready only when a configured provider or CLI command is available.
 
 Capture pauses during the agent response and speech playback, then resumes for
-the next utterance. Stop cancels the call's own chat run and playback. Split Talk
+the next utterance. Stop cancels the call's own chat run and playback. A Talk
+failure, including the two-minute answer timeout, ends capture and playback but
+leaves the accepted chat run to finish in the conversation. The timeout message
+explains that the answer will appear in chat. Leaving the chat, disconnecting, or
+switching away from Talk also detaches without cancelling accepted work. Split Talk
 does not offer realtime voice switching or camera input. Leaving the mode unset
 preserves realtime Talk.
 
@@ -146,9 +150,10 @@ places it beside the correct reply. Stopping a call drains finalized speech,
 skips unfinished transcriptions, and records a browser console warning for
 missing transcriptions or unresolved conversation links.
 
-Google Live saves complete utterances during the call, including Gemini 3.1
-transcriptions that omit an explicit transcription-finished flag. Partial text
-stays provisional until the provider's completion boundary.
+Google Live saves complete utterances during the call, including Gemini 3.1 and
+3.8 transcriptions that omit an explicit transcription-finished flag. This also
+applies to Gemini 3.8 Extended Thinking. Partial text from older models stays
+provisional until the provider's completion boundary.
 
 Talk uses the same effective tool permissions as text for the same authenticated
 caller, agent, session, target, operation, and final arguments. An action already

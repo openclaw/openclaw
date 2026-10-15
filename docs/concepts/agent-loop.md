@@ -293,6 +293,22 @@ controls rather than inheriting callbacks from the completed attempt.
 A terminal timeout is a failed turn, not a successful completion. Chat and
 command results retain its timeout explanation; earlier tool errors do not
 replace that explanation or restart an already-final timed-out turn.
+This includes a timeout during tool execution when no final payload or accepted
+continuation remains. A compaction failure label does not turn that unfinished
+tool timeout into a paused run; completed tool results remain in the transcript.
+Earlier tool warnings and reasoning output do not count as a completed reply.
+Quiet or collect-mode children do not suppress a timeout unless another
+continuation owns the reply; accepting a child alone does not promise delivery.
+Progress sends and messages to another conversation do not finish the current
+source reply. Deliberate yields retain their existing accepted-work semantics.
+Tool media stays in the result alongside the timeout; artifacts alone do not finish the reply.
+
+Cancellation revokes the run's tool and approval authority immediately. Its
+accepted terminal bookkeeping still settles through the lifecycle owner, so
+Stop and restart cancellation can record the session outcome and any applicable
+failure notice. A replaced session, runtime candidate, or Gateway lifecycle
+cannot reuse that terminal writer.
+The lifecycle owner retires the terminal writer after its accepted writes settle.
 
 The model idle and provider HTTP rows describe the built-in OpenClaw model
 path. Codex owns its native stream deadlines and network retries. After exact
@@ -322,6 +338,12 @@ With diagnostics enabled, a built-in two-minute threshold classifies long `proce
 - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
 
 The abort threshold is at least 5 minutes and 3x the warning threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
+
+Pending Code Mode `exec` and `wait` calls remain active tool work until they
+settle, including `awaitResults: true` calls waiting for nested work. Nested tool
+completion does not retire the outer call. The normal blocked-tool recovery
+allowance and enforced run/tool deadlines still apply; after the outer call
+settles, an embedded run that stops making progress remains recoverable.
 
 Attention and recovery log lines read optional session context only when their
 log level is enabled. Transcript enrichment runs in the background read worker

@@ -50,7 +50,7 @@ import {
 import { prepareSessionPortalToolTarget } from "../agents/tools/session-portal-target.js";
 import {
   hasSessionControlAuthority,
-  prepareSandboxSessionRename,
+  prepareSandboxSessionTools,
 } from "../agents/tools/sessions-operator-authority.js";
 import type { SkillWorkshopRunOptions } from "../agents/tools/skill-workshop-tool-factory.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
@@ -224,7 +224,7 @@ export async function resolveGatewayScopedTools(
   const preparedSandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const sessionControlAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
   const { policy: sandboxPolicy, renameOnly: sandboxSessionRenameOnly } =
-    prepareSandboxSessionRename({
+    prepareSandboxSessionTools({
       policy: preparedSandboxPolicy,
       senderIsOwner:
         surface === "loopback" && params.admittedRunContext ? params.senderIsOwner : undefined,

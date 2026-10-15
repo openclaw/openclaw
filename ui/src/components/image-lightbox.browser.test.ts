@@ -3,7 +3,7 @@ import { page, userEvent } from "vitest/browser";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { nextFrame } from "../test-helpers/modal-dialog.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
-import "./image-lightbox.ts";
+import "./image-lightbox.tsx";
 
 const containers = new Set<HTMLElement>();
 let previousViewport: { width: number; height: number };
@@ -176,6 +176,36 @@ describe("progressive image viewer geometry", () => {
       for (const dimension of ["x", "y", "width", "height"] as const) {
         expect(after[dimension]).toBeCloseTo(before[dimension], 1);
       }
+    },
+  );
+
+  it.each([320, 390, 1440])(
+    "places Open original after media without covering zoom chrome at %ipx",
+    async (width) => {
+      await page.viewport(width, 1000);
+      const { viewer, image } = await mountImage({
+        src: imageSource(320, 200, "#264060"),
+        originalSrc: "https://example.invalid/original.png",
+        title: "Footer placement",
+      });
+      const original = viewer.querySelector<HTMLAnchorElement>(".open-original")!;
+      await expect.element(original).toBeVisible();
+      const footer = original.closest<HTMLElement>("openclaw-modal-actions")!;
+      expect(footer.parentElement?.lastElementChild).toBe(footer);
+      expect(viewer.querySelector(".header .open-original")).toBeNull();
+      const bounds = original.getBoundingClientRect();
+      const zoom = viewer.querySelector<HTMLElement>(".zoom-controls")!.getBoundingClientRect();
+      expect(bounds.top).toBeGreaterThanOrEqual(image.getBoundingClientRect().bottom);
+      expect(bounds.left).toBeGreaterThanOrEqual(zoom.right);
+      expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+      expect(bounds.width).toBeGreaterThanOrEqual(44);
+      const close = viewer.querySelector<HTMLButtonElement>(".close")!;
+      close.focus();
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+      expect(document.activeElement).toBe(original);
+      await userEvent.keyboard("{Tab}");
+      expect(document.activeElement).toBe(close);
     },
   );
 

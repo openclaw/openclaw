@@ -5,6 +5,7 @@ import type { ApplicationContext, ApplicationNavigationOptions } from "../app/co
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
@@ -18,7 +19,6 @@ import type {
   SessionOrganizerController,
   SessionOrganizerControllerHost,
 } from "./session-organizer-controller.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 export interface SidebarMenusControllerHost extends SessionOrganizerControllerHost {
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
@@ -39,11 +39,17 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
   readonly onRetryConnect?: () => void;
   readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
   sidebarAgentsMode: "chip" | "roster";
+  navigationView: "pages" | "sessions" | "online";
   readonly pinnedAgentIds: readonly string[];
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
       SessionDataController,
+      | "context"
+      | "activeSessionLineageRoot"
+      | "activeSessionLineageSelectedRow"
+      | "childSessionRowsByParent"
+      | "sessionResultsByAgent"
       | "sessionsLoading"
       | "sessionsResult"
       | "archiveSessionCatalog"

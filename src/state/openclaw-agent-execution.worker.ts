@@ -4,7 +4,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { isSessionActorCommand } from "../config/sessions/session-actor-command.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
-import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
+import {
+  assertTransactionUsable,
+  type SqliteTransactionOptions,
+} from "../infra/sqlite-transaction.js";
 import {
   SQLITE_WORKER_OPERATION_CLEANUP,
   SQLITE_WORKER_PREPARE_ADMITTED,
@@ -77,13 +80,14 @@ import {
   loadConversationRegistryOperations,
   loadAgentPendingInputOperations,
   loadAgentArchivePruningOperations,
-  loadUsageCacheOperations,
+  loadSessionRowBackfillOperations,
   type RegisteredAgentWorkerOperations,
 } from "./openclaw-agent-execution-operations.js";
 import {
   loadAgentTranscriptOperations,
   prepareAgentTranscript,
 } from "./openclaw-agent-execution-transcript.worker.js";
+import { loadUsageCacheOperations } from "./openclaw-agent-execution-usage.worker.js";
 import { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import {
@@ -397,6 +401,7 @@ function openAgentDatabaseBackend(
     operationLabel: string,
     owner: string,
     write: (current: OpenClawAgentDatabase) => T,
+    diagnosticContext?: SqliteTransactionOptions["diagnosticContext"],
   ): T => {
     const opened = openWriter();
     return runOpenClawAgentWriteTransaction(
@@ -408,15 +413,12 @@ function openAgentDatabaseBackend(
         return write(current);
       },
       options,
-      { operationLabel },
+      { operationLabel, diagnosticContext },
     );
   };
   const maintenance = createAgentDatabaseMaintenanceOwner({
     databaseOptions: options,
     openWriter,
-    readPreparedDatabase() {
-      return expectDefined(database, "Maintenance read requires its admitted native owner");
-    },
     admit,
   });
   const loadMaintenanceOperations = async () => maintenance.operations;
@@ -471,11 +473,12 @@ function openAgentDatabaseBackend(
     "session.archivePruning.removeLegacy": loadAgentArchivePruningOperations,
     "session.archivePruning.reclaimPages": loadAgentArchivePruningOperations,
     "session.maintenance.prepare": loadMaintenanceOperations,
-    "session.maintenance.read": loadMaintenanceOperations,
     "session.maintenance.metadata": loadMaintenanceOperations,
     "session.maintenance.release": loadMaintenanceOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
     "usageCache.prune": loadUsageCacheOperations,
+    "usageCache.retireLegacy": loadUsageCacheOperations,
+    "session.rowTranscript.backfill": loadSessionRowBackfillOperations,
   });
   const context: AgentWorkerOperationContext = {
     open: openWriter,
@@ -624,7 +627,6 @@ function openAgentDatabaseBackend(
       }
       if (
         command.type === "session.maintenance.prepare" ||
-        command.type === "session.maintenance.read" ||
         command.type === "session.maintenance.metadata"
       ) {
         return Promise.all([preparing, maintenance.prepare()]).then(() => {});

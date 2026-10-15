@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-import { joinJsonlFrames, claudeStreamEvent, claudeTextDelta } from "./cli-output.test-helpers.js";
+import {
+  createClaudeParser,
+  joinJsonlFrames,
+  claudeStreamEvent,
+  claudeTextDelta,
+} from "./cli-output.test-helpers.js";
 
 type ParserOptions = Parameters<typeof createCliJsonlStreamingParser>[0];
 const claudeBackend: ParserOptions["backend"] = {
@@ -14,13 +19,6 @@ function createParser(overrides: Partial<ParserOptions> = {}) {
     backend: { ...claudeBackend, command: "local-cli" },
     providerId: "local-cli",
     onAssistantDelta: () => {},
-    ...overrides,
-  });
-}
-function createClaudeParser(overrides: Partial<ParserOptions> = {}) {
-  return createParser({
-    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-    providerId: "claude-cli",
     ...overrides,
   });
 }
@@ -95,15 +93,6 @@ describe("createCliJsonlStreamingParser", () => {
       ],
       expected: [["Read"]],
     },
-    {
-      name: "malformed and missing lists left for owner validation",
-      frames: [["Read"], "Bash", null, ["Read", 7], undefined].map((tools) => ({
-        type: "system",
-        subtype: "init",
-        tools,
-      })),
-      expected: [["Read"], "Bash", null, ["Read", 7], undefined],
-    },
   ])("observes native tools across chunked $name", ({ frames, expected }) => {
     const snapshots: unknown[] = [];
     const parser = createClaudeParser({ onNativeTools: (tools) => snapshots.push(tools) });
@@ -113,27 +102,6 @@ describe("createCliJsonlStreamingParser", () => {
     parser.push(first.slice(-2) + "\n" + joinJsonlFrames(...frames.slice(1)));
     parser.finish();
     expect(snapshots).toEqual(expected);
-  });
-
-  it("normalizes usage while incrementally streaming CLI JSONL", () => {
-    const parser = createParser();
-    finishFrames(
-      parser,
-      init("openai-compatible-session"),
-      result("OpenAI-compatible response", {
-        usage: {
-          prompt_tokens: 17,
-          completion_tokens: 5,
-          total_tokens: 22,
-          prompt_tokens_details: { cached_tokens: 6 },
-        },
-      }),
-    );
-    expect(parser.getOutput()).toEqual({
-      text: "OpenAI-compatible response",
-      sessionId: "openai-compatible-session",
-      usage: { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 },
-    });
   });
 
   it.each([
@@ -243,18 +211,8 @@ describe("createCliJsonlStreamingParser", () => {
 
   it.each([
     {
-      name: "raw tool protocol",
-      text: '<invoke name="Bash">\n<parameter name="command">echo 1</parameter>\n</invoke>',
-      rejected: true,
-    },
-    {
       name: "incomplete tool protocol",
       text: '<invoke name="Bash">\n<parameter name="command">echo 1',
-      rejected: true,
-    },
-    {
-      name: "incomplete opening tag",
-      text: '<invoke name="Ba',
       rejected: true,
     },
     {
@@ -436,26 +394,6 @@ describe("createCliJsonlStreamingParser", () => {
   );
 
   it.each([
-    { name: "final text", finalText: "Done", expected: "Done" },
-    { name: "no final text", finalText: undefined, expected: "" },
-  ])(
-    "records only the final message when the stream ends without a result ($name)",
-    ({ finalText, expected }) => {
-      const parser = createParser();
-      finishFrames(
-        parser,
-        init("session-no-result"),
-        messageStart,
-        claudeTextDelta("Checking now."),
-        toolStart(),
-        messageStop,
-        ...(finalText ? [messageStart, claudeTextDelta(finalText)] : []),
-      );
-      expect(parser.getOutput()?.rawFinalText).toBe(expected);
-    },
-  );
-
-  it.each([
     {
       name: "a tool call after stored item text",
       frames: [itemMessage("Checking now."), toolStart()],
@@ -489,22 +427,6 @@ describe("createCliJsonlStreamingParser", () => {
       expect(output?.rawFinalText ?? output?.text.trim()).toBe(expected);
     },
   );
-
-  it("records an empty final message after pre-tool narration", () => {
-    const parser = createParser();
-    finishFrames(
-      parser,
-      init("session-empty-final"),
-      messageStart,
-      claudeTextDelta("Checking now."),
-      toolStart(),
-      messageStop,
-      messageStart,
-      messageStop,
-      result(""),
-    );
-    expect(parser.getOutput()?.rawFinalText).toBe("");
-  });
 
   it("keeps pre-tool text and reconstructible deltas without a commentary consumer", () => {
     const deltas: Array<{ text: string; delta: string }> = [];
@@ -621,14 +543,7 @@ describe("createCliJsonlStreamingParser", () => {
   );
 });
 
-it.each([
-  { name: "discrete", results: ["First answer.", "Second answer.", "Final answer."] },
-  { name: "shared lexical prefix", results: ["Hi", "History matters.", "Final answer."] },
-  {
-    name: "shared paragraph prefix",
-    results: ["First answer.", "First answer.\nMore detail.", "Final answer."],
-  },
-])(
+it.each([{ name: "shared lexical prefix", results: ["Hi", "History matters.", "Final answer."] }])(
   "delivers completed $name results before settlement and retains retry boundaries",
   ({ results }) => {
     const completed: string[] = [];

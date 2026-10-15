@@ -351,27 +351,47 @@ describe("worker placement projection", () => {
     expect(reader.read(active)).toBeUndefined();
   });
 
-  it("projects move status without exposing operation authority", () => {
-    const projected = projectWorkerPlacementMove({
-      operationId: "move:v1:opaque",
-      sessionId: "session-1",
-      source: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
-      target: { kind: "device", deviceId: "device-1" },
-      abandonSource: false,
-      lastError: "device worker is offline",
-      createdAtMs: 100,
-      updatedAtMs: 200,
-    });
+  it.each([false, true])(
+    "projects failed Move retry facts without operation authority (abandon=%s)",
+    (abandonSource) => {
+      const projected = projectWorkerPlacementMove({
+        operationId: "move:v1:opaque",
+        sessionId: "session-1",
+        source: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+        target: { kind: "gateway" },
+        abandonSource,
+        lastError: "device worker is offline",
+        createdAtMs: 100,
+        updatedAtMs: 200,
+      });
 
-    expect(projected).toEqual({
-      target: { kind: "device", deviceId: "device-1" },
-      error: "device worker is offline",
-      updatedAtMs: 200,
-    });
-    expect(Value.Check(SessionPlacementMoveSchema, projected)).toBe(true);
-    expect(projected).not.toHaveProperty("operationId");
-    expect(projected).not.toHaveProperty("source");
-  });
+      expect(projected).toEqual({
+        target: { kind: "gateway" },
+        error: "device worker is offline",
+        updatedAtMs: 200,
+        retry: {
+          expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+          target: { kind: "gateway" },
+          ...(abandonSource ? { abandonSource: true } : {}),
+        },
+      });
+      expect(Value.Check(SessionPlacementMoveSchema, projected)).toBe(true);
+      expect(projected).not.toHaveProperty("operationId");
+      expect(projected.retry).not.toHaveProperty("operationId");
+      expect(
+        projectWorkerPlacementMove({
+          operationId: "move:v1:opaque",
+          sessionId: "session-1",
+          source: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+          target: { kind: "gateway" },
+          abandonSource,
+          lastError: null,
+          createdAtMs: 100,
+          updatedAtMs: 200,
+        }),
+      ).not.toHaveProperty("retry");
+    },
+  );
 
   it("emits only fields valid for each placement discriminator", () => {
     const records = [

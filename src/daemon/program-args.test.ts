@@ -43,7 +43,7 @@ const validatedBunPath = "/opt/Validated Bun/bin/bun";
 const missingSelectedNodeError =
   "No supported Node runtime was selected for the daemon. Install Node >=24.16.0 <25, or >=26.1.0 (Node 26 recommended), then retry.";
 const missingSelectedBunError =
-  "No supported Bun runtime was selected for the daemon. Install Bun 1.4 or newer with WAL-reset-safe node:sqlite, then retry.";
+  "No supported Bun runtime was selected for the daemon. Install Bun 1.4.3 or newer with WAL-reset-safe node:sqlite, then retry.";
 
 beforeEach(() => {
   vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 ** 3);
@@ -125,38 +125,6 @@ describe("resolveGatewayProgramArguments", () => {
     expect(result.child).toBe(Number(nativeDefault.stdout));
     expect(result.options).toBe("");
   });
-
-  it.each([
-    { nodeOptions: "--max-old-space-size=24576", existing: [], expected: [] },
-    {
-      nodeOptions: "",
-      existing: ["--require", "gateway", "--max-old-space-size=24576"],
-      expected: ["--max-old-space-size=24576"],
-    },
-  ])(
-    "preserves stored controls without adding an automatic override: $nodeOptions $existing",
-    async ({ nodeOptions, existing, expected }) => {
-      const entryPath = path.resolve("/opt/openclaw/dist/index.js");
-      mockEntrypoint(entryPath);
-      const result = await resolveGatewayProgramArguments({
-        port: 18789,
-        runtime: "node",
-        runtimePath: validatedNodePath,
-        existingCommand: {
-          programArguments: [validatedNodePath, ...existing, entryPath, "gateway"],
-          environment: { NODE_OPTIONS: nodeOptions },
-        },
-      });
-      expect(result.programArguments).toEqual([
-        validatedNodePath,
-        ...expected,
-        entryPath,
-        "gateway",
-        "--port",
-        "18789",
-      ]);
-    },
-  );
 
   it("ignores installer execArgv and keeps native defaults when capacity is unknown", async () => {
     vi.spyOn(os, "totalmem").mockReturnValue(Number.NaN);

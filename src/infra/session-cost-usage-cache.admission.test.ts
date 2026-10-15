@@ -41,11 +41,13 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { writeSessionCostUsageRollupInDatabase } from "./session-cost-usage-cache.kernel.js";
 import {
-  deleteSessionCostUsageRollupsExcept,
   isSessionCostUsageRefreshRunning,
   prepareSessionCostUsageRefreshLock,
 } from "./session-cost-usage-cache.sqlite.js";
-import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
+import {
+  pruneUsageCostRollupsForTest,
+  readSessionCostUsageRollupRows,
+} from "./session-cost-usage-cache.test-support.js";
 import { withSessionCostUsageWorkerDatabases } from "./session-cost-usage-worker-scope.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "./sqlite-database-admission.js";
 import * as integrityWorker from "./sqlite-integrity-worker.js";
@@ -114,7 +116,7 @@ it.each(["rollup", "prune"] as const)(
             ).toBe(true);
             break;
           case "prune":
-            await deleteSessionCostUsageRollupsExcept({
+            await pruneUsageCostRollupsForTest({
               agentId,
               databasePath,
               rows: before.rows,
@@ -140,7 +142,14 @@ it.each(["rollup", "prune"] as const)(
         expect(readSessionCostUsageRollupRows(agentId, databasePath)).toEqual(
           operation === "prune"
             ? []
-            : [{ key: "session.jsonl", valueJson: '{"totalTokens":2}', updatedAt: 2 }],
+            : [
+                {
+                  key: "session.jsonl",
+                  valueJson: '{"totalTokens":2}',
+                  updatedAt: 2,
+                  bodyBytes: 0,
+                },
+              ],
         );
       } finally {
         await lock?.release();
@@ -257,7 +266,7 @@ it.each([
             expect(rows.map((row) => row.key)).toEqual([sessionFile]);
           } else {
             expect(rows).toEqual([
-              { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1 },
+              { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
             ]);
           }
         }
@@ -722,7 +731,7 @@ it.each([
         const database = openOpenClawAgentDatabase({ agentId, path: storePath, env: state.env });
         expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry).toEqual(written);
         expect(readSessionCostUsageRollupRows(agentId, storePath)).toEqual([
-          { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1 },
+          { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
         ]);
       } finally {
         await lock.release();
@@ -760,7 +769,7 @@ it("acquires a current usage writer after its captured executor retires", async 
         entry.sessionId,
       );
       expect(readSessionCostUsageRollupRows(agentId, storePath)).toEqual([
-        { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1 },
+        { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
       ]);
     } finally {
       await lock.release();

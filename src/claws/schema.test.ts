@@ -100,6 +100,29 @@ async function createPlanSource(): Promise<{ source: ClawSourceIdentity; workspa
 }
 
 describe("parseClawManifest", () => {
+  it("preserves optional portable categories", () => {
+    const result = parseClawManifest({ ...baseManifest, categories: ["travel", "personal"] });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.categories).toEqual(["travel", "personal"]);
+    }
+    expect(parseClawManifest(baseManifest).ok).toBe(true);
+    expect(parseClawManifest({ ...baseManifest, categories: ["custom"] }).ok).toBe(true);
+  });
+
+  it.each([
+    { categories: [] },
+    { categories: ["travel", "travel"] },
+    { categories: ["Travel"] },
+    { categories: ["travel", "personal", "health", "research"] },
+  ])("rejects invalid category declarations %j", ({ categories }) => {
+    const result = parseClawManifest({ ...baseManifest, categories });
+    expect(result.ok).toBe(false);
+    expect(
+      result.diagnostics.some((diagnostic) => diagnostic.path?.startsWith("$.categories")),
+    ).toBe(true);
+  });
+
   it("rejects operator-controlled agent settings", () => {
     const result = parseClawManifest({
       schemaVersion: 1,
@@ -217,6 +240,7 @@ describe("readClawManifestFile", () => {
       [
         "---",
         "schemaVersion: 1",
+        "categories: [operations, research]",
         "agent:",
         "  id: triage",
         "workspace: {}",
@@ -234,7 +258,11 @@ describe("readClawManifestFile", () => {
 
     expect(result).toMatchObject({
       ok: true,
-      manifest: { schemaVersion: 1, agent: { id: "triage" } },
+      manifest: {
+        schemaVersion: 1,
+        categories: ["operations", "research"],
+        agent: { id: "triage" },
+      },
       source: { kind: "package", name: "@acme/github-triage", version: "3.2.1" },
     });
     if (!result.ok) {

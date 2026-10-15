@@ -101,12 +101,19 @@ async function refObjects(
 }
 
 export async function readSessionRepositoryArtifacts(
-  params: CheckpointSource & { previewPath?: string; assertCurrent: () => void },
+  params: CheckpointSource & {
+    previewPath?: string;
+    downloadPath?: string;
+    assertCurrent: () => void;
+  },
 ): Promise<StagedWorkerArtifactInventory> {
   const { workspace, root } = await owner(params);
   const ref = checkpointRef(workspace, params.checkpointRef);
   const snapshot = await runGitWorkerOperation(
-    { type: "workspace.artifacts", input: { root, ref, previewPath: params.previewPath } },
+    {
+      type: "workspace.artifacts",
+      input: { root, ref, previewPath: params.previewPath, downloadPath: params.downloadPath },
+    },
     { assertCurrent: params.assertCurrent },
   );
   assertBase(workspace, snapshot);

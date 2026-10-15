@@ -124,6 +124,8 @@ plugin code registered with `api.registerCliBackend(...)`.
 4. Parses output (JSON or plain text) and returns the final text.
 5. Persists session ids per backend so follow-ups reuse the same CLI session.
 
+Claude CLI startup hook events are consumed in order while initialization completes, so a burst of `SessionStart` hooks does not stall the first turn. Restricted runs continue to disable native hooks.
+
 Claude stream-json backends also emit live line-count progress while `write`,
 `edit`, and `apply_patch` arguments stream. Progress contains only the tool id,
 name, and added/removed line counts, with at most four updates per second per
@@ -189,6 +191,11 @@ an answer does not end the admitted turn or grant its background work another tu
 The `openclaw agent` command also has its own request deadline. Its 600-second fallback default applies to that command invocation, not to ordinary Gateway turns. See [`openclaw agent`](/cli/agent).
 
 ### Claude CLI specifics
+
+For channels that deliver one final reply per turn, a Claude Code Stop-hook
+rejection discards the rejected reply segment, including when Claude runs a tool
+before rewriting. A `NO_REPLY` rewrite stays silent. Ordinary tool-split replies
+still preserve substantive pre-tool text.
 
 Interrupted turns can retain ordinary partial prose. If an unfinished reply contains
 standalone tool-protocol markup outside a code example, OpenClaw discards that
@@ -583,6 +590,12 @@ The loopback bridge sends keepalive bytes while a tool response or notification
 stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
 bytes are not tool results or agent progress; client request deadlines and the
 current model attempt's timeout still apply.
+
+Each loopback response uses `Connection: close` so clients cannot reuse a pooled
+socket as the server closes it after an idle timeout. The connection closes only
+when the response ends; long-running tool responses and SSE notification streams
+remain open until completion or shutdown. Each later request opens a new loopback
+TCP connection.
 
 The shared listener remains available after the turn that first started it completes.
 Later calls use their own run's permissions and caller liveness, without retaining

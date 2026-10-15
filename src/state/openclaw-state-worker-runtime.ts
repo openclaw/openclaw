@@ -9,14 +9,19 @@ import { patchConfigHealthEntryInDatabase } from "../config/io.health-state.kern
 import {
   executeCronStateCommand,
   isCronStateWorkerCommand,
-  prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-read.worker.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
-import { recordUpdateRunMutationInWorker } from "../infra/update-run-mutation.worker.js";
+import {
+  recordUpdateRunMutationInWorker,
+  withUpdateRunWriteAdmission,
+} from "../infra/update-run-mutation.worker.js";
 import { reconcileUpdateRunCandidatesInWorker } from "../infra/update-run-reconciliation.worker.js";
 import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
@@ -33,6 +38,7 @@ import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
 import { TUI_LAST_SESSION_STATE_KEY_PREFIX } from "../tui/tui-last-session.contract.js";
 import { clearRetiredTuiPointers } from "../tui/tui-last-session.kernel.js";
 import { assertAgentDeletionRecoveryHoldPredicate } from "./agent-deletion-journal-recovery.kernel.js";
+import { agentProvenancePublication } from "./agent-provenance-publication.js";
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
@@ -60,31 +66,24 @@ import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerRuntimeCommand,
 } from "./openclaw-state-worker-contract.js";
-import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 import type { WorkerWriteOperationContext } from "./worker-operation-registry.js";
 
 export { openUpdateRunWriter } from "../infra/update-run-mutation.worker.js";
 
-export function prepareSharedStateCommand(type: PropertyKey): Promise<void> | undefined {
-  return stateWorkerRegistry.prepare(type) ?? prepareCronStateWorkerCommand(type);
-}
+export { prepareCronStateWorkerCommand as prepareSharedStateCommand } from "../cron/store/dispatch.worker.js";
 
 export function executeSharedStateCommand(
   command: OpenClawStateWorkerRuntimeCommand,
   context: { databasePath: string },
   open: () => OpenClawStateDatabase,
   write: WorkerWriteOperationContext["write"],
-  writeAdmitted: WorkerWriteOperationContext["writeAdmitted"],
   updateRunWriter: () => ExistingOpenClawStateWriter,
 ): ReturnType<OpenClawStateWorkerBackend["execute"]> {
   const stateOptions = () => ({
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   });
-  if (stateWorkerRegistry.has(command)) {
-    return stateWorkerRegistry.execute(command, { open, write, writeAdmitted, stateOptions });
-  }
   if (
     command.type === "updateRuns.recordStep" ||
     command.type === "updateRuns.recordPhase" ||
@@ -93,21 +92,18 @@ export function executeSharedStateCommand(
     command.type === "updateRuns.recordVerification" ||
     command.type === "updateRuns.recordDiagnostics"
   ) {
-    return recordUpdateRunMutationInWorker(
-      command,
-      stateOptions(),
-      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
-      updateRunWriter,
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      recordUpdateRunMutationInWorker(command, stateOptions(), assertCurrent, updateRunWriter),
     );
   }
   if (command.type === "updateRuns.reconcile") {
-    return reconcileUpdateRunCandidatesInWorker(command.input, stateOptions(), (stage) =>
-      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      reconcileUpdateRunCandidatesInWorker(command.input, stateOptions(), assertCurrent),
     );
   }
   if (command.type === "updateRuns.reconcileInterrupted") {
-    return persistInterruptedUpdateObservation(command.input, stateOptions(), (stage) =>
-      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      persistInterruptedUpdateObservation(command.input, stateOptions(), assertCurrent),
     );
   }
   if (command.type === "claws.install-schema-versions") {
@@ -119,7 +115,7 @@ export function executeSharedStateCommand(
       return readClawInstallSchemaVersionRows(db);
     }, stateOptions());
   }
-  if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
+  if (command.type === "userPreferences.write") {
     return executeUserPreferenceCommand(command, {
       database: open(),
       ...stateOptions(),
@@ -265,7 +261,14 @@ export function executeSharedStateCommand(
   if (command.type === "agentProvenance.record") {
     ensureAgentProvenanceSchema(writeOptions);
     return runOpenClawStateWriteTransaction(
-      ({ db }) => recordAgentProvenanceInDatabase(db, command.input),
+      ({ db }) => {
+        const { receipt } = agentProvenancePublication.capture(db, () =>
+          recordAgentProvenanceInDatabase(db, command.input),
+        );
+        deferSqliteWorkerCommitReceipt(db, {
+          provenanceAuthority: agentProvenancePublication.bound(receipt),
+        });
+      },
       writeOptions,
       { operationLabel: "agent-provenance.record" },
     );

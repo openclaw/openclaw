@@ -1,4 +1,4 @@
-import { render } from "lit";
+import { createComponent, createSignal, getOwner, merge } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
@@ -7,9 +7,47 @@ import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import type { ChatComposerProps } from "./components/chat-composer-types.ts";
+import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 
-type ComposerProps = Parameters<typeof renderChatComposer>[0];
+type ComposerProps = ChatComposerProps;
+type NativeComposerProps = Parameters<typeof ChatComposer>[0];
+
+const providers = new WeakMap<
+  HTMLElement,
+  ReturnType<typeof createSolidApplicationContextProvider>
+>();
+const composers = new Map<
+  HTMLElement,
+  { update: (props: NativeComposerProps) => void; unmount: () => void }
+>();
+
+export function renderComposerInto(container: HTMLElement, props: ComposerProps) {
+  const next = { ...props, renderRevision: {} };
+  const mounted = composers.get(container);
+  if (mounted) {
+    mounted.update(next);
+  } else {
+    const [current, update] = createSignal<NativeComposerProps>(next, { ownedWrite: true });
+    const view = mountSolid(() => createComponent(ChatComposer, merge(current)), {
+      container,
+      wrapper: providers.get(container)!.wrapper,
+    });
+    composers.set(container, { update, unmount: view.unmount });
+    onTestFinished(() => disposeComposer(container));
+  }
+  if (!getOwner()) {
+    flush();
+  }
+}
+
+export function disposeComposer(container: HTMLElement) {
+  composers.get(container)?.unmount();
+  composers.delete(container);
+}
 
 export function createComposerProps(overrides: Partial<ComposerProps> = {}): ComposerProps {
   return {
@@ -41,7 +79,7 @@ export function createComposerProps(overrides: Partial<ComposerProps> = {}): Com
 export function renderComposerFixture(overrides: Partial<ComposerProps> = {}) {
   const container = createComposerContainer();
   const props = createComposerProps(overrides);
-  render(renderChatComposer(props), container);
+  renderComposerInto(container, props);
   return { container, props };
 }
 
@@ -61,7 +99,16 @@ export function createComposerContainer() {
     },
   };
   // SAFETY: Disconnected composer and transcript fixtures only consume these capabilities.
-  return createApplicationContextProvider(context as ApplicationContext);
+  const application = context as ApplicationContext;
+  const container = createApplicationContextProvider(application);
+  const provider = createSolidApplicationContextProvider(application);
+  const setContext = container.setContext;
+  container.setContext = (next) => {
+    setContext(next);
+    provider.setContext(next);
+  };
+  providers.set(container, provider);
+  return container;
 }
 
 export function findComposerButton(container: Element, label: string): HTMLButtonElement {
@@ -87,6 +134,9 @@ export function findPrimaryButton(container: Element): HTMLButtonElement {
 }
 
 export async function resetComposerFixture(afterStateReset?: () => void): Promise<void> {
+  for (const container of composers.keys()) {
+    disposeComposer(container);
+  }
   resetChatComposerState();
   afterStateReset?.();
   localStorage.clear();

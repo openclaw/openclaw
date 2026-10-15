@@ -7,6 +7,7 @@ import { getAiTransportHost } from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveAgentDir } from "../../agents/agent-scope-config.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../../agents/auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -237,6 +238,7 @@ it.each([
       OPENCLAW_STATE_DIR: path.join(root, "state"),
     };
     await withEnvAsync(env, async () => {
+      prepareSharedAuthStoreOwnershipForNative();
       const create = vi.spyOn(ModelRegistry, "fromCapturedSources");
       const fork = vi.spyOn(ModelRegistry.prototype, "fork");
       const setRuntimeKey = vi.spyOn(AuthStorage.prototype, "setRuntimeApiKey");
@@ -337,6 +339,11 @@ it.each([
                   async pull(controller) {
                     if (++reads === 2) {
                       bodyReadStarted.resolve();
+                      if (anthropicReadCancel) {
+                        // Exercise cancellation ownership without racing fetch's abort error.
+                        await finishWork.promise;
+                        return;
+                      }
                     }
                     const { value, done } = await reader.read();
                     if (done) {

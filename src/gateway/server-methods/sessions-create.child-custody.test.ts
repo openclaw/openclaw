@@ -6,13 +6,16 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
+import { SANDBOX_DEFAULT_TOOL_ALLOW } from "../../agents/sandbox/types.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayToolWithCreation } from "../../agents/tools/in-process-gateway.js";
+import { prepareSandboxSessionTools } from "../../agents/tools/sessions-operator-authority.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
 import { withVisibleWorkSessionReporter } from "../../auto-reply/reply/visible-work-sessions.js";
 import {
   bindChildSessionPublication,
@@ -146,6 +149,7 @@ async function createHostedChildFixture(
   const dispatchEntered = createDeferred();
   const provider = vi.fn();
   const persistenceResult = vi.fn();
+  const renamePolicy = vi.fn();
   let sourceCurrent = true;
   let hostCurrent = true;
   let gatewayCurrent = true;
@@ -171,6 +175,17 @@ async function createHostedChildFixture(
     const recorder = expectDefined(replyOptions?.userTurnTranscriptRecorder, "child input owner");
     dispatchEntered.resolve();
     await releaseDispatch.promise;
+    if (toolInvocation && !system) {
+      const allow = ["read"];
+      // Reply tool-policy preparation runs before the child binds its own tool caller.
+      renamePolicy(
+        prepareSandboxSessionTools({
+          policy: { allow, deny: [], [SANDBOX_DEFAULT_TOOL_ALLOW]: allow },
+          senderIsOwner: false,
+          authority: replyOptions?.operatorAuthority,
+        }),
+      );
+    }
     // The real reply admission owner rejects a missing persistence result before inference.
     const persisted = await recorder.persistApproved();
     persistenceResult(persisted);
@@ -230,6 +245,15 @@ async function createHostedChildFixture(
     }),
     "admitted parent caller",
   );
+  const participants =
+    toolInvocation && caller.operatorAuthority
+      ? createReplyTurnParticipants({ operatorAuthority: caller.operatorAuthority })
+      : undefined;
+  if (participants) {
+    caller.personalToolParticipants = participants;
+    caller.personalToolUser = profile.id;
+    caller.personalToolIdentityScoped = true;
+  }
   const dispatch = (requesterSessionKey = parentKey, targetKey = childKey, spawnDepth = 1) =>
     callInProcessGatewayToolWithCreation<{
       key: string;
@@ -354,6 +378,7 @@ async function createHostedChildFixture(
     beforeInputCommit,
     provider,
     persistenceResult,
+    renamePolicy,
     providerDiagnostics: () =>
       JSON.stringify({
         persistenceResults: persistenceResult.mock.calls,
@@ -361,7 +386,10 @@ async function createHostedChildFixture(
         errors: vi.mocked(context.logGateway.error).mock.calls,
       }),
     dispatchEntered: dispatchEntered.promise,
-    closeParent: () => parent.close(),
+    closeParent: () => {
+      participants?.close();
+      parent.close();
+    },
     closeInvocation: () => {
       invocationCurrent = false;
     },
@@ -380,6 +408,7 @@ async function createHostedChildFixture(
       try {
         await finish();
       } finally {
+        participants?.close();
         parent.close();
         captured?.release();
         releaseProfileCatalog?.();
@@ -609,6 +638,11 @@ describe("hosted creation transfers accepted child input", () => {
       fixture.closeParent();
       await fixture.finish();
       expect(fixture.provider, fixture.providerDiagnostics()).toHaveBeenCalledOnce();
+      if (!system) {
+        expect(fixture.renamePolicy).toHaveBeenCalledWith(
+          expect.objectContaining({ renameOnly: true }),
+        );
+      }
       expect(userMessages(scope)).toHaveLength(1);
       expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
       expect(fixture.context.chatAbortControllers.has(accepted.runId)).toBe(false);

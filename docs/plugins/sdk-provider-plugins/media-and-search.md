@@ -61,6 +61,17 @@ the adapter retains responsibility for cancellation and terminal settlement.
     The shared factory always supplies the client's `model` and the original
     `input` array after those fields, preserving response-count validation.
 
+    Clients returned by `resolveRemoteEmbeddingClient` resolve OAuth authorization
+    through the auth-profile owner before each HTTP request. API keys and explicit
+    authorization headers remain static. Pass the client's optional
+    `resolveRequestHeaders` callback through batch helpers too: it receives
+    `{ forceRefresh, signal }` and returns request headers. `withRemoteHttpResponse`
+    applies those headers before guarded dispatch and supplies the actual headers
+    as the second `onResponse` argument for error redaction. If that handler throws
+    a provider HTTP error for `401 token_expired`, the helper releases the response,
+    resolves headers once with `forceRefresh: true`, and retries only that request.
+    Uploads must use a replayable body such as the batch helper's `FormData`.
+
     Embedding adapters can use `resolveEmbeddingProviderSsrFPolicy` from
     `openclaw/plugin-sdk/memory-core-host-engine-embeddings` to apply the shared model
     provider network policy. Pass the embedding provider ID, API, effective base URL,
@@ -111,10 +122,12 @@ the adapter retains responsibility for cancellation and terminal settlement.
     transform-mode support or disabled modes cleanly. Music generation
     follows the same `generate` / `edit` pattern.
 
-    Bundled providers can use `selectSupportedVideoDuration` from the private
-    `openclaw/plugin-sdk/video-generation` subpath to select the nearest value
-    from a nonempty list, preferring the longer duration on ties. Keep input
-    validation, rounding, bounds, and default durations in the provider.
+    Bundled providers can use `normalizeVideoGenerationDuration({ durationSeconds })`
+    from the private `openclaw/plugin-sdk/video-generation` subpath to round an
+    optional duration and reject values outside 1–9007199254740991 seconds after
+    rounding. Omission returns `undefined`; provider defaults remain provider-owned.
+    `selectSupportedVideoDuration` selects the nearest value from a nonempty list,
+    preferring the longer duration on ties. Keep provider-specific bounds in the provider.
 
     ```typescript
     api.registerImageGenerationProvider({

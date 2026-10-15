@@ -305,7 +305,7 @@ export function createGitHubOAuthLifecycle(params: {
       await queueDeviceCleanup(requestId);
       return { status: "expired" };
     }
-    if (!authorizationStillOwned(params.getConfig(), record)) {
+    if (!(await authorizationStillOwnedAsync(params.getConfig, record))) {
       await queueDeviceCleanup(requestId);
       return { status: "failed", reason: "identity_changed" };
     }
@@ -625,7 +625,7 @@ export function createGitHubOAuthLifecycle(params: {
       getOrCreatePromise(devicePolls, requestId, () => pollOnce(requestId), {
         evictOnSettled: true,
       }),
-    /** @deprecated Use cancelAuthorizationAsync; removed in the next Plugin SDK major. */
+    /** @deprecated Use cancelAuthorizationAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     cancelAuthorization(requestId: string): boolean {
       warnPluginSdkDeprecation({
         family: "github-publication",
@@ -653,7 +653,7 @@ export function createGitHubOAuthLifecycle(params: {
       return existed;
     },
     status,
-    /** @deprecated Use retireProfileAsync; removed in the next Plugin SDK major. */
+    /** @deprecated Use retireProfileAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     retireProfile(profileId: string): void {
       warnPluginSdkDeprecation({
         family: "github-publication",

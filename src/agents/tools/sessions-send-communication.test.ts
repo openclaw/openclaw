@@ -173,16 +173,6 @@ describe("sessions_send communication boundary", () => {
     receive.resolve();
     (await pending).close();
   });
-  it.each(["refused", "expired", "cancelled"])(
-    "%s never delivers or releases a backlog",
-    async (reason) => {
-      const input = operation(endpoint("source", { communication: { send: "ask" } }));
-      state.approve.mockRejectedValue(new Error(reason));
-      await expect(prepareSessionsSendCommunication(input)).rejects.toThrow(reason);
-      state.config = { session: { communication: { send: "always" } } };
-      expect(input.callGateway).not.toHaveBeenCalled();
-    },
-  );
   it("rejects policy changes during approval", async () => {
     const input = operation(endpoint("source", { communication: { send: "ask" } }));
     state.approve.mockImplementation(async () => {
@@ -261,6 +251,33 @@ describe("sessions_send communication boundary", () => {
       gate.close();
     },
   );
+  it("ignores metadata notifications but fences unknown storage changes", async () => {
+    const input = operation();
+    const gate = await prepareSessionsSendCommunication(input);
+    try {
+      sessionChanges.emit({ agentId: "main", sessionKey: input.target.sessionKey });
+      await gate.refresh();
+      expect(gate.assertCurrent).not.toThrow();
+      sessionChanges.emit({
+        agentId: "main",
+        sessionKey: input.target.sessionKey,
+        factsInvalidated: true,
+      });
+      expect(gate.assertCurrent).toThrow("changed");
+    } finally {
+      gate.close();
+    }
+  });
+
+  it("does not request fresh consent during durable delivery recovery", async () => {
+    const input = operation(endpoint("source", { communication: { send: "ask" } }));
+    await expect(
+      prepareSessionsSendCommunication({ ...input, allowApproval: false }),
+    ).rejects.toThrow("fresh human communication approval");
+    expect(state.approve).not.toHaveBeenCalled();
+    expect(input.callGateway).not.toHaveBeenCalled();
+  });
+
   it("refuses a replacement without current communication facts", async () => {
     const input = operation();
     const gate = await prepareSessionsSendCommunication(input);

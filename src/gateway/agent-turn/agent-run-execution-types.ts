@@ -27,6 +27,7 @@ export type StartAgentRunExecutionParams = {
   activeSessionAgentId: string;
   delivery: AgentDeliveryPhaseResult;
   isNewSession: boolean;
+  freshChild?: boolean;
   isRawModelRun: boolean;
   isOneShotModelRun: boolean;
   isRestartRecoveryResumeRun: boolean;

@@ -320,9 +320,7 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-identity-card").click();
-      await sidebar
-        .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
-        .click();
+      await sidebar.locator('.sidebar-identity-menu [data-value="command:usage"]').click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
       await waitForRequestCount(gateway, "sessions.usage", 1);
       await page.locator(".daily-chart-compact").waitFor({ timeout: 10_000 });

@@ -6,6 +6,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
+import type { MenuEntry, MenuItem } from "./solid/menu.tsx";
 export const AGENT_VALUE_PREFIX = "agent:";
 export type SidebarAgentMenuSwitcherParams = {
   activeId: string;
@@ -117,14 +118,22 @@ function renderAgentRow(
       .filter(Boolean)
       .join(" "),
   );
-  return (
-    <wa-dropdown-item
-      class={`sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option ${active() ? "sidebar-agent-menu__agent-switch--active" : ""}`}
-      value={`${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId())}`}
-      aria-label={rowLabel()}
-      aria-current={active() ? "true" : undefined}
-      autofocus={readAutofocus()}
-    >
+  return {
+    as: "div",
+    id: `${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId())}`,
+    get label() {
+      return rowLabel();
+    },
+    get class() {
+      return `sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option ${active() ? "sidebar-agent-menu__agent-switch--active" : ""}`;
+    },
+    get attributes() {
+      return {
+        "aria-current": active() ? ("true" as const) : undefined,
+        "data-initial-focus": readAutofocus() ? "" : undefined,
+      };
+    },
+    content: (
       <span class="sidebar-agent-menu__agent-row">
         <span class="sidebar-agent-menu__agent-avatar">
           {" "}
@@ -147,17 +156,23 @@ function renderAgentRow(
               title={pinLabel()}
               aria-pressed={pinned() ? "true" : "false"}
               tabindex="-1"
+              data-form-control
               ref={(button) => {
-                // Stop the click before Web Awesome's shadow menu selects the enclosing agent.
+                // Pinning does not select the enclosing agent.
                 button.addEventListener("click", (event) => {
+                  event.preventDefault();
                   event.stopPropagation();
                   // Moving a keyed row into pinned-first order can drop native focus.
                   const focused = button === document.activeElement;
+                  const menu = button.closest('[role="menu"]');
+                  const value = `${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId())}`;
                   void params.onTogglePinnedAgent(agentId()).then(() => {
-                    if (focused && button.isConnected) {
-                      button.focus({
-                        preventScroll: true,
-                      });
+                    if (focused) {
+                      menu
+                        ?.querySelector<HTMLElement>(
+                          `[data-value="${CSS.escape(value)}"] .sidebar-agent-menu__pin`,
+                        )
+                        ?.focus({ preventScroll: true });
                     }
                   });
                 });
@@ -171,8 +186,8 @@ function renderAgentRow(
           ) : undefined}
         </span>
       </span>
-    </wa-dropdown-item>
-  );
+    ),
+  } satisfies MenuItem;
 }
 export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherParams) {
   const agents = createMemo(() => sidebarAgentMenuRows(params));
@@ -203,48 +218,52 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
       ? (agents().find((agent) => normalizeAgentId(agent.id) === params.activeId) ?? agents()[0])
       : undefined,
   );
-  return (
-    <>
-      {params.agents.length > 0 ? (
-        <div class="sidebar-agent-menu__agent-list">
-          {params.agents.length > 1 && !query() ? (
-            <wa-dropdown-item
-              class={`sidebar-customize-menu__item sidebar-agent-menu__agent-switch ${params.allAgentsScope ? "sidebar-agent-menu__agent-switch--active" : ""}`}
-              value="scope:all"
-              aria-current={params.allAgentsScope ? "true" : undefined}
-              autofocus={autofocusAll()}
-            >
-              <span class="sidebar-agent-menu__agent-row">
-                {renderAgentGroupAvatar(agents(), params)}
-                <span class="agent-select__option-copy">
-                  <span class="agent-select__option-label">{t("agentChip.showAll")}</span>
-                </span>
-              </span>
-            </wa-dropdown-item>
-          ) : undefined}
-          <For each={visibleAgents()} keyed={(entry) => entry.id}>
-            {(entry) =>
-              renderAgentRow(
-                entry,
-                params,
-                () => entry() === autofocusAgent(),
-                () =>
-                  (nameCounts().get(
-                    normalizeAgentLabel(
-                      entry(),
-                      params.identities.get(normalizeAgentId(entry().id)),
-                    ),
-                  ) ?? 0) > 1,
-              )
-            }
-          </For>
-          {visibleAgents().length === 0 ? (
-            <div class="sidebar-agent-menu__empty" role="status">
-              {t("agentChip.noMatches")}
-            </div>
-          ) : undefined}
+  const entries: MenuEntry[] = [];
+  if (params.agents.length === 0) {
+    return entries;
+  }
+  if (params.agents.length > 1 && !query()) {
+    entries.push({
+      id: "scope:all",
+      label: t("agentChip.showAll"),
+      class: `sidebar-customize-menu__item sidebar-agent-menu__agent-switch ${params.allAgentsScope ? "sidebar-agent-menu__agent-switch--active" : ""}`,
+      attributes: {
+        "aria-current": params.allAgentsScope ? "true" : undefined,
+        "data-initial-focus": autofocusAll() ? "" : undefined,
+      },
+      content: (
+        <span class="sidebar-agent-menu__agent-row">
+          {renderAgentGroupAvatar(agents(), params)}
+          <span class="agent-select__option-copy">
+            <span class="agent-select__option-label">{t("agentChip.showAll")}</span>
+          </span>
+        </span>
+      ),
+    });
+  }
+  for (const agent of visibleAgents()) {
+    entries.push(
+      renderAgentRow(
+        () => agent,
+        params,
+        () => agent === autofocusAgent(),
+        () =>
+          (nameCounts().get(
+            normalizeAgentLabel(agent, params.identities.get(normalizeAgentId(agent.id))),
+          ) ?? 0) > 1,
+      ),
+    );
+  }
+  if (visibleAgents().length === 0) {
+    entries.push({
+      kind: "content",
+      id: "empty",
+      content: (
+        <div class="sidebar-agent-menu__empty" role="status">
+          {t("agentChip.noMatches")}
         </div>
-      ) : undefined}
-    </>
-  );
+      ),
+    });
+  }
+  return entries;
 }

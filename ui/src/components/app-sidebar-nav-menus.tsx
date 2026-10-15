@@ -1,6 +1,5 @@
-import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
 import type { JSX } from "@solidjs/web";
-import { For } from "solid-js";
+import { createUniqueId, onCleanup } from "solid-js";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
@@ -12,63 +11,100 @@ import {
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { iconData, type IconName } from "./icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
-import { renderMenuTrigger } from "./solid/menu-trigger.tsx";
-import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
+import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
+import { Menu, type MenuEntry, type MenuItem } from "./solid/menu.tsx";
 
-type SidebarMenuPosition = { x: number; y: number };
+type SidebarMenuPosition = { x: number; y?: number; top?: number; bottom?: number };
 
 export function renderSidebarMenuAction(
   value: string,
   label: string,
   icon: IconName,
   options: { disabled?: boolean; title?: string; className?: string; details?: JSX.Element } = {},
-): JSX.Element {
-  return (
-    <wa-dropdown-item
-      class={["sidebar-customize-menu__item", options.className]}
-      value={value}
-      disabled={options.disabled}
-      title={options.title ?? undefined}
-    >
-      <span slot="icon" class="nav-item__icon" aria-hidden="true">
+): MenuItem {
+  return {
+    id: value,
+    label,
+    class: ["sidebar-customize-menu__item", options.className].filter(Boolean).join(" "),
+    disabled: options.disabled,
+    attributes: { title: options.title },
+    icon: (
+      <span class="nav-item__icon" aria-hidden="true">
         <Icon name={icon} />
       </span>
-      <span class="sidebar-customize-menu__text">{label}</span>
-      {options.details ?? undefined}
-    </wa-dropdown-item>
-  );
+    ),
+    content: <span class="sidebar-customize-menu__text">{label}</span>,
+    details: options.details,
+  };
 }
 
-export function SidebarDropdown(params: {
+export type SidebarDropdownProps = {
   position: SidebarMenuPosition;
   class: string;
   label: string;
-  onSelect: (item: Element) => void;
-  onTabAway: () => void;
+  anchor?: HTMLElement;
+  items: readonly MenuEntry[];
+  onSelect: (id: string) => void;
+  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   onClose: (restoreFocus: boolean) => void;
-  content: JSX.Element;
-}): JSX.Element {
+  onAfterShow?: (event: Event) => void;
+  onOpenChange?: (open: boolean) => void;
+  onPointerEnter?: () => void;
+  onPointerLeave?: () => void;
+  panelStyle?: JSX.CSSProperties;
+  focusOnOpen?: boolean;
+};
+
+export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
+  const id = createUniqueId();
+  let removeListeners: (() => void) | undefined;
+  onCleanup(() => removeListeners?.());
   return (
-    <wa-dropdown
-      class={params.class}
-      prop:open={true}
-      placement="bottom-start"
-      prop:distance={0}
-      aria-label={params.label}
-      onWa-select={(event: WaSelectEvent) => {
-        event.preventDefault();
-        params.onSelect(event.detail.item);
+    <Menu
+      id={`sidebar-menu-${id}`}
+      panelClass={params.class}
+      label={params.label}
+      open
+      items={params.items}
+      placement={params.position.bottom === undefined ? "bottom-start" : "top-start"}
+      triggerAttributes={pointMenuTriggerAttributes(
+        {
+          x: params.position.x,
+          y: params.position.bottom ?? params.position.top ?? params.position.y,
+        },
+        params.position.bottom === undefined ? "top" : "bottom",
+      )}
+      ref={(handle) => {
+        const { overlay } = handle;
+        overlay.surface.dataset.chatAutotypeExempt = "";
+        if (params.anchor) {
+          overlay.setReturnTarget(params.anchor);
+        }
+        if (params.panelStyle) {
+          for (const [property, value] of Object.entries(params.panelStyle)) {
+            overlay.surface.style.setProperty(property, String(value));
+          }
+        }
+        const enter = () => params.onPointerEnter?.();
+        const leave = () => params.onPointerLeave?.();
+        overlay.surface.addEventListener("pointerenter", enter);
+        overlay.surface.addEventListener("pointerleave", leave);
+        removeListeners = () => {
+          overlay.surface.removeEventListener("pointerenter", enter);
+          overlay.surface.removeEventListener("pointerleave", leave);
+        };
+        overlay.request(true, params.focusOnOpen === false ? "none" : "first");
       }}
-      ref={(dropdown) => {
-        // Track dismissal before Web Awesome's document listener restores its hidden trigger.
-        dropdown.addEventListener("keydown", (event) =>
-          trackDropdownKeyboardDismissal(event, params.onTabAway),
-        );
+      tabFocusTarget={params.tabFocusTarget}
+      onSelect={(item) => params.onSelect(item.id)}
+      onAfterShow={params.onAfterShow}
+      onOpenChange={(open) => {
+        params.onOpenChange?.(open);
+        if (!open) {
+          params.onClose(false);
+        }
       }}
-      onWa-after-hide={(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
-    >
-      {renderMenuTrigger(params.position, params.label)} {params.content}
-    </wa-dropdown>
+    />
   );
 }
 
@@ -141,8 +177,9 @@ export function renderSidebarNavLink(params: {
 export function renderSidebarPluginNavigationMenu(params: {
   position: SidebarMenuPosition;
   item: ControlUiNavigationItem;
+  anchor?: HTMLElement;
   onSelect: (id: string) => Promise<void>;
-  onTabAway: () => void;
+  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   onClose: (restoreFocus: boolean) => void;
 }): JSX.Element {
   return (
@@ -150,38 +187,30 @@ export function renderSidebarPluginNavigationMenu(params: {
       {...params}
       class="sidebar-customize-menu sidebar-plugin-navigation-menu"
       label={params.item.label}
-      onSelect={(item) => {
-        const value = item.getAttribute("value");
-        if (value) {
-          void params.onSelect(value);
-        }
-      }}
-      content={
-        <For each={params.item.actions ?? []}>
-          {(action) => {
-            const icon =
-              action.icon && Object.hasOwn(iconData, action.icon) ? (
-                // SAFETY: The preceding own-key guard admits only keys of iconData.
-                <Icon name={action.icon as IconName} />
-              ) : undefined;
-            return (
-              <wa-dropdown-item
-                class={[
-                  "sidebar-customize-menu__item",
-                  { "session-menu__item--destructive": action.destructive },
-                ]}
-                value={action.id}
-                variant={action.destructive ? "danger" : "default"}
-              >
-                <span slot="icon" class="nav-item__icon" aria-hidden="true">
-                  {icon}
-                </span>
-                <span class="sidebar-customize-menu__text">{action.label}</span>
-              </wa-dropdown-item>
-            );
-          }}
-        </For>
-      }
+      onSelect={(id) => void params.onSelect(id)}
+      items={(params.item.actions ?? []).map((action): MenuItem => ({
+        id: action.id,
+        label: action.label,
+        class: [
+          "sidebar-customize-menu__item",
+          action.destructive ? "session-menu__item--destructive" : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+        variant: action.destructive ? "danger" : undefined,
+        icon:
+          action.icon && Object.hasOwn(iconData, action.icon) ? (
+            <span class="nav-item__icon" aria-hidden="true">
+              <Icon
+                name={
+                  // SAFETY: The preceding own-key guard admits only keys of iconData.
+                  action.icon as IconName
+                }
+              />
+            </span>
+          ) : undefined,
+        content: <span class="sidebar-customize-menu__text">{action.label}</span>,
+      }))}
     />
   );
 }

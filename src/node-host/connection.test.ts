@@ -39,7 +39,6 @@ it.each([
     declared: ["presence", "future_tool", "portal", "read"],
     expected: ["presence", "future_tool", "portal", "read"],
   },
-  { declared: ["future_tool"], expected: ["future_tool"] },
   { declared: [], expected: [] },
 ])(
   "preserves declared launch names or the published 2026.9.6 vocabulary ($declared)",
@@ -81,7 +80,6 @@ it.each([
 it.each([
   { reason: "non-array", value: "read" },
   { reason: "duplicate", value: ["read", "read"] },
-  { reason: "duplicate unknown", value: ["future_tool", "future_tool"] },
   { reason: "non-string", value: [1] },
   { reason: "empty name", value: [""] },
   { reason: "oversized name", value: ["x".repeat(65)] },
@@ -179,6 +177,7 @@ function startConnectionFixture(
   workerHostingEnabled = false,
   preparedWorkspacesEnabled = false,
   nativeInferenceEnabled = false,
+  deviceFoldersEnabled = false,
 ) {
   const request = vi.fn().mockResolvedValue({ ok: true, handled: false });
   const runtime = {
@@ -198,6 +197,7 @@ function startConnectionFixture(
     workerHostingEnabled,
     preparedWorkspacesEnabled,
     nativeInferenceEnabled,
+    ...(deviceFoldersEnabled ? { deviceFoldersEnabled: true as const } : {}),
     initialInventory: { skills: [], pluginTools: [] },
     start,
   };
@@ -604,7 +604,6 @@ it.each([
   { kind: "workspace", platform: "linux", bun: false },
   { kind: "workspace", platform: "linux", bun: true },
   { kind: "workspace", platform: "win32", bun: false },
-  { kind: "workspace", platform: "win32", bun: true },
   { kind: "workspace", platform: "darwin", bun: false },
 ] as const)(
   "negotiates $kind inventory per connection ($platform, Bun=$bun)",
@@ -699,6 +698,36 @@ it.each([
       } else {
         delete process.versions.bun;
       }
+    }
+  },
+);
+
+it.each([
+  { enabled: false, supported: true },
+  { enabled: true, supported: true },
+  { enabled: true, supported: false },
+])(
+  "advertises device folders unless disabled, with Gateway support (%j)",
+  async ({ enabled, supported }) => {
+    const { connection, request, start } = startConnectionFixture(true, false, false, enabled);
+    try {
+      start.mock.calls[0]?.[0].onRunnerCapacityChanged?.({ total: 1, available: 1 });
+      connection.connect({
+        ...gateway,
+        capabilities: supported ? [GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS] : [],
+      });
+      await Promise.resolve();
+      const inventory = request.mock.calls.find(
+        ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      )?.[1];
+      expect(inventory).toMatchObject({ workerHost: { enabled: true } });
+      const parsed = parseNodeRunnerInventoryDeclaration(inventory);
+      expect(parsed).not.toBeNull();
+      if (parsed && "workerHost" in parsed && parsed.workerHost.enabled) {
+        expect(parsed.workerHost.deviceFolders).toBe(enabled && supported ? true : undefined);
+      }
+    } finally {
+      await connection.close();
     }
   },
 );

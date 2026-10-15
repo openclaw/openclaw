@@ -40,7 +40,7 @@ export type StagedAdmissionFact = Pick<AdmissionFact, "value" | "revision" | "sc
 export type ScopedWriteRevision = {
   identity: string;
   // The revision and retirement flag share custody across all admission snapshots.
-  state: SharedArrayBuffer;
+  state: Int32Array<SharedArrayBuffer>;
 };
 
 export type Admission = {
@@ -146,14 +146,31 @@ export function publishSqliteDatabaseFact(
   return true;
 }
 
-export type SqliteDatabaseAdmissionCursor = { revision: number; records: WeakSet<Admission> };
+export type SqliteDatabaseAdmissionCursor = {
+  revision: number;
+  records: WeakMap<SharedArrayBuffer, Admission>;
+};
 
 export function createSqliteDatabaseAdmissionCursor(): SqliteDatabaseAdmissionCursor {
-  return { revision: -1, records: new WeakSet() };
+  return { revision: -1, records: new WeakMap() };
+}
+
+function changedAdmissionEntries<Key, Value>(
+  current: Map<Key, Value>,
+  previous: Map<Key, Value>,
+): Map<Key, Value> {
+  const changed = new Map<Key, Value>();
+  for (const [key, value] of current) {
+    if (previous.get(key) !== value) {
+      changed.set(key, value);
+    }
+  }
+  return changed;
 }
 
 export class SqliteDatabaseAdmissionRegistry {
   readonly records = new Map<string, Admission>();
+  private exchangeCursor = createSqliteDatabaseAdmissionCursor();
   private readonly locations = new Map<string, string>();
   private readonly published = new Map<string, Admission>();
   readonly descriptors = new Map<string, number>();
@@ -196,17 +213,18 @@ export class SqliteDatabaseAdmissionRegistry {
     record.writeScopes.clear();
   }
 
-  releaseWorker(owner: number, exitCode: number | undefined): void {
+  releaseWorker(owner: number): void {
     for (const record of this.records.values()) {
       const references = owner > 0 ? record.references.get(owner) : undefined;
-      let priorReferences: number | undefined;
-      if (references) {
-        // Zero permits a live worker to reopen; negative cells cannot be revived by old snapshots.
-        priorReferences = Atomics.exchange(new Int32Array(references), 0, -1);
-        this.retireUnreferenced(record);
+      // A worker cannot leave an unpublished write in a database it never borrowed.
+      if (!references) {
+        continue;
       }
+      // Zero permits a live worker to reopen; negative cells cannot be revived by old snapshots.
+      const priorReferences = Atomics.exchange(new Int32Array(references), 0, -1);
+      this.retireUnreferenced(record);
       // Native close settles receipts before releasing the worker's final reference.
-      if (exitCode === 0 && priorReferences === 0) {
+      if (priorReferences <= 0) {
         continue;
       }
       advanceSqliteDatabaseGeneration(record, "writeRevision");
@@ -293,20 +311,27 @@ export class SqliteDatabaseAdmissionRegistry {
     return true;
   }
 
-  publish(record?: Admission): void {
+  publish(selected?: Admission | Set<Admission>): void {
+    if (
+      selected &&
+      !(selected instanceof Set) &&
+      this.records.get(selected.identity) !== selected
+    ) {
+      return;
+    }
     // Another isolate can retire shared custody. Reclaim it at publication, not on every request.
-    for (const [identity, current] of this.records) {
+    for (const current of this.records.values()) {
       if (isSqliteDatabaseAdmissionRetired(current)) {
         if (readSqliteDatabaseGeneration(current, "retired") === 1) {
-          this.descriptors.delete(identity);
+          this.descriptors.delete(current.identity);
         }
-        this.forget(identity);
+        this.forget(current.identity);
         continue;
       }
-      if (record && current !== record) {
+      if (selected && selected !== current && !(selected instanceof Set && selected.has(current))) {
         continue;
       }
-      let changed = current === record;
+      let changed = selected === current || selected instanceof Set;
       for (const [owner, references] of current.references) {
         if (Atomics.load(new Int32Array(references), 0) < 0) {
           current.references.delete(owner);
@@ -314,7 +339,7 @@ export class SqliteDatabaseAdmissionRegistry {
         }
       }
       for (const [key, revision] of current.writeScopes) {
-        if (Atomics.load(new Int32Array(revision.state), 1) !== 0) {
+        if (Atomics.load(revision.state, 1) !== 0) {
           current.writeScopes.delete(key);
           changed = true;
         }
@@ -343,11 +368,18 @@ export class SqliteDatabaseAdmissionRegistry {
 
   capture(
     cursor?: SqliteDatabaseAdmissionCursor,
-    identities?: ReadonlySet<string>,
+    scope?: { location?: string; admissions?: SqliteDatabaseAdmissions },
   ): SqliteDatabaseAdmissions {
+    const identities = scope
+      ? new Set([
+          ...(scope.admissions?.map((record) => record.identity) ?? []),
+          ...(scope.location === undefined
+            ? []
+            : [this.forLocation(scope.location)?.identity].filter((value) => value !== undefined)),
+        ])
+      : undefined;
     if (!identities && !cursor) {
       this.publish();
-      return [...this.published.values()];
     }
     if (!identities && cursor?.revision === this.revision) {
       return [];
@@ -365,28 +397,52 @@ export class SqliteDatabaseAdmissionRegistry {
     if (!identities) {
       cursor.revision = this.revision;
     }
-    return records.filter((record) => {
-      if (cursor.records.has(record)) {
-        return false;
+    return records.flatMap((record) => {
+      const previous = cursor.records.get(record.generation);
+      if (previous === record) {
+        return [];
       }
-      cursor.records.add(record);
-      return true;
+      cursor.records.set(record.generation, record);
+      // One cursor follows one ordered receiver. Shared cells already carry revocation;
+      // resend only replaced entries, not every session's buffer after each publication.
+      return [
+        previous
+          ? {
+              ...record,
+              facts: changedAdmissionEntries(record.facts, previous.facts),
+              writeScopes: changedAdmissionEntries(record.writeScopes, previous.writeScopes),
+              references: changedAdmissionEntries(record.references, previous.references),
+            }
+          : record,
+      ];
     });
   }
 
-  install(admissions: SqliteDatabaseAdmissions): void {
-    if (admissions.length === 0) {
-      return;
-    }
-    this.publish();
+  captureExchange(
+    scope?: { location?: string; admissions?: SqliteDatabaseAdmissions },
+    target?: string | Admission,
+  ) {
+    return target && typeof target !== "string" && isSqliteDatabaseAdmissionRetired(target)
+      ? [{ ...target, facts: new Map(), writeScopes: new Map(), references: new Map() }]
+      : this.capture(this.exchangeCursor, scope);
+  }
+
+  resetExchangeCursor(): void {
+    this.exchangeCursor = createSqliteDatabaseAdmissionCursor();
+  }
+
+  install(admissions: SqliteDatabaseAdmissions): boolean {
+    const changedRecords = new Set<Admission>();
     for (const incoming of admissions) {
+      let record = this.records.get(incoming.identity);
       if (incoming.descriptorOwner !== 0 || isSqliteDatabaseAdmissionRetired(incoming)) {
+        if (record && isSqliteDatabaseAdmissionRetired(record)) {
+          changedRecords.add(record);
+        }
         continue;
       }
       let changed = false;
-      let record = this.records.get(incoming.identity);
       if (record && isSqliteDatabaseAdmissionRetired(record)) {
-        this.records.delete(record.identity);
         record = undefined;
       }
       if (!record) {
@@ -408,13 +464,14 @@ export class SqliteDatabaseAdmissionRegistry {
         }
       }
       for (const [key, revision] of incoming.writeScopes) {
-        if (Atomics.load(new Int32Array(revision.state), 1) !== 0) {
+        if (Atomics.load(revision.state, 1) !== 0) {
           continue;
         }
         // The host selects one shared incarnation for concurrent discoveries of the same key.
+        const previous = record.writeScopes.get(key);
         if (
-          record.writeScopes.get(key)?.identity === revision.identity ||
-          (threadId === 0 && record.writeScopes.has(key))
+          previous?.identity === revision.identity ||
+          (threadId === 0 && previous && Atomics.load(previous.state, 1) === 0)
         ) {
           continue;
         }
@@ -424,11 +481,10 @@ export class SqliteDatabaseAdmissionRegistry {
         record.writeScopes.set(key, revision);
         changed = true;
       }
-      if (
-        threadId !== 0 &&
-        incoming.writeScopeRevision === readSqliteDatabaseGeneration(record, "writeScopeRevision")
-      ) {
-        record.writeScopeRevision = incoming.writeScopeRevision;
+      const writeScopeRevision = readSqliteDatabaseGeneration(record, "writeScopeRevision");
+      if (threadId === 0 || incoming.writeScopeRevision === writeScopeRevision) {
+        changed ||= record.writeScopeRevision !== writeScopeRevision;
+        record.writeScopeRevision = writeScopeRevision;
       }
       for (const [owner, references] of incoming.references) {
         if (!record.references.has(owner) && Atomics.load(new Int32Array(references), 0) >= 0) {
@@ -448,8 +504,13 @@ export class SqliteDatabaseAdmissionRegistry {
       // Only the host has every borrower's reference cell; worker snapshots can omit later peers.
       this.retireUnreferenced(record);
       if (changed || isSqliteDatabaseAdmissionRetired(record)) {
-        this.publish(record);
+        changedRecords.add(record);
       }
     }
+    if (changedRecords.size > 0) {
+      this.publish(changedRecords);
+      return true;
+    }
+    return false;
   }
 }

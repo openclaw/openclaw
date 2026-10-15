@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "./promise.js";
 
 const { createChildAdapter } = vi.hoisted(() => ({ createChildAdapter: vi.fn() }));
+// mock-isolation: Keep real process and spawn-broker initialization out of this fake-timer fixture.
 vi.mock("../../src/process/supervisor/adapters/child.js", () => ({ createChildAdapter }));
 
 import {

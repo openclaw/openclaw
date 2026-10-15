@@ -7,7 +7,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { onUserProfilesChanged } from "./user-profile-events.js";
 import {
   getUserProfileDisplay,
-  readUserProfileIdentity,
+  readResidentUserProfileIdentity,
   prepareUserProfileCatalog,
 } from "./user-profile-list.js";
 import { linkEmail } from "./user-profile-writes.worker.js";
@@ -86,7 +86,7 @@ it("adopts an avatar off-thread and publishes its catalog before identity observ
     stop = onUserProfilesChanged(() => {
       seen.push({
         display: getUserProfileDisplay(alias.id),
-        identity: readUserProfileIdentity(alias.id),
+        identity: readResidentUserProfileIdentity(alias.id),
       });
     });
     requireNodeSqlite();

@@ -15,7 +15,6 @@ import {
   runGoogleGenerateContentLifecycle,
 } from "./google-shared.js";
 import {
-  assertRecord,
   convertMessages,
   expectConvertedRoles,
   getFirstToolParameters,
@@ -34,15 +33,36 @@ const model: Model<"google-generative-ai"> = {
 
 describe("buildGoogleSimpleThinking", () => {
   it.each([
+    ["minimal", { includeThoughts: true, thinkingLevel: "LOW" }],
+    ["low", { includeThoughts: true, thinkingLevel: "LOW" }],
+    ["medium", { includeThoughts: true, thinkingLevel: "MEDIUM" }],
+    ["high", { includeThoughts: true, thinkingLevel: "HIGH" }],
+    ["max", { includeThoughts: true, thinkingLevel: "HIGH" }],
+    ["off", { thinkingLevel: "LOW" }],
+  ] as const)("serializes Gemini 4 %s without a thinking budget", (reasoning, expected) => {
+    const target = { ...model, id: "gemini-4-argon" };
+    const thinking = buildGoogleSimpleThinking(target, { reasoning });
+    expect(
+      buildGoogleGenerateContentParams(target, { messages: [] }, { thinking }).config
+        ?.thinkingConfig,
+    ).toEqual(expected);
+  });
+
+  it.each([
     ["gemini-flash-latest", "MINIMAL"],
     ["gemini-pro-latest", "LOW"],
     ["gemini-3.7-flash", "LOW"],
   ])("uses the supported thinking floor for %s", (id, level) => {
     const target = { ...model, id };
-    expect(buildGoogleSimpleThinking(target, { reasoning: "minimal" })).toEqual({
+    const thinking = buildGoogleSimpleThinking(target, { reasoning: "minimal" });
+    expect(thinking).toEqual({
       enabled: true,
       level,
     });
+    expect(
+      buildGoogleGenerateContentParams(target, { messages: [] }, { thinking }).config
+        ?.thinkingConfig,
+    ).toEqual({ includeThoughts: true, thinkingLevel: level });
     expect(
       buildGoogleGenerateContentParams(target, { messages: [] }, disabledThinking).config
         ?.thinkingConfig,
@@ -63,12 +83,6 @@ describe("buildGoogleSimpleThinking", () => {
       buildGoogleGenerateContentParams(target, { messages: [] }, disabledThinking).config
         ?.thinkingConfig,
     ).toEqual(disabled);
-  });
-
-  it("uses low thinking for the Flash alias", () => {
-    expect(
-      buildGoogleSimpleThinking({ ...model, id: "gemini-flash-latest" }, { reasoning: "low" }),
-    ).toEqual({ enabled: true, level: "LOW" });
   });
 
   it("keeps thinking disabled when low clamps to off for a non-reasoning model", () => {
@@ -694,20 +708,6 @@ describe("Google message conversion", () => {
       name: "lookup",
       response: { output: "ok" },
     });
-  });
-
-  it("serializes structured tool results into function responses", () => {
-    const contents = convertMessagesForTest(conversionModel, {
-      messages: [
-        {
-          ...result,
-          content: [{ type: "json", payload: { sessionKey: "current", status: "ok" } }],
-        },
-      ],
-    } as unknown as Context);
-    expect(assertRecord(contents[0]?.parts?.[0]?.functionResponse?.response).output).toBe(
-      '{"type":"json","payload":{"sessionKey":"current","status":"ok"}}',
-    );
   });
 
   it("omits payload-less tool images without media placeholders", () => {

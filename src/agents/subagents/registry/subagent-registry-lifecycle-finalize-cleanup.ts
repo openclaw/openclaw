@@ -242,7 +242,8 @@ export const finalizeSubagentCleanup = async (
           delivery.createdAt ??= attemptedAt;
           delivery.lastAttemptAt = attemptedAt;
           delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
-          delivery.lastError = "announce deferred or direct delivery failed";
+          // The announce owner records the concrete failure before retry bookkeeping.
+          delivery.lastError ??= "completion announcement did not report a delivery outcome";
         }
         delivery.status = "pending";
         delivery.payload ??= loadPendingFinalDeliveryPayload(draft);

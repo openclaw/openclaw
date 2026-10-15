@@ -9,11 +9,20 @@ import {
 } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { buildUsageOverview } from "../shared/usage-overview.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "./session-cost-usage-reporting.js";
+import {
+  decodeUsageCostRollup,
+  decodeUsageCostRollupEnvelope,
+  encodeUsageCostRollup,
+  type UsageCostRollupEntry,
+} from "./session-cost-usage-rollup-codec.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
+import { resolveZstdCodec } from "./zstd-codec.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -121,7 +130,258 @@ async function fixture(
   return { owner, actor, binding, append, sessionFile };
 }
 
+async function cachedFixture(target = { sessionKey, sessionId }) {
+  const cached = await fixture({}, target);
+  await cached.append(5);
+  await runSessionActorUsage(
+    cached.binding,
+    { kind: "refresh", pricingFingerprint: "fixture" },
+    () => undefined,
+  );
+  const [snapshot] = await cached.actor.storage!.read(
+    {
+      type: "session.usage.snapshot",
+      input: { sessionIds: [target.sessionId], includeRollupBodies: true },
+    },
+    authority,
+  );
+  const entry =
+    snapshot?.rollup &&
+    decodeUsageCostRollup(snapshot.rollup.valueJson, "fixture", snapshot.rollup.blob ?? null);
+  if (!entry) {
+    throw new Error("Expected a production-generated usage rollup");
+  }
+  return { ...cached, entry, sessionId: target.sessionId };
+}
+
+function paddedRollup(entry: UsageCostRollupEntry, bytes: number, compressed = false) {
+  const rollup = structuredClone(entry);
+  rollup.rollup.untimestamped.tools = [{ name: "x".repeat(bytes), count: 1 }];
+  const encoded = encodeUsageCostRollup(rollup);
+  if (compressed) {
+    return encoded;
+  }
+  const raw = Buffer.from(JSON.stringify(rollup.rollup));
+  const envelope = decodeUsageCostRollupEnvelope(encoded.valueJson);
+  if (!envelope) {
+    throw new Error("Expected generated usage envelope");
+  }
+  return {
+    valueJson: JSON.stringify({
+      ...envelope,
+      body: { ...envelope.body, encoding: "identity", storedBytes: raw.byteLength },
+    }),
+    blob: Uint8Array.from(raw),
+  };
+}
+
+async function writeRollup(
+  cached: Awaited<ReturnType<typeof cachedFixture>>,
+  rollup: ReturnType<typeof paddedRollup>,
+) {
+  expect(
+    await cached.actor.storage!.mutate(
+      {
+        type: "session.usage.write",
+        input: { sessionId: cached.sessionId, rollup: { ...rollup, updatedAt: 1 } },
+      },
+      authority,
+    ),
+  ).toMatchObject({ kind: "committed", value: true });
+}
+
+function memoryReport(
+  cached: Awaited<ReturnType<typeof fixture>>,
+  sessionFiles = [cached.sessionFile],
+) {
+  return runSessionActorUsage(
+    cached.binding,
+    {
+      kind: "sessions",
+      pricingFingerprint: "fixture",
+      sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    },
+    () => undefined,
+  );
+}
+
 describe("actor memory usage", () => {
+  it.each(["valid", "missing", "corrupt", "oversized-header"] as const)(
+    "defers an oversized current body or repairs %s cache data through the actor owner",
+    async (mode) => {
+      const cached = await cachedFixture();
+      const encoded = paddedRollup(cached.entry, mode === "corrupt" ? 16 : 2 * 1024 * 1024);
+      if (mode === "missing") {
+        encoded.blob = new Uint8Array();
+      } else if (mode === "corrupt") {
+        encoded.blob = encoded.blob.map((byte, index) => (index === 0 ? byte ^ 1 : byte));
+      } else if (mode === "oversized-header") {
+        encoded.valueJson = JSON.stringify({
+          ...decodeUsageCostRollupEnvelope(encoded.valueJson),
+          padding: "x".repeat(70 * 1024),
+        });
+      }
+      await writeRollup(cached, encoded);
+      const report = await memoryReport(cached);
+      if (mode === "valid") {
+        expect(report.kind === "sessions" && report.summaries[0] === null).toBe(true);
+      }
+      expect(report).toMatchObject({
+        kind: "sessions",
+        summaries: [null],
+        staleSessionFiles: mode === "valid" ? [] : [cached.sessionFile],
+        cacheStatus: {
+          status: mode === "valid" ? "partial" : "stale",
+          pendingFiles: 1,
+          staleFiles: mode === "valid" ? 0 : 1,
+        },
+      });
+      if (report.kind !== "sessions") {
+        throw new Error("Expected memory usage report");
+      }
+      expect(report.invalidRows).toHaveLength(
+        mode === "valid" || mode === "oversized-header" ? 0 : 1,
+      );
+      expect(
+        await runSessionActorUsage(
+          cached.binding,
+          {
+            kind: "refresh",
+            pricingFingerprint: "fixture",
+            sessionFiles: [cached.sessionFile],
+            rebuildRows: report.invalidRows,
+          },
+          () => undefined,
+        ),
+      ).toEqual({ kind: "refresh", changed: mode !== "valid" });
+      if (mode !== "valid") {
+        expect(await memoryReport(cached)).toMatchObject({
+          summaries: [{ input: 5, output: 2 }],
+          cacheStatus: { status: "fresh", staleFiles: 0 },
+          invalidRows: [],
+        });
+      } else {
+        await cached.append(7);
+        expect(await memoryReport(cached)).toMatchObject({
+          staleSessionFiles: [cached.sessionFile],
+          cacheStatus: { staleFiles: 1 },
+        });
+      }
+    },
+  );
+
+  it("shares encoded snapshot and decoded report bytes across many individually small bodies", async () => {
+    const cached = await cachedFixture();
+    const encoded = paddedRollup(cached.entry, 900 * 1024);
+    const sessionFiles = [cached.sessionFile];
+    await writeRollup(cached, encoded);
+    for (let index = 1; index < 40; index++) {
+      const next = await cachedFixture({
+        sessionKey: `${sessionKey}-${index}`,
+        sessionId: `budget-${index}`,
+      });
+      await writeRollup(next, paddedRollup(next.entry, 900 * 1024));
+      sessionFiles.push(next.sessionFile);
+    }
+    const snapshot = await cached.actor.storage!.read(
+      {
+        type: "session.usage.snapshot",
+        input: {
+          includeRollupBodies: true,
+          reportBudget: {
+            remainingBytes: 32 * 1024 * 1024 - 40 * 256,
+            metadataLimit: 40,
+            pricingFingerprint: "fixture",
+          },
+        },
+      },
+      authority,
+    );
+    expect(
+      snapshot.reduce(
+        (bytes, { rollup }) =>
+          bytes + (rollup ? 2 * rollup.valueJson.length + (rollup.blob?.byteLength ?? 0) : 0),
+        40 * 256,
+      ),
+    ).toBeLessThanOrEqual(32 * 1024 * 1024);
+    expect(snapshot.filter(({ rollup }) => rollup?.blob)).toHaveLength(36);
+    const report = await memoryReport(cached, sessionFiles);
+    expect(report).toMatchObject({
+      kind: "sessions",
+      summaries: Array(40).fill(null),
+      staleSessionFiles: [],
+      invalidRows: [],
+      cacheStatus: { status: "partial", staleFiles: 0, pendingFiles: 40, cachedFiles: 0 },
+    });
+  });
+
+  it.skipIf(!resolveZstdCodec())(
+    "defers compressed expansion within the same report allowance",
+    async () => {
+      const cached = await cachedFixture();
+      const encoded = paddedRollup(cached.entry, 33 * 1024 * 1024, true);
+      expect(encoded.blob.byteLength).toBeLessThan(1024 * 1024);
+      await writeRollup(cached, encoded);
+      const report = await memoryReport(cached);
+      expect(report.kind === "sessions" && report.summaries[0] === null).toBe(true);
+      expect(report).toMatchObject({
+        kind: "sessions",
+        summaries: [null],
+        staleSessionFiles: [],
+        invalidRows: [],
+        cacheStatus: { status: "partial", staleFiles: 0 },
+      });
+    },
+  );
+
+  it.each(["valid", "missing"] as const)(
+    "preserves freshness or repairs %s bodies after header allowance exhaustion",
+    async (mode) => {
+      const cached = await cachedFixture();
+      if (mode !== "valid") {
+        const encoded = encodeUsageCostRollup(cached.entry);
+        await writeRollup(cached, {
+          ...encoded,
+          blob: new Uint8Array(),
+        });
+      }
+      const snapshot = await cached.actor.storage!.read(
+        {
+          type: "session.usage.snapshot",
+          input: {
+            includeRollupBodies: true,
+            reportBudget: { remainingBytes: 128, metadataLimit: 1, pricingFingerprint: "fixture" },
+          },
+        },
+        authority,
+      );
+      if (mode === "valid") {
+        expect(snapshot).toMatchObject([
+          { rollupDeferred: true, deferredRollupMetadata: { checkpoint: { kind: "sqlite" } } },
+        ]);
+        expect(snapshot[0]?.deferredRollupMetadata?.checkpoint).not.toHaveProperty("anchorHash");
+      } else {
+        expect(snapshot[0]?.rollupDeferred).toBeUndefined();
+        expect(snapshot[0]?.deferredRollupMetadata).toBeUndefined();
+      }
+      expect(snapshot[0]?.rollup).toBeUndefined();
+      expect(
+        await runSessionActorUsage(
+          cached.binding,
+          { kind: "refresh", pricingFingerprint: "fixture" },
+          () => undefined,
+        ),
+      ).toEqual({ kind: "refresh", changed: mode !== "valid" });
+      if (mode === "valid") {
+        const scope = new AsyncWorkScope();
+        scope.beginClose(new Error("report cancelled"));
+        await expect(scope.run(() => memoryReport(cached))).rejects.toThrow("report cancelled");
+        await scope.drain();
+      }
+    },
+  );
+
   it("reports publication failure while keeping the refreshed usage rollup", async () => {
     const { binding, append, sessionFile } = await fixture();
     await append(5);
@@ -229,35 +489,38 @@ describe("actor memory usage", () => {
       kind: "refresh",
       changed: true,
     });
-    await expect(
-      runUsageCostWorker(prepared, {
-        kind: "sessions",
-        projection: "overview",
-        pricingFingerprint,
-        sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
-        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-        overview: {
-          sessions: [
-            { sessionKey, sessionId, sessionFile: first.sessionFile },
-            { ...secondTarget, sessionFile: second.sessionFile },
-          ].map((target) => ({
-            key: target.sessionKey,
-            sessionId: target.sessionId,
-            agentId: "main",
-            updatedAt: 10_000,
-            instances: [{ sessionId: target.sessionId, sessionFile: target.sessionFile }],
-          })),
-          options: { limit: 1 },
-        },
-      }),
-    ).resolves.toMatchObject({
-      kind: "overview",
-      result: {
-        totals: { totalTokens: 20, totalCost: 2 },
-        sessions: [{ usage: { totalTokens: 10, totalCost: 1 } }],
-        overview: { total: 2, selectedRowCount: 2, limit: 1 },
-      },
+    const cached = await runUsageCostWorker(prepared, {
+      kind: "sessions",
+      pricingFingerprint,
+      sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    });
+    expect(cached).toMatchObject({
+      kind: "sessions",
       cacheStatus: { status: "fresh", cachedFiles: 2 },
+    });
+    if (cached.kind !== "sessions") {
+      throw new Error("Expected selected memory usage summaries");
+    }
+    expect(
+      buildUsageOverview({
+        rows: [
+          { sessionKey, sessionId, sessionFile: first.sessionFile },
+          { ...secondTarget, sessionFile: second.sessionFile },
+        ].map((target, index) => ({
+          key: target.sessionKey,
+          sessionId: target.sessionId,
+          agentId: "main",
+          updatedAt: 10_000,
+          usage: cached.summaries[index] ?? null,
+        })),
+        options: { limit: 1 },
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      }),
+    ).toMatchObject({
+      totals: { totalTokens: 20, totalCost: 2 },
+      sessions: [{ usage: { totalTokens: 10, totalCost: 1 } }],
+      overview: { total: 2, selectedRowCount: 2, limit: 1 },
     });
   });
 
@@ -291,9 +554,25 @@ describe("actor memory usage", () => {
   it("keeps captured corpus and usage bytes detached while later writes update new reads", async () => {
     const { actor, binding, append } = await fixture();
     await append(5);
+    const refresh = () =>
+      runSessionActorUsage(
+        binding,
+        { kind: "refresh", pricingFingerprint: "fixture" },
+        () => undefined,
+      );
+    await refresh();
     const store = actor.storage!;
+    const snapshotInput = {
+      includeEvents: true,
+      includeRollupBodies: true,
+      reportBudget: {
+        remainingBytes: 1024 * 1024,
+        metadataLimit: 1,
+        pricingFingerprint: "fixture",
+      },
+    };
     const before = await store.read(
-      { type: "session.usage.snapshot", input: { includeEvents: true } },
+      { type: "session.usage.snapshot", input: snapshotInput },
       authority,
     );
     const corpus = await store.read(
@@ -304,14 +583,24 @@ describe("actor memory usage", () => {
       { sessionKey, sessionId, artifactKind: "active-session", sessionKind: "interactive" },
     ]);
     await append(7);
+    await refresh();
     const after = await store.read(
-      { type: "session.usage.snapshot", input: { includeEvents: true } },
+      { type: "session.usage.snapshot", input: snapshotInput },
       authority,
     );
     expect(after[0]!.stats.eventCount).toBe(before[0]!.stats.eventCount + 1);
     expect(before[0]!.events?.some(({ eventJson }) => eventJson.includes("assistant-2"))).toBe(
       false,
     );
+    for (const [snapshot, input] of [
+      [before, 5],
+      [after, 12],
+    ] as const) {
+      const rollup = snapshot[0]?.rollup;
+      const entry =
+        rollup && decodeUsageCostRollup(rollup.valueJson, "fixture", rollup.blob ?? null);
+      expect(Object.values(entry?.rollup.buckets ?? {})[0]?.totals.input).toBe(input);
+    }
     expect(
       (await store.read({ type: "session.corpus.list", input: { options: {} } }, authority))[0]!
         .contentRevision,

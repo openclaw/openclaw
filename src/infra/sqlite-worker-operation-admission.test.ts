@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { serialize } from "node:v8";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -36,6 +37,7 @@ import {
   SqliteWorkerSlotCustody,
   readSqliteWorkerRequestCustody,
 } from "./sqlite-worker-request-custody.js";
+import { getWorkerMessageMetrics } from "./worker-message-metrics.js";
 
 afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -405,6 +407,8 @@ it.each(["rollback", "unknown", "later rollback"] as const)(
     const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
     const published = vi.fn();
     observeSqliteWorkerCommittedFacts(admission, published);
+    const projected = vi.fn();
+    observeSqliteWorkerCommittedFacts(admission, projected);
     const owner: SqliteWorkerOperationContext = { port: admission.port };
     try {
       const write = (value: number, rollback = false) =>
@@ -451,9 +455,9 @@ it.each(["rollback", "unknown", "later rollback"] as const)(
       );
       admission.finish();
       expect(admission.committed).toEqual(committed);
-      expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual(
-        outcome === "rollback" ? [] : [{ value: 1 }],
-      );
+      const expectedFacts = outcome === "rollback" ? [] : [{ value: 1 }];
+      expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual(expectedFacts);
+      expect(projected.mock.calls.map(([receipt]) => receipt.facts)).toEqual(expectedFacts);
     } finally {
       admission.finish();
       db.close();
@@ -485,8 +489,12 @@ it.each([
       }
     });
     observeSqliteWorkerCommittedFacts(admission, publish);
+    const before = getWorkerMessageMetrics().find(
+      (metric) => metric.kind === "authority" && metric.direction === "from_worker",
+    );
+    const payloadBytes = serialize({ value: 1 }).byteLength;
     const postMessage = admission.port.postMessage.bind(admission.port);
-    vi.spyOn(admission.port, "postMessage").mockImplementation((message) => {
+    const posted = vi.spyOn(admission.port, "postMessage").mockImplementation((message) => {
       if (message.kind === "native-commit") {
         if (receipt === "failed commit delivery") {
           throw new Error("Synthetic commit delivery failure");
@@ -519,8 +527,26 @@ it.each([
         ),
       );
       settleSqliteWorkerOperationContext(owner, "completed");
+      expect(posted).toHaveBeenLastCalledWith(
+        {
+          kind: "native-settlement",
+          settlement:
+            receipt === "failed commit delivery"
+              ? { kind: "completed", committed: { version: 1, sequence: 1, facts: { value: 1 } } }
+              : { kind: "completed" },
+          payloadBytes: receipt === "failed commit delivery" ? payloadBytes : 0,
+        },
+        [],
+      );
       expect(events).toEqual([]);
       settleSqliteWorkerJob(job, undefined, { written: true });
+      expect(getWorkerMessageMetrics()).toContainEqual({
+        kind: "authority",
+        direction: "from_worker",
+        messages: (before?.messages ?? 0) + (receipt === "failed commit delivery" ? 1 : 2),
+        payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
+        unmeasuredMessages: before?.unmeasuredMessages ?? 0,
+      });
       expect(readSqliteWorkerRequestCustody(custody.descriptor)).toBe(false);
       expect(events).toEqual(["publish", publicationFails ? "reject" : "reply"]);
       expect(publish).toHaveBeenCalledOnce();
@@ -542,7 +568,7 @@ it.each([
   },
 );
 
-it.each(["settlement", "malformed"] as const)(
+it.each(["settlement", "settlement-only", "malformed"] as const)(
   "retains committed facts through %s receipt delivery",
   (delivery) => {
     const db = new DatabaseSync(":memory:");
@@ -557,17 +583,20 @@ it.each(["settlement", "malformed"] as const)(
           withSqlitePostCommitPublications(db, () =>
             runSqliteImmediateTransactionSync(db, () => {
               db.prepare("INSERT INTO proof VALUES (?)").run(value);
-              deferSqliteWorkerCommitReceipt(db, { value });
+              deferSqliteWorkerCommitReceipt(
+                db,
+                { value },
+                delivery === "settlement-only" && value === 2 ? "settlement" : "commit",
+              );
             }),
           ),
         );
       }
       admission.service();
-      expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual([
-        { value: 1 },
-        { value: 2 },
-      ]);
-      if (delivery === "settlement") {
+      expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual(
+        delivery === "settlement-only" ? [{ value: 1 }] : [{ value: 1 }, { value: 2 }],
+      );
+      if (delivery !== "malformed") {
         settleSqliteWorkerOperationContext(owner, "completed");
       } else {
         admission.port.postMessage(
@@ -585,7 +614,7 @@ it.each(["settlement", "malformed"] as const)(
         { value: 1 },
         { value: 2 },
       ]);
-      if (delivery === "settlement") {
+      if (delivery !== "malformed") {
         expect(admission.failure).toBeUndefined();
         expect(admission.waitForSettlement(performance.now())).toEqual({
           kind: "completed",

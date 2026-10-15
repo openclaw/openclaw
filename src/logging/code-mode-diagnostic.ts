@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -16,6 +17,7 @@ export type CodeModeFailureContext = {
   codeModeRunId?: string;
   workerId?: string;
   failurePhase: string;
+  failureCode?: string;
   bridgeDispatchStarted?: boolean;
   bridgeRequestId?: string;
   bridgeMethod?: string;
@@ -28,7 +30,16 @@ export function logCodeModeFailure(error: unknown, context: CodeModeFailureConte
   const name = cause instanceof Error ? cause.name : record?.name;
   const message = cause instanceof Error ? cause.message : record?.message;
   const stack = cause instanceof Error ? cause.stack : record?.stack;
-  failureLog.error("Code Mode execution failed", {
+  const level =
+    context.failurePhase === "guest" ||
+    context.failurePhase === "input" ||
+    context.failureCode === "invalid_input" ||
+    context.failureCode === "input_contract" ||
+    context.failureCode === "store_range" ||
+    context.failureCode === "store_type"
+      ? "warn"
+      : "error";
+  failureLog[level]("Code Mode execution failed", {
     ...context,
     errorName: typeof name === "string" ? name : "Error",
     errorCode: typeof record?.code === "string" ? record.code : undefined,
@@ -65,4 +76,14 @@ export function logCodeModeDiagnostic(
     }),
   );
   log.info(`code-mode diagnostic ${JSON.stringify({ boundary, ...bounded })}`);
+}
+
+/** Prepare only correlation metadata; never send the session key into a guest worker. */
+export function codeModeGcAttribution(runId: string, sessionKey?: string) {
+  return {
+    runId,
+    sessionKeyHash: sessionKey
+      ? createHash("sha256").update(sessionKey).digest("hex").slice(0, 16)
+      : undefined,
+  };
 }

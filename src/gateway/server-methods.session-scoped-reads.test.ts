@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
@@ -16,11 +18,14 @@ import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { createHistoryReadContext } from "./server-methods/chat-history.test-helpers.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import { sessionsFilesHandlers } from "./server-methods/sessions-files.js";
+import { fetchSessionFileDownload } from "./server-methods/sessions-files.test-support.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import { sessionRewindHandlers } from "./server-methods/sessions-rewind.js";
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
 import * as workspace from "./server-methods/workspace-files.js";
 import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -79,10 +84,82 @@ function prepareRead(method: (typeof methods)[number], beforeReturn: () => Promi
 }
 
 describe("narrow session read owners", () => {
+  it("authorizes original-byte downloads for session-only VIEW readers and revokes HTTP grants with sharing", async () => {
+    await withOpenClawTestState(profileState, async (state) => {
+      const reader = roleClient("view", "download-reader");
+      reader.connect.scopes = ["operator.sessions.read"];
+      reader.connId = "narrow-download";
+      const controller = new AbortController();
+      reader.connectionSignal = controller.signal;
+      const owner = roleClient("view", "download-owner");
+      const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
+      const catalog = await prepareUserProfileCatalog();
+      using _ = {
+        [Symbol.dispose]: () => {
+          controller.abort();
+          catalog.release();
+        },
+      };
+      prepareGatewayRecipientProfile(reader);
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const bytes = Buffer.alloc(600_001, 0xff);
+      await fs.writeFile(path.join(state.workspaceDir, "original.bin"), bytes);
+      const entry = {
+        sessionId: "download-session",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        spawnedCwd: state.workspaceDir,
+        permissionMode: "read-only" as const,
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: owner.authenticatedUserProfile!.profileId,
+        },
+      };
+      await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+      const respond = vi.fn();
+      const dispatch = () =>
+        handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "download",
+            method: "sessions.files.download",
+            params: { sessionKey: key, path: "original.bin" },
+          },
+          client: reader,
+          context,
+          respond,
+          isWebchatConnect: () => false,
+          extraHandlers: sessionsFilesHandlers,
+        });
+      await dispatch();
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      const download = respond.mock.calls[0]?.[1] as { url: string; filename: string };
+      expect(download.filename).toBe("original.bin");
+      await sessions.upsertSessionEntryCore(
+        { agentId: "main", sessionKey: key },
+        { ...entry, updatedAt: 2, label: "Renamed while downloading" },
+      );
+      const fetched = await fetchSessionFileDownload(reader, download.url);
+      expect(fetched.response.statusCode).toBe(200);
+      expect(Buffer.from(fetched.body as Uint8Array)).toEqual(bytes);
+      await sessions.upsertSessionEntryCore(
+        { agentId: "main", sessionKey: key },
+        { ...entry, visibility: "draft", updatedAt: 3 },
+      );
+      expect((await fetchSessionFileDownload(reader, download.url)).response.statusCode).toBe(404);
+      respond.mockClear();
+      await dispatch();
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+      expect(respond.mock.calls[0]?.[1]).toBeUndefined();
+    });
+  });
+
   it.each([false, true])(
     "binds describe and message subscriptions to visible rows (roles=%s)",
     async (roles) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await withOpenClawTestState(profileState, async (state) => {
         const reader = roleClient("view", "row-reader");
         reader.connect.scopes = ["operator.sessions.read"];
         const owner = roleClient("view", "row-owner");
@@ -191,7 +268,7 @@ describe("narrow session read owners", () => {
   it.each(["current", "source", "generation"] as const)(
     "keeps the original %s through message subscription preparation",
     async (change) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await withOpenClawTestState(profileState, async () => {
         const client = {
           ...roleClient("view", "subscription-reader"),
           connId: "subscription-reader",
@@ -284,7 +361,7 @@ describe("narrow session read owners", () => {
   it.each(["chat.metadata", "chat.startup"] as const)(
     "%s hides foreign draft metadata and rechecks held shared reads",
     async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await withOpenClawTestState(profileState, async (state) => {
         const client = roleClient("view", "metadata-reader");
         const owner = roleClient("view", "metadata-owner");
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -393,7 +470,7 @@ describe("narrow session read owners", () => {
 
   it("separates a trusted solo operator from its sharing exemption", async () => {
     const method = "sessions.files.get";
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
       setRuntimeConfigSnapshot({});
       const client = sharingPolicyClient({
         user: GATEWAY_OWNER_PROFILE_ID,
@@ -440,7 +517,7 @@ describe("narrow session read owners", () => {
   });
 
   it.each(methods)("%s retains shared VIEW and hides foreign drafts before I/O", async (method) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
       const reader = roleClient("view", "scoped-reader");
       reader.connect.scopes = ["operator.sessions.read"];
       const owner = roleClient("view", "scoped-owner");
@@ -504,7 +581,7 @@ describe("narrow session read owners", () => {
   });
 
   it.each(methods)("%s retains only current session read facts", async (method) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
       const reader = roleClient("view", "retained-reader");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       prepareGatewayRecipientProfile(reader);
@@ -591,7 +668,7 @@ describe("narrow session read owners", () => {
   });
 
   it("rechecks session visibility before fetching a remote file after stat", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(profileState, async (state) => {
       const reader = roleClient("view", "remote-reader");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       prepareGatewayRecipientProfile(reader);
@@ -675,7 +752,7 @@ describe("narrow session read owners", () => {
     ["sessions.files.get", "solo"],
     ["sessions.files.get", "internal"],
   ] as const)("%s keeps missing-row access for %s callers", async (method, identity) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
       const cfg = identity === "narrow" ? rolePolicyConfig() : {};
       setRuntimeConfigSnapshot(cfg);
       const client =

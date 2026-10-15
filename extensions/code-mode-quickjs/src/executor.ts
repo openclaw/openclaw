@@ -149,7 +149,11 @@ async function runQuickJsWorker(
               } else if (value.status === "failure") {
                 inlineHost?.onFailure?.(
                   value.error,
-                  value.failurePhase === "bridge" ? "bridge" : "guest",
+                  value.failurePhase === "bridge" ||
+                    value.failurePhase === "guest" ||
+                    value.failurePhase === "input"
+                    ? value.failurePhase
+                    : "host",
                   workerId,
                 );
               }

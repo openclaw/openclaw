@@ -41,8 +41,8 @@ export async function personalGitHubStatusAsync(
   try {
     const prepared = await prepareUserGitHubConnection(action.owner);
     action.assertCurrent();
-    const status = projectPersonalGitHubStatus(prepared.connection);
-    statusAuthorities.set(status, prepared.assertCurrent);
+    const status = projectPersonalGitHubStatus(prepared.read());
+    statusAuthorities.set(status, prepared.read);
     return status;
   } catch {
     action.assertCurrent();
@@ -91,24 +91,14 @@ export async function resolvePersonalGitHubStatus(
     prepared = await prepareUserGitHubConnection(action.owner);
   } catch {
     action.assertCurrent();
-    return {
-      state: "unavailable",
-      generation: null,
-      account: null,
-      accessExpiresAtMs: null,
-      refreshState: "failed",
-      pending: null,
-    };
+    return unavailablePersonalGitHubStatus();
   }
   action.assertCurrent();
-  const record = prepared.connection;
+  const record = prepared.read();
   const status = projectPersonalGitHubStatus(record);
-  statusAuthorities.set(status, prepared.assertCurrent);
-  if (status.state !== "connected") {
-    return status;
-  }
+  statusAuthorities.set(status, prepared.read);
   if (record?.selection.kind !== "connected") {
-    return { ...status, state: "unavailable" };
+    return status;
   }
   const assertCurrent = () => {
     revalidatePersonalGitHubStatus(action, status);
@@ -126,14 +116,14 @@ export async function resolvePersonalGitHubStatus(
       ...revalidatePersonalGitHubStatus(action, status),
       ...(identity.stale ? { stale: true } : {}),
     };
-    statusAuthorities.set(result, prepared.assertCurrent);
+    statusAuthorities.set(result, prepared.read);
     return result;
   } catch {
     const result = {
       ...revalidatePersonalGitHubStatus(action, status),
       state: "unavailable" as const,
     };
-    statusAuthorities.set(result, prepared.assertCurrent);
+    statusAuthorities.set(result, prepared.read);
     return result;
   }
 }

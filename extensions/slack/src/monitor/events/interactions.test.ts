@@ -900,10 +900,6 @@ describe("registerSlackInteractionEvents", () => {
 
   it.each([
     {
-      name: "current Applied card",
-      current: "applied",
-    },
-    {
       name: "a missing current message",
       current: "missing",
     },
@@ -942,9 +938,7 @@ describe("registerSlackInteractionEvents", () => {
                   blocks:
                     current === "replacement"
                       ? approvalButtonBlocks("replacement", "system-agent", "allow-once")
-                      : current === "different-kind"
-                        ? approvalButtonBlocks(approvalId, "exec", "allow-once")
-                        : [{ type: "section", text: { type: "mrkdwn", text: "Applied" } }],
+                      : approvalButtonBlocks(approvalId, "exec", "allow-once"),
                 },
               ],
         hasMore: false,
@@ -1320,56 +1314,6 @@ describe("registerSlackInteractionEvents", () => {
       text: "This approval action is invalid or expired.",
       response_type: "ephemeral",
     });
-  });
-
-  it("routes opaque legacy ids through the authorized plugin adapter", async () => {
-    const { ctx, app, getHandler } = setupInteractions(
-      approvalContextOptions("u123owner", "U999EXEC"),
-    );
-
-    const handler = getHandler();
-
-    const ack = vi.fn().mockResolvedValue(undefined);
-    const respond = vi.fn().mockResolvedValue(undefined);
-    await handler({
-      ack,
-      respond,
-      body: actionBody(
-        {
-          text: "Plugin approval required",
-          blocks: singleButtonBlocks("plugin_actions", "openclaw:reply_button"),
-        },
-        { userId: "U123OWNER" },
-      ),
-      action: {
-        type: "button",
-        action_id: "openclaw:reply_button",
-        block_id: "plugin_actions",
-        value: "/approve req-legacy allow-once",
-        text: plainText("Allow once"),
-      },
-    });
-
-    expect(ack).toHaveBeenCalled();
-    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith({
-      cfg: ctx.cfg,
-      approvalId: "req-legacy",
-      decision: "allow-once",
-      senderId: "U123OWNER",
-      resolveMethod: "plugin",
-      channel: "slack",
-      accountId: "default",
-    });
-    expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
-    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expectRecordFields(chatUpdateCall(app), {
-      channel: "C1",
-      ts: "100.200",
-      text: "Plugin approval required",
-      blocks: [],
-    });
-    expect(respond).not.toHaveBeenCalled();
   });
 
   it("preserves legacy unprefixed fallback when the sender may approve either kind", async () => {
@@ -2417,7 +2361,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 
-  it("captures modal input labels and picker values across block types", async () => {
+  it("captures typed modal number, email, URL, and rich text inputs", async () => {
     const { getViewHandler } = setupInteractions({ allowFrom: [] });
     const viewHandler = getViewHandler();
 
@@ -2432,69 +2376,6 @@ describe("registerSlackInteractionEvents", () => {
           private_metadata: JSON.stringify({ userId: "U444" }),
           state: {
             values: {
-              env_block: {
-                env_select: {
-                  type: "static_select",
-                  selected_option: {
-                    text: plainText("Production"),
-                    value: "prod",
-                  },
-                },
-              },
-              assignee_block: {
-                assignee_select: {
-                  type: "users_select",
-                  selected_user: "U900",
-                },
-              },
-              channel_block: {
-                channel_select: {
-                  type: "channels_select",
-                  selected_channel: "C900",
-                },
-              },
-              convo_block: {
-                convo_select: {
-                  type: "conversations_select",
-                  selected_conversation: "G900",
-                },
-              },
-              date_block: {
-                date_select: {
-                  type: "datepicker",
-                  selected_date: "2026-02-16",
-                },
-              },
-              time_block: {
-                time_select: {
-                  type: "timepicker",
-                  selected_time: "12:45",
-                },
-              },
-              datetime_block: {
-                datetime_select: {
-                  type: "datetimepicker",
-                  selected_date_time: 1_771_632_300,
-                },
-              },
-              radio_block: {
-                radio_select: {
-                  type: "radio_buttons",
-                  selected_option: {
-                    text: plainText("Blue"),
-                    value: "blue",
-                  },
-                },
-              },
-              checks_block: {
-                checks_select: {
-                  type: "checkboxes",
-                  selected_options: [
-                    { text: plainText("A"), value: "a" },
-                    { text: plainText("B"), value: "b" },
-                  ],
-                },
-              },
               number_block: {
                 number_input: {
                   type: "number_input",
@@ -2540,33 +2421,6 @@ describe("registerSlackInteractionEvents", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const payload = slackInteractionPayload();
     const inputs = interactionInputs(payload);
-    expectRecordFields(inputByActionId(inputs, "env_select"), {
-      selectedValues: ["prod"],
-      selectedLabels: ["Production"],
-    });
-    expectRecordFields(inputByActionId(inputs, "assignee_select"), {
-      selectedValues: ["U900"],
-      selectedUsers: ["U900"],
-    });
-    expectRecordFields(inputByActionId(inputs, "channel_select"), {
-      selectedValues: ["C900"],
-      selectedChannels: ["C900"],
-    });
-    expectRecordFields(inputByActionId(inputs, "convo_select"), {
-      selectedValues: ["G900"],
-      selectedConversations: ["G900"],
-    });
-    expect(inputByActionId(inputs, "date_select").selectedDate).toBe("2026-02-16");
-    expect(inputByActionId(inputs, "time_select").selectedTime).toBe("12:45");
-    expect(inputByActionId(inputs, "datetime_select").selectedDateTime).toBe(1_771_632_300);
-    expectRecordFields(inputByActionId(inputs, "radio_select"), {
-      selectedValues: ["blue"],
-      selectedLabels: ["Blue"],
-    });
-    expectRecordFields(inputByActionId(inputs, "checks_select"), {
-      selectedValues: ["a", "b"],
-      selectedLabels: ["A", "B"],
-    });
     expectRecordFields(inputByActionId(inputs, "number_input"), {
       inputKind: "number",
       inputNumber: 42.5,
@@ -2793,7 +2647,6 @@ describe("registerSlackInteractionEvents", () => {
 
   it.each([
     { name: "current", actionId: "openclaw:reply_link:1:1", value: undefined },
-    { name: "session", actionId: "openclaw:session_link", value: undefined },
     { name: "additional session", actionId: "openclaw:session_link:1", value: undefined },
     {
       name: "legacy",

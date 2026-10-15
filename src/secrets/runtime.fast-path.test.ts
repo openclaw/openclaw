@@ -238,6 +238,8 @@ describe("secrets runtime fast path", () => {
 
   it("skips the startup-only fast path when the inherited main auth store exists", async () => {
     const { prepareSecretsRuntimeFastPathSnapshot } = await import("./runtime-fast-path.js");
+    const { prepareSharedAuthStoreOwnershipForNative } =
+      await import("../agents/auth-profiles/path-resolve.native.js");
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-runtime-fast-path-"));
     const env: NodeJS.ProcessEnv = {
       HOME: root,
@@ -247,6 +249,7 @@ describe("secrets runtime fast path", () => {
     const agentDir = path.join(root, "custom-agent");
     mkdirSync(agentDir, { recursive: true });
     writeAuthProfileStore(mainAgentDir);
+    prepareSharedAuthStoreOwnershipForNative(env);
 
     try {
       const snapshot = prepareSecretsRuntimeFastPathSnapshot({
@@ -271,6 +274,8 @@ describe("secrets runtime fast path", () => {
     const { activateSecretsRuntimeSnapshotState, getActiveSecretsRuntimeSnapshotState } =
       await import("./runtime-state.js");
     const { refreshActiveProviderAuthRuntimeSnapshot } = await import("./runtime.js");
+    const { prepareSharedAuthStoreOwnershipForNative } =
+      await import("../agents/auth-profiles/path-resolve.native.js");
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-runtime-fast-path-refresh-"));
     const env: NodeJS.ProcessEnv = {
       HOME: root,
@@ -278,6 +283,7 @@ describe("secrets runtime fast path", () => {
     };
     const agentDir = path.join(root, "custom-agent");
     mkdirSync(agentDir, { recursive: true });
+    prepareSharedAuthStoreOwnershipForNative(env);
 
     try {
       const fastPath = prepareSecretsRuntimeFastPathSnapshot({

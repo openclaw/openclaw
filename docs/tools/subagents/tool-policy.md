@@ -12,6 +12,14 @@ Sub-agents use the same profile and tool-policy pipeline as the parent or
 target agent first. After that, OpenClaw applies the sub-agent restriction
 layer.
 
+For a newly created child, a permitted `github_publish` capability is inherited
+when publication is unavailable only in the parent's workspace. The child's own
+workspace must still qualify for Gateway publication. Explicit denies and
+restrictive profile, sender, sandbox, runtime, and inherited policies still
+apply; this does not grant access to another session's repository or credentials.
+Existing children keep their recorded policy. Create a new child after correcting
+a policy that excluded publication.
+
 When settled children resume a requester after `sessions_yield`, the continuation
 keeps the requester policy captured at spawn. The handoff must still belong to
 the current requester session and settled batch, and every child in that batch

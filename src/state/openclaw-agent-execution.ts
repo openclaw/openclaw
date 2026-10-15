@@ -160,7 +160,9 @@ export function captureOpenClawAgentDatabaseExecution(
           pathname,
           identity,
           initialIdentity: constraints.expectedIdentity,
-          expectedCreationIdentity,
+          expectedCreationIdentity:
+            expectedCreationIdentity ??
+            (inheritCreationIdentity && identity.key.startsWith("path:") ? identity : undefined),
           requestedPath: constraints.requestedPath,
         },
         executionState,

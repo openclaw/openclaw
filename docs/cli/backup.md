@@ -276,6 +276,14 @@ path and actual content source through the same classifier. A support bundle
 reports refused inputs without including their contents. These checks do not
 parse workspace manifests or scan for other state roots.
 
+Database discovery for updates, database porting, and Git backups inspects known
+core database paths and declared plugin database resources, including retained
+stores from disabled plugins. It does not traverse unrelated state directories
+such as historical repair backups. Permission errors in those unrelated trees
+do not block a schema crossing; privacy and permission checks still apply to
+selected database sources. Full archives retain their broader traversal and
+error handling.
+
 The marker is an exclusion instruction, not proof of artifact ownership or
 permission to reopen, adopt, or delete it. Producers must durably write it before
 raw data, including in each independently movable staging or capture directory.
@@ -755,6 +763,12 @@ OpenClaw does not enforce a built-in maximum backup size or per-file size limit.
 - Time to walk large workspace trees and compress them into a `.tar.gz`
 - Time to rescan the archive with `--verify` or `openclaw backup verify`
 - Destination filesystem behavior: OpenClaw requires no-overwrite hard-link publication so a final archive path never exposes an in-progress copy; unsupported filesystems fail with an actionable error
+
+Interrupting archive creation with Ctrl-C or SIGTERM stops traversal and compression,
+closes the archive writer, and cleans up its owned partial archive and scratch before
+the command exits. Existing archives and backup source files remain unchanged.
+An archive already published to the requested local destination is retained;
+admitted verification and best-effort outcome recording finish before signal exit.
 
 If final-directory durability confirmation fails after publication, the command reports failure but preserves the complete final entry rather than risk deleting a concurrent replacement.
 

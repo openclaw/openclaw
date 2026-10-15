@@ -11,6 +11,7 @@ import {
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Mobile New conversation" });
 const mobile = {
@@ -75,7 +76,7 @@ async function installScenario(page: Page, operatorScopes?: string[], team = fal
 }
 
 suite.define(() => {
-  it("keeps one reachable creation action in chat and page headers without opening the drawer", async () => {
+  it("keeps creation in chat navigation and non-chat page headers", async () => {
     await suite.withPage(mobile, async ({ page }) => {
       const gateway = await installScenario(page);
       const dir =
@@ -89,13 +90,17 @@ suite.define(() => {
         const frame = await takeControlUiScreenshotFrame(
           page,
           page.locator(".shell"),
-          [page.locator(".header-new-session:visible")],
+          [page.locator(".chat-pane__header:visible, .header-new-session:visible").first()],
           { animations: "disabled" },
         );
         await writeFile(path.join(dir, name + ".png"), frame.png);
       };
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:current"));
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      expect(await page.locator(".header-new-session").count()).toBe(0);
+      await capture("chat");
+      await page.locator(".chat-pane__nav-toggle").tap();
+      await waitForMobileSidebarDrawerOpen(page);
       const create = page.getByRole("link", { name: "New conversation", exact: true });
       await create.waitFor();
       expect(await create.count()).toBe(1);
@@ -104,14 +109,7 @@ suite.define(() => {
       expect(box).not.toBeNull();
       expect(box!.x).toBeGreaterThanOrEqual(0);
       expect(box!.x + box!.width).toBeLessThanOrEqual(390);
-      await capture("chat");
-      await page.locator(".chat-pane__nav-toggle").click();
-      await page.locator(".shell--nav-drawer-open").waitFor();
-      expect(await page.locator(".header-new-session").count()).toBe(0);
-      expect(await create.count()).toBe(1);
       expect(await page.locator(".sidebar-rail .sidebar-new-session").isVisible()).toBe(true);
-      await page.keyboard.press("Escape");
-      await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
       await create.tap();
       await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=research" });
       await page.locator(".new-session-page__message").waitFor();
@@ -145,7 +143,7 @@ suite.define(() => {
   });
 
   it.each(["chat", "new"] as const)(
-    "keeps the team agent picker in the closed-drawer %s header",
+    "keeps the team agent picker reachable from %s",
     async (route) => {
       await suite.withPage(mobile, async ({ page }) => {
         const gateway = await installScenario(page, undefined, true);
@@ -172,26 +170,31 @@ suite.define(() => {
           const frame = await takeControlUiScreenshotFrame(
             page,
             page.locator(".shell"),
-            [page.locator(".header-new-session:visible")],
+            [page.locator(".chat-pane__header:visible, .header-new-session:visible").first()],
             { animations: "disabled" },
           );
           await writeFile(path.join(dir, name + ".png"), frame.png);
         };
         await capture("closed");
         const action = page.getByRole("button", { name: "New conversation", exact: true });
-        expect(await action.count()).toBe(1);
+        expect(await action.count()).toBe(route === "chat" ? 0 : 1);
         expect(
           await page.getByRole("link", { name: "New conversation", exact: true }).count(),
         ).toBe(0);
+        // Mouse hover can reveal the sliding drawer's tooltip, which owns the first Escape.
         await page
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first()
-          .click();
-        await page.locator(".shell--nav-drawer-open").waitFor();
+          .tap();
+        await waitForMobileSidebarDrawerOpen(page);
         expect(await page.locator(".header-new-session:visible").count()).toBe(0);
         expect(await action.count()).toBe(1);
-        await page.keyboard.press("Escape");
-        await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+        if (route === "new") {
+          // The drawer moves focus after rendering; Escape must not reach the departing text field.
+          await page.locator(".shell-nav:focus, .shell-nav :focus").waitFor();
+          await page.keyboard.press("Escape");
+          await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+        }
         await action.tap();
         const menu = page.locator('.sidebar-new-session-menu [role="menu"]:visible');
         await menu.locator('[role="menuitem"][data-value="writer"]').waitFor();
@@ -201,7 +204,7 @@ suite.define(() => {
             .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
         ).toEqual(["/new?agent=research", "/new?agent=writer"]);
         await capture("agent-menu");
-        await menu.locator('[role="menuitem"][data-value="writer"]').click();
+        await menu.locator('[role="menuitem"][data-value="writer"]').tap();
         await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=writer" });
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       });
@@ -213,7 +216,7 @@ suite.define(() => {
     { state: "disconnected", team: false },
     { state: "denied", team: true },
   ] as const)(
-    "keeps the $state header action visible but non-navigable (team: $team)",
+    "keeps the $state creation action visible but non-navigable (team: $team)",
     async ({ state, team }) => {
       await suite.withPage(mobile, async ({ page }) => {
         const gateway = await installScenario(
@@ -226,7 +229,13 @@ suite.define(() => {
             ? controlUiSessionUrl(suite.server.baseUrl, "agent:research:current")
             : suite.server.baseUrl + "new?agent=research",
         );
-        const create = page.locator(".header-new-session");
+        if (state === "denied") {
+          await page.locator(".chat-pane__nav-toggle").tap();
+          await waitForMobileSidebarDrawerOpen(page);
+        }
+        const create = page.locator(
+          state === "denied" ? ".sidebar-rail .sidebar-new-session" : ".header-new-session",
+        );
         await create.waitFor();
         if (state === "disconnected") {
           await gateway.setOnline(false);

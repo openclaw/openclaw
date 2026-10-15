@@ -401,35 +401,28 @@ describe("ActivityPage gateway lifecycle", () => {
     ]);
   });
 
-  it.each(["gateway", "account"] as const)(
-    "retires the mounted session's activity after a %s change",
-    (change) => {
-      const { gateway: source, current } = activityGateway();
-      const page = bindActivity(source);
-      current().opts.onEvent?.(toolEvent("old"));
-      expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["old output"]);
-      page.expandedIds.add(page.entries[0]!.id);
+  it("retires the mounted session's activity after an account change", () => {
+    const { gateway: source, current } = activityGateway();
+    const page = bindActivity(source);
+    current().opts.onEvent?.(toolEvent("old"));
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["old output"]);
+    page.expandedIds.add(page.entries[0]!.id);
 
-      if (change === "gateway") {
-        source.connect({ gatewayUrl: "wss://other-activity.example.test" });
-      } else {
-        current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
-        current().opts.onHello?.(activityHello("activity-owner-b"));
-      }
+    current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    current().opts.onHello?.(activityHello("activity-owner-b"));
 
-      expect(page.entries).toEqual([]);
-      expect(page.expandedIds.size).toBe(0);
-      if (source.snapshot.phase !== "connected") {
-        current().request.mockImplementation(async (method, params) =>
-          activityResponse(method, params),
-        );
-        current().opts.onHello?.(activityHello());
-      }
-      syncActivityRoster(page);
-      current().opts.onEvent?.(toolEvent("new"));
-      expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["new output"]);
-    },
-  );
+    expect(page.entries).toEqual([]);
+    expect(page.expandedIds.size).toBe(0);
+    if (source.snapshot.phase !== "connected") {
+      current().request.mockImplementation(async (method, params) =>
+        activityResponse(method, params),
+      );
+      current().opts.onHello?.(activityHello());
+    }
+    syncActivityRoster(page);
+    current().opts.onEvent?.(toolEvent("new"));
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["new output"]);
+  });
 
   it("keeps streamed previews and expansion across ordinary appends and reconnects", () => {
     const { gateway: source, current } = activityGateway();

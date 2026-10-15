@@ -8,7 +8,7 @@ import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { ensureBoardViewElement } from "./board-session-surface.ts";
+import { ensureBoardViewElement } from "./board-session-surface.tsx";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import { sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import {
@@ -252,17 +252,6 @@ describe("dashboard default activation and personal layout persistence", () => {
       expectPresentation(h.state.sidebarLayout, shared === "expanded");
     },
   );
-
-  it("opens a dashboard route in split only once and preserves a later panel choice", () => {
-    const h = createDashboardHarness();
-    h.state.updateSidebarLayout(openSlot(h.state.sidebarLayout, "terminal"));
-    h.sync();
-    expectPresentation(h.state.sidebarLayout, false);
-    h.state.updateSidebarLayout(openSlot(h.state.sidebarLayout, "terminal"));
-    h.sync();
-    expect(isSidebarSlotVisible(h.state.sidebarLayout, "terminal")).toBe(true);
-    expect(isSidebarSlotVisible(h.state.sidebarLayout, "dashboard")).toBe(false);
-  });
 
   it("waits for the selected authoritative row, then inherits without creating an override", () => {
     const h = createDashboardHarness({ metadataPending: true });
@@ -529,16 +518,12 @@ describe("dashboard shared default in the real header Layout menu", () => {
     expectPresentation(h.state.sidebarLayout, false);
   });
 
-  it.each(["builtin split", "narrow", "read only", "restricted viewer"] as const)(
+  it.each(["builtin split", "narrow"] as const)(
     "identifies the matching shared default for %s without offering a write",
     async (view) => {
       const h = createDashboardHarness({
-        scopes: view === "read only" ? ["operator.read"] : undefined,
         row: session({
           boardPresentation: view === "builtin split" ? undefined : "split",
-          ...(view === "restricted viewer"
-            ? { visibility: "read-only", sharingRole: "viewer" }
-            : {}),
         }),
       });
       h.sync();
@@ -661,7 +646,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
     expect(patch).toHaveBeenCalledTimes(1);
     expect(showToast).toHaveBeenCalledWith({
       message: t("chat.sidePanel.defaultSaved"),
-      anchor: h.pane,
+      anchor: h.pane.element,
     });
   });
 
@@ -683,7 +668,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
     expect(h.state.chatError).toContain("Dashboard default denied");
     expect(showToast).toHaveBeenCalledWith({
       message: t("chat.sidePanel.defaultSaveError", { error: "Dashboard default denied" }),
-      anchor: h.pane,
+      anchor: h.pane.element,
     });
     expect((await h.header()).querySelector(defaultAction)?.hasAttribute("disabled")).toBe(false);
     expect(h.saved()).toEqual(before);

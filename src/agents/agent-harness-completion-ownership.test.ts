@@ -103,6 +103,52 @@ describe("native harness completion admission", () => {
       getOwedHarnessCompletionTask({ ...restored, requesterAgentId: "other" }, saved),
     ).toBeUndefined();
   });
+  it.each(["retained", "receipt-only", "task", "outcome", "source"] as const)(
+    "does not let historical terminal evidence overrule %s current custody",
+    async (variant) => {
+      const params = input();
+      const claim = await withAgentHarnessCompletionAdmission(
+        {
+          scope: createAgentHarnessCompletionScope({
+            requesterSessionKey,
+            requesterAgentId: "main",
+          }),
+          sourceSessionKey,
+          sourceRunId,
+          requesterSessionId: params.entry.sessionId,
+          requesterLifecycleRevision: params.entry.lifecycleRevision,
+          isSourceCurrent: () => true,
+        },
+        async () => captureHarnessCompletionRecovery(params),
+      );
+      if (!claim) {
+        throw new Error("missing admitted claim");
+      }
+      const currentClaim = { ...claim };
+      if (variant === "task") {
+        currentClaim.taskRunId = "other-child";
+      }
+      if (variant === "outcome") {
+        currentClaim.taskStatus = "failed";
+      }
+      if (variant === "source") {
+        currentClaim.sourceRunId = "announce:other";
+      }
+      const entry: SessionEntry = {
+        ...params.entry,
+        restartRecoveryHarnessCompletion: variant === "receipt-only" ? undefined : currentClaim,
+        restartRecoveryTerminalDeliveryEvidence: [
+          { runId: claim.sourceRunId, harnessCompletion: { ...claim }, captured: true },
+        ],
+      };
+      const owed = getOwedHarnessCompletionTask(structuredClone(claim), entry);
+      if (variant === "retained" || variant === "receipt-only") {
+        expect(owed).toEqual(claim);
+      } else {
+        expect(owed).toBeUndefined();
+      }
+    },
+  );
   it("revalidates native source ownership after awaited work", async () => {
     const params = input();
     let current = true;

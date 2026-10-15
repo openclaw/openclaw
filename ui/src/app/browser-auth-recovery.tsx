@@ -1,4 +1,3 @@
-import { render, type JSX } from "@solidjs/web";
 import { createSignal, Show } from "solid-js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
@@ -59,86 +58,82 @@ export function startBrowserAuthRecovery(
     if (dialog || dismissed || lifetime.signal.aborted) {
       return;
     }
-    void withPromiseModalHost<void, JSX.Element>(
-      { signal: lifetime.signal, value: undefined },
-      (modal) => {
-        const dismiss = () => {
-          dismissed = true;
-          modal.finish(undefined);
-        };
-        let update: (() => void) | undefined;
-        async function signIn() {
-          if (webKitHostWindow()?.webkit?.messageHandlers?.openclawGateways) {
-            const { nativeGatewaysCapability } = await import("./native-gateways.runtime.ts");
-            if (lifetime.signal.aborted || dismissed) {
-              return;
-            }
-            const native = nativeGatewaysCapability();
-            const currentId = native?.snapshot?.currentId;
-            if (native?.reconnect && currentId) {
-              // The app owns a separate cookie store; a normal browser tab cannot renew it.
-              native.reconnect(currentId);
-              return;
-            }
+    void withPromiseModalHost<void>({ signal: lifetime.signal, value: undefined }, (modal) => {
+      const dismiss = () => {
+        dismissed = true;
+        modal.finish(undefined);
+      };
+      let update: (() => void) | undefined;
+      async function signIn() {
+        if (webKitHostWindow()?.webkit?.messageHandlers?.openclawGateways) {
+          const { nativeGatewaysCapability } = await import("./native-gateways.runtime.ts");
+          if (lifetime.signal.aborted || dismissed) {
+            return;
           }
-          openedSignIn = true;
-          probeResult = undefined;
-          openExternalUrlSafe(root.href);
-          update?.();
+          const native = nativeGatewaysCapability();
+          const currentId = native?.snapshot?.currentId;
+          if (native?.reconnect && currentId) {
+            // The app owns a separate cookie store; a normal browser tab cannot renew it.
+            native.reconnect(currentId);
+            return;
+          }
         }
-        const content = () => {
-          const readView = () => ({ openedSignIn, pending: Boolean(pending), probeResult });
-          const [view, setView] = createSignal(readView());
-          update = () => setView(readView());
-          return (
-            <openclaw-modal-dialog
-              label={t("connection.browserSignIn.title")}
-              description={t("connection.browserSignIn.description")}
-              onModal-cancel={dismiss}
-            >
-              <div class="exec-approval-card">
-                <div class="exec-approval-header">
-                  <div style={{ "min-width": "0" }}>
-                    <div class="exec-approval-title">{t("connection.browserSignIn.title")}</div>
-                    <div class="exec-approval-sub" style={{ "white-space": "normal" }}>
-                      {t("connection.browserSignIn.description")}
-                    </div>
+        openedSignIn = true;
+        probeResult = undefined;
+        openExternalUrlSafe(root.href);
+        update?.();
+      }
+      const content = () => {
+        const readView = () => ({ openedSignIn, pending: Boolean(pending), probeResult });
+        const [view, setView] = createSignal(readView());
+        update = () => setView(readView());
+        return (
+          <openclaw-modal-dialog
+            label={t("connection.browserSignIn.title")}
+            description={t("connection.browserSignIn.description")}
+            onModal-cancel={dismiss}
+          >
+            <div class="exec-approval-card">
+              <div class="exec-approval-header">
+                <div style={{ "min-width": "0" }}>
+                  <div class="exec-approval-title">{t("connection.browserSignIn.title")}</div>
+                  <div class="exec-approval-sub" style={{ "white-space": "normal" }}>
+                    {t("connection.browserSignIn.description")}
                   </div>
                 </div>
-                <Show when={view().openedSignIn}>
-                  <p>{t("connection.browserSignIn.returnHint")}</p>
-                </Show>
-                <p role="status" aria-live="polite">
-                  {view().pending
-                    ? t("connection.browserSignIn.checking")
-                    : view().probeResult === "unavailable"
-                      ? t("connection.browserSignIn.unavailable")
-                      : view().probeResult === "sign-in"
-                        ? t("connection.browserSignIn.stillRequired")
-                        : null}
-                </p>
-                <div class="exec-approval-actions">
-                  <button class="btn primary" onClick={() => void signIn()}>
-                    {t("connection.browserSignIn.action")}
-                  </button>
-                  <Show when={view().openedSignIn}>
-                    <button class="btn" disabled={view().pending} onClick={() => void check(true)}>
-                      {t("connection.browserSignIn.checkAgain")}
-                    </button>
-                  </Show>
-                  <button class="btn" onClick={dismiss}>
-                    {t("connection.browserSignIn.dismiss")}
-                  </button>
-                </div>
               </div>
-            </openclaw-modal-dialog>
-          );
-        };
-        dialog = { close: () => modal.finish(undefined), update: () => update?.() };
-        modal.render(content);
-      },
-      render,
-    ).finally(() => {
+              <Show when={view().openedSignIn}>
+                <p>{t("connection.browserSignIn.returnHint")}</p>
+              </Show>
+              <p role="status" aria-live="polite">
+                {view().pending
+                  ? t("connection.browserSignIn.checking")
+                  : view().probeResult === "unavailable"
+                    ? t("connection.browserSignIn.unavailable")
+                    : view().probeResult === "sign-in"
+                      ? t("connection.browserSignIn.stillRequired")
+                      : null}
+              </p>
+              <openclaw-modal-actions class="exec-approval-actions">
+                <button class="btn primary" onClick={() => void signIn()}>
+                  {t("connection.browserSignIn.action")}
+                </button>
+                <Show when={view().openedSignIn}>
+                  <button class="btn" disabled={view().pending} onClick={() => void check(true)}>
+                    {t("connection.browserSignIn.checkAgain")}
+                  </button>
+                </Show>
+                <button class="btn" onClick={dismiss}>
+                  {t("connection.browserSignIn.dismiss")}
+                </button>
+              </openclaw-modal-actions>
+            </div>
+          </openclaw-modal-dialog>
+        );
+      };
+      dialog = { close: () => modal.finish(undefined), update: () => update?.() };
+      modal.render(content);
+    }).finally(() => {
       dialog = undefined;
     });
   };

@@ -1,7 +1,5 @@
-import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
-import { jsonArrayFrom, jsonObjectFrom } from "kysely/helpers/sqlite";
-import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
+import { jsonArrayFrom, jsonObjectFrom } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -22,20 +20,21 @@ import type {
   SessionActorVersion,
 } from "./session-actor-contract.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
+import {
+  retainSessionActorTranscriptWindow,
+  SESSION_ACTOR_TRANSCRIPT_WINDOW,
+} from "./session-actor-transcript-window.worker.js";
 import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
 import { sessionColdArchiveMetadataColumns } from "./session-cold-storage-state.js";
-import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
+import { sessionEntryWindowColumns } from "./session-entry-window.types.js";
+import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
-import { transcriptEventModelNavigationSql } from "./transcript-payload.js";
-import {
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-} from "./transcript-tree.js";
+import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
-// Kysely's SQLite JSON helpers retain their SQL result type but node:sqlite returns TEXT.
+// SQL JSON projections retain their declared shape but cross the driver as TEXT.
 function decodeJsonProjection<T>(value: T | string): T {
   if (typeof value !== "string") {
     return value;
@@ -82,6 +81,7 @@ export function hydrateSessionActorState(
           : eb.lit(0)
         ).as("actor_has_board"),
         jsonArrayFrom(
+          database.db,
           db
             .selectFrom("session_participants")
             .select([
@@ -96,16 +96,20 @@ export function hydrateSessionActorState(
             .orderBy("first_prompted_at")
             .orderBy("actor_id")
             .orderBy("identity_namespace"),
+          ["first_prompted_at", "actor_id", "identity_namespace"],
         ).as("actor_participants"),
         jsonArrayFrom(
+          database.db,
           db
             .selectFrom("session_members")
             .select(["added_at", "added_by", "identity_id", "session_key"])
             .where("session_members.session_key", "=", eb.ref("session_nodes.session_key"))
             .orderBy("identity_id"),
+          ["identity_id"],
         ).as("actor_members"),
         tables?.has("session_pending_inputs")
           ? jsonArrayFrom(
+              database.db,
               db
                 .selectFrom("session_pending_inputs")
                 .select([
@@ -134,10 +138,12 @@ export function hydrateSessionActorState(
                 )
                 .orderBy("accepted_at")
                 .orderBy("input_id"),
+              ["accepted_at", "input_id"],
             ).as("actor_pending")
           : eb.val("[]").as("actor_pending"),
         tables?.has("session_input_completions")
           ? jsonArrayFrom(
+              database.db,
               db
                 .selectFrom("session_input_completions")
                 .select([
@@ -160,42 +166,18 @@ export function hydrateSessionActorState(
                   "=",
                   eb.ref("session_nodes.current_session_id"),
                 ),
+              [],
             ).as("actor_completions")
           : eb.val("[]").as("actor_completions"),
         jsonObjectFrom(
+          database.db,
           db
             .selectFrom("session_windows")
-            .select([
-              "account_id",
-              "acp_owned",
-              "agent_harness_id",
-              "channel",
-              "chat_type",
-              "created_at",
-              "display_name",
-              "ended_at",
-              "hook_external_content_source",
-              "model",
-              "model_provider",
-              "parent_session_key",
-              "plugin_owner_id",
-              "previous_session_id",
-              "primary_conversation_id",
-              "reason",
-              "session_entry_provenance",
-              "session_id",
-              "session_key",
-              "session_scope",
-              "spawned_by",
-              "started_at",
-              "status",
-              "transcript_observed_at",
-              "transcript_updated_at",
-              "updated_at",
-            ])
+            .select(sessionEntryWindowColumns)
             .where("session_windows.session_id", "=", eb.ref("session_nodes.current_session_id")),
         ).as("actor_window"),
         jsonObjectFrom(
+          database.db,
           db
             .selectFrom("transcript_rewrite_watermarks")
             .select(["generation", "session_id", "updated_at"])
@@ -206,6 +188,7 @@ export function hydrateSessionActorState(
             ),
         ).as("actor_rewrite"),
         jsonObjectFrom(
+          database.db,
           db
             .selectFrom("session_transcript_cold_archives")
             .select(sessionColdArchiveMetadataColumns)
@@ -216,6 +199,7 @@ export function hydrateSessionActorState(
             ),
         ).as("actor_cold"),
         jsonObjectFrom(
+          database.db,
           db
             .selectFrom("session_transcript_index_state")
             .select([
@@ -233,7 +217,21 @@ export function hydrateSessionActorState(
               eb.ref("session_nodes.current_session_id"),
             ),
         ).as("actor_projection"),
+        eb
+          .exists(
+            db
+              .selectFrom("session_transcript_active_events")
+              .select("session_id")
+              .where(
+                "session_transcript_active_events.session_id",
+                "=",
+                eb.ref("session_nodes.current_session_id"),
+              )
+              .where("context_eligible", "is", null),
+          )
+          .as("actor_has_unclassified"),
         jsonArrayFrom(
+          database.db,
           db
             .selectFrom("transcript_event_identities")
             .select([
@@ -250,9 +248,12 @@ export function hydrateSessionActorState(
               "=",
               eb.ref("session_nodes.current_session_id"),
             )
-            .orderBy("seq"),
+            .orderBy("seq", "desc")
+            .limit(SESSION_ACTOR_TRANSCRIPT_WINDOW + 1),
+          ["seq"],
         ).as("actor_identities"),
         jsonArrayFrom(
+          database.db,
           db
             .selectFrom("session_transcript_active_events")
             .select([
@@ -267,21 +268,29 @@ export function hydrateSessionActorState(
               "=",
               eb.ref("session_nodes.current_session_id"),
             )
-            .orderBy("active_position"),
+            .orderBy("active_position", "desc")
+            .limit(SESSION_ACTOR_TRANSCRIPT_WINDOW + 1),
+          ["active_position"],
         ).as("actor_active"),
         jsonArrayFrom(
+          database.db,
           db
             .selectFrom("transcript_events")
             .select([
               "seq",
               "navigation_type",
               "navigation_valid",
-              transcriptEventModelNavigationSql().as("navigation_json"),
+              projectTranscriptNavigationSql(
+                database.db,
+                transcriptEventNavigationSql(database.db),
+              ).as("navigation_json"),
               /* kysely-allow-raw: retain exact stored JSONL sizes without loading payloads. */
               sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
             ])
             .where("transcript_events.session_id", "=", eb.ref("session_nodes.current_session_id"))
-            .orderBy("seq"),
+            .orderBy("seq", "desc")
+            .limit(SESSION_ACTOR_TRANSCRIPT_WINDOW + 1),
+          ["seq"],
         ).as("actor_navigation"),
       ])
       .where("session_nodes.session_key", "in", sqliteStringSet(keys)),
@@ -347,22 +356,26 @@ export function hydrateSessionActorState(
     : undefined;
   const projection = selected ? decodeJsonProjection(selected.actor_projection) : undefined;
   const identities = new Map(
-    (selected ? decodeJsonProjection(selected.actor_identities) : []).map((row) => [
-      row.event_id,
-      row,
-    ]),
+    (selected
+      ? decodeJsonProjection(selected.actor_identities).toSorted((a, b) => a.seq - b.seq)
+      : []
+    ).map((row) => [row.event_id, row]),
   );
   const active = new Map(
-    (selected ? decodeJsonProjection(selected.actor_active) : []).map((row) => [
-      row.event_seq,
-      row,
-    ]),
+    (selected
+      ? decodeJsonProjection(selected.actor_active).toSorted(
+          (a, b) => a.active_position - b.active_position,
+        )
+      : []
+    ).map((row) => [row.event_seq, row]),
   );
-  const storedNavigation = selected ? decodeJsonProjection(selected.actor_navigation) : [];
+  const storedNavigation = selected
+    ? decodeJsonProjection(selected.actor_navigation).toSorted((a, b) => a.seq - b.seq)
+    : [];
   const navigation = storedNavigation.map((row) =>
     Object.assign(
-      // SAFETY: The canonical model codec preserves discriminants with readable empty payloads.
-      JSON.parse(row.navigation_json) as SessionTreeEntry,
+      // SAFETY: SQL selects only tree fields; the tree reader owns their interpretation.
+      JSON.parse(row.navigation_json) as Record<string, unknown>,
       { seq: row.seq },
     ),
   );
@@ -400,6 +413,7 @@ export function hydrateSessionActorState(
     pendingInputs,
     completions,
     transcript: {
+      complete: true,
       coldArchive,
       identities,
       active,
@@ -412,13 +426,12 @@ export function hydrateSessionActorState(
             indexedSeq: projection.indexed_seq,
             leafEventId: projection.leaf_event_id,
             needsRebuild: projection.needs_rebuild !== 0,
-            hasUnclassifiedEvents: [...active.values()].some(
-              (row) => row.context_eligible === null,
-            ),
+            hasUnclassifiedEvents: Boolean(selected?.actor_has_unclassified),
           }
         : undefined,
     },
   };
+  retainSessionActorTranscriptWindow(state);
   seedSessionActorContextMetadata(state, storedNavigation);
   state.hot = projectSessionActorHotState(state);
   return state;
@@ -449,7 +462,9 @@ export function projectSessionActorHotState(state: SessionActorStoredState): Ses
       modelContext: { kind: "resident", entries: [] },
     },
   };
-  hot.transcript.projection = projectSessionTranscriptFacts(state);
+  hot.transcript.projection = state.transcript.complete
+    ? projectSessionTranscriptFacts(state)
+    : undefined;
   hot.dependencySessionIds = [
     ...new Set([
       ...[...state.entryRows.values()].flatMap((row) => (row ? [row.entry.sessionId] : [])),
@@ -460,68 +475,12 @@ export function projectSessionActorHotState(state: SessionActorStoredState): Ses
   hot.pendingInputs = [...state.pendingInputs.values()].map(
     ({ message_json: _message, ...row }) => row,
   );
-  hot.completionKeys = [...state.completions.keys()];
-  hot.transcript.idempotency = [...state.transcript.identities.values()].flatMap((row) =>
-    row.message_idempotency_key
-      ? [{ key: row.message_idempotency_key, eventId: row.event_id, rawSeq: row.seq }]
-      : [],
-  );
-  hot.transcript.anchorsState =
-    !state.transcript.coldArchive && hot.transcript.version.rawSeq === null
-      ? "resident"
-      : "unavailable";
-  const generation = hot.transcript.version.generation;
-  const projection = state.transcript.projection;
-  if (
-    !state.transcript.coldArchive &&
-    hot.entry &&
-    generation &&
-    projection &&
-    !projection.needsRebuild &&
-    !projection.hasUnclassifiedEvents &&
-    projection.indexedSeq === hot.transcript.version.rawSeq
-  ) {
-    hot.transcript.anchorsState = "resident";
-    for (const row of state.transcript.identities.values()) {
-      const active = state.transcript.active.get(row.seq);
-      if (active?.message_position === undefined || active.message_position === null) {
-        continue;
-      }
-      hot.transcript.anchors.push({
-        agentId: state.agentId,
-        sessionKey: hot.target.sessionKey,
-        sessionId: hot.entry.sessionId,
-        storePath: state.path,
-        generation,
-        entryId: row.event_id,
-        rawSeq: row.seq,
-        effectiveParentId: row.parent_id,
-        activeMessagePosition: active.message_position,
-        ...(row.message_idempotency_key ? { idempotencyKey: row.message_idempotency_key } : {}),
-      });
-    }
-  }
-  if (state.transcript.coldArchive) {
-    hot.transcript.modelContext = { kind: "unavailable", reason: "cold", generation };
-  } else {
-    const tree = scanSessionTranscriptTree(state.transcript.navigation);
-    if (tree.hasInvalidLeafControl) {
-      hot.transcript.modelContext = { kind: "unavailable", reason: "projection", generation };
-    } else {
-      const entries = normalizeSessionContextEntryBoundaries(
-        selectSessionTranscriptTreePathNodes(tree, tree.leafId).map(({ entry, parentId }) =>
-          Object.assign({}, entry, { parentId }),
-        ),
-        tree.nodes,
-      );
-      hot.transcript.modelContext = {
-        kind: "resident",
-        entries: [...iterateSessionContextEntries(entries)].map(({ entry }) => ({
-          rawSeq: entry.seq,
-          eventId: entry.id ?? null,
-        })),
-      };
-    }
-  }
+  // Durable history stays with its reader. Publishing these indexes on every
+  // append made the receipt proportional to the entire transcript.
+  hot.transcript.modelContext = {
+    kind: "unavailable",
+    reason: state.transcript.coldArchive ? "cold" : "projection",
+    generation: hot.transcript.version.generation,
+  };
   return hot;
 }

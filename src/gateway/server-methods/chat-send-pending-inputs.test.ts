@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -37,6 +37,7 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createMentionInbox } from "../mention-inbox.js";
 import { readMentionInbox, dismissMentionInbox } from "../mention-inbox.test-support.js";
@@ -48,6 +49,10 @@ import type { GatewayClient, RespondFn } from "./types.js";
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
+const prepareProfileCatalog = useUserProfileCatalogForTest();
+beforeEach(async () => {
+  await prepareProfileCatalog();
+});
 
 describe("ordinary chat input admission", () => {
   async function createMentionFixture(
@@ -687,6 +692,8 @@ describe("ordinary chat input admission", () => {
         await fixture.finishDispatch();
         await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
         const legacyMessage = structuredClone(message);
+        // Legacy receipts predate the admitted request identity.
+        delete legacyMessage["__openclaw"]?.chatRequestIdentity;
         if (!recordedClient) {
           // Shipped Gateway receipts predate transport.clients. Seed only after
           // collection, whose live owner still requires its exact accepted bytes.

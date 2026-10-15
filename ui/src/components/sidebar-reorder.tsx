@@ -1,16 +1,19 @@
-import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
+import { createSignal, createUniqueId, flush } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import "../styles/sidebar-reorder.css";
 import { Icon } from "./solid/icon.tsx";
-import "./web-awesome.ts";
+import { Menu, type MenuHandle, type MenuItem } from "./solid/menu.tsx";
+
 type ReorderPosition = "before" | "after";
 export function renderSidebarReorderMenu(params: {
   label: string;
   onMove: (target: string, position: ReorderPosition) => void | Promise<void>;
 }) {
+  let handle: MenuHandle | undefined;
+  const [revision, refresh] = createSignal(0);
   const attribute = "data-session-section";
-  const adjacent = (menu: HTMLElement, position: ReorderPosition): string | null => {
-    const row = menu.closest(`[${attribute}]`);
+  const adjacent = (position: ReorderPosition): string | null => {
+    const row = handle?.overlay.trigger?.closest(`[${attribute}]`);
     const siblings = [...(row?.parentElement?.children ?? [])].filter(
       (element) =>
         element.hasAttribute(attribute) &&
@@ -21,68 +24,51 @@ export function renderSidebarReorderMenu(params: {
       ? null
       : (siblings[index + (position === "before" ? -1 : 1)]?.getAttribute(attribute) ?? null);
   };
+  const items: MenuItem[] = (["before", "after"] as const).map((position) => ({
+    id: position,
+    label: t(position === "before" ? "chat.sidebar.moveUp" : "chat.sidebar.moveDown"),
+    get disabled() {
+      revision();
+      return adjacent(position) === null;
+    },
+    icon: <Icon name={position === "before" ? "arrowUp" : "arrowDown"} />,
+  }));
   const label = () => t("chat.sidebar.reorderItem", { item: params.label });
   return (
-    <wa-dropdown
+    <Menu
+      id={`sidebar-reorder-${createUniqueId()}`}
       class="sidebar-reorder-menu"
       placement="bottom-end"
-      aria-label={label()}
-      onWa-show={(event: Event) => {
-        const menu = event.currentTarget;
-        if (!(menu instanceof HTMLElement)) {
+      label={label()}
+      items={items}
+      triggerClass="sidebar-reorder-trigger"
+      triggerAttributes={{ title: label() }}
+      trigger={<Icon name="gripVertical" />}
+      ref={(value) => {
+        handle = value;
+        value.overlay.surface.dataset.chatAutotypeExempt = "";
+      }}
+      onBeforeShow={() => {
+        // Keyed rows move without remounting; refresh all Zag bindings before opening.
+        refresh((value) => value + 1);
+        flush();
+      }}
+      onSelect={(item) => {
+        const position = item.id;
+        if (position !== "before" && position !== "after") {
           return;
         }
-        for (const position of ["before", "after"] as const) {
-          menu
-            .querySelector(`wa-dropdown-item[value="${position}"]`)
-            ?.toggleAttribute("disabled", adjacent(menu, position) === null);
-        }
-      }}
-      onWa-select={(event: WaSelectEvent) => {
-        void (async () => {
-          const position = event.detail.item.getAttribute("value");
-          if (position !== "before" && position !== "after") {
-            return;
-          }
-          const menu = event.currentTarget;
-          if (!(menu instanceof HTMLElement)) {
-            return;
-          }
-          const target = adjacent(menu, position);
-          if (target) {
-            const trigger = menu.querySelector<HTMLButtonElement>("button[slot=trigger]");
-            await params.onMove(target, position);
+        const target = adjacent(position);
+        const trigger = handle?.overlay.trigger;
+        if (target) {
+          void Promise.resolve(params.onMove(target, position)).then(() => {
             // Moving a keyed DOM row can drop focus; do not reclaim it from another control.
             if (trigger?.isConnected && document.activeElement === document.body) {
-              trigger.focus({
-                preventScroll: true,
-              });
+              trigger.focus({ preventScroll: true });
             }
-          }
-        })();
+          });
+        }
       }}
-    >
-      <button
-        slot="trigger"
-        type="button"
-        class="sidebar-reorder-trigger"
-        aria-label={label()}
-        title={label()}
-      >
-        <Icon name="gripVertical" />
-      </button>
-      <wa-dropdown-item value="before">
-        <span slot="icon" aria-hidden="true">
-          <Icon name="arrowUp" />
-        </span>
-        {t("chat.sidebar.moveUp")}
-      </wa-dropdown-item>
-      <wa-dropdown-item value="after">
-        <span slot="icon" aria-hidden="true">
-          <Icon name="arrowDown" />
-        </span>
-        {t("chat.sidebar.moveDown")}
-      </wa-dropdown-item>
-    </wa-dropdown>
+    />
   );
 }

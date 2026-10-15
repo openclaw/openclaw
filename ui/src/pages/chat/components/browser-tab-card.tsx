@@ -63,9 +63,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
   const [pagePreview, setPagePreview] = createSignal<ControlUiLinkPreview>();
   const [failedImages, setFailedImages] = createSignal<ReadonlySet<string>>(new Set<string>());
   let requestIdentity: { client: unknown; key: string } | undefined;
-  let pageIdentity:
-    | { client: unknown; url: string; generation: number; recoveryScope: string }
-    | undefined;
+  let pageIdentity: { client: unknown; url: string } | undefined;
   let active = true;
   const canLoadPagePreview = (current: ApplicationContext | undefined) => {
     return Boolean(
@@ -82,9 +80,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
       client &&
       canLoadPagePreview(current) &&
       pageIdentity.client === client &&
-      pageIdentity.url === url &&
-      pageIdentity.generation === client.connectionGeneration &&
-      pageIdentity.recoveryScope === client.recoveryScope,
+      pageIdentity.url === url,
     );
   };
   createEffect(
@@ -96,23 +92,13 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
         pageIdentity = undefined;
         setPagePreview(undefined);
       } else if (!pagePreviewCurrent(current, url)) {
-        const identity = {
-          client,
-          url,
-          generation: client.connectionGeneration,
-          recoveryScope: client.recoveryScope,
-        };
+        // Link metadata may stay cached through a same-client reconnect.
+        const identity = { client, url };
         pageIdentity = identity;
         setPagePreview(undefined);
         setFailedImages(new Set<string>());
         void loadLinkPreview(client, url).then((loadedPreview) => {
-          if (
-            active &&
-            host.isConnected &&
-            pageIdentity === identity &&
-            pagePreviewCurrent(untrack(context), host.preview?.url) &&
-            host.preview?.url === url
-          ) {
+          if (active && pageIdentity === identity) {
             setPagePreview(loadedPreview);
           }
         });
@@ -151,14 +137,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
           password: current.gateway.connection.password,
         }),
       }).then((src) => {
-        if (
-          active &&
-          host.isConnected &&
-          requestIdentity === identity &&
-          host.latest &&
-          host.preview &&
-          JSON.stringify([browserTabKey(host.preview), host.revision]) === key
-        ) {
+        if (active && requestIdentity === identity) {
           setThumbnail(src);
         }
       });
@@ -237,6 +216,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
       return undefined;
     }
     const currentImage =
+      props.latest &&
       requestIdentity?.client === context()?.gateway.snapshot.client &&
       requestIdentity?.key === JSON.stringify([browserTabKey(preview), props.revision])
         ? loadedThumbnail

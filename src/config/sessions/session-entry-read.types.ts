@@ -49,7 +49,7 @@ export type SessionEntryReadWorkerResult = {
 export type SessionEntryListWorkerInput = {
   kind: "session-entry-list";
   database: { agentId: string; path: string };
-  scope: SessionEntryListScope & { cleanupSession?: string };
+  scope: SessionEntryListScope & { cleanupSession?: string; pendingInputRecovery?: true };
   expectedIdentity?: DatabasePathIdentity;
   continuation?: CanonicalSessionReaderContinuation;
   ifRevision?: string;
@@ -61,6 +61,10 @@ export type SessionEntryListWorkerResult = {
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
   revision?: string;
   unchanged?: true;
+  /** Oldest cron run in the requested logical agent; null means no run rows. */
+  nextCronRunUpdatedAt?: number | null;
+  /** Last scanned cron key when another retention page may remain. */
+  nextCronRunSessionKey?: string | null;
 };
 
 export type SessionExactEntriesWorkerInput = {

@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
 import type { ConsoleMessage } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -109,32 +108,25 @@ suite.define(() => {
                 return target instanceof ShadowRoot ? "shadow-root" : "other";
               }
               return {
-                tag: [
-                  "span",
-                  "button",
-                  "svg",
-                  "path",
-                  "wa-dropdown-item",
-                  "wa-dropdown",
-                  "wa-popup",
-                  "openclaw-app-sidebar",
-                ].includes(target.localName)
+                tag: ["span", "button", "svg", "path", "div", "a", "openclaw-app-sidebar"].includes(
+                  target.localName,
+                )
                   ? target.localName
                   : "other-element",
                 trigger: target.matches(".sidebar-identity-card"),
-                menu: target.matches("wa-dropdown.sidebar-identity-menu"),
-                settings: target.matches('wa-dropdown-item[value="command:settings"]'),
+                menu: target.matches(".sidebar-identity-menu"),
+                settings: target.matches('[data-value="command:settings"]'),
               };
             };
             for (const type of [
               "pointerdown",
               "pointerup",
               "click",
-              "wa-select",
-              "wa-show",
-              "wa-after-show",
-              "wa-hide",
-              "wa-after-hide",
+              "menu-select",
+              "overlay-show",
+              "overlay-after-show",
+              "overlay-hide",
+              "overlay-after-hide",
             ]) {
               document.addEventListener(
                 type,
@@ -146,15 +138,10 @@ suite.define(() => {
                   const dropdown =
                     eventPath.find(
                       (target): target is HTMLElement =>
-                        target instanceof HTMLElement &&
-                        target.matches("wa-dropdown.sidebar-identity-menu"),
-                    ) ?? document.querySelector<HTMLElement>("wa-dropdown.sidebar-identity-menu");
-                  const popup = dropdown?.shadowRoot?.querySelector("wa-popup");
-                  const nativePopup = popup?.shadowRoot?.querySelector('[part~="popup"]');
+                        target instanceof HTMLElement && target.matches(".sidebar-identity-menu"),
+                    ) ?? document.querySelector<HTMLElement>(".sidebar-identity-menu");
                   const selected =
-                    type === "wa-select"
-                      ? (event as WaSelectEvent).detail.item.getAttribute("value")
-                      : null;
+                    type === "menu-select" && event instanceof CustomEvent ? event.detail.id : null;
                   emit(type, {
                     trusted: event.isTrusted,
                     path: eventPath.slice(0, 8).map(describe),
@@ -167,8 +154,10 @@ suite.define(() => {
                     dropdown: dropdown
                       ? {
                           connected: dropdown.isConnected,
-                          open: Reflect.get(dropdown, "open") === true,
-                          nativeOpen: nativePopup?.matches(":popover-open") ?? null,
+                          open:
+                            dropdown.dataset.phase === "opening" ||
+                            dropdown.dataset.phase === "open",
+                          nativeOpen: dropdown.matches(":popover-open"),
                         }
                       : null,
                   });
@@ -182,7 +171,7 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         await sidebar.locator(".sidebar-identity-card").click();
         await sidebar
-          .locator("wa-dropdown.sidebar-identity-menu")
+          .locator(".sidebar-identity-menu")
           .getByRole("menuitem", { exact: true, name: "Settings" })
           .click();
         await page.waitForURL((url) => url.pathname === "/settings/appearance");

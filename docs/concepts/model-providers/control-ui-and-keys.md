@@ -20,7 +20,17 @@ the saved key remains; follow the reported recovery step. Removing a stored key
 keeps model defaults and provider connection settings. See
 [Auth profiles](/cli/models#auth-profiles) for the matching CLI commands.
 
-Provider controls appear as soon as credentials, the model catalog, and configuration are ready. Usage and local costs load independently afterward, so a slow usage response does not block provider settings.
+The initial loading view stays in place until credentials, the model catalog,
+configuration, and the installed-app inventory are ready. Usage and local costs
+load independently afterward, so a slow usage response does not block provider
+settings. The AI setup summary stays in place when model discovery finishes.
+
+Background catalog updates keep the current provider rows and usage visible.
+Finishing sign-in updates that provider's credentials without restarting usage
+or local-cost loading for the other providers. If another client changes
+credentials while the sign-in picker is open, the page reconciles those changes
+when you finish, cancel, or close sign-in. Use **Refresh** to explicitly reload all
+provider data.
 
 After an account's quota recovers, model availability reflects the recovered account even if a catalog refresh began while it was blocked.
 

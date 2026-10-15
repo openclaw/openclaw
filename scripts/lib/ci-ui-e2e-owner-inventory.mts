@@ -190,6 +190,14 @@ const sessionMenuOwnerRoots = [
   "ui/src/pages/chat/components/chat-header-session-menu.ts",
 ] as const;
 
+// Transcript virtualization sits several hops below the chat route. Direct imports
+// of these owners reach message reveal, Solid render lifecycle, and row geometry.
+const chatTranscriptOwnerRoots = [
+  "ui/src/pages/chat/components/chat-transcript-controller.ts",
+  "ui/src/pages/chat/components/chat-transcript-layout-solid.tsx",
+  "ui/src/pages/chat/components/chat-transcript-virtualizer-host.ts",
+] as const;
+
 function pageWatch(
   testFile: string,
   pages: readonly (keyof typeof pageStyles)[],
@@ -211,7 +219,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/activity-polish.e2e.test.ts",
     ["activity"],
     [
-      "ui/src/components/image-lightbox.ts",
+      "ui/src/components/image-lightbox.tsx",
       "ui/src/lib/session-pull-requests.ts",
       "ui/src/pages/activity/activity-page.ts",
     ],
@@ -277,10 +285,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/agent-model-fallback-ownership.e2e.test.ts",
     ["agents-home", "agents", "config"],
-    [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/components/multi-select-registration.ts",
-    ],
+    ["ui/src/components/agent-select-registration.ts", "ui/src/components/multi-select.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/agent-select-avatar-timeout.e2e.test.ts",
@@ -329,7 +334,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/avatar-initial-emoji.e2e.test.ts",
     ["agents-home", "agents", "config", "usage"],
-    ["ui/src/components/agent-emoji-picker.ts", "ui/src/components/agent-select-registration.ts"],
+    ["ui/src/components/agent-emoji-picker.tsx", "ui/src/components/agent-select-registration.ts"],
     ["ui/src/styles/agent-emoji-picker.css"],
   ),
   pageWatch(
@@ -399,7 +404,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-attachment-remove.e2e.test.ts",
     ["chat", "new-session"],
-    ["ui/src/components/image-lightbox.ts"],
+    ["ui/src/components/image-lightbox.tsx"],
   ),
   pageWatch("ui/src/e2e/chat-attachment-spacing.e2e.test.ts", ["chat", "profile"]),
   pageWatch(
@@ -419,7 +424,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-cli-history-redaction.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-collaborator-scroll.e2e.test.ts", ["chat", "profile"]),
-  pageWatch("ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts",
+    ["chat"],
+    chatTranscriptOwnerRoots,
+  ),
   pageWatch(
     "ui/src/e2e/chat-comment-lifecycle.e2e.test.ts",
     ["chat"],
@@ -561,7 +570,10 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-flow.reactions.e2e.test.ts",
     ["chat", "profile"],
-    ["ui/src/pages/chat/components/chat-message-reaction-chips-view.tsx"],
+    [
+      "ui/src/pages/chat/components/chat-message-reaction-chips-view.tsx",
+      "ui/src/pages/chat/components/chat-message-reactions-view.tsx",
+    ],
   ),
   pageWatch(
     "ui/src/e2e/chat-flow.session-start.e2e.test.ts",
@@ -643,7 +655,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-omitted-image-placeholder.e2e.test.ts",
     ["chat"],
-    ["ui/src/components/image-lightbox.ts"],
+    ["ui/src/components/image-lightbox.tsx"],
   ),
   pageWatch("ui/src/e2e/chat-only-model.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-outbox-agent-scope.e2e.test.ts", ["chat"]),
@@ -691,7 +703,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-position-rail.e2e.test.ts",
     ["chat", "config"],
-    ["ui/src/pages/chat/sidebar-layout.ts", "ui/src/pages/question/question-page-registration.ts"],
+    [
+      ...chatTranscriptOwnerRoots,
+      "ui/src/pages/chat/sidebar-layout.ts",
+      "ui/src/pages/question/question-page-registration.ts",
+    ],
   ),
   pageWatch("ui/src/e2e/chat-prepared-identity.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-provider-policy-notice.e2e.test.ts", ["chat"]),
@@ -719,7 +735,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-recovered-search.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-reply-attribution.e2e.test.ts", ["chat", "profile"]),
-  pageWatch("ui/src/e2e/chat-reply-preview-recovery.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-reply-preview-recovery.e2e.test.ts",
+    ["chat"],
+    chatTranscriptOwnerRoots,
+  ),
   pageWatch(
     "ui/src/e2e/chat-retained-pane-escape.e2e.test.ts",
     ["chat"],
@@ -776,7 +796,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     [
       ...sessionMenuOwnerRoots,
-      "ui/src/components/command-palette.ts",
+      "ui/src/components/command-palette.tsx",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-session-rail.ts",
     ],
@@ -785,7 +805,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/chat-session-companion-manual-open-focus.e2e.test.ts",
     ["chat", "config"],
     [
-      "ui/src/components/command-palette.ts",
+      "ui/src/components/command-palette.tsx",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
     ],
@@ -914,7 +934,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-video-gallery.e2e.test.ts",
     ["chat"],
-    ["ui/src/components/image-lightbox.ts"],
+    ["ui/src/components/image-lightbox.tsx"],
   ),
   pageWatch("ui/src/e2e/chat-widget-autosize.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-widget-sandbox.e2e.test.ts", ["chat", "connection"]),
@@ -972,22 +992,22 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/command-palette-create.e2e.test.ts",
     ["chat", "config", "device"],
-    ["ui/src/components/agent-select-registration.ts", "ui/src/components/command-palette.ts"],
+    ["ui/src/components/agent-select-registration.ts", "ui/src/components/command-palette.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/command-palette-first-open.e2e.test.ts",
     ["chat", "config"],
-    ["ui/src/components/command-palette.ts", "ui/src/components/modal-dialog.ts"],
+    ["ui/src/components/command-palette.tsx", "ui/src/components/modal-dialog.ts"],
   ),
   pageWatch(
     "ui/src/e2e/command-palette-images.e2e.test.ts",
     ["chat"],
-    ["ui/src/components/command-palette.ts"],
+    ["ui/src/components/command-palette.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/command-palette-mentions.e2e.test.ts",
     ["chat", "profile"],
-    ["ui/src/components/command-palette.ts"],
+    ["ui/src/components/command-palette.tsx"],
   ),
   pageWatch("ui/src/e2e/composer-text-readability.e2e.test.ts", ["chat", "new-session"]),
   pageWatch("ui/src/e2e/config-enum-controls.e2e.test.ts", ["config"]),
@@ -1131,7 +1151,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/desktop-panel-credentials.e2e.test.ts",
     ["activity"],
     [
-      "ui/src/components/command-palette.ts",
+      "ui/src/components/command-palette.tsx",
       "ui/src/components/desktop/desktop-client.ts",
       "ui/src/components/desktop/desktop-panel.ts",
     ],
@@ -1140,7 +1160,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/desktop-panel-fullscreen.e2e.test.ts",
     ["activity", "terminal"],
     [
-      "ui/src/components/command-palette.ts",
+      "ui/src/components/command-palette.tsx",
       "ui/src/components/desktop/desktop-client.ts",
       "ui/src/components/desktop/desktop-panel.ts",
     ],
@@ -1149,7 +1169,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/desktop-panel.e2e.test.ts",
     ["activity", "chat", "terminal"],
     [
-      "ui/src/components/command-palette.ts",
+      "ui/src/components/command-palette.tsx",
       "ui/src/components/desktop/desktop-client.ts",
       "ui/src/components/desktop/desktop-panel.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
@@ -1539,7 +1559,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/new-session-page.transition.e2e.test.ts",
     ["chat", "new-session"],
     [
-      "ui/src/components/image-lightbox.ts",
+      "ui/src/components/image-lightbox.tsx",
       "ui/src/components/modal-dialog.ts",
       "ui/src/pages/chat/chat-page.ts",
       "ui/src/pages/chat/chat-pane.ts",
@@ -1576,7 +1596,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/plugins-config-mutation.e2e.test.ts",
     ["agents-home", "agents", "config", "plugins", "workboard"],
-    ["ui/src/components/multi-select-registration.ts", "ui/src/lib/plugins/index.ts"],
+    ["ui/src/components/multi-select.tsx", "ui/src/lib/plugins/index.ts"],
   ),
   pageWatch(
     "ui/src/e2e/plugins-schema-controls.e2e.test.ts",
@@ -2147,7 +2167,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/usage-cost-analysis.e2e.test.ts",
     ["usage"],
-    ["ui/src/components/agent-select-registration.ts", "ui/src/pages/usage/usage-page.ts"],
+    ["ui/src/components/agent-select-registration.ts", "ui/src/pages/usage/usage-page.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/usage-known-zero-cost.e2e.test.ts",
@@ -2158,12 +2178,12 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/usage-query-recovery.e2e.test.ts",
     ["usage"],
-    ["ui/src/pages/usage/usage-page.ts"],
+    ["ui/src/pages/usage/usage-page.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/usage-session-unicode.e2e.test.ts",
     ["usage"],
-    ["ui/src/pages/usage/usage-page.ts"],
+    ["ui/src/pages/usage/usage-page.tsx"],
   ),
   pageWatch("ui/src/e2e/usage-tool-count.e2e.test.ts", ["usage"]),
   pageWatch("ui/src/e2e/warm-boot.e2e.test.ts", ["chat", "profile", "sessions"]),

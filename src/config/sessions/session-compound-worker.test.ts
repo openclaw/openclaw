@@ -37,32 +37,37 @@ const delivery = vi.hoisted(() => ({
 }));
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
+  const withDelivery = (
+    owner: ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution>,
+  ): typeof owner => {
+    return {
+      ...owner,
+      get fileIdentity() {
+        return owner.fileIdentity;
+      },
+      runExisting: (source, operation, options) =>
+        owner.runExisting(
+          source,
+          (worker) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                const result = await worker.execute(command, commandOptions);
+                delivery.afterCommit?.(command.type);
+                return result;
+              },
+            }),
+          options,
+        ),
+    };
+  };
   return {
     ...actual,
     captureOpenClawAgentDatabaseExecution: (
       ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
-      return {
-        ...owner,
-        get fileIdentity() {
-          return owner.fileIdentity;
-        },
-        runExisting: (source, operation, options) =>
-          owner.runExisting(
-            source,
-            (worker) =>
-              operation({
-                execute: async (command, commandOptions) => {
-                  const result = await worker.execute(command, commandOptions);
-                  delivery.afterCommit?.(command.type);
-                  return result;
-                },
-              }),
-            options,
-          ),
-      };
-    },
+    ) => withDelivery(actual.captureOpenClawAgentDatabaseExecution(...args)),
+    captureOpenClawAgentDatabasePreparationExecution: (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabasePreparationExecution>
+    ) => withDelivery(actual.captureOpenClawAgentDatabasePreparationExecution(...args)),
   };
 });
 

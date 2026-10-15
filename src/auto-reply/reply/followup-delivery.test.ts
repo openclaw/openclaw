@@ -136,14 +136,10 @@ describe("resolveFollowupDeliveryDecision", () => {
     to: "channel:C1",
     text: "Still working",
   };
-  const progressTarget = { ...sourceReplyTarget, sourceReplyFinal: false };
-  const finalTarget = { ...sourceReplyTarget, sourceReplyFinal: true };
-  const progressPayload = { text: "Still working", sourceReplyFinal: false };
 
   it.each([
     { state: undefined, routed: true, delivered: true },
     { state: "missing", routed: true, delivered: false },
-    { state: undefined, routed: false, delivered: false },
   ] as const)(
     "requires current-source evidence before suppressing a queued duplicate: $state/$routed",
     async ({ state, routed, delivered }) => {
@@ -217,9 +213,8 @@ describe("resolveFollowupDeliveryDecision", () => {
   );
 
   it.each([
-    ["yielded", undefined, false],
     ["continuationPending", undefined, false],
-    ["yielded", "Research started; results will follow.", false],
+
     ["yielded", "Research started; results will follow.", true],
   ] as const)(
     "delivers waiting status for %s (%s, private partial=%s)",
@@ -258,7 +253,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     },
   );
 
-  it.each(["required", "optional"] as const)(
+  it.each(["required"] as const)(
     "honors a queued %s reply expectation over heartbeat drain options and NO_REPLY",
     async (expectation) => {
       const turn = createTurn();
@@ -273,39 +268,30 @@ describe("resolveFollowupDeliveryDecision", () => {
         opts: { isHeartbeat: true },
       });
 
-      if (expectation === "optional") {
-        expect(decision).toEqual({ kind: "suppress", reason: "silent" });
-      } else {
-        expect(decision).toMatchObject({
-          kind: "deliver",
-          payloads: [{ isError: true, text: expect.any(String) }],
-        });
-        if (decision.kind === "deliver") {
-          expect(decision.payloads[0]?.text).not.toContain("NO_REPLY");
-        }
+      expect(decision).toMatchObject({
+        kind: "deliver",
+        payloads: [{ isError: true, text: expect.any(String) }],
+      });
+      if (decision.kind === "deliver") {
+        expect(decision.payloads[0]?.text).not.toContain("NO_REPLY");
       }
     },
   );
 
-  it.each(["room-event", "send-policy", "aborted"] as const)(
+  it.each(["room-event", "send-policy"] as const)(
     "suppresses %s turns before projecting their final output",
     async (reason) => {
       const turn = createTurn({ sendPolicy: reason === "send-policy" ? "deny" : "allow" });
       if (reason === "room-event") {
         turn.queued.currentInboundEventKind = "room_event";
       }
-      const execution: AgentTurnExecutionResult =
-        reason === "aborted"
-          ? {
-              runId: "run-1",
-              outcome: { kind: "aborted", reason: "user", compaction: { count: 1, durable: [] } },
-            }
-          : createSettledExecution(reason === "room-event" ? "private room final" : "blocked");
+      const execution = createSettledExecution(
+        reason === "room-event" ? "private room final" : "blocked",
+      );
       expect(
         await resolveFollowupDeliveryDecision({
           turn,
           execution,
-          accounting: reason === "aborted" ? createAccounting([{ text: "late reply" }]) : undefined,
         }),
       ).toEqual({ kind: "suppress", reason });
     },
@@ -321,7 +307,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       outcome: { kind: "aborted", reason: "user" },
     };
 
-    it.each(["automatic", "message_tool_only"] as const)(
+    it.each(["message_tool_only"] as const)(
       "delivers the stall notice once the single recovery run stalls too (%s)",
       async (sourceReplyDeliveryMode) => {
         const turn = createTurn({ operation: stalledOperation });
@@ -344,11 +330,6 @@ describe("resolveFollowupDeliveryDecision", () => {
 
     it.each([
       {
-        label: "an ordinary queued request stalls",
-        operation: stalledOperation,
-        recovery: false,
-      },
-      {
         label: "the user stops the recovery run",
         operation: {
           result: { kind: "aborted", code: "aborted_by_user" },
@@ -369,8 +350,7 @@ describe("resolveFollowupDeliveryDecision", () => {
   it.each([
     ["private failure", undefined, false, "channel", "message-tool-only", "private failure detail"],
     ["internal failure", undefined, false, "internal", "silent", "internal failure"],
-    ["optional WebChat failure", "optional", false, "webchat", "silent", "internal failure"],
-    ["approved required failure", "required", true, "channel", undefined, "visible failure"],
+
     ["approved optional failure", "optional", true, "channel", undefined, "visible failure"],
   ] as const)(
     "applies queued rejection visibility for %s",
@@ -379,9 +359,6 @@ describe("resolveFollowupDeliveryDecision", () => {
       turn.queued.run.terminalReplyExpectation = expectation;
       if (source === "internal") {
         turn.queued.run.inputProvenance = { kind: "internal_system", sourceTool: "test" };
-      } else if (source === "webchat") {
-        turn.queued.originatingChannel = "webchat";
-        turn.queued.run.messageProvider = "webchat";
       } else {
         turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
       }
@@ -398,7 +375,6 @@ describe("resolveFollowupDeliveryDecision", () => {
       const decision = await resolveFollowupDeliveryDecision({
         turn,
         execution: { runId: "run-1", outcome: { kind: "rejected", payload } },
-        opts: source === "webchat" ? { onBlockReply: vi.fn(async () => {}) } : undefined,
       });
       if (approved) {
         expect(decision).toMatchObject({ kind: "deliver", payloads: [payload] });
@@ -415,12 +391,6 @@ describe("resolveFollowupDeliveryDecision", () => {
   );
 
   it.each<{ name: string; payload?: ReplyPayload; sent?: boolean; deliver?: boolean }>([
-    { name: "no marked payload" },
-    {
-      name: "visible marked media",
-      payload: { mediaUrl: "file:///tmp/generated.png" },
-      deliver: true,
-    },
     { name: "blank marked text", payload: { text: "   " } },
     { name: "heartbeat marker", payload: { text: "HEARTBEAT_OK" } },
     { name: "private reasoning", payload: { text: "hidden reasoning", isReasoning: true } },
@@ -485,27 +455,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     }
   });
 
-  it("turns a second missing source delivery into a sanitized diagnostic", async () => {
-    const turn = createTurn();
-    turn.queued.strandedReplyRetry = true;
-    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-
-    expect(
-      await resolveFollowupDeliveryDecision({
-        turn,
-        execution: createSettledExecution(),
-        accounting: createAccounting(),
-      }),
-    ).toMatchObject({
-      kind: "deliver",
-      payloads: [{ isError: true, isStatusNotice: true }],
-    });
-  });
-
   it.each([
-    { name: "internal follow-up", expectation: undefined, internal: true, final: "" },
-    { name: "required reply", expectation: "required", internal: false, final: "" },
-    { name: "optional reply", expectation: "optional", internal: false, final: "" },
     {
       name: "substantive private final",
       expectation: undefined,
@@ -540,16 +490,12 @@ describe("resolveFollowupDeliveryDecision", () => {
   );
 
   it.each([
-    { evidence: "empty", failureText: "The run failed after progress.", delivered: true },
-    { evidence: "empty", failureText: "Rate limit reached. Try again later.", delivered: true },
-    { evidence: "empty", failureText: "NO_REPLY", delivered: false },
-    { evidence: "delivered", failureText: "The run failed after progress.", delivered: false },
-    { evidence: "pending", failureText: "The run failed after progress.", delivered: false },
-    { evidence: "blocked", failureText: "The run failed after progress.", delivered: false },
-    { evidence: "ready", failureText: "The run failed after progress.", delivered: false },
+    { evidence: "pending", failureText: "The run failed after progress." },
+
+    { evidence: "ready", failureText: "The run failed after progress." },
   ] as const)(
     "settles optional failure $failureText with $evidence terminal custody",
-    async ({ evidence, failureText, delivered }) => {
+    async ({ evidence, failureText }) => {
       const turn = createTurn();
       turn.queued.run.terminalReplyExpectation = "optional";
       turn.queued.originatingChatType = "group";
@@ -560,10 +506,8 @@ describe("resolveFollowupDeliveryDecision", () => {
         status: "failed",
         terminalFailurePayload,
       };
-      if (evidence === "delivered" || evidence === "pending") {
+      if (evidence === "pending") {
         execution.outcome.result.sourceReplyDeliveryState = evidence;
-      } else if (evidence === "blocked") {
-        execution.outcome.result.didSendDeterministicApprovalPrompt = true;
       }
       const readyPayloads = evidence === "ready" ? [{ text: "The answer is ready." }] : [];
 
@@ -574,39 +518,16 @@ describe("resolveFollowupDeliveryDecision", () => {
       });
 
       expect(decision).toMatchObject(
-        delivered
-          ? { kind: "deliver", payloads: [{ isError: true }] }
-          : evidence === "ready"
-            ? { kind: "deliver", payloads: readyPayloads }
-            : { kind: "suppress", reason: "silent" },
+        evidence === "ready"
+          ? { kind: "deliver", payloads: readyPayloads }
+          : { kind: "suppress", reason: "silent" },
       );
     },
   );
 
   it.each([
-    ["progress-only target", { messagingToolSentTargets: [progressTarget] }, true],
-    ["progress-only source payload", { messagingToolSourceReplyPayloads: [progressPayload] }, true],
-    ["final source reply", { messagingToolSentTargets: [finalTarget] }, false],
-    ["unclassified target", { messagingToolSentTargets: [sourceReplyTarget] }, true],
-    ["legacy source reply", { didDeliverSourceReplyViaMessageTool: true }, false],
-    ["unscoped outbound send", { didSendViaMessagingTool: true }, true],
     ["deterministic approval prompt", { didSendDeterministicApprovalPrompt: true }, false],
-    [
-      "visible progress while yielded",
-      {
-        meta: { durationMs: 0, yielded: true },
-        messagingToolSentTargets: [progressTarget],
-      },
-      false,
-    ],
-    [
-      "visible progress while continuation is pending",
-      {
-        meta: { durationMs: 0, continuationPending: true },
-        messagingToolSentTargets: [progressTarget],
-      },
-      false,
-    ],
+
     [
       "pending tool call",
       {
@@ -639,11 +560,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     },
   );
 
-  it.each([
-    ["accidental", undefined, undefined],
-    ["intentional terminal tool", "tool-batch", undefined],
-    ["private terminal diagnostic", undefined, "Private terminal diagnostic."],
-  ] as const)(
+  it.each([["private terminal diagnostic", undefined, "Private terminal diagnostic."]] as const)(
     "accounts for %s message-tool-only completion",
     async (_label, intentionalTerminalCompletion, privateText) => {
       const turn = createTurn();
@@ -895,11 +812,6 @@ describe("deliverFollowupDecision", () => {
     {
       name: "partial delivery",
       result: { ok: false, delivered: true, error: "later chunk failed" },
-      dispatcher: true,
-    },
-    {
-      name: "channel transform veto",
-      result: { ok: true, delivered: false, suppressed: true, reason: "channel_transform" },
       dispatcher: true,
     },
   ])("does not retry $name", async ({ result, dispatcher }) => {

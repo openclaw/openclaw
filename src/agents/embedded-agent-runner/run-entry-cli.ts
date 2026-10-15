@@ -59,7 +59,8 @@ export function withAdmittedCliCandidate(
         throw createAgentRunSupersededAbortError();
       }
       return run({
-        sessionEntry,
+        // History preparation publishes its writer into this candidate's working row.
+        sessionEntry: sessionEntry ? { ...sessionEntry } : undefined,
         cliSessionBinding: getCliSessionBinding(sessionEntry, params.provider),
         assertSettlementCurrent,
         settleResult: async ({ result, expectedSession, sessionStore, preserveBinding }) => {

@@ -312,6 +312,7 @@ async function runUpdateGitCommand(root: string, args: string[], options: GitUpd
   const { onGitProbeTimeout, ...commandOptions } = options;
   const result = await executeGitCommand(root, args, {
     ...commandOptions,
+    operation: "update.inspect",
     killProcessTree: true,
   }).catch(() => null);
   if (result?.termination === "timeout" && args[0] !== "fetch") {

@@ -268,7 +268,7 @@ suite.define(() => {
         await footer.waitFor({ state: "visible" });
 
         await footer.locator(".sidebar-identity-card").click();
-        const menu = page.locator("wa-dropdown.sidebar-identity-menu");
+        const menu = page.locator(".sidebar-identity-menu");
         await menu.getByText("Alex", { exact: true }).waitFor();
         await menu.getByText("Studio Gateway", { exact: true }).waitFor();
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
@@ -286,7 +286,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Expand sidebar" }).click();
         await footer.locator(".sidebar-identity-card").click();
         await menu.getByText("Alex", { exact: true }).waitFor();
-        const retry = menu.locator('wa-dropdown-item[value="command:retry-connect"]');
+        const retry = menu.locator('[data-value="command:retry-connect"]');
         await retry.waitFor();
         expect(await menu.locator(".sidebar-identity-menu__outbox").count()).toBe(0);
         const bounds = await retry.boundingBox();

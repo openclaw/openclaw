@@ -185,6 +185,7 @@ describe("private subagent completion processing receipts", () => {
       const command = input as AgentCommandOpts;
       expect(command.inputProvenance?.sourceSessionKey).toBe(sourceSessionKeys[1]);
       expect(command.trustedInternalHandoff?.sourceSessionKey).toBe(sourceSessionKeys[1]);
+      expect(command.replyExpectation).toBe("optional");
       await recorder(input).persistApproved();
       return { payloads: [], meta: { durationMs: 1 } };
     });
@@ -199,6 +200,7 @@ describe("private subagent completion processing receipts", () => {
           },
         },
         privateCompletion: true,
+        replyExpectation: "optional",
         expectFinal: true,
         settleWakeSourceSessionKeys: sourceSessionKeys,
         delegatedToolPolicyHandoff: {
@@ -608,12 +610,13 @@ describe("private subagent completion processing receipts", () => {
               : undefined,
           ),
         ).rejects.toThrow("synthetic private transaction failure");
-        await Promise.all(
-          aborted.map(
-            async ({ entry }) =>
-              expectDefined(entry.executionSettlement, "private abort execution").completion,
-          ),
-        );
+        expect(
+          await waitForChatAbortControllerRemoval({
+            entries: kernel.gatewayRequestContext.chatAbortControllers,
+            targets: aborted,
+            timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          }),
+        ).toBe(true);
         expect(kernel.gatewayRequestContext.chatAbortControllers.has(runId)).toBe(false);
         expect(agentCommandMock).not.toHaveBeenCalled();
         expect(completions()).toEqual([]);

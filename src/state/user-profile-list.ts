@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { ok, type Result } from "@openclaw/normalization-core/result";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deferSqlitePostCommitPublication,
   stageSqliteTransactionState,
@@ -46,6 +46,7 @@ import type {
 
 export { projectUserProfileDisplay } from "./user-profiles-internal.js";
 
+/** Read the Gateway catalog installed by admission and committed profile writes. */
 export const hasMultipleSessionSharingIdentities = (options: OpenClawStateDatabaseOptions = {}) =>
   readProfileCatalog(options, projectHasMultipleSessionSharingIdentities) ?? false;
 
@@ -66,16 +67,34 @@ export const readUserProfileAliases = (
 ): ReadonlySet<string> =>
   new Set([profileId, ...(readUserProfileIdentity(profileId, options)?.aliases ?? [])]);
 
+function requireResidentProfileCatalog(options: OpenClawStateDatabaseOptions) {
+  const catalog = profileCatalogs.get(profileCatalogPath(options));
+  if (!catalog?.valid) {
+    throw new Error("User profile catalog is not ready");
+  }
+  return catalog.rows;
+}
+
+/** Gateway policy consumes the catalog installed by profile admission and committed writes. */
+export function readResidentUserProfileIdentity(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  return projectCatalogUserProfileIdentity(requireResidentProfileCatalog(options), profileId);
+}
+
+export function hasMultipleResidentSessionSharingIdentities(
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  return projectHasMultipleSessionSharingIdentities(requireResidentProfileCatalog(options));
+}
+
 /** Gateway readers already retain this catalog with their session projection. */
 export function readResidentUserProfileId(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): string | undefined {
-  const catalog = profileCatalogs.get(profileCatalogPath(options));
-  if (!catalog?.valid) {
-    throw new Error("User profile catalog is not ready");
-  }
-  return resolveCatalogProfile(catalog.rows, profileId)?.id;
+  return resolveCatalogProfile(requireResidentProfileCatalog(options), profileId)?.id;
 }
 
 /** Participant recording consumes the Gateway's prepared aliases without opening storage. */
@@ -83,11 +102,7 @@ export function readResidentUserProfileAliases(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): ReadonlySet<string> {
-  const catalog = profileCatalogs.get(profileCatalogPath(options));
-  if (!catalog?.valid) {
-    throw new Error("User profile catalog is not ready");
-  }
-  const identity = projectCatalogUserProfileIdentity(catalog.rows, profileId);
+  const identity = readResidentUserProfileIdentity(profileId, options);
   return new Set([profileId, ...(identity?.aliases ?? [])]);
 }
 
@@ -167,9 +182,9 @@ export function listResidentUserProfileDisplayFacts(options: OpenClawStateDataba
   }));
 }
 
-/** Projection readiness follows physical admission; warm checks never inspect SQLite. */
-export function isUserProfileCatalogReady(options: OpenClawStateDatabaseOptions = {}): boolean {
-  const catalog = profileCatalogs.get(profileCatalogPath(options));
+/** Pass the prepared absolute database path for allocation-free checks of live owner state. */
+export function isUserProfileCatalogReady(pathname = profileCatalogPath({})): boolean {
+  const catalog = profileCatalogs.get(pathname);
   return Boolean(catalog?.valid && profileBindings.has(catalog.rows));
 }
 type ProfileCatalog = {
@@ -202,7 +217,7 @@ type ProfileMutationPublication = {
 const profileMutationPublications = new Set<ProfileMutationPublication>();
 let stopCatalogEvents: (() => void) | undefined;
 let stopBindingEvents: (() => void) | undefined;
-let profileCatalogHandles = new WeakMap<DatabaseSync, Map<string, ProfileDisplayRow>>();
+let profileCatalogHandles = new WeakMap<EngineConnection, Map<string, ProfileDisplayRow>>();
 const profileBindings = new WeakMap<Map<string, ProfileDisplayRow>, UserProfileEmailBindingIndex>();
 
 function supersedeBindingPublications(
@@ -608,6 +623,9 @@ async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions =
 export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}) {
   const catalog = await acquireUserProfileCatalog(options);
   return {
+    hasMultipleSessionSharingIdentities(this: void) {
+      return projectHasMultipleSessionSharingIdentities(catalog.rows);
+    },
     readCurrentIdentity(this: void, profileId: string) {
       catalog.assertCurrent(profileId);
       const profile = projectCatalogUserProfileIdentity(catalog.rows, profileId);
@@ -635,7 +653,7 @@ export async function prepareUserProfileIdentity(
 }
 
 /** Stage exact changed keys before commit so observers always see the whole committed catalog. */
-export function stageUserProfileCatalogChange(db: DatabaseSync, profileIds: string[]): void {
+export function stageUserProfileCatalogChange(db: EngineConnection, profileIds: string[]): void {
   const catalog = profileCatalogHandles.get(db);
   if (catalog) {
     const rows = selectProfileAccessEntries(db, profileIds);
@@ -654,7 +672,7 @@ export function stageUserProfileCatalogChange(db: DatabaseSync, profileIds: stri
   }
 }
 
-export function publishUserProfilesChange(db: DatabaseSync, ...profileIds: string[]): void {
+export function publishUserProfilesChange(db: EngineConnection, ...profileIds: string[]): void {
   stageUserProfileCatalogChange(db, profileIds);
   deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
 }
@@ -667,6 +685,17 @@ export function getUserProfileDisplay(
   const profile = readProfileCatalog(options, (resident) =>
     resolveCatalogProfile(resident, profileId),
   );
+  if (!profile) {
+    throw new UserProfileNotFoundError(profileId);
+  }
+  return projectUserProfileDisplay(profile);
+}
+
+export function getResidentUserProfileDisplay(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const profile = resolveCatalogProfile(requireResidentProfileCatalog(options), profileId);
   if (!profile) {
     throw new UserProfileNotFoundError(profileId);
   }

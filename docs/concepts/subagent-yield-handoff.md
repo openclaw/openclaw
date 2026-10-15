@@ -75,6 +75,14 @@ the latter already owns its run replacement after dispatch and must not trigger
 paused-run adoption at admission. Provenance classifies the handoff; live
 Gateway admission and registry ownership still authorize it.
 
+The completion owner also selects whether the successor owes another reply.
+Gateway admission carries that choice into execution without deriving it again
+from the internal channel or private-delivery mode. Optional result processing
+can finish silently when there is no more work or new answer; an outstanding
+required final still cannot. A peer’s returned `sessions_send` result likewise
+need not generate an acknowledgment. These internal choices are not public RPC
+options, and an unrelated earlier answer never discharges a new request.
+
 An explicit yield batch must be eligible at any requester depth. The ordinary
 nested-wave exclusion remains: nested runs without a yielded batch use the
 existing descendant-settle path. The top-level cron exclusion also remains;
@@ -139,6 +147,13 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   custody only after the new delivery generation commits; it does not reopen the
   expired source. Restart still admits a
   fresh recovery owner rather than reviving the previous process capability.
+  Visible settlement cohorts use the host-only binding when every captured
+  requester session and lifecycle revision matches the current parent. Private
+  cohorts retain their strict requester identity checks. This lets a guest's own yielded session
+  resume under its existing session-write scope without granting `operator.write`.
+  Stale, mixed-incarnation, or unbound visible history does not gain this scope
+  alternative; its existing authorized recovery path stays unchanged. Copied
+  request fields cannot supply the host-only binding.
 - **Stable audience.** A nested wake uses internal delivery. A settlement
   continuation targeting a live `sessions_yield`-paused row adopts that row;
   unrelated inter-session messages do not adopt that row. An ordinary

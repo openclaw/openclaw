@@ -10,6 +10,7 @@ import {
   deferGitHubPublicationRequestsInDatabase,
 } from "../gateway/github-publication-store.worker.js";
 import * as repository from "../gateway/github-repository-publication-store.worker.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import { captureGitHubPublicationWorkerReceipt } from "./github-publication-receipts.js";
 import { publicationRequestOperations } from "./github-publication-request.worker.js";
@@ -61,7 +62,7 @@ function mutate(
   source?: GitHubPublicationSourcePredicate,
 ) {
   const capture = () =>
-    captureGitHubPublicationWorkerReceipt(database.db, () => {
+    captureGitHubPublicationWorkerReceipt(sqlPublicationAnchor(database.db), () => {
       const { value, changes } = captureGitHubPublicationChanges(write);
       return { ...value, changes };
     });
@@ -71,7 +72,7 @@ function mutate(
       const receipt = capture();
       assertMutationSource(database, receipt, source);
       assertGitHubPublicationWorkerSourceCurrent(database.db);
-      deferSqliteWorkerCommitReceipt(database.db, receipt);
+      deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(database.db), receipt);
       return receipt;
     });
   }
@@ -79,7 +80,7 @@ function mutate(
     ({ db }) => {
       // Accepted bookkeeping can settle after caller revocation; it grants no GitHub action.
       const receipt = capture();
-      deferSqliteWorkerCommitReceipt(db, receipt);
+      deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(db), receipt);
       return receipt;
     },
     { database },

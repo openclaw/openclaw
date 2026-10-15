@@ -1,3 +1,4 @@
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { ControlUiHost, ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
@@ -16,7 +17,7 @@ import {
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
-import { renderTeamSessionSlots } from "./solid/session-presentation.tsx";
+import { TeamSessionSlots } from "./solid/session-presentation.tsx";
 
 it("does not manufacture personal pins from plugin defaults", () => {
   const pluginNavigation = [
@@ -626,7 +627,12 @@ describe("sidebar navigation lineage ownership", () => {
       [tree!.children[0]!, false, "2 questions need your answer\nChoose a region\n+1 more"],
     ] as const) {
       const view = mountSolid(
-        () => renderTeamSessionSlots([row], includeChildren, row.childSessionKeys.length),
+        () =>
+          createComponent(TeamSessionSlots, {
+            rows: [row],
+            includeChildren,
+            childCount: row.childSessionKeys.length,
+          }),
         { container },
       );
       expect(container.querySelector("[data-session-attention]")?.getAttribute("aria-label")).toBe(
@@ -705,6 +711,7 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
     sessions: {
       isPreparedWorkSession: (candidate: string) => candidate === key,
       pullRequestSummary: () => undefined,
+      isRunVisuallyActive: () => false,
     },
   } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];
   const navigation = buildSidebarSessionNavigationState({

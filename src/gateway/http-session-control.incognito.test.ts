@@ -16,6 +16,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
 import { handleChannelAvatarHttpRequest } from "./channel-avatar-http.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { readOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
@@ -109,6 +110,7 @@ vi.mock("../agents/agent-tools.before-tool-call.js", async (original) => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const prepareProfiles = useUserProfileCatalogForTest();
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 let location: { agentId: string; path: string };
@@ -349,6 +351,7 @@ it("revalidates tool policy after hooks while preserving unbound memory tool exe
 });
 
 it("carries configured-role authority into unbound memory sessions_send and refuses a replaced target", async () => {
+  await prepareProfiles({ env });
   const sourceKey = await seed();
   const nestedKey = await seed();
   const initialConfig = runtime.cfg;

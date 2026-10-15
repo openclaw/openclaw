@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installTestLinkReader } from "../test-helpers/link-reader.ts";
 import { renderKbd } from "./kbd.ts";
+import { linkReaderHovercardBootstrap } from "./link-reader-hovercard-registration.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import {
@@ -415,18 +416,22 @@ describe("openclaw-tooltip", () => {
   it.each([true])(
     "returns Escape focus from rich content to its trigger (wrapped=%s)",
     async (wrapped) => {
-      const { tooltip, trigger, card } = createRichTooltip("Focusable card");
+      const { tooltip, trigger: directTrigger, card } = createRichTooltip("Focusable card");
+      const trigger = wrapped ? document.createElement("button") : directTrigger;
       if (wrapped) {
         const wrapper = document.createElement("span");
-        trigger.replaceWith(wrapper);
+        trigger.textContent = directTrigger.textContent;
         wrapper.append(trigger);
+        directTrigger.replaceWith(wrapper);
       }
       const action = document.createElement("button");
       action.textContent = "Card action";
       card.append(action);
       document.body.append(tooltip);
-      await commitTooltip(tooltip);
+      await settleTooltip(tooltip);
       trigger.focus();
+      expect(document.activeElement).toBe(trigger);
+      await expectOpenCount(1);
       action.focus();
       await expectOpenCount(1);
       action.dispatchEvent(
@@ -688,19 +693,24 @@ describe("title tooltips", () => {
     provider.append(link);
     parent.append(provider, control);
     document.body.append(parent);
-    dispatchMousePointer(link, "pointerover");
-    await vi.advanceTimersByTimeAsync(200);
-    await expectOpenCount(0);
-    expect(parent.title).toBe("");
-    expect(link.hasAttribute("aria-expanded")).toBe(false);
-    dispatchMousePointer(control, "pointerover");
-    await vi.advanceTimersByTimeAsync(200);
-    await expectOpenCount(1);
-    expect(document.querySelector<TooltipElement>("openclaw-tooltip")?.content).toBe(
-      "Shared context hint",
-    );
-    dispatchMousePointer(parent, "pointerleave");
-    expect(parent.title).toBe("Shared context hint");
+    try {
+      dispatchMousePointer(link, "pointerover");
+      await vi.advanceTimersByTimeAsync(200);
+      await expectOpenCount(0);
+      expect(parent.title).toBe("");
+      expect(link.hasAttribute("aria-expanded")).toBe(false);
+      dispatchMousePointer(control, "pointerover");
+      await vi.advanceTimersByTimeAsync(200);
+      await expectOpenCount(1);
+      expect(document.querySelector<TooltipElement>("openclaw-tooltip")?.content).toBe(
+        "Shared context hint",
+      );
+      dispatchMousePointer(parent, "pointerleave");
+      expect(parent.title).toBe("Shared context hint");
+    } finally {
+      parent.remove();
+      await linkReaderHovercardBootstrap.define();
+    }
   });
 
   it("yields a nested title when its link becomes preview eligible and restores ordinary hints on reentry", async () => {

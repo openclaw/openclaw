@@ -2,7 +2,7 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
-import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
+import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import "./chat-audio-player.tsx";
 import "./chat-svg-attachment.tsx";
 import "./chat-video-player.tsx";
@@ -156,35 +156,30 @@ export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Eleme
         />
       }
     >
-      {(item) => (
-        <Show
-          when={shouldDeferAttachmentCard(item(), props.presentation ?? "inline")}
-          fallback={
-            <AttachmentContent
-              item={item()}
-              options={props.options}
-              onOpenSidebar={props.onOpenSidebar}
-              onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
-              presentation={props.presentation}
-            />
-          }
-        >
-          <ChatAttachmentAdmission
-            attachments={[item().attachment]}
+      {(item) => {
+        const content = (admission?: AttachmentAdmission) => (
+          <AttachmentContent
+            item={item()}
             options={props.options}
-            render={(admission) => (
-              <AttachmentContent
-                item={item()}
-                options={props.options}
-                onOpenSidebar={props.onOpenSidebar}
-                onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
-                presentation={props.presentation}
-                admission={admission}
-              />
-            )}
+            onOpenSidebar={props.onOpenSidebar}
+            onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
+            presentation={props.presentation}
+            admission={admission}
           />
-        </Show>
-      )}
+        );
+        return (
+          <Show
+            when={shouldDeferAttachmentCard(item(), props.presentation ?? "inline")}
+            fallback={content()}
+          >
+            <ChatAttachmentAdmission
+              attachments={[item().attachment]}
+              options={props.options}
+              render={content}
+            />
+          </Show>
+        );
+      }}
     </Show>
   );
 }
@@ -216,10 +211,11 @@ function prepareAttachment(
     attachment.kind === "video" && onOpenImage && safeAttachmentUrl
       ? (src: string) => {
           const requestVersion = onRequestOpenImage?.();
-          const videoItem = (video: AttachmentItem["attachment"]) =>
+          const videoItem = (video: AttachmentItem["attachment"], messageId = options.messageId) =>
             videoLightboxItem(
               video,
-              (onRequestUpdate) => resolveAttachmentSource(video, { ...options, onRequestUpdate }),
+              (onRequestUpdate) =>
+                resolveAttachmentSource(video, { ...options, messageId, onRequestUpdate }),
               options.onRequestUpdate,
             );
           const membership = options.galleryVideos?.(item);
@@ -232,9 +228,9 @@ function prepareAttachment(
                   gallery: {
                     index: membership.index,
                     items: membership.items.map(
-                      ({ attachment: video }) =>
+                      ({ attachment: video, messageId }) =>
                         async () =>
-                          videoItem(video),
+                          videoItem(video, messageId),
                     ),
                   },
                 }
@@ -270,6 +266,7 @@ function prepareAttachment(
                   resolveSource: (sidebarUpdate, runtime): AttachmentSidebarState => {
                     const next = resolveAttachmentSource(attachment, {
                       ...runtime,
+                      messageId: options.messageId,
                       onRequestUpdate: sidebarUpdate,
                     });
                     if (next.status === "available") {
@@ -316,22 +313,21 @@ function AttachmentContent(
     !model().pastedText &&
     (model().resolved?.status === "unavailable" ||
       (model().resolved?.status === "checking" && !props.admission));
-  const card = () =>
-    renderCompactAttachmentCard(
-      {
-        kind: attachment().kind,
-        label: attachment().label,
-        mimeType: attachment().mimeType,
-        sizeBytes: model().media?.sizeBytes ?? attachment().sizeBytes,
-        downloadHref: model().safeAttachmentUrl,
-        downloadPending: Boolean(props.admission && !model().media),
-        downloadPendingFocusable: Boolean(props.admission),
-        onExpand: model().openAttachmentSidebar,
-        voiceNote: attachment().isVoiceNote === true,
-      },
-      props.admission?.observeElement,
-      props.admission?.onAdmit,
-    );
+  const card = () => (
+    <CompactAttachmentCard
+      kind={attachment().kind}
+      label={attachment().label}
+      mimeType={attachment().mimeType}
+      sizeBytes={model().media?.sizeBytes ?? attachment().sizeBytes}
+      downloadHref={model().safeAttachmentUrl}
+      downloadPending={Boolean(props.admission && !model().media)}
+      downloadPendingFocusable={Boolean(props.admission)}
+      onExpand={model().openAttachmentSidebar}
+      voiceNote={attachment().isVoiceNote === true}
+      elementRef={props.admission?.observeElement}
+      onFocus={props.admission?.onAdmit}
+    />
+  );
   const scope = () =>
     JSON.stringify([
       attachment().url,
@@ -349,7 +345,7 @@ function AttachmentContent(
   };
   const ready = () => !props.admission || Boolean(model().media);
   return (
-    <Switch fallback={<LitContent value={card()} />}>
+    <Switch fallback={card()}>
       <Match when={unavailable()}>
         <AssistantAttachmentStatusCard
           label={attachment().label}
@@ -473,7 +469,7 @@ function AttachmentContent(
           src={model().safeAttachmentUrl!}
           label={attachment().label}
           onOpen={() => model().openAttachmentSidebar?.()}
-          fallback={<LitContent value={card()} />}
+          fallback={card()}
         />
       </Match>
     </Switch>

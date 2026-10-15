@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render, type LitElement } from "lit";
 import { expect, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import * as attachmentPayloadStore from "./attachment-payload-store.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
 import * as attachmentTextReader from "./components/chat-attachment-text-reader.ts";
@@ -36,10 +36,11 @@ export async function renderSettledPastedTextAttachment(
   const read = vi.spyOn(attachmentTextReader, "readAttachmentText");
   try {
     const container = renderChatView(overrides);
-    document.body.append(container);
-    const chip = expectDefined(
-      container.querySelector<LitElement>("openclaw-chat-pasted-text"),
-      "pasted text attachment",
+    const chip = await waitForSolid(() =>
+      expectDefined(
+        container.querySelector<LitElement>("openclaw-chat-pasted-text"),
+        "pasted text attachment",
+      ),
     );
     await chip.updateComplete;
     expect(read).toHaveBeenCalledOnce();
@@ -66,18 +67,22 @@ export function selectFile(input: HTMLInputElement, file: File) {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-export function getAttachmentMenuOption(container: Element, label: string) {
-  container.querySelector(".agent-chat__attach-menu")?.dispatchEvent(new Event("wa-show"));
-  flush();
+export async function getAttachmentMenuOption(container: Element, label: string) {
+  const trigger = await waitForSolid(() =>
+    expectDefined(
+      container.querySelector<HTMLButtonElement>(".agent-chat__attach-menu .oc-menu-trigger"),
+      "attachment menu trigger",
+    ),
+  );
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
   return Array.from(
     container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
   ).find((button) => button.textContent?.trim() === label);
 }
 
 export function selectAttachmentMenuOption(button: HTMLButtonElement | undefined) {
-  button
-    ?.closest("wa-dropdown")
-    ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: button }, bubbles: true }));
+  button?.click();
 }
 
 export function requireAttachmentInput(container: Element, selector: string, label: string) {

@@ -139,7 +139,9 @@ it("retains committed initial turns through fencing and denies their final write
         key: scenario.key,
         agentId: "main",
         task: "Start the accepted initial turn.",
-      }).catch((error: unknown) => ({ error }));
+      }).catch((error: unknown) => ({
+        error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+      }));
       requests.push(request);
       const initial = await Promise.race([
         scenario.beforeTurn.promise,

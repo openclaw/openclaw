@@ -334,7 +334,8 @@ it("creates the lazy shared schema and publishes lifecycle authority before its 
     }),
   );
   const reply = holdNextReply("githubPublications.insert", () => {
-    expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
+    // An uncommitted insert cannot authorize publication from a missing binding.
+    expect(lifecycle.readCurrent()).toBeUndefined();
   });
   const inserting = insertGitHubPublicationRequestAsync(
     {
@@ -440,7 +441,7 @@ it("does not cancel a newer personal GitHub authorization", async () => {
   expect(
     await mutateUserGitHubConnection(owner, { kind: "cancel", requestId: first }, () => {}),
   ).toBeUndefined();
-  expect((await prepareUserGitHubConnection(owner)).connection?.pending?.requestId).toBe(second);
+  expect((await prepareUserGitHubConnection(owner)).read()?.pending?.requestId).toBe(second);
 });
 
 it("revokes personal source authority at commit before reply delivery without reviving restored state", async ({
@@ -461,7 +462,7 @@ it("revokes personal source authority at commit before reply delivery without re
       }),
     ).toThrow("rollback connection");
     expect(() => bindGitHubPublicationSource(source)).not.toThrow();
-    expect(connection.assertCurrent).not.toThrow();
+    expect(() => connection.read()).not.toThrow();
     const receipt = holdNextReceipt();
     const reply = holdNextReply("userGitHubConnections.mutate");
     const disconnected = mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
@@ -477,7 +478,7 @@ it("revokes personal source authority at commit before reply delivery without re
       // Receipt and reply use separate ports; deliver the real commit facts before asserting.
       receipt.release();
       expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
-      expect(connection.assertCurrent).toThrow("My GitHub connection changed");
+      expect(() => connection.read()).toThrow("My GitHub connection changed");
     } finally {
       receipt.release();
       reply.release();
@@ -488,13 +489,61 @@ it("revokes personal source authority at commit before reply delivery without re
       () => original,
       () => {},
     );
-    expect(connection.assertCurrent).toThrow("My GitHub connection changed");
-    expect((await prepareUserGitHubConnection(owner)).connection).toEqual(original);
+    expect(() => connection.read()).toThrow("My GitHub connection changed");
+    expect((await prepareUserGitHubConnection(owner)).read()).toEqual(original);
     await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
       "source authority changed",
     );
     expect(read(row)).toMatchObject({ ok: true, rows: [] });
   } finally {
+    await source.release();
+  }
+});
+
+it("revokes cached personal authority when a committed disconnect loses its receipt", async ({
+  signal,
+}) => {
+  const owner = ensureProfileForEmail("publication-lost-receipt@example.test").id;
+  updateUserGitHubConnection(
+    owner,
+    () => ({
+      ...disconnectedUserGitHubConnection(),
+      selection: {
+        kind: "connected",
+        profileId: "ghp_0123456789abcdef0123456789abcdef",
+        accountId: 42,
+        login: "fixture-user",
+        refreshToken: "synthetic-refresh",
+        accessExpiresAtMs: 1000,
+        refreshExpiresAtMs: 2000,
+        scopes: ["repo"],
+      },
+    }),
+    () => {},
+  );
+  const connection = await prepareUserGitHubConnection(owner);
+  const { source } = await sourceFixture("source-lost-connection-receipt", () => {}, owner);
+  const receipt = holdNextReceipt();
+  const reply = holdNextReply("userGitHubConnections.mutate");
+  const disconnected = mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
+  const refused = expect(disconnected).rejects.toThrow("connection write outcome is unknown");
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        Promise.all([receipt.ready, reply.ready]),
+        disconnected,
+        "connection receipt and reply were not held",
+      ),
+      signal,
+    );
+    reply.release(new Error("connection write outcome is unknown"));
+    await refused;
+    expect(() => connection.read()).toThrow("My GitHub connection changed");
+    expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
+    expect((await prepareUserGitHubConnection(owner)).read()?.selection.kind).toBe("disconnected");
+  } finally {
+    receipt.release();
+    reply.release();
     await source.release();
   }
 });

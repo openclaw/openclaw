@@ -47,10 +47,17 @@ Configure the provider plugin before selecting its model:
 - [ONNX](/plugins/onnx) runs local CPU classifiers in a persistent subprocess.
   Follow its development-checkout or compatible-package setup, then explicitly
   download the model or prepare a local export. Inference needs no hosted API credential.
-- [TypeSafe AI](/plugins/typesafe) connects to hosted Jev or a local System One
+- [OpenAI](/providers/openai#decision-models) uses the bundled `openai` plugin
+  and the OpenAI Platform Decisions API. Configure an OpenAI API key;
+  ChatGPT/Codex subscription credentials do not authorize this endpoint.
+  Evaluations send the supplied evidence to OpenAI and incur Platform usage charges.
+- [TypeSafe AI](/plugins/typesafe) connects to hosted Jev or a self-hosted System One
   server such as Kev. Install and enable the external plugin, then configure a
-  protected hosted credential or an explicit loopback `baseUrl`. Hosted
-  evaluations send the selected evidence to TypeSafe and incur its normal usage charges.
+  protected hosted credential, the existing loopback setting, or a
+  [standard model-provider endpoint](/plugins/typesafe#custom-endpoint-and-provider-request-settings)
+  through `models.providers.typesafe`. Evaluations send user content to that
+  endpoint; hosted calls incur TypeSafe's normal charges. Select `typesafe/kev-latest`
+  for Kev; router-backed servers must use their own routing model ID.
 
 The current plugins declare these model references:
 
@@ -63,11 +70,12 @@ The current plugins declare these model references:
 | `onnx/gliclass-instruct-edge-v1.0`   | GLiClass Instruct Edge | Local export                                           |
 | `onnx/gliner2.5-base-v1`             | GLiNER 2.5 Base        | Download pinned ONNX artifacts                         |
 | `onnx/gliner2.5-small-v1`            | GLiNER 2.5 Small       | Download pinned ONNX artifacts                         |
+| `openai/gpt-6-luna`                  | GPT-6 Luna             | OpenAI Platform API key and Decisions API access       |
 | `typesafe/jev-1.13.0`                | Jev 1.13.0             | TypeSafe credential                                    |
 | `typesafe/jev-latest`                | Jev                    | TypeSafe credential; follows the vendor's latest model |
 | `typesafe/kev-latest`                | Kev (local server)     | Running System One server and explicit loopback URL    |
 
-Both plugins are currently unpublished candidates. Their setup pages explain
+The ONNX and TypeSafe AI plugins are currently unpublished candidates. Their setup pages explain
 source-checkout use and the packaged host floor. The table describes the plugins' declared models,
 not which artifacts or credentials are ready on your machine.
 

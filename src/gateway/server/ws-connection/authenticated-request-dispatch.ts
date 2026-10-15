@@ -137,7 +137,18 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
     }
-    const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers);
+    const diagnostics = createGatewayRpcDiagnostics(
+      req.method,
+      getMethodRegistry,
+      extraHandlers,
+      req.method === "models.list" || req.method === "sessions.list" || req.method === "cron.list"
+        ? {
+            clientKind: client.connect.client.id,
+            source: sendResponse === send ? "wire" : "internal",
+            params: req.params,
+          }
+        : undefined,
+    );
     logWs("in", "req", { connId, id: req.id, method: req.method });
     const generationState = SharedGatewaySessionGenerationState.fromReader(
       getRequiredSharedGatewaySessionGeneration,
@@ -388,6 +399,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         // belongs to its requester so disconnect can release its admission fence.
         const cancelOnDisconnect =
           req.method === "sessions.companion.ask" ||
+          req.method === "sessions.usage" ||
           (req.method === "plugins.reload" &&
             asOptionalRecord(req.params)?.waitForDrain === true) ||
           (req.method === "node.invoke" &&

@@ -9,14 +9,17 @@ import type {
 } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { buildUsageOverview } from "../shared/usage-overview.js";
-import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
+import type {
+  SessionCostUsageDeferredMetadata,
+  SessionCostUsageRollupRow,
+} from "./session-cost-usage-cache.kernel.js";
 import type { UsageCostResolver } from "./session-cost-usage-pricing.js";
 import {
   projectCostUsageSummary,
   projectSessionCostSummaries,
 } from "./session-cost-usage-projection.js";
 import {
+  decodeUsageCostRollup,
   decodeUsageCostRollupEnvelope,
   encodeUsageCostRollup,
   isUsageCostRollupFresh,
@@ -124,6 +127,19 @@ async function runCapturedSessionActorUsage(
       return marker.sessionId;
     };
     const ids = requested?.map(requestedSessionId);
+    const metadataLimit = Math.min(ids ? new Set(ids).size : 20_000, 20_000);
+    const reportBudget =
+      operation.kind === "summary" || operation.kind === "sessions"
+        ? {
+            remainingBytes:
+              (operation.kind === "sessions"
+                ? (operation.reportBudgetBytes ?? 32 * 1024 * 1024)
+                : 32 * 1024 * 1024) -
+              metadataLimit * 256,
+            metadataLimit,
+            pricingFingerprint: operation.pricingFingerprint,
+          }
+        : undefined;
     if (operation.kind === "refresh") {
       operation.rebuildRows?.forEach((row) => requestedSessionId(row.key));
     }
@@ -134,6 +150,7 @@ async function runCapturedSessionActorUsage(
             input: {
               includeEvents: refresh,
               includeRollupBodies: operation.kind === "summary" || operation.kind === "sessions",
+              ...(reportBudget ? { reportBudget } : {}),
               ...(ids ? { sessionIds: ids } : {}),
             },
           },
@@ -165,25 +182,52 @@ async function runCapturedSessionActorUsage(
       };
     }
     const rows = new Map<string, SessionCostUsageRollupRow>();
+    const deferredPaths = new Set<string>();
+    const deferredMetadata = new Map<string, SessionCostUsageDeferredMetadata>();
     for (const [filePath, { instance }] of files) {
       if (instance.rollup) {
         rows.set(filePath, {
           key: filePath,
           valueJson: instance.rollup.valueJson,
           updatedAt: instance.rollup.updatedAt,
+          ...(instance.rollup.bodyBytes === undefined
+            ? {}
+            : { bodyBytes: instance.rollup.bodyBytes }),
         });
+        if (reportBudget) {
+          reportBudget.remainingBytes -=
+            2 * instance.rollup.valueJson.length + (instance.rollup.blob?.byteLength ?? 0);
+        }
+      }
+      if (instance.rollupDeferred) {
+        deferredPaths.add(filePath);
+      }
+      if (instance.deferredRollupMetadata) {
+        deferredMetadata.set(filePath, instance.deferredRollupMetadata);
       }
     }
     if (operation.kind === "summary" || operation.kind === "sessions") {
+      const decodeBudget = { remainingBytes: reportBudget?.remainingBytes ?? 0 };
       const consumed = new Set<string>();
       const invalidRows = new Map<string, SessionCostUsageRollupRow>();
       const source = {
+        deferredPaths,
+        deferredMetadata,
         readRow(filePath: string) {
           consumed.add(filePath);
           return rows.get(filePath);
         },
         readBody(row: SessionCostUsageRollupRow) {
           return files.get(row.key)?.instance.rollup?.blob ?? null;
+        },
+        async readEntry(row: SessionCostUsageRollupRow) {
+          getAsyncWorkSignal()?.throwIfAborted();
+          return decodeUsageCostRollup(
+            row.valueJson,
+            operation.pricingFingerprint,
+            files.get(row.key)?.instance.rollup?.blob ?? null,
+            decodeBudget,
+          );
         },
         onInvalidBody(filePath: string) {
           const row = rows.get(filePath);
@@ -216,22 +260,10 @@ async function runCapturedSessionActorUsage(
                 ...operation,
                 files: selectedFiles ?? [],
               })),
+              remainingReportBytes: Math.max(0, decodeBudget.remainingBytes),
             };
       // This is the disclosure boundary; ordinary bookkeeping uses the captured immutable snapshot.
       binding.actor?.snapshot(binding.authority);
-      if (result.kind === "sessions" && operation.kind === "sessions" && operation.overview) {
-        return {
-          kind: "overview",
-          result: buildUsageOverview({
-            ...operation.overview,
-            summaries: result.summaries,
-            dayBucket: operation.dayBucket,
-          }),
-          cacheStatus: result.cacheStatus,
-          staleSessionFiles: result.staleSessionFiles,
-          invalidRows: [...invalidRows.values()],
-        };
-      }
       return { ...result, invalidRows: [...invalidRows.values()] };
     }
     if (!binding.actor) {
@@ -252,10 +284,14 @@ async function runCapturedSessionActorUsage(
           return false;
         }
         const row = rows.get(file.filePath);
+        if (row && Buffer.byteLength(row.valueJson) > 64 * 1024) {
+          return true;
+        }
         const envelope =
           row && decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint);
         return (
           rebuild.has(file.filePath) ||
+          (row?.bodyBytes !== undefined && envelope?.body.storedBytes !== row.bodyBytes) ||
           !isUsageCostRollupFresh({ file, checkpoint: envelope?.checkpoint })
         );
       })

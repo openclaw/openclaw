@@ -2,14 +2,16 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import {
   SqliteDatabaseGenerationSlot,
+  readSqliteDatabaseGeneration,
   type Admission,
 } from "./sqlite-database-admission-record.js";
-import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
+import {
+  createSqliteDatabaseWriteReceipts,
+  sqliteSessionIdWriteScope,
+} from "./sqlite-database-write-receipts.js";
 
-it("invalidates a scope registered by another isolate during an accepted write", () => {
-  const reader = new DatabaseSync(":memory:");
-  const writer = new DatabaseSync(":memory:");
-  const host: Admission = {
+function createAdmission(): Admission {
+  return {
     identity: "receipt-test",
     location: ":memory:",
     descriptor: -1,
@@ -24,6 +26,60 @@ it("invalidates a scope registered by another isolate during an accepted write",
     writeScopeRevision: 0,
     references: new Map(),
   };
+}
+
+it("publishes cohort scope discovery once and preserves independent write receipts", () => {
+  const database = new DatabaseSync(":memory:");
+  const record = createAdmission();
+  const publications: number[] = [];
+  const receipts = createSqliteDatabaseWriteReceipts({
+    admission: () => record,
+    pathAdmission: () => record,
+    readRevision: () => 0,
+    writer: () => record,
+    suspended: () => false,
+    publish: (current) => {
+      Atomics.store(
+        new Int32Array(current.generation),
+        SqliteDatabaseGenerationSlot.writeScopeRevision,
+        current.writeScopes.size,
+      );
+      current.writeScopeRevision = readSqliteDatabaseGeneration(current, "writeScopeRevision");
+      publications.push(current.writeScopes.size);
+    },
+  });
+  const scopes = [
+    ["first", sqliteSessionIdWriteScope("first-id")],
+    ["second", sqliteSessionIdWriteScope("second-id")],
+  ];
+  try {
+    const before = receipts.readSqliteDatabaseScopedWriteTokensForPath(":memory:", scopes)!;
+    expect(before).toHaveLength(2);
+    expect(before.every((token) => typeof token === "string")).toBe(true);
+    expect(publications).toEqual([4]);
+    expect(receipts.readSqliteDatabaseScopedWriteTokensForPath(":memory:", scopes)).toEqual(before);
+    expect(publications).toEqual([4]);
+
+    receipts.withSqliteDatabaseWriteScope(database, ["second"], () => {
+      receipts.begin(database, false);
+      receipts.finish(database, record);
+    });
+    const after = receipts.readSqliteDatabaseScopedWriteTokensForPath(":memory:", scopes)!;
+    expect(after[0]).toBe(before[0]);
+    expect(after[1]).not.toBe(before[1]);
+    expect(after).toEqual(
+      scopes.map((scope) => receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", scope)),
+    );
+    expect(publications).toEqual([4]);
+  } finally {
+    database.close();
+  }
+});
+
+it("invalidates a scope registered by another isolate during an accepted write", () => {
+  const reader = new DatabaseSync(":memory:");
+  const writer = new DatabaseSync(":memory:");
+  const host = createAdmission();
   const worker = { ...host, writeScopes: new Map(host.writeScopes) };
   const receipts = createSqliteDatabaseWriteReceipts({
     admission: (database) => (database === reader ? host : worker),
@@ -31,7 +87,6 @@ it("invalidates a scope registered by another isolate during an accepted write",
     readRevision: () => 0,
     writer: () => worker,
     suspended: () => false,
-    exchange: () => {},
     publish: (record) => {
       Atomics.store(
         new Int32Array(record.generation),

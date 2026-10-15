@@ -169,6 +169,7 @@ function prepareGitHubToolEnvironmentForIdentity(
     localGitConfigParameters: AGENT_GIT_CONFIG_PARAMETERS,
     excludedStoreNames: Object.freeze(excludedStoreNames),
     managedLocalIdentity,
+    ...(managedLocalIdentity ? { hostExecutionRequired: true as const } : {}),
   });
 }
 
@@ -236,7 +237,7 @@ async function readManagedGitHubToken(profileDir: string): Promise<string | unde
 async function readGitAuthor(env: NodeJS.ProcessEnv, cwd: string) {
   const result = await runIdentityCommand(
     ["git", "config", "--null", "--get-regexp", "^user\\.(name|email)$"],
-    env,
+    { ...env, GIT_NO_LAZY_FETCH: "1" },
     cwd,
   );
   const author: { name: string | null; email: string | null } = { name: null, email: null };
@@ -466,11 +467,11 @@ async function prepareSharedGitHubIdentity(
     allowAnonymous?: boolean;
     allowStale?: boolean;
   },
+  identity: ResolvedGitHubToolIdentity,
   readNativeToken = readNativeGitHubToken,
   host = resolveGitHubHost(),
   apiBaseUrl = resolveGitHubApiBaseUrl(),
 ) {
-  const identity = resolveGitHubToolIdentity(params);
   const managed = identity.source !== "system-detected";
   const readOAuth = () =>
     managed && identity.config.kind === "oauth"
@@ -481,7 +482,6 @@ async function prepareSharedGitHubIdentity(
     ...githubIdentityProbeEnvironment(params, identity),
     GH_PROMPT_DISABLED: "1",
   });
-  const env = currentEnvironment();
   if (managed && (host !== GITHUB_HOST || apiBaseUrl !== resolveConfiguredGitHubApiBaseUrl())) {
     const error = new GitHubIdentityError("unavailable");
     error.message =
@@ -516,16 +516,13 @@ async function prepareSharedGitHubIdentity(
       oauth,
       probe.account.accountId,
     );
-    const prepared = Object.freeze({
+    const prepared = {
       source: identity.source,
       ...(managed ? { profileId: identity.config.profileId } : {}),
       host,
       account: probe.account,
-      // Broker children and worker launches receive this fixed snapshot. Profile
-      // retirement cannot redirect an already-admitted operation.
-      env: Object.freeze(withGitHubToken(env, token)),
       ...(accessExpiresAtMs !== undefined ? { accessExpiresAtMs } : {}),
-    }) satisfies PreparedGitHubPublicationIdentity;
+    };
     return { prepared, token, readToken, ...(probe.stale ? { stale: true as const } : {}) };
   }, params);
 }
@@ -534,11 +531,15 @@ async function prepareSharedGitHubIdentity(
 export async function prepareGitHubPublicationIdentity(
   params: GitHubIdentityPreparation & { assertCurrent?: () => void },
 ): Promise<PreparedGitHubPublicationIdentity> {
-  const { prepared } = await prepareSharedGitHubIdentity(params);
-  if (!prepared) {
+  const identity = resolveGitHubToolIdentity(params);
+  // Capture the child environment before awaiting credentials; retirement cannot
+  // redirect an already-admitted publication to another profile.
+  const env = { ...githubIdentityProbeEnvironment(params, identity), GH_PROMPT_DISABLED: "1" };
+  const { prepared, token } = await prepareSharedGitHubIdentity(params, identity);
+  if (!prepared || token === undefined) {
     throw new GitHubIdentityError("unavailable");
   }
-  return prepared;
+  return Object.freeze({ ...prepared, env: Object.freeze(withGitHubToken(env, token)) });
 }
 
 /** Options expose account facts only; publication obtains its own live credential. */
@@ -548,6 +549,7 @@ export async function prepareGitHubPublicationOptionsIdentity(
   let nativeStale = false;
   const { prepared, stale } = await prepareSharedGitHubIdentity(
     { ...params, allowStale: true },
+    resolveGitHubToolIdentity(params),
     (env, requireAbsentProof, host) =>
       readCachedNativeGitHubToken(env, requireAbsentProof, host, {
         onStale: () => {
@@ -595,6 +597,7 @@ export async function prepareGitHubReadIdentity(
   assertSelected();
   const { token, readToken, prepared, stale } = await prepareSharedGitHubIdentity(
     { ...params, ...caller },
+    selected,
     readCachedNativeGitHubToken,
     params.issuer,
     params.issuer ? resolveConfiguredGitHubApiBaseUrl() : undefined,

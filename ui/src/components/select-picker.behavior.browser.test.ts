@@ -1,11 +1,6 @@
-import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  renderPicker,
-  type PickerParams,
-  type PickerOption,
-  type SelectPicker,
-} from "./select-picker.ts";
+import { pickerClass } from "./select-picker.ts";
+import type { PickerParams, PickerOption } from "./select-picker.ts";
 import overlayStyles from "./solid/overlay.css?inline";
 
 const options: PickerOption[] = [
@@ -31,13 +26,19 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
   };
   const container = document.createElement("div");
   document.body.append(container);
+  const picker = document.createElement("openclaw-select-picker");
+  picker.style.cssText = "width:100%;min-width:min(138px,100%)";
+  const next = document.createElement("button");
+  next.id = "next";
+  next.textContent = "Next";
+  container.append(picker, next);
   const update = async (patch: Partial<PickerParams<PickerOption>>) => {
     Object.assign(params, patch);
-    render(html`${renderPicker({ ...params })}<button id="next">Next</button>`, container);
-    await container.querySelector<SelectPicker>("openclaw-select-picker")!.updateComplete;
+    picker.className = pickerClass(params);
+    picker.params = { ...params };
+    await picker.updateComplete;
   };
   await update({});
-  const picker = container.querySelector<SelectPicker>("openclaw-select-picker")!;
   const trigger = picker.querySelector<HTMLButtonElement>("button")!;
   const open = async () => {
     trigger.click();
@@ -66,7 +67,7 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
   return { params, picker, trigger, open, search, rows, key, update, container };
 }
 
-describe("renderPicker", () => {
+describe("Picker", () => {
   it("keeps grouped choices clickable near the viewport edge when overlay styles load later", async () => {
     const { page } = await import("vitest/browser");
     const initialViewport = { width: innerWidth, height: innerHeight };
@@ -88,6 +89,11 @@ describe("renderPicker", () => {
         searchable: "always",
       });
       p.container.style.cssText = "position:fixed;right:12px;top:calc(100vh - 50px);width:240px";
+      expect(
+        p.picker
+          .querySelector<HTMLElement>(".picker-select__menu")!
+          .style.getPropertyValue("position-anchor"),
+      ).toBe(p.trigger.style.getPropertyValue("anchor-name"));
       await page.elementLocator(p.trigger).click();
       const row = p.picker.querySelector<HTMLElement>('[role="option"][data-value=""]')!;
       const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
@@ -176,14 +182,6 @@ describe("renderPicker", () => {
       }
     },
   );
-
-  it("anchors its native popup to the mounted trigger before the first open", async () => {
-    const p = await mount();
-    const popup = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
-    expect(popup.style.getPropertyValue("position-anchor")).toBe(
-      p.trigger.style.getPropertyValue("anchor-name"),
-    );
-  });
 
   it("leaves closed-trigger Escape to the page after dismissing the menu without a write", async () => {
     const p = await mount();

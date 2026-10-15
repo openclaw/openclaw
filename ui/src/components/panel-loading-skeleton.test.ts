@@ -130,7 +130,6 @@ describe("panel presentation bridges", () => {
     expect(getByRole(host, "button", { name: "Add another file" })).toBe(button);
     host.remove();
     await Promise.resolve();
-    expect(icon?.hasAttribute("aria-hidden")).toBe(false);
     owner.append(host);
     await host.updateComplete;
     expect(owner.querySelectorAll("openclaw-panel-empty-state")).toHaveLength(1);

@@ -22,6 +22,95 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus service", () => {
+  it("counts list callers separately while preserving method-only RPC totals", () => {
+    const metrics = createMetricsHarness();
+    try {
+      const event = {
+        type: "gateway.rpc",
+        method: "models.list",
+        phase: "received",
+        modelsList: {
+          clientKind: "openclaw-control-ui",
+          source: "wire",
+          view: "configured",
+          scope: "agent",
+          refresh: false,
+          preparedOnly: true,
+        },
+      } as const;
+      metrics.record(event);
+      metrics.record(event);
+      metrics.record(event, untrusted);
+      metrics.record({ ...event, modelsList: { ...event.modelsList, source: "internal" } });
+      const sessions = {
+        type: "gateway.rpc",
+        method: "sessions.list",
+        phase: "received",
+        sessionsList: {
+          clientKind: "openclaw-control-ui",
+          source: "wire",
+          callerSource: "sidebar",
+          rowMode: "sidebar",
+          filter: "general",
+        },
+      } as const;
+      metrics.record(sessions);
+      metrics.record(sessions);
+      metrics.record(sessions, untrusted);
+      metrics.record({
+        ...sessions,
+        sessionsList: { ...sessions.sessionsList, source: "internal" },
+      });
+      const cron = {
+        type: "gateway.rpc",
+        method: "cron.list",
+        phase: "received",
+        cronList: {
+          clientKind: "openclaw-control-ui",
+          source: "wire",
+          scope: "session",
+          compact: true,
+          page: "first",
+        },
+      } as const;
+      metrics.record(cron);
+      metrics.record(cron);
+      metrics.record(cron, untrusted);
+      metrics.record({ ...cron, cronList: { ...cron.cronList, source: "internal" } });
+      metrics.record({ type: "gateway.rpc", method: "health", phase: "received" });
+      const rendered = metrics.render();
+      expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="models.list"} 3\n');
+      expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="health"} 1\n');
+      expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="sessions.list"} 3\n');
+      expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="cron.list"} 3\n');
+      expect(rendered).toContain(
+        'openclaw_cron_list_requests_total{client_kind="openclaw-control-ui",compact="true",page="first",scope="session",source="wire"} 2\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_cron_list_requests_total{client_kind="openclaw-control-ui",compact="true",page="first",scope="session",source="internal"} 1\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_sessions_list_requests_total{caller_source="sidebar",client_kind="openclaw-control-ui",filter="general",row_mode="sidebar",source="wire"} 2\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_sessions_list_requests_total{caller_source="sidebar",client_kind="openclaw-control-ui",filter="general",row_mode="sidebar",source="internal"} 1\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_models_list_requests_total{client_kind="openclaw-control-ui",prepared_only="true",refresh="false",scope="agent",source="wire",view="configured"} 2\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_models_list_requests_total{client_kind="openclaw-control-ui",prepared_only="true",refresh="false",scope="agent",source="internal",view="configured"} 1\n',
+      );
+      expect(
+        rendered
+          .split("\n")
+          .filter((line) => line.startsWith("openclaw_models_list_requests_total{")),
+      ).toHaveLength(2);
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it("counts egress outcomes and catalog preparation independently of log records", () => {
     const metrics = createMetricsHarness();
     try {
@@ -164,40 +253,6 @@ describe("diagnostics-prometheus service", () => {
     } finally {
       metrics.stop();
     }
-  });
-
-  it("preserves escaped histogram labels and fresh values across scrapes and restarts", () => {
-    const metrics = createMetricsHarness();
-    const event = {
-      type: "gateway.rpc" as const,
-      method: 'test."\\\n😀',
-      phase: "handler" as const,
-      outcome: "returned" as const,
-      durationMs: 5,
-      admissionMs: 0,
-    };
-    const name = "openclaw_gateway_rpc_handler_seconds";
-    const label = String.raw`method="test.\"\\\n😀"`;
-    metrics.record(event);
-    const first = metrics.render();
-    expect(first).toContain(`${name}_bucket{le="0.005",${label}} 1\n`);
-    expect(first).toContain(`${name}_bucket{le="+Inf",${label}} 1\n`);
-    expect(metrics.render()).toBe(first);
-
-    metrics.record({ ...event, durationMs: 10 });
-    const updated = metrics.render();
-    expect(updated).toContain(`${name}_bucket{le="0.005",${label}} 1\n`);
-    expect(updated).toContain(`${name}_bucket{le="0.01",${label}} 2\n`);
-    expect(updated).toContain(`${name}_bucket{le="+Inf",${label}} 2\n`);
-    expect(updated).toContain(`${name}_sum{${label}} 0.015\n`);
-    expect(updated).toContain(`${name}_count{${label}} 2\n`);
-
-    metrics.stop();
-    expect(metrics.render()).toBe("");
-    metrics.start();
-    metrics.record(event);
-    expect(metrics.render()).toBe(first);
-    metrics.stop();
   });
 
   it("counts HTTP cancellations by source without accepting public events", () => {

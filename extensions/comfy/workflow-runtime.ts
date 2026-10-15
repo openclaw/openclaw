@@ -380,8 +380,7 @@ async function waitForComfyHistory(
   promptId: string,
   pollIntervalMs: number,
 ): Promise<unknown> {
-  const { baseUrl, headers: requestHeaders, mode, ...request } = params;
-  const headers = new Headers(requestHeaders);
+  const { baseUrl, headers, mode, ...request } = params;
   const deadline = performance.now() + params.timeoutMs;
   const read = <T>(path: string, kind: "history" | "status", timeoutMs: number) =>
     readJsonResponse<T>({
@@ -486,8 +485,7 @@ async function downloadOutputFile(
   capability: ComfyCapability,
   maxBytes: number,
 ): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
-  const { baseUrl, headers: requestHeaders, mode, ...request } = params;
-  const headers = new Headers(requestHeaders);
+  const { baseUrl, headers, mode, ...request } = params;
   const fileName = normalizeOptionalString(file.filename) || normalizeOptionalString(file.name);
   if (!fileName) {
     throw new Error("Comfy output entry missing filename");
@@ -598,7 +596,7 @@ function resolveComfyConfigurationReadiness(
   return undefined;
 }
 
-/** Retained for released hosts that discover providers through the synchronous hook. */
+/** The released resolveCapabilityModelCandidates SDK needs this hook through 2026-12-31. */
 export function isComfyCapabilityConfigured(params: ComfyCapabilityConfiguredParams): boolean {
   return (
     resolveComfyConfigurationReadiness(params) ??

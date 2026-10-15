@@ -1,6 +1,6 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid as render } from "../test-helpers/mount-solid.ts";
-import { flush } from "../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { SidebarDropdown, renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { renderSidebarRailPinMenuForController } from "./sidebar-menus-render.tsx";
@@ -31,7 +31,7 @@ it("keeps modified sidebar links native and handles ordinary navigation", () => 
   expect(navigate).toHaveBeenCalledOnce();
 });
 
-it("delivers the Web Awesome selection event from the Solid dropdown", () => {
+it("delivers an action selected through the shared sidebar menu", async () => {
   const select = vi.fn();
   const view = render(() => (
     <SidebarDropdown
@@ -39,23 +39,40 @@ it("delivers the Web Awesome selection event from the Solid dropdown", () => {
       class="sidebar-menu-test"
       label="Sidebar actions"
       onSelect={select}
-      onTabAway={vi.fn()}
       onClose={vi.fn()}
-      content={<span>Actions</span>}
+      items={[{ id: "customize", label: "Customize" }]}
     />
   ));
-  flush();
-  const dropdown = view.container.querySelector("wa-dropdown");
-  expect(dropdown).not.toBeNull();
-  const item = Object.assign(document.createElement("div"), { value: "customize" });
-  const event = new CustomEvent("wa-select", {
-    bubbles: true,
-    cancelable: true,
-    detail: { item },
-  });
-  dropdown!.dispatchEvent(event);
-  expect(event.defaultPrevented).toBe(true);
-  expect(select).toHaveBeenCalledExactlyOnceWith(item);
+  await waitForSolid(() =>
+    expect(view.container.querySelector("[role=menu]")!.matches(":popover-open")).toBe(true),
+  );
+  view.getByRole("menuitem", { name: "Customize", hidden: true }).click();
+  await waitForSolid(() => expect(select).toHaveBeenCalledExactlyOnceWith("customize"));
+});
+
+it("returns to the durable trigger without consuming native Tab", async () => {
+  const anchor = document.createElement("button");
+  document.body.append(anchor);
+  onTestFinished(() => anchor.remove());
+  const close = vi.fn();
+  const view = render(() => (
+    <SidebarDropdown
+      position={{ x: 12, y: 30 }}
+      class="sidebar-menu-test"
+      label="Sidebar actions"
+      anchor={anchor}
+      onSelect={vi.fn()}
+      onClose={close}
+      items={[{ id: "customize", label: "Customize" }]}
+    />
+  ));
+  const item = view.getByRole("menuitem", { name: "Customize", hidden: true });
+  await waitForSolid(() => expect(document.activeElement).toBe(item));
+  const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+  item.dispatchEvent(tab);
+  expect(tab.defaultPrevented).toBe(false);
+  expect(document.activeElement).toBe(anchor);
+  expect(close).toHaveBeenCalledExactlyOnceWith(false);
 });
 
 it.each([
@@ -65,7 +82,7 @@ it.each([
   ["remove", 2, "person:ada"],
 ] as const)(
   "closes the rail pin menu before %s dispatch at position %i",
-  (action, index, target) => {
+  async (action, index, target) => {
     const entries: readonly string[] = ["route:usage", "route:sessions", "person:ada"];
     const pins = document.createElement("div");
     for (const entry of entries) {
@@ -100,22 +117,17 @@ it.each([
       closePositionedMenu(_menu: "railPin") {
         calls.push("close");
       },
-      positionedMenuHandlers: (_menu: "railPin") => ({ onTabAway() {}, onClose() {} }),
+      positionedMenuHandlers: (_menu: "railPin") => ({ onClose() {} }),
     } as SidebarMenusController;
     const view = render(() => renderSidebarRailPinMenuForController(controller), {
       container: pins,
     });
     flush();
-    const menu = view.container.querySelector("wa-dropdown")!;
-    expect(menu.querySelector('[value="before"]')?.hasAttribute("disabled")).toBe(index === 0);
-    expect(menu.querySelector('[value="after"]')?.hasAttribute("disabled")).toBe(index === 2);
-    menu.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        cancelable: true,
-        detail: { item: menu.querySelector(`[value="${action}"]`) },
-      }),
-    );
+    const menu = view.getByRole("menu", { hidden: true });
+    expect(menu.querySelector('[data-value="before"]')?.hasAttribute("disabled")).toBe(index === 0);
+    expect(menu.querySelector('[data-value="after"]')?.hasAttribute("disabled")).toBe(index === 2);
+    menu.querySelector<HTMLButtonElement>(`[data-value="${action}"]`)!.click();
+    await waitForSolid(() => expect(calls).toHaveLength(2));
     if (action === "remove") {
       expect(remove).toHaveBeenCalledExactlyOnceWith(target);
       expect(move).not.toHaveBeenCalled();

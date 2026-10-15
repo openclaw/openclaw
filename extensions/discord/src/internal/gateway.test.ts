@@ -10,8 +10,10 @@ import {
 } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiscordVoiceStateUpdateListener } from "../voice/listeners.js";
+import { Client } from "./client.js";
 import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
 import { GatewayPlugin } from "./gateway.js";
+import { VoicePlugin } from "./voice.js";
 
 function attachOpenSocket(gateway: GatewayPlugin) {
   const send = vi.fn();
@@ -196,22 +198,77 @@ describe("GatewayPlugin", () => {
     );
   });
 
-  it("bounds identify waits after a backward clock jump", async () => {
-    vi.useFakeTimers();
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+  it("routes only the bot's own guild voice updates to its adapter while preserving other members' events", () => {
+    const gateway = new TestGatewayPlugin();
+    const onVoiceStateUpdate = vi.fn();
+    const onVoiceServerUpdate = vi.fn();
+    const handleVoiceState = vi.fn();
+    const client = new Client(
+      { clientId: "application-id", token: "test-token" },
+      { listeners: [{ type: GatewayDispatchEvents.VoiceStateUpdate, handle: handleVoiceState }] },
+      [gateway, new VoicePlugin()],
+    );
+    const voice = expectDefined(client.getPlugin("voice"), "registered voice plugin");
+    const adapter = voice.getGatewayAdapterCreator("g1")({
+      onVoiceStateUpdate,
+      onVoiceServerUpdate,
+      destroy: vi.fn(),
+    });
+    const socket = expectDefined(gateway.sockets[0], "Discord gateway socket");
+    const dispatch = (t: GatewayDispatchEvents, d: unknown) =>
+      socket.emit("message", JSON.stringify({ op: GatewayOpcodes.Dispatch, t, s: 1, d }));
+    const ownState = {
+      guild_id: "g1",
+      user_id: "bot-user",
+      session_id: "bot-session",
+      channel_id: "c1",
+      self_mute: false,
+      self_deaf: false,
+    };
     try {
-      vi.setSystemTime(1_000_000_000_000);
-      await sharedGatewayIdentifyLimiter.wait();
+      dispatch(GatewayDispatchEvents.VoiceStateUpdate, ownState);
+      expect(onVoiceStateUpdate).not.toHaveBeenCalled();
+      dispatch(GatewayDispatchEvents.Ready, {
+        user: { id: "bot-user" },
+        session_id: "gateway-session",
+      });
+      dispatch(GatewayDispatchEvents.VoiceStateUpdate, ownState);
+      expect(onVoiceStateUpdate).toHaveBeenCalledExactlyOnceWith(ownState);
 
-      vi.setSystemTime(0);
-      const second = sharedGatewayIdentifyLimiter.wait();
+      for (const channelId of ["c1", "c2", null]) {
+        const foreignState = {
+          ...ownState,
+          user_id: "other-member",
+          session_id: "other-session",
+          channel_id: channelId,
+          self_mute: true,
+          self_deaf: true,
+        };
+        dispatch(GatewayDispatchEvents.VoiceStateUpdate, foreignState);
+        expect(onVoiceStateUpdate).toHaveBeenCalledExactlyOnceWith(ownState);
+        expect(handleVoiceState).toHaveBeenLastCalledWith(foreignState, client);
+        if (channelId) {
+          expect(gateway.listVoiceChannelStates("g1", channelId)).toContainEqual(foreignState);
+        }
+      }
+      expect(gateway.listVoiceChannelStates("g1", "c1")).toEqual([ownState]);
+      expect(gateway.listVoiceChannelStates("g1", "c2")).toEqual([]);
 
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 5_000);
+      dispatch(GatewayDispatchEvents.VoiceStateUpdate, { ...ownState, guild_id: "g2" });
+      const server = { guild_id: "g1", token: "voice-token", endpoint: "voice.example.test" };
+      dispatch(GatewayDispatchEvents.VoiceServerUpdate, { ...server, guild_id: "g2" });
+      expect(onVoiceServerUpdate).not.toHaveBeenCalled();
+      dispatch(GatewayDispatchEvents.VoiceServerUpdate, server);
+      expect(onVoiceServerUpdate).toHaveBeenCalledExactlyOnceWith(server);
+      expect(onVoiceStateUpdate).toHaveBeenCalledExactlyOnceWith(ownState);
 
-      await vi.advanceTimersByTimeAsync(5_000);
-      await expect(second).resolves.toBeUndefined();
+      const ownLeave = { ...ownState, channel_id: null };
+      dispatch(GatewayDispatchEvents.VoiceStateUpdate, ownLeave);
+      expect(onVoiceStateUpdate).toHaveBeenCalledTimes(2);
+      expect(onVoiceStateUpdate).toHaveBeenLastCalledWith(ownLeave);
     } finally {
-      timeoutSpy.mockRestore();
+      adapter.destroy();
+      gateway.disconnect();
     }
   });
 
@@ -354,7 +411,11 @@ describe("GatewayPlugin", () => {
     });
     await handleDispatch({
       t: GatewayDispatchEvents.Ready,
-      d: { session_id: "session-2", resume_gateway_url: "wss://gateway.discord.gg" },
+      d: {
+        user: { id: "bot-user" },
+        session_id: "session-2",
+        resume_gateway_url: "wss://gateway.discord.gg",
+      },
     });
 
     expect(gateway.listVoiceChannelStates("g1", "c1")).toBeNull();
@@ -499,6 +560,7 @@ describe("GatewayPlugin", () => {
         t: GatewayDispatchEvents.Ready,
         s: 42,
         d: {
+          user: { id: "bot-user" },
           session_id: "session-1",
           resume_gateway_url: "wss://resume.example.test",
         },

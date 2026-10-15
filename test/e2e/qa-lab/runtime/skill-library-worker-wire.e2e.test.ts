@@ -193,13 +193,16 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             marker: string,
             runId: string,
           ) => {
-            await expect(
-              client.request(
-                "agent.wait",
-                { runId, timeoutMs: PROOF_TIMEOUT_MS },
-                PROOF_TIMEOUT_MS + 5_000,
-              ),
-            ).resolves.toMatchObject({ status: "ok" });
+            const waitResult = await client.request(
+              "agent.wait",
+              { runId, timeoutMs: PROOF_TIMEOUT_MS },
+              PROOF_TIMEOUT_MS + 5_000,
+            );
+            expect(waitResult, `agent.wait ${marker}: ${JSON.stringify(waitResult)}`).toMatchObject(
+              {
+                status: "ok",
+              },
+            );
             if (key === remoteKey) {
               await settlement.wait(admin, key, signal);
             }
@@ -581,6 +584,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           );
           expect(cancelled.status).not.toBe("timeout");
           provider.release("cancelled-worker");
+          // The replacement send can race cancelled-turn persistence; chat admission joins it.
           await settlement.wait(admin, remoteKey, signal);
           expect((await turn(alice, remoteKey, "replacement-worker")).reference).toBe(
             "ALICE-RESOURCE-2\n",

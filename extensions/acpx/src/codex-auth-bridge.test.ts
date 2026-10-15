@@ -138,20 +138,17 @@ describe("prepareAcpxCodexAuthConfig", () => {
     await fs.access(generatedClaude.wrapperPath);
   });
 
-  it.each([
-    { agent: "codex", packageName: "codex-acp", version: "2.1.1" },
-    { agent: "claude", packageName: "claude-agent-acp", version: "0.86.0" },
-  ] as const)(
+  it.each([{ agent: "codex", packageName: "codex-acp", version: "2.1.1" }] as const)(
     "launches $agent after its captured adapter is removed",
-    async ({ agent, packageName, version }) => {
-      const { root, generated, generatedClaude, prepare } = createWrapperFixture();
+    async ({ packageName, version }) => {
+      const { root, generated, prepare } = createWrapperFixture();
       const capturedBin = path.join(root, "captured-adapter.cjs");
       await fs.writeFile(capturedBin, "console.log('captured adapter');\n");
       await prepare({
         resolveInstalledCodexAcpBinPath: async () => capturedBin,
         resolveInstalledClaudeAcpBinPath: async () => capturedBin,
       });
-      const wrapperPath = agent === "codex" ? generated.wrapperPath : generatedClaude.wrapperPath;
+      const wrapperPath = generated.wrapperPath;
       const packageDir = path.join(root, "node_modules", "@agentclientprotocol", packageName);
       const binDir = path.join(root, "node_modules", ".bin");
       await fs.mkdir(packageDir, { recursive: true });
@@ -470,40 +467,77 @@ describe("prepareAcpxCodexAuthConfig", () => {
     await expectPathMissing(path.join(agentDir, "acp-auth", "codex", "auth.json"));
   });
 
-  it("copies only trusted Codex project declarations into the isolated Codex home", async () => {
+  it.each(["inline map", "project tables"])(
+    "copies only trusted Codex project declarations into the isolated Codex home (%s)",
+    async (syntax) => {
+      const { root, generated, prepare } = createWrapperFixture();
+      const sourceCodexHome = path.join(root, "source-codex");
+      const explicitProject = path.join(root, "explicit project");
+      const inlineProject = path.join(root, "inline-project");
+      const mapProject = path.join(root, "map-project");
+      const untrustedProject = path.join(root, "untrusted-project");
+      const quotedProject = path.join(root, "quoted-project");
+      const projects =
+        syntax === "inline map"
+          ? [
+              `projects = { ${[mapProject, inlineProject, explicitProject]
+                .map((project) => `${JSON.stringify(project)} = { trust_level = "trusted" }`)
+                .join(
+                  ", ",
+                )}, ${JSON.stringify(untrustedProject)} = { trust_level = "untrusted" } }`,
+            ]
+          : [
+              "[projects]",
+              `${JSON.stringify(mapProject)} = { trust_level = "trusted" }`,
+              `${JSON.stringify(inlineProject)} = { trust_level = "trusted" }`,
+              `${JSON.stringify(untrustedProject)} = { trust_level = "untrusted" }`,
+              `[projects.${JSON.stringify(explicitProject)}]`,
+              'trust_level = "trusted"',
+            ];
+      await fs.mkdir(sourceCodexHome, { recursive: true });
+      await fs.writeFile(
+        path.join(sourceCodexHome, "config.toml"),
+        [
+          'notify = ["SkyComputerUseClient", "turn-ended"]',
+          "notes = '''",
+          `[projects.${JSON.stringify(quotedProject)}]`,
+          'trust_level = "trusted"',
+          "'''",
+          ...projects,
+          "",
+        ].join("\n"),
+      );
+      process.env.CODEX_HOME = sourceCodexHome;
+
+      await prepare({
+        resolveInstalledCodexAcpBinPath: async () => undefined,
+      });
+
+      const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
+      expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(root))}]`);
+      expect(isolatedConfig).toContain(
+        `[projects.${JSON.stringify(path.resolve(explicitProject))}]`,
+      );
+      expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(inlineProject))}]`);
+      expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(mapProject))}]`);
+      expect(isolatedConfig).not.toContain(untrustedProject);
+      expect(isolatedConfig).not.toContain(quotedProject);
+      expect(isolatedConfig).not.toContain("notify");
+      expect(isolatedConfig).not.toContain("SkyComputerUseClient");
+    },
+  );
+
+  it("rejects malformed source Codex config without publishing inferred trust", async () => {
     const { root, generated, prepare } = createWrapperFixture();
     const sourceCodexHome = path.join(root, "source-codex");
-    const explicitProject = path.join(root, "explicit project");
-    const inlineProject = path.join(root, "inline-project");
-    const mapProject = path.join(root, "map-project");
-    const untrustedProject = path.join(root, "untrusted-project");
     await fs.mkdir(sourceCodexHome, { recursive: true });
-    await fs.writeFile(
-      path.join(sourceCodexHome, "config.toml"),
-      [
-        'notify = ["SkyComputerUseClient", "turn-ended"]',
-        `projects = { ${JSON.stringify(mapProject)} = { trust_level = "trusted" }, ${JSON.stringify(untrustedProject)} = { trust_level = "untrusted" } }`,
-        "[projects]",
-        `${JSON.stringify(inlineProject)} = { trust_level = "trusted" }`,
-        `[projects.${JSON.stringify(explicitProject)}]`,
-        'trust_level = "trusted"',
-        "",
-      ].join("\n"),
-    );
+    await fs.writeFile(path.join(sourceCodexHome, "config.toml"), 'model = "unfinished');
     process.env.CODEX_HOME = sourceCodexHome;
 
-    await prepare({
-      resolveInstalledCodexAcpBinPath: async () => undefined,
-    });
-
-    const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
-    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(root))}]`);
-    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(explicitProject))}]`);
-    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(inlineProject))}]`);
-    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(mapProject))}]`);
-    expect(isolatedConfig).not.toContain(untrustedProject);
-    expect(isolatedConfig).not.toContain("notify");
-    expect(isolatedConfig).not.toContain("SkyComputerUseClient");
+    await expect(prepare()).rejects.toThrow(
+      "Codex config.toml must be valid TOML before starting an ACP session.",
+    );
+    await expectPathMissing(generated.configPath);
   });
 
   it("captures Codex wrapper stderr in a stream-aware redacted per-lease log", async () => {
@@ -609,32 +643,6 @@ describe("prepareAcpxCodexAuthConfig", () => {
     ]);
 
     await expectPathMissing(stderrLogPath);
-  });
-
-  it("starts the adapter when a previous stderr log cannot be removed", async () => {
-    const { root, stateDir, generated, prepare } = createWrapperFixture();
-    const quietScript = path.join(root, "quiet-adapter.mjs");
-    await fs.writeFile(quietScript, "process.exit(0);\n", "utf8");
-
-    await prepare({
-      resolveInstalledCodexAcpBinPath: async () => path.join(root, "codex-acp.js"),
-    });
-
-    const stderrLogPath = path.join(stateDir, "acpx", "codex-acp-wrapper.stderr.blocked-lease.log");
-    await fs.mkdir(stderrLogPath);
-
-    await expect(
-      execFileAsync(process.execPath, [
-        generated.wrapperPath,
-        "--openclaw-run-configured",
-        process.execPath,
-        quietScript,
-        OPENCLAW_ACPX_LEASE_ID_ARG,
-        "blocked-lease",
-        OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-        "gateway-test",
-      ]),
-    ).resolves.toMatchObject({ stderr: "" });
   });
 
   it("keeps the persisted stderr line tail UTF-16 safe at the 256 KiB boundary", async () => {

@@ -13,9 +13,7 @@ import type {
   TelegramSplitLaneSegmentsResult,
 } from "./bot-message-dispatch.types.js";
 import type { TelegramDraftPreview } from "./draft-stream-message.js";
-import { createTelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState, LaneName } from "./lane-delivery-text-deliverer.js";
-import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 import { buildTelegramRichMarkdownPlan, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { reportTelegramProviderDelivery } from "./send-outbound.js";
@@ -75,7 +73,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
       : { text, markdownSource: { text, tableMode: params.tableMode } };
 
   const createLaneStream = (laneName: LaneName) =>
-    (params.telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
+    params.telegramDeps.createTelegramDraftStream({
       api: params.bot.api,
       chatId: params.context.chatId,
       maxChars: draftMaxChars,
@@ -113,10 +111,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           accountId: params.context.route.accountId,
           agentId: params.opts.ownerAgentId,
         });
-        await (
-          params.telegramDeps.recordOutboundMessageForPromptContext ??
-          recordOutboundMessageForPromptContext
-        )({
+        await params.telegramDeps.recordOutboundMessageForPromptContext({
           cfg: params.cfg,
           ownerAgentId: params.opts.ownerAgentId,
           account: {

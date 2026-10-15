@@ -15,9 +15,6 @@ type StagedIMessageAttachments = {
 };
 
 type StageIMessageAttachmentsDeps = {
-  saveMediaBuffer?: typeof saveMediaBuffer;
-  convertHeicToJpeg?: (sourcePath: string, maxBytes: number) => Promise<Buffer>;
-  openLocalFileSafely?: typeof openLocalFileSafely;
   logVerbose?: (message: string) => void;
 };
 
@@ -44,7 +41,7 @@ async function readAttachmentBuffer(params: {
   allowedRoots?: readonly string[];
   deps: StageIMessageAttachmentsDeps;
 }): Promise<{ buffer: Buffer; contentType?: string; originalFilename?: string }> {
-  await using opened = await (params.deps.openLocalFileSafely ?? openLocalFileSafely)({
+  await using opened = await openLocalFileSafely({
     filePath: params.attachmentPath,
   });
   if (opened.stat.size > params.maxBytes) {
@@ -80,19 +77,14 @@ async function readAttachmentBuffer(params: {
 
   if (isHeicAttachment(params.attachmentPath, params.mimeType)) {
     try {
-      const convert = params.deps.convertHeicToJpeg;
       const converted = await withTempWorkspace(
         { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-imessage-heic-" },
         async (workspace) => {
           const pinnedPath = await workspace.write("attachment.heic", buffer);
-          return convert
-            ? {
-                buffer: await convert(pinnedPath, params.maxBytes),
-              }
-            : await loadWebMedia(pinnedPath, {
-                maxBytes: params.maxBytes,
-                localRoots: [workspace.dir],
-              });
+          return await loadWebMedia(pinnedPath, {
+            maxBytes: params.maxBytes,
+            localRoots: [workspace.dir],
+          });
         },
       );
       return {
@@ -123,7 +115,6 @@ export async function stageIMessageAttachments(
   },
 ): Promise<StagedIMessageAttachments> {
   const deps = params.deps ?? {};
-  const save = deps.saveMediaBuffer ?? saveMediaBuffer;
   const staged: ChannelInboundMediaInput[] = [];
   let unavailableCount = 0;
 
@@ -143,7 +134,7 @@ export async function stageIMessageAttachments(
         allowedRoots: params.allowedRoots,
         deps,
       });
-      const saved = await save(
+      const saved = await saveMediaBuffer(
         media.buffer,
         media.contentType,
         "inbound",

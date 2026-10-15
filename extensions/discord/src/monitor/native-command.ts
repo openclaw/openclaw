@@ -291,9 +291,6 @@ async function dispatchDiscordCommandInteraction(
         : "This channel is not allowed.",
     );
   }
-  if (policy?.isCurrent() === false) {
-    return reject("Access policy changed. Try this interaction again.", true);
-  }
   const dmEnabled = discordConfig?.dm?.enabled ?? true;
   const dmPolicy = resolveDiscordAccountDmPolicy({ cfg, accountId }) ?? "pairing";
   let commandAuthorized = true;
@@ -374,6 +371,7 @@ async function dispatchDiscordCommandInteraction(
   const effectiveRoute = routeState.effectiveRoute;
   const { ctxPayload, sessionKey, commandTargetSessionKey } =
     await buildDiscordNativeInteractionContext({
+      cfg,
       buildContext,
       interaction,
       channelContext,

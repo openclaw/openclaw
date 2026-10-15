@@ -126,9 +126,8 @@ describe("AppSidebar automatic list scope replacement", () => {
       const expand = sidebar.querySelector<HTMLButtonElement>(
         `[data-child-session-toggle="${nextParent.key}"]`,
       );
-      expect(expand?.getAttribute("aria-expanded")).toBe("false");
-      expand!.click();
-      await settleLitElement(sidebar);
+      // The newly discovered child reveals its parent after the background queue drains.
+      expect(expand?.getAttribute("aria-expanded")).toBe("true");
       expect(sidebar.textContent).toContain(`${nextParent.key} child`);
       expect(parents).toHaveLength(2);
     } finally {
@@ -299,8 +298,11 @@ describe("AppSidebar automatic list scope replacement", () => {
           `[data-child-session-toggle="${researchParent}"]`,
         );
         expect(expand).not.toBeNull();
-        expect(expand?.getAttribute("aria-expanded")).toBe("false");
-        expand!.click();
+        // Only the cross-agent roster discovers a new child after the initial baseline.
+        expect(expand?.getAttribute("aria-expanded")).toBe(nextAgent === "main" ? "false" : "true");
+        if (nextAgent === "main") {
+          expand!.click();
+        }
         await settleLitElement(sidebar);
         await vi.advanceTimersByTimeAsync(0);
         expect(sidebar.textContent).toContain("Next child");
@@ -332,7 +334,7 @@ describe("AppSidebar initial managed-list hydration", () => {
       invalidate: false,
       filter: "involving-me",
     },
-  ])("keeps only required filtered reads during $name", async (scenario) => {
+  ])("paints filtered sessions before group metadata during $name", async (scenario) => {
     const { holdSecondSlot, invalidate, filter } = scenario;
     const matchesFilter = (query: Record<string, unknown> | null | undefined) =>
       filter === "involving-me"
@@ -448,29 +450,26 @@ describe("AppSidebar initial managed-list hydration", () => {
     try {
       sidebar.connected = true;
       await settleLitElement(sidebar);
-      expect(listQueries).toHaveLength(1);
+      expect(listQueries).toHaveLength(holdSecondSlot ? 1 : 2);
       expect(listQueries[0]).toMatchObject({ ownerFirst: true, agentId: "main" });
-      expect(order.includes("groups:start")).toBe(!holdSecondSlot);
+      expect(order).not.toContain("groups:start");
 
       order.push("primary:resolve");
       primary.resolve(primaryResult);
-      await vi.waitFor(() => expect(order).toContain("groups:start"));
+      await vi.waitFor(() => expect(order).toContain("filtered:start"));
       await vi.waitFor(() =>
         expect(sessions.state.result?.sessions[0]?.label).toBe("Canonical session"),
       );
-      if (holdSecondSlot) {
-        expect(listQueries).toHaveLength(1);
-      }
-
-      order.push("groups:resolve");
-      groups.resolve(emptyGroups);
-      await vi.waitFor(() => expect(order).toContain("filtered:start"));
       expect(listQueries).toHaveLength(2);
       expect(listQueries[1]?.agentId).toBe(filter === "involving-me" ? "main" : undefined);
       expect(matchesFilter(listQueries[1])).toBe(true);
 
       order.push("filtered:resolve");
       filtered.resolve(filteredResult);
+      await vi.waitFor(() => expect(sidebar.textContent).toContain("My session"));
+      await vi.waitFor(() => expect(order).toContain("groups:start"));
+      order.push("groups:resolve");
+      groups.resolve(emptyGroups);
       if (invalidate) {
         await vi.waitFor(() => expect(order).toContain("later:start"));
         expect(sidebar.textContent).toContain("My session");

@@ -122,6 +122,8 @@ function createMaintenanceRuntime(params: {
     subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
     installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
     start: vi.fn(),
+    isStopping: () => false,
+    beginClose: vi.fn(),
     stop,
   };
   const runtime = createGatewayWorkerPlacementRuntime({

@@ -14,6 +14,7 @@ import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { recordLiveServingContextLimit } from "./provider-catalog-expiry.js";
 
 const log = createSubsystemLogger("plugins/self-hosted-provider-discovery");
 
@@ -363,6 +364,21 @@ export async function discoverOpenAICompatibleLocalModels(
     if (!modelId) {
       return [];
     }
+    // max_model_len describes the serving instance, not the model training window.
+    // Do not promote defaults, generic metadata, or malformed values to live ceilings.
+    const servingTokens = model.max_model_len;
+    if (
+      typeof servingTokens === "number" &&
+      Number.isSafeInteger(servingTokens) &&
+      servingTokens > 0
+    ) {
+      recordLiveServingContextLimit({
+        id: modelId,
+        api: "openai-completions",
+        baseUrl: params.baseUrl,
+        tokens: servingTokens,
+      });
+    }
     const meta = asOptionalRecord(model.meta);
     const parentId = normalizeOptionalString(model.parent);
     const parentContextWindow =
@@ -373,7 +389,9 @@ export async function discoverOpenAICompatibleLocalModels(
     const modelConfig: ModelDefinitionConfig = {
       id: modelId,
       name: modelId,
-      reasoning: /r1|reasoning|think|reason/i.test(modelId),
+      reasoning: /r1|reason|think|deepseek[-_]?v4|nemotron-3[-_](?:nano|super|ultra)\b/i.test(
+        modelId,
+      ),
       input: ["text"],
       cost: SELF_HOSTED_DEFAULT_COST,
       contextWindow:

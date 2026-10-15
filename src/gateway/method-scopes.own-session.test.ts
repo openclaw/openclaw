@@ -289,6 +289,19 @@ describe("method scope resolution and authorization", () => {
     ).toEqual(["operator.admin"]);
   });
 
+  it("requires operator.write rather than own-session scope for device folders", () => {
+    const params = { deviceFolder: { deviceId: "paired-device", path: "~/project" } };
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
+      "operator.write",
+    ]);
+    expect(authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params)).toEqual(
+      { allowed: true },
+    );
+    expect(
+      authorizeOperatorScopesForMethod("sessions.create", ["operator.sessions.write"], params),
+    ).toEqual({ allowed: false, missingScope: "operator.write" });
+  });
+
   it("keeps Gateway fs.listDir write-scoped and node browsing admin-only", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("fs.listDir", {})).toEqual([
       "operator.write",

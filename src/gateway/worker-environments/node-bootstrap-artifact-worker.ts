@@ -16,12 +16,7 @@ export async function prepareNodeBootstrapArtifactInWorker(
     workerClass: "writer",
   });
   try {
-    const artifact = await pool.run({ options, temporaryRoot }, {});
-    // Structured cloning drops frozen descriptors at the worker boundary.
-    return Object.freeze({
-      ...artifact,
-      enabledPluginIds: Object.freeze(artifact.enabledPluginIds),
-    });
+    return await pool.run({ options, temporaryRoot }, {});
   } finally {
     // The provider may remove staging only after the builder has stopped writing.
     await pool.close();

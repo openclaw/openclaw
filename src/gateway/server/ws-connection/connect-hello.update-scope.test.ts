@@ -74,8 +74,9 @@ vi.mock("../../session-row-projection-access.js", async (importOriginal) => ({
   getSessionRowProjection: getSessionRowProjectionMock,
 }));
 
-vi.mock("../../../state/user-profiles.js", () => ({
-  hasMultipleSessionSharingIdentities: vi.fn(() => false),
+vi.mock("../../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: vi.fn(() => false),
 }));
 
 vi.mock("../../control-ui-plugin-tabs.js", () => ({
@@ -509,6 +510,7 @@ describe("sendGatewayHello update detail scope", () => {
     });
     expectRedactedHelloSnapshot(context);
     expect(helloPayload(context)?.features.capabilities).toContain("node-permission-errors");
+    expect(helloPayload(context)?.features.capabilities).toContain("agent-session-id-create-v1");
   });
 
   it.each([

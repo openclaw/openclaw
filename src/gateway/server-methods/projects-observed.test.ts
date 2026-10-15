@@ -25,6 +25,11 @@ vi.mock("./projects-session-store.js", async (importOriginal) => ({
   }),
 }));
 
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  readResidentUserProfileAliases: (profileId: string) => new Set([profileId]),
+}));
+
 vi.mock("../../projects/project-registry.js", () => ({
   listProjectRegistry: async () => [],
   ProjectCheckoutError: class ProjectCheckoutError extends Error {},

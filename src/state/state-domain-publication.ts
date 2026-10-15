@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
   hasSqliteCommitReceiptCoverage,
@@ -50,7 +51,7 @@ export function batchStateDomainPublications(operation: () => void): void {
 /** Shared staging mechanics only; domain owners retain projections and authority. */
 export function createStateDomainPublication<T>(codec: {
   domain: string;
-  sourceIdentity?(this: void, db: DatabaseSync): string | symbol;
+  sourceIdentity?(this: void, db: EngineConnection): string | symbol;
   keyOf(value: T): string;
   isValue(value: unknown): value is T;
 }) {
@@ -63,7 +64,7 @@ export function createStateDomainPublication<T>(codec: {
   });
   return {
     ...publication,
-    stagePostimages(db: DatabaseSync, values: readonly T[]) {
+    stagePostimages(db: EngineConnection, values: readonly T[]) {
       publication.stagePostimages(
         db,
         values.map((value) => [codec.keyOf(value), value]),
@@ -75,7 +76,7 @@ export function createStateDomainPublication<T>(codec: {
 /** Domains with compound keys keep their key policy outside the shared receipt lifecycle. */
 export function createKeyedStateDomainPublication<T>(codec: {
   domain: string;
-  sourceIdentity?(this: void, db: DatabaseSync): string | symbol;
+  sourceIdentity?(this: void, db: EngineConnection): string | symbol;
   isFact(this: void, key: string, fact: SqliteCommittedFact<unknown>): boolean;
   invalidReceiptMessage?: string;
   installFailureMessage?: string;
@@ -85,14 +86,15 @@ export function createKeyedStateDomainPublication<T>(codec: {
   const state = resolveGlobalSingleton(
     Symbol.for(`openclaw.stateDomainPublication.${codec.domain}`),
     () => ({
-      sources: new WeakMap<DatabaseSync, SqliteCommitSource>(),
-      capture: new AsyncLocalStorage<{ db: DatabaseSync; facts: Facts }>(),
+      sources: new WeakMap<EngineConnection, SqliteCommitSource>(),
+      capture: new AsyncLocalStorage<{ db: EngineConnection; facts: Facts }>(),
       facts: new Set<(change: StateDomainChange<T>) => void>(),
       observers: new Set<(change: StateDomainChange<T>) => void>(),
     }),
   );
-  const sourceFor = (db: DatabaseSync) => {
-    let source = state.sources.get(db);
+  const sourceFor = (db: EngineConnection) => {
+    const anchor = sqlPublicationAnchor(db);
+    let source = state.sources.get(anchor);
     if (!source) {
       source = {
         identity:
@@ -101,12 +103,12 @@ export function createKeyedStateDomainPublication<T>(codec: {
           Symbol(codec.domain),
         incarnation: randomUUID(),
       };
-      state.sources.set(db, source);
+      state.sources.set(anchor, source);
     }
     return source;
   };
   const receiptFor = (
-    db: DatabaseSync,
+    db: EngineConnection,
     facts: ReadonlyMap<string, SqliteCommittedFact<T>>,
   ): Receipt =>
     createSqliteCommitReceipt({
@@ -136,12 +138,12 @@ export function createKeyedStateDomainPublication<T>(codec: {
       notify: () => notifyListeners(state.observers, change),
     };
   };
-  const stage = (db: DatabaseSync, facts: Facts) => {
+  const stage = (db: EngineConnection, facts: Facts) => {
     if (!facts.size) {
       return;
     }
     const capture = state.capture.getStore();
-    if (capture?.db === db) {
+    if (capture && sqlPublicationAnchor(capture.db) === sqlPublicationAnchor(db)) {
       const previous = new Map([...facts.keys()].map((key) => [key, capture.facts.get(key)]));
       if (
         !stageSqliteTransactionState(db, {
@@ -191,7 +193,7 @@ export function createKeyedStateDomainPublication<T>(codec: {
   };
   return {
     receipt: receiptFor,
-    stagePostimages(db: DatabaseSync, entries: readonly (readonly [string, T])[]) {
+    stagePostimages(db: EngineConnection, entries: readonly (readonly [string, T])[]) {
       stage(
         db,
         new Map(
@@ -202,15 +204,20 @@ export function createKeyedStateDomainPublication<T>(codec: {
         ),
       );
     },
-    stageDeletions(db: DatabaseSync, keys: readonly string[]) {
+    stageDeletions(db: EngineConnection, keys: readonly string[]) {
       stage(db, new Map(keys.map((key) => [key, { kind: "absent" }])));
     },
-    capture<Result>(db: DatabaseSync, operation: () => Result) {
+    capture<Result>(db: EngineConnection, operation: () => Result) {
       const parent = state.capture.getStore();
-      return state.capture.run(parent?.db === db ? parent : { db, facts: new Map() }, () => {
-        const result = operation();
-        return { result, receipt: receiptFor(db, state.capture.getStore()!.facts) };
-      });
+      return state.capture.run(
+        parent && sqlPublicationAnchor(parent.db) === sqlPublicationAnchor(db)
+          ? parent
+          : { db, facts: new Map() },
+        () => {
+          const result = operation();
+          return { result, receipt: receiptFor(db, state.capture.getStore()!.facts) };
+        },
+      );
     },
     /** Leave space for sibling domains and the operation's existing settlement metadata. */
     bound(receipt: Receipt): Receipt | { kind: "unknown"; identity: string | symbol } {

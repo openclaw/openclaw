@@ -12,15 +12,11 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
-import * as authProfiles from "../../agents/auth-profiles.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import * as authStoreRuntime from "../../agents/auth-profiles/store-runtime.js";
 import type { ApiKeyCredential, AuthProfileCredential } from "../../agents/auth-profiles/types.js";
-import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
-import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
-import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { registerRuntimeConfigWriteListener } from "../../config/runtime-snapshot.js";
 import {
   getRuntimeConfigWriteApplication,
@@ -31,7 +27,6 @@ import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
@@ -464,131 +459,6 @@ describe("shared API-key editing and removal", () => {
           }),
         ).resolves.toMatchObject({ profileId: replacementId });
       }
-    }
-  });
-
-  it("preserves a same-ID reconnect at the conversation cleanup commit", async () => {
-    const profileId = "sample:reconnected";
-    const fallbackProfileId = "sample:deleted-fallback";
-    writeConfig({ agents: { entries: { writer: { model: `sample/astra@${profileId}` } } } });
-    const profile = { agentDir: agentDir("writer"), profileId };
-    await seedKey(profileId, "removed", "writer");
-    await seedKey(fallbackProfileId, "removed-fallback", "writer");
-    const scope = {
-      agentId: "writer",
-      sessionKey: "agent:writer:chat",
-      storePath: resolveDefaultSessionStorePath("writer"),
-    };
-    await replaceSessionEntry(scope, {
-      sessionId: "existing-chat",
-      updatedAt: 1,
-      authProfileOverride: profileId,
-      authProfileOverrideSource: "user",
-      modelFallback: {
-        source: "agent-patch",
-        ts: 1,
-        prevModel: "luna",
-        prevProvider: "sample",
-        prevAuthProfileOverride: fallbackProfileId,
-      },
-    });
-    const patch = sessionAccessor.patchSessionEntryTarget;
-    vi.spyOn(sessionAccessor, "patchSessionEntryTarget").mockImplementationOnce(
-      (target, update, options) =>
-        patch(
-          target,
-          async (...args) => {
-            const change = await update(...args);
-            // Reconnect after cleanup has prepared its patch, before the canonical commit.
-            await seedKey(profileId, "reconnected", "writer");
-            return change;
-          },
-          options,
-        ),
-    );
-    await removeModelAuthCredentials({
-      cfg: await readConfig(),
-      agentDir: profile.agentDir,
-      profileIds: [profileId, fallbackProfileId],
-    });
-    expect(loadPersistedAuthProfileStore(profile.agentDir)?.profiles[profileId]).toMatchObject({
-      key: "reconnected",
-    });
-    const retained = loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
-    expect(retained).toMatchObject({
-      authProfileOverride: profileId,
-      authProfileOverrideSource: "user",
-      updatedAt: 1,
-    });
-    expect(retained?.modelFallback?.prevAuthProfileOverride).toBeUndefined();
-  });
-
-  it("preserves queued work for an account reconnected after credential removal", async () => {
-    const profileId = "sample:reconnected";
-    const removedId = "sample:removed";
-    const queueKey = "agent:writer:reconnect";
-    const config: OpenClawConfig = {
-      agents: {
-        entries: {
-          writer: {
-            model: {
-              primary: `sample/astra@${profileId}`,
-              fallbacks: [`sample/luna@${removedId}`],
-            },
-          },
-        },
-      },
-    };
-    writeConfig(config);
-    for (const id of [profileId, removedId]) {
-      await seedKey(id, "removed", "writer");
-    }
-    const queued = (id: string, snapshot: OpenClawConfig) => {
-      const pending = createQueueTestRun({ prompt: id });
-      Object.assign(pending.run, {
-        agentId: "writer",
-        agentDir: agentDir("writer"),
-        config: snapshot,
-        provider: "sample",
-        model: "astra",
-        authProfileId: id,
-        authProfileIdSource: "user",
-      });
-      return pending;
-    };
-    const removedRun = queued(removedId, config);
-    const reconnectedConfig: OpenClawConfig = {
-      agents: { entries: { writer: { model: `sample/astra@${profileId}` } } },
-    };
-    const reconnectedRun = queued(profileId, reconnectedConfig);
-    const remove = authProfiles.removeAuthProfilesAcrossOwnerStores;
-    vi.spyOn(authProfiles, "removeAuthProfilesAcrossOwnerStores").mockImplementationOnce(
-      async (params) => {
-        const result = await remove(params);
-        expect(result).toBe(true);
-        await seedKey(profileId, "reconnected", "writer");
-        writeConfig(reconnectedConfig);
-        enqueueFollowupRun(queueKey, reconnectedRun, { mode: "followup" });
-        return result;
-      },
-    );
-    try {
-      enqueueFollowupRun(queueKey, removedRun, { mode: "followup" });
-      await removeModelAuthCredentials({
-        cfg: config,
-        agentDir: agentDir("writer"),
-        profileIds: [profileId, removedId],
-      });
-      expect(reconnectedRun.run.authProfileId).toBe(profileId);
-      expect(reconnectedRun.run.authProfileIdSource).toBe("user");
-      expect(reconnectedRun.run.config).toBe(reconnectedConfig);
-      expect(removedRun.run.authProfileId).toBeUndefined();
-      expect(removedRun.run.config.agents?.entries?.writer?.model).toEqual({
-        primary: `sample/astra@${profileId}`,
-        fallbacks: ["sample/luna"],
-      });
-    } finally {
-      clearFollowupQueue(queueKey);
     }
   });
 

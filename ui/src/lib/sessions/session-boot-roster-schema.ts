@@ -31,6 +31,7 @@ const row = z.object({
   spawnedCwd: text,
   execNode: text,
   execCwd: text,
+  deviceFolder: z.object({ deviceId: z.string(), path: z.string() }).optional(),
   worktree: z.object({ id: z.string(), branch: z.string(), repoRoot: z.string() }).optional(),
   repository: z.object({ url: z.string(), ref: text, branch: z.string() }).optional(),
   thinkingLevel: text,

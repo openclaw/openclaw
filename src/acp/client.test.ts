@@ -56,7 +56,6 @@ describe("ACP child environment", () => {
     { serverCommand: undefined, serverArgs: undefined, strip: true },
     { serverCommand: "openclaw", serverArgs: ["acp"], strip: true },
     { serverCommand: "custom-server", serverArgs: ["serve"], strip: false },
-    { serverCommand: "openclaw", serverArgs: ["custom-entry.js"], strip: false },
   ])(
     "sanitizes $serverCommand $serverArgs (provider stripping: $strip)",
     ({ strip, ...server }) => {

@@ -43,7 +43,10 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
-import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
+import {
+  clearStoredSessionRowTranscriptForTest,
+  observeSessionRowBackfill,
+} from "../session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
@@ -100,6 +103,23 @@ describe("resident sessions.list", () => {
         ts: initial.ts + 1_000,
       });
       expect(unchanged.sharedFacts).toBeUndefined();
+      for (const unrelated of [
+        { agentId: "work", sessionKey: "agent:work:active" },
+        { agentId: "main", sessionKey: "agent:main:archived" },
+      ]) {
+        await replaceSessionEntry(unrelated, {
+          ...loadSessionEntry(unrelated)!,
+          label: "Changed outside the held window",
+        });
+        const retained = await listSessions({ client, context, request: conditional });
+        expect(retained).toMatchObject({
+          sessions: [],
+          rowsUnchanged: true,
+          rowsRevision: initial.rowsRevision,
+          count: initial.count,
+          totalCount: initial.totalCount,
+        });
+      }
       const filtered = await listSessions({
         client,
         context,
@@ -118,11 +138,29 @@ describe("resident sessions.list", () => {
       expect(changed.sessions.find((row) => row.key === scope.sessionKey)?.label).toBe(
         "Renamed sidebar row",
       );
+      const admitted = { agentId: "main", sessionKey: "agent:main:archived" };
+      await replaceSessionEntry(admitted, {
+        ...loadSessionEntry(admitted)!,
+        archivedAt: undefined,
+        updatedAt: Date.now(),
+      });
+      const membership = await listSessions({
+        client,
+        context,
+        request: { ...request, ifRowsRevision: changed.rowsRevision },
+      });
+      expect(membership.rowsUnchanged).toBeUndefined();
+      expect(membership.rowsRevision).not.toBe(changed.rowsRevision);
+      expect(membership.sessions.map((row) => row.key)).toEqual([
+        "agent:main:archived",
+        "agent:main:active",
+        "agent:main:draft",
+      ]);
       await replaceSessionEntry(scope, { ...loadSessionEntry(scope)!, visibility: "draft" });
       const revoked = await listSessions({
         client: identifiedClient("other@example.com"),
         context,
-        request: { ...request, ifRowsRevision: changed.rowsRevision },
+        request: { ...request, ifRowsRevision: membership.rowsRevision },
       });
       expect(revoked.rowsUnchanged).toBeUndefined();
       expect(revoked.sessions.some((row) => row.key === scope.sessionKey)).toBe(false);
@@ -465,6 +503,7 @@ describe("resident sessions.list", () => {
         },
       );
       await waitForSessionTranscriptIndexReconcile({ agentId: "main", env: state.env });
+      clearStoredSessionRowTranscriptForTest({ agentId: "main", sessionId, sessionKey });
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       database.db
         .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")

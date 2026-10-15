@@ -12,39 +12,91 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
-import { Menu, type MenuItem, type MenuProps } from "./menu.tsx";
+import { Menu, type MenuEntry, type MenuItem, type MenuProps } from "./menu.tsx";
 
 afterEach(cleanup);
 
 describe("Solid menu navigation", () => {
-  it("uses real link leaves, skips disabled links, and selects once by click or Enter", async () => {
+  it("navigates from search through grouped compound rows and custom controls", async () => {
     const selected: string[] = [];
+    let pins = 0;
+    const [revision, setRevision] = createSignal(0);
     mountMenu({
-      items: [
-        { id: "new", label: "New session", href: "/new?agent=main", class: "new-session" },
-        { id: "disabled", label: "Unavailable", href: "/new?agent=other", disabled: true },
-        { id: "action", label: "Action" },
-      ],
+      get items(): MenuEntry[] {
+        revision();
+        return [
+          { kind: "content", id: "search", content: <input data-search aria-label="Find agent" /> },
+          {
+            kind: "group",
+            id: "agents",
+            class: "agent-list",
+            items: [
+              {
+                id: "alpha",
+                label: "Alpha",
+                as: "div",
+                content: (
+                  <>
+                    Alpha
+                    <button
+                      data-form-control
+                      tabindex="-1"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        pins += 1;
+                      }}
+                    >
+                      Pin Alpha
+                    </button>
+                  </>
+                ),
+              },
+              { id: "beta", label: "Beta" },
+            ],
+          },
+          {
+            id: "footer",
+            label: "Footer",
+            render: (attributes) => <button {...attributes}>Footer</button>,
+          },
+        ];
+      },
       onSelect: (entry) => selected.push(entry.id),
     });
     await openMenu();
-    const link = surface().querySelector<HTMLAnchorElement>('a[data-value="new"]')!;
-    expect(link.getAttribute("href")).toBe("/new?agent=main");
-    expect(link.getAttribute("role")).toBe("menuitem");
-    expect(link.classList.contains("new-session")).toBe(true);
-    expect(link.querySelector("a, button")).toBeNull();
-    expect(document.activeElement).toBe(link);
+    const group = surface().querySelector(".agent-list");
+    const footer = item("Footer");
+    const alpha = surface().querySelector<HTMLElement>('[data-value="alpha"]')!;
+    alpha.focus();
+    setRevision(1);
+    flush();
+    expect(surface().querySelector(".agent-list")).toBe(group);
+    expect(item("Footer")).toBe(footer);
+    expect(document.activeElement).toBe(alpha);
+    const search = surface().querySelector<HTMLInputElement>("input")!;
+    search.focus();
     await userEvent.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(item("Action"));
+    expect(document.activeElement).toBe(alpha);
+    await userEvent.tab();
+    expect(document.activeElement).toBe(surface().querySelector("[data-form-control]"));
+    await userEvent.tab({ shift: true });
+    expect(document.activeElement).toBe(alpha);
     await userEvent.keyboard("{ArrowUp}");
-    expect(document.activeElement).toBe(link);
-    await userEvent.click(link);
-    await phase(surface(), "hidden");
-    expect(selected).toEqual(["new"]);
-    await openMenu();
+    expect(document.activeElement).toBe(search);
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    expect(document.activeElement).toBe(item("Beta"));
+    await userEvent.click(surface().querySelector<HTMLButtonElement>("[data-form-control]")!);
+    expect(pins).toBe(1);
+    expect(selected).toEqual([]);
+    item("Beta").focus();
     await userEvent.keyboard("{Enter}");
     await phase(surface(), "hidden");
-    expect(selected).toEqual(["new", "new"]);
+    expect(selected).toEqual(["beta"]);
+    await openMenu();
+    item("Footer").focus();
+    await userEvent.keyboard("{Enter}");
+    await phase(surface(), "hidden");
+    expect(selected).toEqual(["beta", "footer"]);
   });
 
   it("preserves modified, middle, and context-menu link gestures without selecting", async () => {
@@ -266,6 +318,8 @@ describe("Solid menu navigation", () => {
   it.each(["ltr", "rtl"] as const)("preserves sibling → Back → Down in %s", async (dir) => {
     mountMenu({ dir });
     await openMenu();
+    expect(trigger("people-assign").dataset.value).toBe("assign");
+    expect(trigger("people-move").dataset.value).toBe("move");
     await openMenu("people-assign");
     trigger("people-move").focus();
     await userEvent.keyboard(dir === "ltr" ? "{ArrowRight}" : "{ArrowLeft}");
@@ -340,17 +394,6 @@ describe("Solid menu navigation", () => {
       expect(document.activeElement).toBe(trigger());
     },
   );
-
-  it("opens at the last enabled item with ArrowUp and exits with native Tab", async () => {
-    const view = mountMenu();
-    trigger().focus();
-    await userEvent.keyboard("{ArrowUp}");
-    await phase(surface(), "open");
-    expect(document.activeElement).toBe(item("Archive"));
-    await userEvent.tab();
-    await phase(surface(), "hidden");
-    expect(document.activeElement).toBe(view.getByRole("button", { name: "After menu" }));
-  });
 
   it("clears search before closing the deepest branch and restores each trigger", async () => {
     mountMenu({

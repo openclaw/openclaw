@@ -12,7 +12,6 @@ import {
 } from "../../lit/subscriptions-controller.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
-import "../../components/web-awesome-popover.ts";
 import "../../styles/new-session.css";
 import "../../styles/chat/composer.css";
 import {
@@ -233,7 +232,11 @@ export class PaletteSessionDraft {
           pickerIdPrefix: this.idPrefix,
           preferenceScope: "palette",
           readPalettePreference: () => this.preferences.selection,
-          closeTransientUi: () => closeSessionMenus(this.host),
+          closeTransientUi: () => {
+            this.draft?.browser.close();
+            this.settings.close();
+            closeSessionMenus(this.host);
+          },
           onInvalidate: () => this.connectMachine.close(),
           onRecoveryReady: (url, scope) => this.bindOwner(url, scope),
           onAccepted: (result) => this.accepted(result),

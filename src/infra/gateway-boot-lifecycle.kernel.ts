@@ -1,8 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
 import { TAILSCALE_BACKEND_STOPPED_REASON } from "./tailscale-backend-stopped-error.js";
 
@@ -45,14 +44,14 @@ export function buildGatewayCrashLoopBreakerDecision(params: {
   };
 }
 
-export function inspectGatewayCrashLoopBreakerInDatabase(db: DatabaseSync, nowMs: number) {
+export function inspectGatewayCrashLoopBreakerInDatabase(db: EngineConnection, nowMs: number) {
   const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
   const windowStartMs = nowMs - GATEWAY_BOOT_LOOP_WINDOW_MS;
   // Unclean means startup_failed by completion time, or an open boot row
   // whose process disappeared. A completed stopped-daemon refusal happens
   // before channels start; unfinished boots still count. forced_stop is
   // operator shutdown pressure, not a startup crash-loop signal.
-  const uncleanRow = executeSqliteQueryTakeFirstSync(
+  const row = executeSqliteQueryTakeFirstSync(
     db,
     kysely
       .selectFrom("gateway_boot_lifecycle")
@@ -61,6 +60,20 @@ export function inspectGatewayCrashLoopBreakerInDatabase(db: DatabaseSync, nowMs
         eb.fn
           .max<number>(eb.fn.coalesce("completed_at_ms", "started_at_ms"))
           .as("latestUncleanAtMs"),
+        eb
+          .selectFrom("gateway_boot_lifecycle")
+          .select("started_at_ms")
+          .where("startup_reason", "=", GATEWAY_CRASH_LOOP_BREAKER_REASON)
+          .orderBy("started_at_ms", "desc")
+          .limit(1)
+          .as("latestBreakerStartedAtMs"),
+        eb
+          .selectFrom("gateway_boot_lifecycle")
+          .select("started_at_ms")
+          .where("startup_reason", "=", GATEWAY_CRASH_LOOP_RECOVERED_REASON)
+          .orderBy("started_at_ms", "desc")
+          .limit(1)
+          .as("latestRecoveryStartedAtMs"),
       ])
       .where((eb) =>
         eb.or([
@@ -82,29 +95,17 @@ export function inspectGatewayCrashLoopBreakerInDatabase(db: DatabaseSync, nowMs
         ]),
       ),
   );
-  const latestStartedAt = (reason: string) =>
-    executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom("gateway_boot_lifecycle")
-        .select("started_at_ms as startedAtMs")
-        .where("startup_reason", "=", reason)
-        .orderBy("started_at_ms", "desc")
-        .limit(1),
-    )?.startedAtMs;
   return buildGatewayCrashLoopBreakerDecision({
-    uncleanBoots: uncleanRow?.count ?? 0,
-    latestUncleanAtMs: uncleanRow?.latestUncleanAtMs,
-    latestBreakerStartedAtMs: latestStartedAt(GATEWAY_CRASH_LOOP_BREAKER_REASON),
-    latestRecoveryStartedAtMs: latestStartedAt(GATEWAY_CRASH_LOOP_RECOVERED_REASON),
+    uncleanBoots: row?.count ?? 0,
+    latestUncleanAtMs: row?.latestUncleanAtMs,
+    latestBreakerStartedAtMs: row?.latestBreakerStartedAtMs,
+    latestRecoveryStartedAtMs: row?.latestRecoveryStartedAtMs,
   });
 }
 
 export const gatewayBootReadOperations = {
   "gatewayBoot.breaker": (nowMs: number, db) => ({
     type: "gatewayBoot.breaker" as const,
-    decision: runSqliteDeferredTransactionSync(db, () =>
-      inspectGatewayCrashLoopBreakerInDatabase(db, nowMs),
-    ),
+    decision: inspectGatewayCrashLoopBreakerInDatabase(db, nowMs),
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;

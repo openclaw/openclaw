@@ -13,7 +13,7 @@ import {
   scheduleCommittedChatScroll,
 } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import {
   flushDeferredRowPrune,
@@ -999,15 +999,18 @@ describe("chat transcript controller", () => {
   });
 
   it.each([false, true])(
-    "keeps disclosure anchoring only without reader interruption=%s",
+    "keeps disclosure anchoring after a plain owner geometry commit unless interrupted=%s",
     async (interrupt) => {
-      const host = Object.assign(document.body.appendChild(document.createElement("div")), {
+      const geometryEventTarget = document.body.appendChild(document.createElement("div"));
+      const host = {
         addController: vi.fn(),
         removeController: vi.fn(),
         requestUpdate: vi.fn(),
         updateComplete: Promise.resolve(true),
+      };
+      const transcript = new ChatTranscriptController(host, () => `disclosure-${interrupt}`, {
+        geometryEventTarget,
       });
-      const transcript = new ChatTranscriptController(host, () => `disclosure-${interrupt}`);
       const rows: TestContentRow[] = [
         {
           kind: "content",
@@ -1016,7 +1019,7 @@ describe("chat transcript controller", () => {
         },
       ];
       const { container } = await mountTestTranscript(`disclosure-${interrupt}`, rows, transcript);
-      host.append(container);
+      geometryEventTarget.append(container);
       container.className = "sidebar-region__right-runtime";
       try {
         const row = transcriptRows(container)[0]!;

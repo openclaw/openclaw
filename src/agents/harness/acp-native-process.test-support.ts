@@ -7,7 +7,10 @@ import type { AcpxRuntime } from "acpx/runtime";
 import { afterEach, beforeEach, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestPluginApi } from "../../plugin-sdk/plugin-test-api.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/plugin-test-runtime.js";
@@ -58,6 +61,7 @@ export function useNativeProcessFixture() {
   });
   afterEach(async () => {
     await lifetime.cleanup();
+    clearRuntimeConfigSnapshot();
     restoreActivePluginRegistrySnapshot(snapshot);
     vi.restoreAllMocks();
   });

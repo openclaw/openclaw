@@ -134,6 +134,11 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
+      const initialToggle = parent.locator("[data-child-session-toggle]");
+      await initialToggle.waitFor();
+      if ((await initialToggle.getAttribute("aria-expanded")) === "true") {
+        await initialToggle.click();
+      }
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
       // Delegated work keeps the idle parent's ring visible even with children collapsed.
       await expect
@@ -555,7 +560,7 @@ suite.define(() => {
         .toBe(socketsBefore + 1);
       await page.locator(".sidebar-identity-card").click();
       const retryConnection = page.locator(
-        'wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:retry-connect"]',
+        '.sidebar-identity-menu [data-value="command:retry-connect"]',
       );
       await retryConnection.waitFor({ state: "visible", timeout: 10_000 });
       await retryConnection.click();

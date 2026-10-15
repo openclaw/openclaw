@@ -120,7 +120,7 @@ async function dispatch(
 }
 
 beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "talk-target" });
+  state = await createOpenClawTestState({ label: "talk-target", prepareProfileCatalog: true });
   client = {
     ...sharingPolicyClient({ user: ensureProfileForEmail("listener@example.test").id }),
     connId: "talk-target-test",

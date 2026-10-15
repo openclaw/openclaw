@@ -92,6 +92,32 @@ function mutate<Key extends Mutation>(
   );
 }
 
+/** Capture explicitly enrolls older credentials through the same admitted personal writer. */
+export function enrollPersonalAuthProfileAuthorizationAsync(
+  params: { profileId: string; assertCurrent: () => void },
+  options: AccountOptions = {},
+) {
+  const locator = parseUserModelAuthProfileId(params.profileId);
+  if (!locator) {
+    throw new Error("Personal authorization enrollment requires an exact account ID");
+  }
+  const context = options.context ?? captureOpenClawStateWorkerContext(options);
+  params.assertCurrent();
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({
+        type: "userProfiles.modelAccount.enrollAuthorization",
+        input: { profileId: locator.ownerProfileId, authProfileId: params.profileId },
+      }),
+    {
+      existingOnly: true,
+      assertCurrent: params.assertCurrent,
+      ...mutationAdmission(context, locator.ownerProfileId, params.assertCurrent, [], true),
+    },
+  );
+}
+
 /** The provider compares identities before BEGIN; the worker compares the exact current rows. */
 export function connectUserModelAccountAsync(
   params: {

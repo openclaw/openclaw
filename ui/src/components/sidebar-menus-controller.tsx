@@ -159,7 +159,7 @@ export class SidebarMenusController {
     const position = this[`${menu}MenuPosition`];
     const trigger = this[`${menu}MenuTrigger`];
     return {
-      onTabAway: () => trigger?.focus(),
+      anchor: trigger ?? undefined,
       onClose: (restoreFocus?: boolean) => {
         if (this[`${menu}MenuPosition`] === position) {
           this.closePositionedMenu(menu, { restoreFocus });
@@ -394,12 +394,12 @@ export class SidebarMenusController {
       const dropdown = trigger
         ?.closest("openclaw-app-sidebar")
         ?.querySelector<HTMLElement>(".sidebar-session-sort-menu");
-      const menu = dropdown?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      const menu = dropdown;
       if (!dropdown || !menu) {
         return;
       }
       menu.scrollTop = 0;
-      dropdown.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus();
+      dropdown.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')?.focus();
     });
   }
 
@@ -419,7 +419,11 @@ export class SidebarMenusController {
         }
         const dropdown = this.host.querySelector<HTMLElement>(".sidebar-agent-menu");
         if (dropdown) {
-          this.menuRenderer?.focusActiveAgentMenuItem(dropdown);
+          dropdown
+            .querySelector<HTMLElement>(
+              '.sidebar-agent-menu__agent-switch--active, [role^="menuitem"]:not([disabled])',
+            )
+            ?.focus();
         }
       });
       return;
@@ -494,12 +498,12 @@ export class SidebarMenusController {
   }
 
   restoreFocusAfterAgentMenuHoverOpen() {
-    if (this.agentMenuInteractionState !== "open-hover") {
-      return;
-    }
     this.host
       .querySelector<HTMLElement>(".sidebar-agent-menu__agent-switch--active")
       ?.scrollIntoView?.({ block: "nearest" });
+    if (this.agentMenuInteractionState !== "open-hover") {
+      return;
+    }
     const previous = this.agentMenuFocusBeforeHover;
     this.agentMenuFocusBeforeHover = null;
     if (previous && previous !== document.body && previous.isConnected) {

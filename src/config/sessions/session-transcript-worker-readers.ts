@@ -187,18 +187,13 @@ export function createSessionHistoryWorkerReaders(
     readWatermark: reader("transcript-watermark", (value) => value.watermark),
     readStats: reader("transcript-stats", (value) => value.stats),
     readActivitySummarySource: reader("session-activity-summary-source", (value) => value.source),
-    readRowBackfill: reader(
-      "session-row-backfill",
-      (value) => value.fields,
-      (params) => ({ kind: "session-row-backfill", params }),
-    ),
     run: async (prepare, inputBytes) => await runRequest(prepare, inputBytes, (value) => value),
     readTranscript: async (input, signal) => {
       const events: TranscriptEvent[] = [];
       const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
       const eventSeqs: number[] | undefined = input.includeEventJson ? [] : undefined;
-      let parts: string[] = [];
-      let text: { encoding: string; decoder: TextDecoder } | undefined;
+      const parts: Uint8Array[] = [];
+      let decoder: TextDecoder | undefined;
       const receiveChunk = (value: unknown) => {
         if (
           !isRecord(value) ||
@@ -208,14 +203,8 @@ export function createSessionHistoryWorkerReaders(
         ) {
           throw new Error("Session history worker returned an invalid transcript chunk");
         }
-        if (!text) {
-          text = {
-            encoding: value.encoding,
-            decoder: new TextDecoder(value.encoding, { ignoreBOM: true }),
-          };
-        } else if (text.encoding !== value.encoding) {
-          throw new Error("Session history worker changed transcript encoding during transfer");
-        }
+        // The worker holds one storage encoding for the entire read snapshot.
+        decoder ??= new TextDecoder(value.encoding, { ignoreBOM: true });
         for (const frame of value.frames) {
           if (
             !isRecord(frame) ||
@@ -224,9 +213,9 @@ export function createSessionHistoryWorkerReaders(
           ) {
             throw new Error("Session history worker returned an invalid transcript frame");
           }
-          parts.push(text.decoder.decode(frame.data, { stream: !frame.endOfEvent }));
+          parts.push(frame.data);
           if (frame.endOfEvent) {
-            const json = parts.join("");
+            const json = decoder.decode(parts.length === 1 ? parts[0] : Buffer.concat(parts));
             events.push(JSON.parse(json));
             eventJson?.push(json);
             if (eventSeqs) {
@@ -235,7 +224,7 @@ export function createSessionHistoryWorkerReaders(
               }
               eventSeqs.push(frame.seq);
             }
-            parts = [];
+            parts.length = 0;
           }
         }
       };
@@ -295,7 +284,6 @@ export function createSessionHistoryWorkerReaders(
         (value) => value,
       );
     },
-    readSessionMaintenance: reader("session-maintenance-read", (value) => value),
     readProgressCard: reader("session-progress-card", (value) => value.card),
     readPendingInputHistory: reader("session-pending-input-history", (value) => value.snapshot),
     readPendingInputReceipts: reader("session-pending-input-receipts", (value) => value.receipts),
@@ -314,7 +302,6 @@ export function createSessionHistoryWorkerReaders(
       facts: value.facts,
     })),
     readEntryCurrent: reader("session-entry-current", (value) => value.entry),
-    readDiagnosticText: reader("session-diagnostic-text", (value) => value.text),
     // The native reader validates the selected file. Replacement after that read is best effort.
     readEntries: async (scope, continuation, expectedIdentity, ifRevision) => {
       const captured = expectedIdentity && { ...expectedIdentity };
@@ -333,18 +320,11 @@ export function createSessionHistoryWorkerReaders(
     readStoreProjection: reader("session-store-projection", (value) => value),
     readStoreSummary: reader("session-store-summary", (value) => value.summary),
     readIdentityEvidence: reader("session-identity-evidence", (value) => value.evidence),
-    readProjectionStatus: async (input, signal) =>
-      await runRequest(
-        () => ({ kind: "projection-status", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => value,
-        signal,
-      ),
-    readEntryPresence: async (scope) =>
-      await runRequest(
-        () => ({ kind: "session-row-presence", scope }),
-        JSON.stringify(scope).length * 2,
-        (value) => value,
-      ),
+    readProjectionStatus: reader("projection-status", (value) => value),
+    readEntryPresence: reader(
+      "session-row-presence",
+      (value) => value,
+      (scope) => ({ kind: "session-row-presence", scope }),
+    ),
   };
 }

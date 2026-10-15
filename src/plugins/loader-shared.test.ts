@@ -19,6 +19,7 @@ import {
 } from "./loader.test-fixtures.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { waitForPluginCacheRetirement } from "./plugin-cache.js";
 
 const emptyObjectSchema = {
   type: "object",
@@ -429,6 +430,8 @@ module.exports = { id: "source-fixture", register(api) {
               expect({ runtime, source }).toEqual(before);
             } finally {
               resetPluginLoaderTestStateForTest();
+              const { failures } = await waitForPluginCacheRetirement();
+              expect(failures, "Plugin cache retirement failed during cleanup").toEqual([]);
             }
           },
         );

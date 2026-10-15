@@ -221,7 +221,7 @@ function prepareBlockedSubagentCompletion(
   }
   const text =
     successful && !params.storeReplaced
-      ? "Subagent completion delivery is blocked: " + params.reason
+      ? `Subagent completion delivery is blocked: ${params.reason} (run ${subagent.runId})`
       : null;
   const queued = text
     ? prepareClaimedSessionDelivery(
@@ -440,24 +440,18 @@ function reconcileRequesterWake(
     const original = committed.entries.find(
       ({ subagent }) => subagent.runId === expected.runId,
     )?.subagent;
-    const originalCanonical = original && rowToSubagentRunRecord(bindSubagentRunRecord(original));
-    const expectedCanonical = rowToSubagentRunRecord(bindSubagentRunRecord(expected));
-    if (
-      !originalCanonical ||
-      !expectedCanonical ||
-      !sameRequesterSettleRunIdentity(originalCanonical, expectedCanonical)
-    ) {
+    if (!original || !sameRequesterSettleRunIdentity(original, expected)) {
       throw new Error("Requester wake reconciliation lost its original generation");
     }
     const row = readSubagentRunRow(database, expected.runId);
     if (
-      loadSubagentRunsForChildSessionFromSqlite(originalCanonical.childSessionKey, database).some(
+      loadSubagentRunsForChildSessionFromSqlite(original.childSessionKey, database).some(
         (candidate) =>
           matchesSubagentChildSessionOwner(
             candidate,
-            originalCanonical.childSessionKey,
-            resolveSubagentChildAgentId(originalCanonical),
-          ) && compareSubagentRunGeneration(candidate, originalCanonical) > 0,
+            original.childSessionKey,
+            resolveSubagentChildAgentId(original),
+          ) && compareSubagentRunGeneration(candidate, original) > 0,
       )
     ) {
       throw new Error("Requester wake reconciliation was superseded");
@@ -478,8 +472,8 @@ function reconcileRequesterWake(
       !row ||
       !current ||
       !intended ||
-      !sameRequesterSettleRunIdentity(current, originalCanonical) ||
-      !sameRequesterSettleRunIdentity(intended, originalCanonical) ||
+      !sameRequesterSettleRunIdentity(current, original) ||
+      !sameRequesterSettleRunIdentity(intended, original) ||
       current.pauseReason !== intended.pauseReason ||
       current.completionTarget !== intended.completionTarget ||
       current.expectsCompletionMessage !== intended.expectsCompletionMessage ||

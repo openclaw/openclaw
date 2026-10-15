@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-page-draft.test/"} */
-import { html, LitElement } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 
-// mock-isolation: the real ChatPage owns routing; a deferred Lit child isolates its commit boundary from Gateway bootstrap.
-vi.mock("./chat-pane.ts", () => ({}));
+// mock-isolation: the real ChatPage owns routing; a deferred child isolates its commit boundary from Gateway bootstrap.
+vi.mock("./chat-pane.tsx", async () => {
+  const { mockChatPagePane } = await import("./chat-page-pane.test-support.ts");
+  return { ChatPaneView: mockChatPagePane };
+});
 
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { setNavigationContext, stubMatchMedia } from "./chat-page.test-support.ts";
@@ -13,28 +15,38 @@ import { ChatPage } from "./chat-page.ts";
 
 let childCommit: Promise<void> | undefined;
 
-class DraftCommitPane extends LitElement {
-  static override properties = { draft: { attribute: false } };
-  declare draft: string | undefined;
-  private message = "Scoped Home draft";
+class DraftCommitPane extends HTMLElement {
+  private readonly textarea = Object.assign(document.createElement("textarea"), {
+    value: "Scoped Home draft",
+  });
+  private draftValue: string | undefined;
+  private updatePending = false;
+  updateComplete = Promise.resolve(true);
 
-  override createRenderRoot() {
-    return this;
+  get draft() {
+    return this.draftValue;
   }
 
-  protected override async scheduleUpdate() {
-    await childCommit;
-    await super.scheduleUpdate();
-  }
-
-  override willUpdate(changed: Map<PropertyKey, unknown>) {
-    if (changed.has("draft") && this.draft !== undefined) {
-      this.message = this.draft;
+  set draft(value: string | undefined) {
+    if (value === this.draftValue) {
+      return;
     }
+    this.draftValue = value;
+    if (this.updatePending) {
+      return;
+    }
+    this.updatePending = true;
+    this.updateComplete = Promise.resolve(childCommit).then(() => {
+      if (this.draftValue !== undefined) {
+        this.textarea.value = this.draftValue;
+      }
+      this.updatePending = false;
+      return true;
+    });
   }
 
-  override render() {
-    return html`<textarea .value=${this.message}></textarea>`;
+  connectedCallback() {
+    this.append(this.textarea);
   }
 }
 
@@ -46,7 +58,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("keeps a route draft until its Lit pane commits it", async () => {
+it("keeps a route draft until its pane commits it", async () => {
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
   stubMatchMedia(false);

@@ -5,6 +5,7 @@ import {
   insertGitHubPublicationRequest,
 } from "../gateway/github-publication-store.worker.js";
 import { insertRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-store.worker.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import type { RepositoryGitHubPublicationRow } from "./github-publication-read.types.js";
 import { captureGitHubPublicationWorkerReceipt } from "./github-publication-receipts.js";
@@ -198,12 +199,15 @@ export const publicationRequestOperations = {
         }
         throw new Error("Unknown GitHub publication request kind.");
       };
-      const receipt = captureGitHubPublicationWorkerReceipt(database.db, () => {
-        const { value, changes } = captureGitHubPublicationChanges(write);
-        return { ...value, changes };
-      });
+      const receipt = captureGitHubPublicationWorkerReceipt(
+        sqlPublicationAnchor(database.db),
+        () => {
+          const { value, changes } = captureGitHubPublicationChanges(write);
+          return { ...value, changes };
+        },
+      );
       assertCurrent();
-      deferSqliteWorkerCommitReceipt(database.db, receipt);
+      deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(database.db), receipt);
       return receipt;
     });
   },

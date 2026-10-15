@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
@@ -8,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB, WorkerEnvironments } from "../../state/openclaw-state-db.generated.js";
 import type {
   PreparedEnvironmentPlacementBinding,
@@ -33,7 +33,7 @@ type PreparationRow = Pick<
   | "preparation_expires_at_ms"
   | "preparation_consumed_at_ms"
 >;
-const query = (db: DatabaseSync) =>
+const query = (db: EngineConnection) =>
   getNodeSqliteKysely<Pick<DB, "worker_environments" | "worker_session_placements">>(db);
 
 export function readWorkerEnvironmentPreparation(
@@ -89,7 +89,7 @@ export function workerEnvironmentPreparationColumns(
   return columns;
 }
 
-function hasPlacementReference(db: DatabaseSync, environmentId: string): boolean {
+function hasPlacementReference(db: EngineConnection, environmentId: string): boolean {
   return Boolean(
     executeSqliteQueryTakeFirstSync(
       db,
@@ -153,7 +153,7 @@ export function selectPreparedEnvironmentReservations(
 }
 
 type Reservations = ReturnType<typeof selectPreparedEnvironmentReservations>;
-function readPreparedReservations(db: DatabaseSync): Reservations {
+function readPreparedReservations(db: EngineConnection): Reservations {
   return selectPreparedEnvironmentReservations(
     executeSqliteQuerySync(
       db,
@@ -217,10 +217,10 @@ export function isPreparedReservationWithinCapacity(
 }
 
 export function createPreparedEnvironmentStoreOps(options: {
-  db: DatabaseSync;
+  db: EngineConnection;
   now: () => number;
   createIntent: (input: WorkerEnvironmentIntentInput) => WorkerEnvironmentRecord;
-  get: (db: DatabaseSync, environmentId: string) => WorkerEnvironmentRecord | undefined;
+  get: (db: EngineConnection, environmentId: string) => WorkerEnvironmentRecord | undefined;
 }) {
   const { db } = options;
   return {
@@ -361,7 +361,7 @@ export function createPreparedEnvironmentStoreOps(options: {
 
 /** Placement and consumption commit together; dropping a placement never recreates a spare. */
 export function consumePreparedEnvironment(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: Omit<PreparedEnvironmentSelection, "assertCurrent">,
   nowMs: number,
 ):
@@ -432,7 +432,7 @@ export function consumePreparedEnvironment(
 }
 
 export function assertPreparedEnvironmentAttachment(
-  db: DatabaseSync,
+  db: EngineConnection,
   environment: WorkerEnvironmentRecord,
   sessionId: string,
   binding: Omit<PreparedEnvironmentPlacementBinding, "assertCurrent"> | undefined,

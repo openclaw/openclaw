@@ -30,7 +30,7 @@ export type {
   MemorySessionTarget,
 } from "../config/sessions/session-memory-targets.types.js";
 
-/** @deprecated Use loadArchivedSessionsAsync; removed at the next Plugin SDK major. */
+/** @deprecated Await loadArchivedSessionsAsync. Final compatibility day: 2026-12-31. */
 export function loadArchivedSessions(
   params: Parameters<typeof listSessionTranscriptArchivesReadOnly>[0],
 ) {
@@ -82,7 +82,7 @@ export type {
   SessionTranscriptCorpusEntry,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
 
-/** @deprecated Use loadMemorySessionMetadataAsync; removed at the next Plugin SDK major. */
+/** @deprecated Await loadMemorySessionMetadataAsync. Final compatibility day: 2026-12-31. */
 export function loadMemorySessionMetadata(params: {
   agentId: string;
   sessionId: string;
@@ -161,7 +161,7 @@ export async function loadMemorySessionMetadataBatchAsync(params: {
   );
 }
 
-/** @deprecated Use resolveMemorySessionTargetsAsync; removed at the next Plugin SDK major. */
+/** @deprecated Await resolveMemorySessionTargetsAsync. Final compatibility day: 2026-12-31. */
 export function resolveMemorySessionTargets(params: MemorySessionSelectors): MemorySessionTarget[] {
   warnPluginSdkDeprecation({
     family: "memory-session-sync-inventory",

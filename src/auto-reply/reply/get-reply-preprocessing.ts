@@ -41,7 +41,6 @@ export async function applyMediaUnderstandingIfNeeded(params: {
     const { applyMediaUnderstanding } = await mediaUnderstandingApplyRuntimeLoader.load();
     return await applyMediaUnderstanding(params);
   } catch (err) {
-    mediaUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );
@@ -70,7 +69,6 @@ export async function applyLinkUnderstandingIfNeeded(params: {
     if (isAbortError(err)) {
       throw err;
     }
-    linkUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `link understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );

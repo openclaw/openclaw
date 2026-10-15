@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable, Updateable } from "kysely";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
@@ -12,9 +12,9 @@ export type LocalWorkspaceMutation =
   | { kind: "create"; row: Omit<LocalWorkspaceProjection, "revision"> }
   | { kind: "update"; revision: number; patch: Updateable<DB[typeof table]> }
   | { kind: "delete"; revision: number };
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
 
-export function readLocalWorkspaceProjectionInDatabase(db: DatabaseSync, id: string) {
+export function readLocalWorkspaceProjectionInDatabase(db: EngineConnection, id: string) {
   return tableExists(db, table)
     ? executeSqliteQueryTakeFirstSync(
         db,
@@ -23,7 +23,7 @@ export function readLocalWorkspaceProjectionInDatabase(db: DatabaseSync, id: str
     : undefined;
 }
 
-export function hasLocalWorkspaceProjectionInDatabase(db: DatabaseSync, id: string): boolean {
+export function hasLocalWorkspaceProjectionInDatabase(db: EngineConnection, id: string): boolean {
   return (
     tableExists(db, table) &&
     executeSqliteQueryTakeFirstSync(
@@ -34,7 +34,7 @@ export function hasLocalWorkspaceProjectionInDatabase(db: DatabaseSync, id: stri
 }
 
 export function mutateLocalWorkspaceProjection(
-  db: DatabaseSync,
+  db: EngineConnection,
   id: string,
   mutation: LocalWorkspaceMutation,
 ) {
@@ -115,11 +115,11 @@ export function mutateLocalWorkspaceProjection(
 }
 
 export const localWorkspaceReadOperations = {
-  "localWorkspace.exists": (input: { id: string }, db: DatabaseSync) => ({
+  "localWorkspace.exists": (input: { id: string }, db: EngineConnection) => ({
     type: "localWorkspace.exists" as const,
     exists: hasLocalWorkspaceProjectionInDatabase(db, input.id),
   }),
-  "localWorkspace.get": (input: { id: string }, db: DatabaseSync) => ({
+  "localWorkspace.get": (input: { id: string }, db: EngineConnection) => ({
     type: "localWorkspace.get" as const,
     row: readLocalWorkspaceProjectionInDatabase(db, input.id),
   }),

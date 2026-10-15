@@ -2,7 +2,11 @@
 
 Connect OpenAI models to OpenClaw. The plugin also provides embeddings, media
 understanding, image generation, speech output, realtime transcription,
-and realtime voice.
+realtime voice, and typed Decision evaluations.
+
+For the Decision role, select `openai/gpt-6-luna` after configuring a Platform
+API key with Decisions API access. See [Decision models](https://docs.openclaw.ai/providers/openai#decision-models)
+for configuration and the text/JSON input contract.
 
 ## Get started
 

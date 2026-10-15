@@ -297,7 +297,6 @@ const MIN_KEEP_CHARS = 2_000;
 const RECOVERY_MIN_KEEP_CHARS = 0;
 const TOOL_RESULT_WARNING_DEDUPE_LIMIT = 1_024;
 export const toolResultWarningDedupe = {
-  promptPressure: createDedupeCache({ ttlMs: 0, maxSize: TOOL_RESULT_WARNING_DEDUPE_LIMIT }),
   sessionRecovery: createDedupeCache({ ttlMs: 0, maxSize: TOOL_RESULT_WARNING_DEDUPE_LIMIT }),
 };
 
@@ -778,7 +777,6 @@ export function restoreCacheTtlToolResultProjections(
 ): void {
   const checkpoint = readCacheTtlCheckpoint(entries);
   projectionState.cacheTtlCheckpoint = checkpoint;
-  projectionState.cacheTtlRevision = (projectionState.cacheTtlRevision ?? 0) + 1;
   if (!checkpoint) {
     return;
   }

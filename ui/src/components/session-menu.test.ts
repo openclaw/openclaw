@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContextProvider } from "../test-helpers/application-context.ts";
@@ -18,6 +19,7 @@ import {
 } from "../test-helpers/session-owner-menu.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import { openDropdownSubmenu, settleWebAwesome } from "../test-helpers/web-awesome.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 
 function press(target: EventTarget, key: string, options: KeyboardEventInit = {}) {
@@ -252,25 +254,13 @@ describe("session menu", () => {
   });
 
   it.each([false, true])(
-    "keeps archive choices in one root entry (compact=%s)",
+    "dispatches archive directly from the root entry (compact=%s)",
     async (compact) => {
       const onAction = vi.fn();
-      const menu = await mountMenu({ compact, session: { hasChildren: true }, onAction });
+      const menu = await mountMenu({ compact, onAction });
       expect(menuItemLabels(menu)).toContain("Archive session");
-      expect(menuItemLabels(menu)).not.toContain("Archive session and children…");
-      if (compact) {
-        selectMenuValue(menu, "compact:open-archive");
-        await menu.updateComplete;
-        expect(menuItem(menu, "Back").getAttribute("value")).toBe("compact:back");
-      }
-      const choices = compact ? menu : menuItem(menu, "Archive session");
-      expect(menuItemLabels(choices)).toEqual([
-        ...(compact ? ["Back"] : []),
-        "Session only",
-        "Archive session and children…",
-      ]);
-      selectMenuValue(menu, "archive-tree");
-      expect(onAction).toHaveBeenCalledWith({ kind: "archive-tree" });
+      selectMenuValue(menu, "toggle-archived");
+      expect(onAction).toHaveBeenCalledWith({ kind: "toggle-archived" });
     },
   );
 
@@ -655,6 +645,8 @@ describe("session menu", () => {
         calls.push(`${action.kind}:${action.kind === "set-icon" ? action.icon : ""}`),
     });
     const submenu = menuItem(menu, "Icon & color");
+    await settleWebAwesome(menu);
+    await openDropdownSubmenu(submenu as WaDropdownItem);
     submenu.querySelector<HTMLButtonElement>('[aria-label="Custom icon…"]')?.click();
     await menu.updateComplete;
 
@@ -697,6 +689,8 @@ describe("session menu", () => {
     const onClose = vi.fn();
     const menu = await mountMenu({ onClose, session: { icon: "braces" } });
     const submenu = menuItem(menu, "Icon & color");
+    await settleWebAwesome(menu);
+    await openDropdownSubmenu(submenu as WaDropdownItem);
     const braces = submenu.querySelector<HTMLButtonElement>('[aria-label="braces"]');
     expect(braces?.getAttribute("aria-pressed")).toBe("true");
     expect(braces?.tabIndex).toBe(0);
@@ -734,6 +728,8 @@ describe("session menu", () => {
     const columns = 6;
     const menu = await mountMenu({ session: { icon: "🚀" } });
     const submenu = menuItem(menu, "Icon & color");
+    await settleWebAwesome(menu);
+    await openDropdownSubmenu(submenu as WaDropdownItem);
     const choices = iconChoices(submenu);
     for (const [index, choice] of choices.entries()) {
       vi.spyOn(choice, "getBoundingClientRect").mockReturnValue(

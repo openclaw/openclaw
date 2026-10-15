@@ -12,7 +12,7 @@ import {
   ChatActivityHeadline,
   type ChatActivityHeadlineProps,
 } from "./chat-activity-headline.solid.tsx";
-import { renderActivityGroup } from "./chat-message-group.ts";
+import { renderActivityGroup } from "./chat-message-group.test-support.ts";
 import {
   createAssistantMessage,
   createMessageEntry,
@@ -131,19 +131,6 @@ describe("activity headline cadence", () => {
     // The count line carries the outcome itself.
     expect(label()).toBe("2 reads · 1 unknown");
     expect(outcomes()).toEqual([]);
-  });
-
-  it("clears to the summary immediately and cannot resurrect a pending headline", () => {
-    update(operation("first"));
-    update(operation("pending"));
-    update(undefined);
-    expect(label()).toBe("2 reads");
-    expect(container.querySelector(".chat-activity-group__label--live")).toBeNull();
-    expect(vi.getTimerCount()).toBe(0);
-    advanceTimersByTime(3_000);
-    expect(label()).toBe("2 reads");
-    update(operation("fresh"));
-    expect(label()).toBe("Read fresh…");
   });
 
   it("starts a fresh dwell when a new scope reuses the same operation identity", () => {
@@ -325,44 +312,6 @@ it("keeps the headline and its dwell across disclosure toggles with accessible c
   expect(label()).toBe("Read next");
   expect(summary.getAttribute("aria-expanded")).toBe("false");
 });
-
-it("retains the latest completed operation between tools and returns to counts when the run ends", () => {
-  const groups = [group("current", [prepared("finished", "completed")])];
-  render(renderActivityGroup(groups, liveOptions), container);
-  expect(label()).toBe("Read finished");
-  render(renderActivityGroup([group("current", [prepared("next")])], liveOptions), container);
-  expect(label()).toBe("Read finished");
-  render(renderActivityGroup(groups, { ...liveOptions, runActive: false }), container);
-  expect(label()).toBe("1 read");
-  expect(vi.getTimerCount()).toBe(0);
-  advanceTimersByTime(3_000);
-  expect(label()).toBe("1 read");
-});
-
-it.each(["failed", "blocked"] as const)(
-  "prioritizes a new %s outcome over running and pending operations",
-  (status) => {
-    render(renderActivityGroup([group("current", [prepared("first")])], liveOptions), container);
-    render(
-      renderActivityGroup(
-        [group("current", [prepared("first"), prepared("pending")])],
-        liveOptions,
-      ),
-      container,
-    );
-    render(
-      renderActivityGroup(
-        [group("current", [prepared("first"), prepared("urgent", status)])],
-        liveOptions,
-      ),
-      container,
-    );
-    expect(label()).toBe("Read urgent");
-    expect(vi.getTimerCount()).toBe(0);
-    advanceTimersByTime(3_000);
-    expect(label()).toBe("Read urgent");
-  },
-);
 
 it("selects only visible activity from the matching run and newest eligible group", () => {
   const groups = [

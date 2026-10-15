@@ -37,10 +37,7 @@ import {
   loadSessionUpdatesRuntime,
   routeThreadIdsMatch,
 } from "./get-reply-run-helpers.js";
-import {
-  REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
-  waitForPreparedReplyQueue,
-} from "./get-reply-run-queue.js";
+import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { hasPendingFollowupQueueWork } from "./queue/state.js";
@@ -96,6 +93,17 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionEntryHandle,
     sessionStore,
   } = params;
+  const assertPreparationActive = composeSessionSourceAssertion(
+    [opts?.operatorAuthority?.assertCurrent, opts?.internalEventExecution?.assertCurrent],
+    (assertSourceCurrent) => {
+      opts?.abortSignal?.throwIfAborted();
+      opts?.replyOperation?.abortSignal.throwIfAborted();
+      assertSourceCurrent();
+      if (opts?.replyOperation?.result) {
+        throw new Error("Reply operation ended during preparation");
+      }
+    },
+  );
   let { sessionEntry, prefixedBodyBase } = context;
   let { resolvedThinkLevel } = params;
   let thinkLevelOverride =
@@ -153,6 +161,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         continue;
       }
       const isCurrentSession = systemEventSessionKey === sessionKey;
+      assertPreparationActive();
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
         agentId,
@@ -208,17 +217,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           execOverrides: params.execOverrides,
           skillFilter: opts?.skillFilter,
           skillOverrides: opts?.skillOverrides,
-          assertCurrent: composeSessionSourceAssertion(
-            [opts?.operatorAuthority?.assertCurrent, opts?.internalEventExecution?.assertCurrent],
-            (assertSourceCurrent) => {
-              opts?.abortSignal?.throwIfAborted();
-              opts?.replyOperation?.abortSignal.throwIfAborted();
-              assertSourceCurrent();
-              if (opts?.replyOperation?.result) {
-                throw new Error("Reply operation ended while preparing skills");
-              }
-            },
-          ),
+          assertCurrent: assertPreparationActive,
         });
       });
   sessionEntry = skillResult.sessionEntry;
@@ -362,6 +361,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     : rawActiveSessionIdForInterrupt;
   const shouldPreemptHeartbeat =
     !isRoomEvent && !context.isHeartbeat && rawActiveSessionIdForInterrupt !== undefined;
+  assertPreparationActive();
   const heartbeatPreemption =
     shouldPreemptHeartbeat && embeddedAgentRuntime
       ? await embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun(
@@ -379,13 +379,14 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionLaneKey &&
     (laneSize > 0 || activeSessionIdForInterrupt)
   ) {
+    assertPreparationActive();
     // Keyless runs use an incarnation-unique sessionId lane; session-key lanes can be shared.
     const cleared = sessionKey
       ? (await import("./queue/cleanup.js")).clearSessionLifecycleLanes({
           keys: [sessionKey],
           agentId,
           sessionKey,
-          assertCurrent: () => {},
+          assertCurrent: assertPreparationActive,
         })
       : clearCommandLane(sessionLaneKey);
     logVerbose(`Cleared ${cleared} queued command(s) before interrupting ${sessionLaneKey}`);
@@ -413,10 +414,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       params.configuredProfileId !== undefined ||
       modelState.operatorModelOverride === true;
     const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
-    const authSessionEntry =
-      shouldUseEphemeralSession && preparedSessionState.sessionEntry
-        ? { ...preparedSessionState.sessionEntry }
-        : preparedSessionState.sessionEntry;
+    const authSessionEntry = preparedSessionState.sessionEntry
+      ? { ...preparedSessionState.sessionEntry }
+      : undefined;
     if (params.autoFallbackPrimaryProbe && authSessionEntry) {
       clearAutoFallbackPrimaryProbeSelection(authSessionEntry);
     }
@@ -424,6 +424,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       shouldUseEphemeralSession && authSessionEntry && authSessionKey !== undefined
         ? { [authSessionKey]: authSessionEntry }
         : sessionStore;
+    if (authSessionStore && authSessionEntry && authSessionKey !== undefined) {
+      authSessionStore[authSessionKey] = authSessionEntry;
+    }
     const selection = await resolveSessionAuthSelection({
       cfg,
       provider,
@@ -441,6 +444,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       sessionKey: authSessionKey,
       storePath: shouldUseEphemeralSession ? undefined : storePath,
       isNewSession,
+      assertCommitAllowed: assertPreparationActive,
       // Only an authenticated Gateway profile establishes a person-linked pin;
       // channel senders read as observations and resolve to undefined here.
       requesterProfileId: readSessionInputProfileId(ctx),
@@ -567,43 +571,31 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resetTriggered: effectiveResetTriggered,
   });
   if (isActive && activeRunQueueAction === "run-now") {
-    const queueReply = await waitForPreparedReplyQueue({
-      activeSessionId: activeSessionId ?? resolveActiveQueueSessionId(),
-      queueMode: activeRunQueueMode,
-      interruptActiveRun: async () => {
-        if (activeRunInterruptTarget) {
-          return (
-            await interruptReplyRunTarget(
-              activeRunInterruptTarget,
-              REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-            )
-          ).settled;
-        }
-        return storePath
-          ? await interruptSessionWorkAdmissions({
-              scope: storePath,
-              identities: [sessionKey, activeSessionId, preparedSessionState.sessionId],
-              timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-            })
-          : false;
-      },
-      waitForActiveRunEnd: (activeRunSessionId) =>
-        isReplyRunActiveForSessionId(activeRunSessionId)
-          ? waitForReplyRunEndBySessionId(activeRunSessionId, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS)
-          : (embeddedAgentRuntime?.waitForEmbeddedAgentRunEnd(activeRunSessionId) ??
-            Promise.resolve(undefined)),
-      refreshPreparedState: async () => {
-        preparedSessionState = resolvePreparedSessionState();
-        ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
-        preparedSessionState = resolvePreparedSessionState();
-        // The interrupted run may have changed goal or suggestion state while admission waited.
-        refreshInboundContextAfterAdmissionWait();
-        promptBodies = await rebuildPromptBodies();
-      },
-      resolveBusyState: resolveQueueBusyState,
-    });
-    if (queueReply) {
-      return finishReplyPreparation(typing, () => queueReply);
+    if (activeRunQueueMode === "interrupt") {
+      assertPreparationActive();
+      if (activeRunInterruptTarget) {
+        await interruptReplyRunTarget(activeRunInterruptTarget, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      } else if (storePath) {
+        await interruptSessionWorkAdmissions({
+          scope: storePath,
+          identities: [sessionKey, activeSessionId, preparedSessionState.sessionId],
+          timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+        });
+      }
+    } else {
+      const activeRunSessionId = activeSessionId ?? resolveActiveQueueSessionId();
+      await (isReplyRunActiveForSessionId(activeRunSessionId)
+        ? waitForReplyRunEndBySessionId(activeRunSessionId, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS)
+        : embeddedAgentRuntime?.waitForEmbeddedAgentRunEnd(activeRunSessionId));
+    }
+    preparedSessionState = resolvePreparedSessionState();
+    ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
+    preparedSessionState = resolvePreparedSessionState();
+    // The interrupted run may have changed goal or suggestion state while admission waited.
+    refreshInboundContextAfterAdmissionWait();
+    promptBodies = await rebuildPromptBodies();
+    if (resolveQueueBusyState().isActive) {
+      return finishReplyPreparation(typing, () => ({ text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT }));
     }
   }
   if (activeRunQueueAction !== "drop") {

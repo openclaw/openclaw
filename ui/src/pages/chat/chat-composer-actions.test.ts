@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { t } from "../../i18n/index.ts";
@@ -10,9 +9,9 @@ import {
   findPrimaryButton as primaryButton,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 
 afterEach(async () => {
   await resetComposerFixture();
@@ -127,7 +126,7 @@ describe("renderChatComposer controls", () => {
     const finishActive = vi.spyOn(dictation, "finishActive").mockResolvedValue(true);
     const handleClick = vi.spyOn(dictation, "handleClick");
     const update = vi.spyOn(dictation, "update");
-    render(renderChatComposer(props), container);
+    renderComposerInto(container, props);
     const commit = update.mock.lastCall?.[0].onCommit;
     if (!commit) {
       throw new Error("expected the composer transcript callback");
@@ -550,6 +549,7 @@ describe("renderChatComposer controls", () => {
 
   it("renders reconnect waits as compact badges without the raw transport error", () => {
     const { container } = renderComposer({
+      connected: false,
       queue: [
         {
           id: "reconnect-1",

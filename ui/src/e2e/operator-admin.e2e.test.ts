@@ -243,7 +243,7 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
-        .locator("wa-dropdown.sidebar-agent-menu")
+        .locator(".sidebar-agent-menu")
         .getByRole("menuitem", { name: "Reviewer" })
         .click();
       await waitForRequest(gateway, "skills.status", (params) => params.agentId === "reviewer");

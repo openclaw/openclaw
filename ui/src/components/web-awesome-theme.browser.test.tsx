@@ -1,10 +1,13 @@
+import "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import "@awesome.me/webawesome/dist/components/option/option.js";
 import "@awesome.me/webawesome/dist/components/select/select.js";
+import "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
+import "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
+import "@awesome.me/webawesome/dist/components/tab/tab.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { renderSidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
-import "./web-awesome-tabs.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../styles/base.css";
 import "../styles/layout.css";
@@ -66,8 +69,12 @@ function controlStyle(
     "selected value": "display-input",
     "clear selection": "clear-button",
   }[surface];
-  const found = element.shadowRoot?.querySelector<HTMLElement>(`[part~="${name}"]`);
-  expect(found, surface).not.toBeNull();
+  const found =
+    surface === "menu"
+      ? element
+      : (element.querySelector<HTMLElement>(`.oc-menu-item__${name}`) ??
+        element.shadowRoot?.querySelector<HTMLElement>(`[part~="${name}"]`));
+  expect(found, surface).toBeInstanceOf(Element);
   // Reading computed style starts CSS transitions inside this shadow root.
   const style = getComputedStyle(found!);
   void style.color;
@@ -88,6 +95,8 @@ async function focusNextOption(select: HTMLElement) {
   const control = select as HTMLElementTagNameMap["wa-select"];
   await control.show();
   const { userEvent } = await import("vitest/browser");
+  // Palette checks use idle colors, independent of the previous pointer target.
+  await userEvent.unhover(select);
   control.focus();
   await userEvent.keyboard("{ArrowDown}");
   const current = control.querySelector<HTMLElement>("wa-option:state(current)");
@@ -117,11 +126,10 @@ describe.runIf("__vitest_browser__" in globalThis)("shared control theme inherit
             canPairDevice: true,
             basePath: "",
             gatewayVersion: "test",
-            updateAttentionDismissed: true,
+            updateAvailable: true,
             canRetryConnection: false,
             themeMode: "dark",
             triggerWidth: 250,
-            onTabAway() {},
             onClose() {},
             onNavigate() {},
             onPairMobile() {},
@@ -149,15 +157,19 @@ describe.runIf("__vitest_browser__" in globalThis)("shared control theme inherit
       { container: host },
     ).unmount;
     flush();
-    const menu = host.querySelector("wa-dropdown")!;
+    const menu = host.querySelector(".sidebar-identity-menu")!;
     const help = host.querySelector<HTMLElement>(".sidebar-identity-menu__help")!;
+    const settings = host.querySelector<HTMLElement>('[data-value="command:settings"]')!;
     const select = host.querySelector("wa-select")!;
     const tabs = host.querySelector("wa-tab-group")!;
     const danger = [...host.querySelectorAll("wa-dropdown-item")].find(
       (item) => item.variant === "danger",
     )!;
     await prepareControls(host);
-    const currentOption = await focusNextOption(select);
+    const menuTrigger = menu.parentElement!.querySelector<HTMLButtonElement>(".oc-menu-trigger")!;
+    const { userEvent } = await import("vitest/browser");
+    // Exercise the idle-pointer precondition with the clear button initially hovered.
+    await userEvent.hover(select.shadowRoot!.querySelector<HTMLElement>('[part~="clear-button"]')!);
 
     for (const theme of [
       "dark",
@@ -179,14 +191,21 @@ describe.runIf("__vitest_browser__" in globalThis)("shared control theme inherit
         root.style.setProperty("--popover", "rgb(32, 45, 38)");
         root.style.setProperty("--danger", "rgb(240, 135, 150)");
       }
+      // The select dismisses the native menu. Check each owner while its surface is visible.
+      if (!menu.matches(":popover-open")) {
+        menuTrigger.click();
+      }
+      await expect.poll(() => menu.getAttribute("data-phase")).toBe("open");
       // Finish existing library color transitions; this test checks settled palette inheritance.
       for (const animation of document.getAnimations()) {
         animation.finish();
       }
       expectThemeDefaults();
       expect(controlStyle(help, "submenu indicator").color, theme).toBe(color("muted"));
-      expect(controlStyle(help, "item description").color, theme).toBe(color("muted"));
+      expect(controlStyle(settings, "item description").color, theme).toBe(color("muted"));
       expect(controlStyle(menu, "menu").backgroundColor, theme).toBe(color("bg-elevated"));
+      const currentOption = await focusNextOption(select);
+      await expect.poll(() => menu.getAttribute("data-phase")).toBe("hidden");
       expect(controlStyle(select, "options").backgroundColor, theme).toBe(color("popover"));
       expect(controlStyle(select, "select indicator").color, theme).toBe(color("muted"));
       expect(controlStyle(select, "selected value").color, theme).toBe(color("text"));
@@ -200,6 +219,7 @@ describe.runIf("__vitest_browser__" in globalThis)("shared control theme inherit
       }
       expect(getComputedStyle(currentOption).color, theme).toBe(color("text"));
       expect(getComputedStyle(currentOption).backgroundColor, theme).toBe(color("bg-hover"));
+      await select.hide();
     }
   });
 });

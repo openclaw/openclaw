@@ -137,6 +137,7 @@ export class NewSessionPageOwner extends ControllerHost {
           restoreDraftOwner(this.submission, gatewayUrl, recoveryScope),
         closeTransientUi: () => {
           this.closeAttachmentPanel();
+          this.draft.browser.close();
           closeSessionMenus(this.host);
         },
         takePreparedTitle: () => this.titlePreparation.takePreparedTitle(),
@@ -335,7 +336,6 @@ export class NewSessionPageOwner extends ControllerHost {
     this.place.resetDraft();
     this.submission.resetDraft();
     this.messageOwnerKey = catalog.routeKey(this.data);
-    this.browser.clearPopoverHiding();
     closeAgentPicker(this.host);
     this.browser.close();
     this.connectMachine.close();

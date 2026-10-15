@@ -184,6 +184,7 @@ export function renderSidebarRegion(params: {
   narrow: boolean;
   /** The layout given is a narrow pane's view of the saved one; see presentNarrowSidebarLayout. */
   sideFocusLocked?: boolean;
+  sideFocusManaged?: boolean;
   sideFocusOrigin?: () => HTMLElement | null;
   panelDefinitions?: SidebarPanelDefinition[];
   header?: TemplateResult | typeof nothing;
@@ -214,6 +215,10 @@ export function renderSidebarRegion(params: {
   const main = sidebarMainPanel(params.layout);
   const chatMain = !main || main.slot === "conversation";
   const column = params.layout.columns[0];
+  // The successful outlet belongs to Solid; its cleanup must not eject a Lit child marker.
+  const rightRuntime = regionError
+    ? html`<div class="sidebar-region__right-runtime">${regionError}</div>`
+    : html`<div class="sidebar-region__right-runtime"></div>`;
   return html`<div
     class="sidebar-region ${params.background ? "sidebar-region--background" : ""} ${collapsed ? "sidebar-region--narrow" : ""} ${
       params.layout.expanded ? "sidebar-region--expanded" : ""
@@ -250,12 +255,13 @@ export function renderSidebarRegion(params: {
                   panel.slot !== "conversation" && isSidebarSlotVisible(params.layout, panel.slot),
               )
               .map(
-                (panel) => html`<div
-                  class="side-panel__panel"
-                  data-region=${panel.id === params.layout.mainPanelId ? "main" : "side"}
-                >
-                  ${panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading}
-                </div>`,
+                (panel) =>
+                  html`<div
+                    class="side-panel__panel"
+                    data-region=${panel.id === params.layout.mainPanelId ? "main" : "side"}
+                  >
+                    ${panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading}
+                  </div>`,
               )
           : null
         : html`<openclaw-chat-sidebar-region
@@ -267,6 +273,7 @@ export function renderSidebarRegion(params: {
             .callbacks=${params.callbacks}
             .narrow=${params.narrow}
             .sideFocusLocked=${params.sideFocusLocked === true}
+            .sideFocusManaged=${params.sideFocusManaged === true}
             .sideFocusOrigin=${params.sideFocusOrigin}
             .availableWidth=${params.availableWidth}
           ></openclaw-chat-sidebar-region>`
@@ -281,7 +288,7 @@ export function renderSidebarRegion(params: {
     >
       ${params.primary}
     </div>
-    <div class="sidebar-region__right-runtime">${regionError ?? null}</div>
+    ${rightRuntime}
   </div>`;
 }
 

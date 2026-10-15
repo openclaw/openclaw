@@ -459,8 +459,8 @@ describe("createLazyGatewayCronState", () => {
 
 function createParams(overrides: Partial<OpenClawConfig> = {}) {
   return {
-    scheduler: createTestGatewayScheduler(),
     storePath: "/tmp/openclaw-cron.json",
+    scheduler: createTestGatewayScheduler(),
     cfg: {
       ...overrides,
     } as OpenClawConfig,
@@ -501,6 +501,8 @@ function createCronService(): GatewayCronServiceContract {
     }),
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
+    readEventSources: vi.fn<GatewayCronServiceContract["readEventSources"]>(async () => []),
+    runEvent: vi.fn<GatewayCronServiceContract["runEvent"]>(async () => ({ kind: "invalidated" })),
     waitForManualRun: vi.fn(async () => true),
     getJob: vi.fn(() => undefined),
     readJob: vi.fn(async () => undefined),

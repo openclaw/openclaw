@@ -246,6 +246,7 @@ describe("codex plugin", () => {
 
   it("registers request-scoped surfaces with explicit multi-agent ownership", () => {
     const registerAgentHarness = vi.fn();
+    const registerGatewayMethod = vi.fn();
     const registerNodeHostCommand = vi.fn();
     const registerNodeInvokePolicy = vi.fn();
     const registerSessionCatalog = vi.fn();
@@ -256,6 +257,7 @@ describe("codex plugin", () => {
           config: explicitAgentConfig,
           runtime: createCodexTestRuntime(() => explicitAgentConfig),
           registerAgentHarness,
+          registerGatewayMethod,
           registerNodeHostCommand,
           registerNodeInvokePolicy,
           registerSessionCatalog,
@@ -264,6 +266,9 @@ describe("codex plugin", () => {
     ).not.toThrow();
 
     expect(registerAgentHarness).toHaveBeenCalledOnce();
+    expect(registerGatewayMethod).toHaveBeenCalledWith("codex.accountUsage", expect.any(Function), {
+      scope: "operator.admin",
+    });
     expect(registerSessionCatalog).toHaveBeenCalledOnce();
     expect(registerNodeHostCommand.mock.calls.map(([command]) => command.command)).toEqual(
       expect.arrayContaining([

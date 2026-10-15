@@ -42,6 +42,8 @@ auth health, sandbox images, and plugin installs.
 
     Deferred session import receipts bind the database inode and supported creation time, so a virtual filesystem device-number change after reboot does not invalidate a verified import. Retained source files keep their SHA-256 and size checks; normal SQLite edits and deletions remain authoritative. Doctor's import/recovery pass upgrades older device-and-inode receipts once in the existing receipt JSON. If the old physical identity no longer matches, Doctor verifies retained sources against stored history before rebinding. A changed or incomplete database keeps its recovery warning and cannot replay retained sessions.
 
+    When a stale receipt references missing originals, Doctor reads each migration manifest once per synchronous source-verification phase, reusing the archive inventory across transcripts. Later phases verify again so changed manifests and archives cannot inherit earlier verification.
+
     Doctor retains one prepared plugin selection through planning and post-session repair. A deferred external plugin stays deferred while admitted plugins complete their repairs; changing maintenance scopes does not add unplanned actions or block an update with an action-order mismatch. When no plugin migration is deferred and no verified legacy session source is retained, the post-session plugin repair runs its detectors once and skips the completion certification pass. `openclaw update status` and Doctor report deferred plugin repairs; Gateway startup consumes canonical state without reading those pending records.
 
     Before archiving retained originals, Doctor rechecks pending plugin migrations against the current publication transaction. If those obligations changed during repair, the originals remain protected and Doctor reports the conflict for a later repair.
@@ -51,6 +53,8 @@ auth health, sandbox images, and plugin installs.
     If an agent schema upgrade is interrupted after the database commits, rerun `openclaw doctor --fix` with a compatible OpenClaw build. Doctor refreshes the registration of each successfully verified database, including retained registered databases inside the active state directory whose agents are no longer configured.
 
     An unfinished agent deletion keeps ownership of its database during an update. Doctor includes resumable pending stores in schema preflight and pre-migration backups, then prepares their schemas under the current deletion owner. Other per-agent content migrations defer those stores. Gateway recovery resumes the full session cleanup, including native bindings and related state, before removing or retaining files according to the original deletion request. This also supports older journals without a phase field. Completed retained deletions and unfinished Claw removals keep their existing restoration and removal owners.
+
+    Doctor's legacy-main session-key repair uses the session import target policy. Retained retired-agent stores stay untouched even when their schemas need admission, and Doctor warns with each skipped store's path. Any legacy-main rows in those stores remain preserved for explicit agent restoration; they do not block an active agent's update. Unreadable active stores still require repair.
 
     Doctor finishes database work started by its repair before releasing maintenance. A check that finds no repair leaves existing runtime handles open. If maintenance ownership is lost, Doctor stops its repairs and cleans up its own resources without closing independently admitted runtime work.
 
@@ -65,6 +69,8 @@ auth health, sandbox images, and plugin installs.
     Divergent or unverified copies remain in place. For a configured secondary agent with a verified ownership mismatch, the Gateway starts with that agent unavailable and continues serving healthy agents. `openclaw agents list`, status, and Doctor report the degraded agent; turns addressed to it return the recorded refusal reason. A refusal affecting the default or system agent, or the shared state database, still blocks startup.
 
     Doctor reports the embedded owner and the existing explicit quarantine command for an operator who has inspected the data and stopped OpenClaw. Independent state migrations still run; repairs requiring the refused database are skipped and reported as warnings. Admission is derived from the database files and held only in the running process. After repairing or explicitly quarantining the misplaced copy, restart the Gateway to evaluate admission again. There is no persisted refusal or separate clearance record.
+
+    Media persistence repair scans transcripts in byte-bounded batches and services maintenance lease renewal during long scans. Each agent database gets its own maintenance scope. If ownership is lost, that database's active rewrite rolls back; Doctor reports the failure and still attempts unrelated agent databases. Stop other OpenClaw writers before retrying the refused repair.
 
     JSON delivery files under `delivery-queue/` and `session-delivery-queue/` were last written before July 1, 2026. Their import is retired. Doctor and startup leave these files untouched and stop with guidance to upgrade through `2026.9.7` and run its `openclaw doctor --fix` first. Back up the full state directory, including queue-owned media, before that intermediate upgrade. Current SQLite queues and their retry policies are unchanged.
 
@@ -144,6 +150,9 @@ auth health, sandbox images, and plugin installs.
   </Accordion>
   <Accordion title="3d. Session transcript branch repair">
     Doctor scans legacy agent session JSONL files for the duplicated branch shape created by the 2026.4.24 prompt transcript rewrite bug: an abandoned user turn with OpenClaw internal runtime context plus an active sibling containing the same visible user prompt. In `--fix` / `--repair` mode, Doctor repairs the branch while staging its history for import into SQLite. The raw JSONL file stays unchanged and is archived after successful import.
+
+    Doctor also drops redundant session headers from staged history when every field except `timestamp` matches the first header. Discovery accepts these headers in unindexed history too. Import retries and validation use that same staged history. Headers with conflicting identity or metadata are retained for investigation; the original JSONL bytes remain unchanged.
+
   </Accordion>
   <Accordion title="4. State integrity checks (session persistence, routing, and safety)">
     The state directory is the operational brainstem. If it vanishes, you lose sessions, credentials, logs, and config unless you have backups elsewhere.

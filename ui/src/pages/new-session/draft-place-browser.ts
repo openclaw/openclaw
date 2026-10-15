@@ -53,12 +53,9 @@ export class DraftPlaceBrowser {
   private debouncedProjectQuery = "";
   private browserOpenValue = false;
   private browserProjectPathValue: string | null = null;
-  private browserRegistrationId: number | null = null;
-  private browserRegistrationCounter = 0;
+  private browserRegistration: object | null = null;
   private openPopoverValue: DraftPickerKind | null = null;
   private focusRequestId = 0;
-  // Independent hide animations can overlap; keep every trigger fenced until its own completes.
-  private readonly hidingPopovers = new Set<DraftPickerKind>();
   private projectSearchTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   readonly browser: PlaceBrowserState;
@@ -268,22 +265,16 @@ export class DraftPlaceBrowser {
   }
 
   get browserRegistering(): boolean {
-    return this.browserRegistrationId !== null;
+    return this.browserRegistration !== null;
   }
 
   popoverOpen(kind: DraftPickerKind): boolean {
     return this.openPopoverValue === kind;
   }
 
-  popoverHiding(kind: DraftPickerKind): boolean {
-    return this.hidingPopovers.has(kind);
-  }
-
   popoverCallbacks(kind: DraftPickerKind) {
     return {
       popoverOpen: this.popoverOpen(kind),
-      popoverHiding: this.popoverHiding(kind),
-      onGuardTransition: (event: MouseEvent) => this.guardPopoverTransition(event, kind),
       onPopoverShow: () => this.transitionPopover(kind, true),
       onPopoverHide: () => this.transitionPopover(kind, false),
       onPopoverAfterHide: () => this.onPopoverAfterHide(kind),
@@ -421,14 +412,6 @@ export class DraftPlaceBrowser {
 
   close() {
     this.resetBrowser(true);
-    for (const kind of ["where", "project", "checkout"] as const) {
-      const popover = this.callbacks.querySelector(`.new-session-page__${kind}-popover`) as
-        | (HTMLElement & { open: boolean })
-        | null;
-      if (popover) {
-        popover.open = false;
-      }
-    }
   }
 
   showRoot() {
@@ -459,15 +442,12 @@ export class DraftPlaceBrowser {
     ) {
       return;
     }
-    const generation = this.browser.listingGeneration;
-    const id = ++this.browserRegistrationCounter;
-    this.browserRegistrationId = id;
-    // Navigation/loading/errors hide the project path; IDs retire reset or superseded work.
-    // Plain filtering preserves both, so a valid registration can finish.
-    // A replaced listing retires registration even when the same folder is loaded again.
+    const listing = this.browser.listing;
+    const operation = {};
+    this.browserRegistration = operation;
     const isCurrentRegistration = () =>
-      this.browserRegistrationId === id &&
-      this.browser.listingGeneration === generation &&
+      this.browserRegistration === operation &&
+      this.browser.listing === listing &&
       this.browserProjectPath === path &&
       client === this.gateway.client;
     this.browser.error = null;
@@ -488,8 +468,8 @@ export class DraftPlaceBrowser {
         this.browser.error = formatUiError(error);
       }
     } finally {
-      if (this.browserRegistrationId === id) {
-        this.browserRegistrationId = null;
+      if (this.browserRegistration === operation) {
+        this.browserRegistration = null;
         this.callbacks.requestUpdate();
       }
     }
@@ -501,11 +481,8 @@ export class DraftPlaceBrowser {
       if (kind === "where") {
         this.environmentQueryValue = "";
       }
-    } else {
-      if (this.openPopoverValue === kind) {
-        this.openPopoverValue = null;
-      }
-      this.hidingPopovers.add(kind);
+    } else if (this.openPopoverValue === kind) {
+      this.openPopoverValue = null;
     }
     if (kind === "project") {
       this.showRoot();
@@ -515,7 +492,6 @@ export class DraftPlaceBrowser {
   }
 
   onPopoverAfterHide(kind: DraftPickerKind) {
-    this.hidingPopovers.delete(kind);
     const id = `${this.callbacks.pickerIdPrefix ?? "new-session"}-${kind}-trigger`;
     const active = this.callbacks.activeElement();
     const popover = this.callbacks.querySelector(`.new-session-page__${kind}-popover`);
@@ -523,19 +499,6 @@ export class DraftPlaceBrowser {
     if (!active || active === body || popover?.contains(active)) {
       (this.callbacks.querySelector(`#${id}`) as HTMLButtonElement | null)?.focus();
     }
-    this.callbacks.requestUpdate();
-  }
-
-  guardPopoverTransition(event: Event, kind: DraftPickerKind) {
-    if (!this.hidingPopovers.has(kind)) {
-      return;
-    }
-    event.preventDefault();
-    event.stopImmediatePropagation();
-  }
-
-  clearPopoverHiding() {
-    this.hidingPopovers.clear();
     this.callbacks.requestUpdate();
   }
 
@@ -556,7 +519,7 @@ export class DraftPlaceBrowser {
     this.browser.reset();
     this.browserOpenValue = false;
     this.browserProjectPathValue = null;
-    this.browserRegistrationId = null;
+    this.browserRegistration = null;
     if (closePopover) {
       this.openPopoverValue = null;
     }
@@ -572,11 +535,7 @@ export class DraftPlaceBrowser {
     const requestId = ++this.focusRequestId;
     const origin = this.callbacks.activeElement();
     void this.host.updateComplete.then(() => {
-      if (
-        requestId !== this.focusRequestId ||
-        this.openPopoverValue !== "project" ||
-        this.hidingPopovers.has("project")
-      ) {
+      if (requestId !== this.focusRequestId || this.openPopoverValue !== "project") {
         return;
       }
       const active = this.callbacks.activeElement();

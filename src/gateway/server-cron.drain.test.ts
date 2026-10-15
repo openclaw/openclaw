@@ -83,9 +83,12 @@ async function startGatewayCron(
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(clock.clock);
   const state = buildGatewayCronService({
+    storePath: await cronStore.resolveCronJobsStorePathFromConfigAsync(cfg, {
+      ...process.env,
+      OPENCLAW_STATE_DIR: stateDir,
+    }),
     scheduler,
     cfg,
-    storePath: path.join(stateDir, "cron", "jobs.json"),
     deps: {} as CliDeps,
     broadcast,
     env: { ...process.env, OPENCLAW_SKIP_CRON: "0", OPENCLAW_STATE_DIR: stateDir },
@@ -571,6 +574,48 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     } finally {
       exitWatcherDrain.resolve(undefined);
       await cleanGatewayCron(original);
+    }
+  });
+
+  it("observes asynchronous exit cleanup failure and preserves it across drain and restart", async () => {
+    const exitWatcherDrain = createDeferred();
+    cancelAllMock.mockReturnValue(exitWatcherDrain.promise);
+    stopAllMock.mockResolvedValue(undefined);
+    const original = await startGatewayCron("exit-watcher-cleanup-failure");
+    const error = new Error("cleanup could not be confirmed");
+    try {
+      original.state.cron.stop();
+      exitWatcherDrain.reject(error);
+      // cron.stop has no returned promise; its owner must observe rejection itself.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(false);
+      await expect(original.state.cron.stopAndDrain?.()).rejects.toBe(error);
+      await expect(original.state.cron.start()).rejects.toBe(error);
+      await expect(original.state.cron.stopAndDrain?.()).rejects.toBe(error);
+      expect(cancelAllMock).toHaveBeenCalledOnce();
+    } finally {
+      exitWatcherDrain.reject(error);
+      await expect(cleanGatewayCron(original)).rejects.toBe(error);
+      await original.scheduler.stop();
+    }
+  });
+
+  it("observes failed exit cleanup during disabled reconciliation", async () => {
+    stopAllMock.mockResolvedValue(undefined);
+    const original = await startGatewayCron("disabled-exit-cleanup-failure", false);
+    const error = new Error("cleanup could not be confirmed");
+    try {
+      await original.state.reconcileExitWatchers();
+      cancelAllMock.mockRejectedValue(error);
+      await expect(original.state.reconcileExitWatchers()).resolves.toBeUndefined();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    } finally {
+      await expect(cleanGatewayCron(original)).rejects.toBe(error);
+      await original.scheduler.stop();
     }
   });
 

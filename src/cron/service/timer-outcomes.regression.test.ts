@@ -13,6 +13,7 @@ import { createCronServiceStateWithJobs } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
+import { needsCronTimerMaintenance } from "./jobs-scheduling.js";
 import type { DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult } from "./timer-outcomes.js";
@@ -47,6 +48,70 @@ function outcomeFixture(
 }
 
 describe("cron timer outcome and failure policy regressions", () => {
+  it.each([false, true])("never invents an event retry slot during outcome replay=%s", (replay) => {
+    const startedAt = Date.parse("2026-10-05T00:00:00.000Z");
+    const { state, job } = outcomeFixture(startedAt, {
+      schedule: { kind: "event", source: "mcp-events", options: {} },
+      state: { sourceIdentity: "source-generation" },
+    });
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error: "rate limit",
+        startedAt,
+        endedAt: startedAt + 1,
+      },
+      {
+        deferredNotifications: [],
+        ...(replay ? { replay: true, replaySchedule: { nextRunAtMs: startedAt + 60_000 } } : {}),
+      },
+    );
+    expect(job.enabled).toBe(true);
+    expect(job.state.lastRunStatus).toBe("error");
+    expect(job.state.consecutiveErrors).toBe(1);
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(job.state.sourceIdentity).toBe("source-generation");
+  });
+
+  it.each([0, 9, 10])(
+    "keeps %i failures unchanged after a cancelled recurring run",
+    (priorErrors) => {
+      const startedAt = Date.parse("2026-10-05T00:00:00.000Z");
+      const { state, job } = outcomeFixture(startedAt, {
+        state: { consecutiveErrors: priorErrors },
+        failureAlert: { after: 1, cooldownMs: 0 },
+      });
+      const deferredNotifications: DeferredCronNotifications = [];
+      applyJobResult(
+        state,
+        job,
+        {
+          status: "error",
+          error: "Gateway restarting.",
+          errorClassification: { kind: "aborted" },
+          startedAt,
+          endedAt: startedAt + 1,
+        },
+        { deferredNotifications },
+      );
+
+      expect(job.enabled).toBe(true);
+      expect(job.state.lastError).toBe("Gateway restarting.");
+      expect(job.state.lastRunStatus).toBe("error");
+      expect(job.state.consecutiveErrors).toBe(priorErrors);
+      expect(job.state.autoDisabled).toBeUndefined();
+      expect(job.state.failureAlertIncident).toBeUndefined();
+      // Interrupted runs retain error scheduling, including its minimum backoff.
+      const nextRunAtMs = startedAt + (priorErrors === 0 ? 60_000 : 3_600_001);
+      expect(job.state.nextRunAtMs).toBe(nextRunAtMs);
+      expect(needsCronTimerMaintenance(job, startedAt + 60_000)).toBe(false);
+      expect(needsCronTimerMaintenance(job, nextRunAtMs)).toBe(false);
+      expect(deferredNotifications).toEqual([]);
+    },
+  );
+
   it("preserves every cadence after a transient recurring retry succeeds", () => {
     const scheduledAt = Date.parse("2026-05-29T02:28:00.000Z");
     const everyTwelveHoursMs = 12 * 60 * 60 * 1_000;

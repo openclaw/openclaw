@@ -89,10 +89,6 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     this.setSessionObserverVisibility(!closing);
   }
 
-  requestSubagentsPanel(intent: "open" | "toggle"): void {
-    this.requestBackgroundPanel("subagents", intent);
-  }
-
   /** Opens the Subagents panel on one subagent, or on its list. */
   protected showSubagents(subagentKey: string | null, focus = false): void {
     const sessionKey = this.state?.sessionKey;
@@ -137,8 +133,8 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
 
   /** The layout as this pane shows it, which a narrow pane decides for the background panels. */
   protected presentSidebarLayout(layout: SidebarLayout): SidebarLayout {
-    return this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX
-      ? presentNarrowSidebarLayout(layout)
+    return this.mergedChrome || this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX
+      ? presentNarrowSidebarLayout(layout, { allPanels: this.mergedChrome })
       : layout;
   }
 

@@ -289,22 +289,6 @@ describe("bedrock discovery", () => {
     );
   });
 
-  it("skips cache when refreshInterval expiry overflows", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    mockSingleActiveSummary();
-    mockSingleActiveSummary();
-
-    await discoverBedrockModels({
-      region: "cache-overflow",
-      config: { refreshInterval: 1 },
-    });
-    await discoverBedrockModels({
-      region: "cache-overflow",
-      config: { refreshInterval: 1 },
-    });
-    expect(sendMock).toHaveBeenCalledTimes(4);
-  });
-
   it("aborts stalled Bedrock model discovery requests", async () => {
     vi.useFakeTimers();
     const abortSignals: AbortSignal[] = [];

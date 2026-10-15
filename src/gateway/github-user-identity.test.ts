@@ -8,16 +8,13 @@ import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
-import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { getUserProfileDisplay, prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   setDisplayName,
   setUserProfileRole,
   syncGitHubIdentity,
 } from "../state/user-profile-writes.worker.js";
-import {
-  ensureProfileForTailscaleIdentity,
-  getUserProfileDisplay,
-} from "../state/user-profiles.js";
+import { ensureProfileForTailscaleIdentity } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import type { ControlUiGitHubError } from "./github-public-api.js";
@@ -206,24 +203,6 @@ describe("authenticated GitHub identity sync", () => {
       });
     },
   );
-
-  it("preserves the sign-in resolver's existing optional-auth recovery", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({
-        gateway: { controlUi: { github: { token: "synthetic-stale-service-token" } } },
-      });
-      const fetchMock = vi
-        .spyOn(globalThis, "fetch")
-        .mockResolvedValueOnce(githubResponse({}, 401))
-        .mockResolvedValueOnce(githubResponse({ id: 42, login: "Visitor" }));
-      await expect(tailscaleSync("visitor")?.()).resolves.toHaveProperty("profileId");
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
-        "Bearer synthetic-stale-service-token",
-      );
-      expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).has("authorization")).toBe(false);
-    });
-  });
 
   it("rejects a malformed public GitHub account id", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -572,6 +551,10 @@ describe("GitHub public identity metadata cache", () => {
         .mockResolvedValueOnce(new Response(null, { status: 304 }));
       stubIdentityFetch(metadata);
       await createAccessSync()();
+      expect(new Headers(metadata.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+        "Bearer service-token",
+      );
+      expect(new Headers(metadata.mock.calls[1]?.[1]?.headers).has("authorization")).toBe(false);
       await createAccessSync()();
       expect(new Headers(metadata.mock.calls[2]?.[1]?.headers).get("if-none-match")).toBeNull();
       clock.mockReturnValue(1_800_000_000_000 + CACHE_TTL_MS);

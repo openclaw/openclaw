@@ -275,7 +275,7 @@ export async function readChildCompletionFindings(
     children.map(async (observed) => {
       const prepared = await readSubagentRunAnnounceResult(observed, readCurrent);
       const child = readCurrent(observed.runId);
-      if (!child || !prepared.isCurrent()) {
+      if (!child) {
         throw new SubagentAnnouncePreparationConflictError(
           "A child result changed while preparing the completion batch.",
         );
@@ -291,17 +291,7 @@ export async function readChildCompletionFindings(
   }
   return {
     text: buildChildCompletionFindings(
-      results.map(({ child, text }) => ({
-        childSessionKey: child.childSessionKey,
-        task: child.task,
-        taskName: child.taskName,
-        label: child.label,
-        createdAt: child.createdAt,
-        endedReason: child.endedReason,
-        execution: child.execution,
-        completion: child.completion,
-        announceResult: text,
-      })),
+      results.map(({ child, text }) => Object.assign({}, child, { announceResult: text })),
     ),
     isCurrent,
   };
@@ -310,11 +300,12 @@ export async function readChildCompletionFindings(
 export function dedupeLatestChildCompletionRows<
   T extends ChildCompletionRow & { runId: string; generation?: number },
 >(children: T[]): T[] {
-  const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
+  const latestByChildOwner = new Map<string, (typeof children)[number]>();
   for (const child of children) {
-    recordLatestSubagentRun(latestByChildSessionKey, child.childSessionKey, child);
+    const key = JSON.stringify([resolveSubagentChildAgentId(child), child.childSessionKey]);
+    recordLatestSubagentRun(latestByChildOwner, key, child);
   }
-  return [...latestByChildSessionKey.values()];
+  return [...latestByChildOwner.values()];
 }
 
 export function filterCurrentDirectChildCompletionRows<

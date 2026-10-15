@@ -133,7 +133,7 @@ type ChannelExecApprovalProfileParams = {
   requireClientEnabledForLocalPromptSuppression?: boolean;
 };
 
-/** @deprecated Use createChannelExecApprovalProfileAsync for worker-owned account matching. */
+/** @deprecated Use createChannelExecApprovalProfileAsync for worker-owned account matching. Final compatibility day: 2026-12-31. */
 export function createChannelExecApprovalProfile(params: ChannelExecApprovalProfileParams) {
   warnPluginSdkDeprecation({
     family: "approval-session-routing",

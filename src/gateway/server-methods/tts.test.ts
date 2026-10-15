@@ -158,44 +158,6 @@ describe("ttsHandlers", () => {
     });
   });
 
-  it("reuses one configured-state pass for TTS status", async () => {
-    const providers = [
-      { id: "openai", label: "OpenAI", isConfigured: vi.fn(() => true) },
-      { id: "google", label: "Google", isConfigured: vi.fn(() => true) },
-    ];
-    mocks.listSpeechProviders.mockReturnValue(providers);
-    mocks.resolveTtsProviderOrder.mockReturnValue(["openai", "google"]);
-
-    const respond = vi.fn();
-    const statusPromise = expectDefined(
-      ttsHandlers["tts.status"],
-      'ttsHandlers["tts.status"] test invariant',
-    )({
-      params: {},
-      respond,
-      context: { getRuntimeConfig: mocks.getRuntimeConfig },
-    } as never);
-
-    await statusPromise;
-
-    expect(mocks.listSpeechProviders).toHaveBeenCalledOnce();
-    expect(mocks.resolveTtsProviderOrder).toHaveBeenCalledWith("openai", {}, providers);
-    expect(mocks.isTtsProviderConfiguredAsync).toHaveBeenCalledTimes(2);
-    expect(mocks.isTtsProviderConfiguredAsync.mock.calls.map((call) => call[1])).toEqual(providers);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        provider: "openai",
-        fallbackProvider: "google",
-        fallbackProviders: ["google"],
-        providerStates: [
-          { id: "openai", label: "OpenAI", configured: true },
-          { id: "google", label: "Google", configured: true },
-        ],
-      }),
-    );
-  });
-
   it.each([
     { method: "tts.status", providerField: "provider" },
     { method: "tts.providers", providerField: "active" },
@@ -287,6 +249,8 @@ describe("ttsHandlers", () => {
 
     const respond = await callTts("tts.status", {});
 
+    expect(mocks.listSpeechProviders).toHaveBeenCalledOnce();
+    expect(mocks.resolveTtsProviderOrder).toHaveBeenCalledWith("openai", {}, providers);
     expect(mocks.isTtsProviderConfiguredAsync.mock.calls.map((call) => call[1])).toEqual([
       providers[0],
       providers[1],

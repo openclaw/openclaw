@@ -14,6 +14,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { formatModelCatalogAuthLabel } from "./model-catalog-auth-labels.js";
@@ -88,30 +89,6 @@ module.exports = { id: ${JSON.stringify(UNRELATED_PLUGIN_ID)}, register() {} };
     "utf8",
   );
   return pluginFile;
-}
-
-function createJwtWithExp(exp: number, marker?: string): string {
-  const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(
-    "base64url",
-  );
-  return `header.${payload}.signature`;
-}
-
-export function writeCodexAuth(codexHome: string, marker: string): void {
-  const authPath = path.join(codexHome, "auth.json");
-  fs.writeFileSync(
-    authPath,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: createJwtWithExp(Math.floor(Date.now() / 1000) + 3600, marker),
-        refresh_token: `refresh-${marker}-not-real`,
-      },
-    }),
-    "utf8",
-  );
-  const future = new Date(Date.now() + 2_000);
-  fs.utimesSync(authPath, future, future);
 }
 
 export function writeFixturePlugin(params: {
@@ -403,6 +380,7 @@ export async function createCatalogFixture(
     [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
     [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
   };
+  await prepareSharedAuthStoreOwnership(env);
   const config = {
     agents: {
       defaults: {

@@ -1085,7 +1085,7 @@ async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
 ): Promise<string[]> {
-  if (!getAgentWorkspaceAccess(workspaceDir) && typeof fs.glob === "function") {
+  if (!getAgentWorkspaceAccess(workspaceDir)) {
     try {
       const matches: string[] = [];
       for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
@@ -1095,10 +1095,6 @@ async function resolveExtraBootstrapPatternPaths(
     } catch {
       // Fall through to the local matcher before treating the pattern as literal.
     }
-  }
-
-  if (typeof path.matchesGlob !== "function") {
-    return [pattern];
   }
 
   const normalizedPattern = normalizeWorkspacePatternPath(pattern);

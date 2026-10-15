@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
@@ -17,8 +17,8 @@ import {
 import type { SidebarFilterMenuView, SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { SidebarSessionFilterPopover } from "./sidebar-session-filter-popover.tsx";
 import { Icon } from "./solid/icon.tsx";
+import type { MenuItem } from "./solid/menu.tsx";
 import { Picker } from "./solid/select-picker.tsx";
-import { renderCompactSessionMenuFrame } from "./solid/session-menu-compact.tsx";
 import { SettingsSegmented, SettingsToggle } from "./solid/settings-ui.tsx";
 import {
   SidebarMenuRadioItem,
@@ -83,23 +83,16 @@ export function renderSidebarSessionGroupMenuForController(
     action: SidebarSessionGroupMenuAction,
     label: string,
     icon: JSX.Element,
-  ) => (
-    <wa-dropdown-item
-      class={[
-        "session-menu__item",
-        { "session-menu__item--destructive": action === "delete-group" },
-      ]}
-      value={action}
-      variant={action === "delete-group" ? "danger" : undefined}
-      disabled={!host.connected || Boolean(actionDisabledReasons()[action])}
-      title={actionDisabledReasons()[action] ?? undefined}
-    >
-      <span slot="icon" class="session-menu__icon" aria-hidden="true">
-        {icon}
-      </span>
-      <span class="session-menu__text">{label}</span>
-    </wa-dropdown-item>
-  );
+  ): MenuItem => ({
+    id: action,
+    label,
+    icon,
+    class: `session-menu__item${action === "delete-group" ? " session-menu__item--destructive" : ""}`,
+    variant: action === "delete-group" ? "danger" : undefined,
+    disabled: !host.connected || Boolean(actionDisabledReasons()[action]),
+    attributes: { title: actionDisabledReasons()[action] },
+    content: <span class="session-menu__text">{label}</span>,
+  });
   return (
     <Show when={menu} keyed>
       {(_identity) => (
@@ -107,8 +100,7 @@ export function renderSidebarSessionGroupMenuForController(
           position={menu}
           class="session-menu sidebar-session-group-menu"
           label={t("sessionsView.groupMenu", { group: menu.group })}
-          onSelect={(item) => {
-            const value = item.getAttribute("value") ?? undefined;
+          onSelect={(value) => {
             if (
               (value === "group-defaults" ||
                 value === "rename-group" ||
@@ -138,35 +130,29 @@ export function renderSidebarSessionGroupMenuForController(
               }
             }
           }}
-          onTabAway={() => trigger?.focus()}
+          anchor={trigger ?? undefined}
           onClose={(restoreFocus) => {
             if (controller.sessionGroupMenu === menu) {
               controller.closeSessionGroupMenu({ restoreFocus });
             }
           }}
-          content={
-            <>
-              {renderAction(
-                "group-defaults",
-                groupDefaultsStatus() === "unavailable"
-                  ? `${t("common.retry")}: ${t("sessionsView.groupDefaultsMenu")}`
-                  : t("sessionsView.groupDefaultsMenu"),
-                <Icon name="settings" />,
-              )}
-              {renderAction(
-                "rename-group",
-                t("sessionsView.renameGroupMenu"),
-                <Icon name="edit" />,
-              )}
-              {renderAction("new-group", t("sessionsView.newGroup"), <Icon name="folder" />)}
-              <div class="session-menu__separator" role="separator" />
-              {renderAction(
-                "delete-group",
-                t("sessionsView.deleteGroupMenu"),
-                <Icon name="trash" />,
-              )}
-            </>
-          }
+          items={[
+            renderAction(
+              "group-defaults",
+              groupDefaultsStatus() === "unavailable"
+                ? `${t("common.retry")}: ${t("sessionsView.groupDefaultsMenu")}`
+                : t("sessionsView.groupDefaultsMenu"),
+              <Icon name="settings" />,
+            ),
+            renderAction("rename-group", t("sessionsView.renameGroupMenu"), <Icon name="edit" />),
+            renderAction("new-group", t("sessionsView.newGroup"), <Icon name="folder" />),
+            {
+              kind: "content",
+              id: "separator",
+              content: <div class="session-menu__separator" role="separator" />,
+            },
+            renderAction("delete-group", t("sessionsView.deleteGroupMenu"), <Icon name="trash" />),
+          ]}
         />
       )}
     </Show>
@@ -207,8 +193,7 @@ export function renderSidebarCatalogViewMenuForController(
           position={position}
           class={`sidebar-session-sort-menu sidebar-catalog-view-menu${ownerFilter().compact ? " session-menu--compact" : ""}`}
           label={t("chat.sidebar.catalogViewOptions")}
-          onSelect={(item) => {
-            const value = item.getAttribute("value") ?? undefined;
+          onSelect={(value) => {
             const view = sidebarFilterMenuViewForValue(value);
             if (view) {
               controller.setFilterMenuView(view);
@@ -231,30 +216,47 @@ export function renderSidebarCatalogViewMenuForController(
             }
           }}
           {...controller.positionedMenuHandlers("catalogView")}
-          content={
-            ownerFilter().compact && controller.filterMenuView === "specific-owner" ? (
-              renderCompactSessionMenuFrame(
-                <SidebarOwnerOptions {...ownerFilter()} submenu={false} />,
-              )
-            ) : (
-              <>
-                <div class="sidebar-session-sort-menu__title">{t("sessionsView.groupBy")}</div>
-                <For each={groupingOptions()}>
-                  {(option) => (
-                    <SidebarMenuRadioItem
-                      value={`grouping:${option.grouping}`}
-                      checked={host.catalogProjectGrouping === option.grouping}
-                      label={option.label}
-                    />
-                  )}
-                </For>
-                <SidebarOwnerFilter {...ownerFilter()} />
-                <div class="session-menu__separator" role="separator" />
-                <wa-dropdown-item class="sidebar-session-sort-menu__item" value="hide-catalog">
-                  <span class="session-menu__text">{t("chat.sidebar.hideFromSidebar")}</span>
-                </wa-dropdown-item>
-              </>
-            )
+          items={
+            ownerFilter().compact && controller.filterMenuView === "specific-owner"
+              ? [
+                  {
+                    id: "compact:back",
+                    label: t("common.back"),
+                    class: "session-menu__item session-menu__back",
+                    icon: <Icon name="arrowLeft" />,
+                    closeOnSelect: false,
+                  },
+                  ...SidebarOwnerOptions(ownerFilter()),
+                ]
+              : [
+                  {
+                    kind: "content",
+                    id: "group-heading",
+                    content: (
+                      <div class="sidebar-session-sort-menu__title">
+                        {t("sessionsView.groupBy")}
+                      </div>
+                    ),
+                  },
+                  ...groupingOptions().map((option) =>
+                    SidebarMenuRadioItem({
+                      value: `grouping:${option.grouping}`,
+                      checked: host.catalogProjectGrouping === option.grouping,
+                      label: option.label,
+                    }),
+                  ),
+                  ...SidebarOwnerFilter(ownerFilter()),
+                  {
+                    kind: "content",
+                    id: "separator",
+                    content: <div class="session-menu__separator" role="separator" />,
+                  },
+                  {
+                    id: "hide-catalog",
+                    label: t("chat.sidebar.hideFromSidebar"),
+                    class: "sidebar-session-sort-menu__item",
+                  },
+                ]
           }
         />
       )}

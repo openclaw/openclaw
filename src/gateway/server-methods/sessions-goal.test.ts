@@ -209,7 +209,7 @@ describe("typed Goal management RPCs", () => {
   });
 
   it("edits literal objectives in the writer without chat rows and rejects a changed retry", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot(cfg);
       await seedSession();
       const objective = "clear the backlog\n/goal pause is part of the objective";
@@ -258,7 +258,7 @@ describe("typed Goal management RPCs", () => {
   });
 
   it("replays a clear without deleting a replacement Goal", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot(cfg);
       await seedSession();
       const request = operation("clear");
@@ -283,41 +283,44 @@ describe("typed Goal management RPCs", () => {
   it.each(["sessions.goal.update", "sessions.goal.clear"] as const)(
     "%s requires write scope and session participation before mutation or continuation",
     async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot(cfg);
-        const owner = ensureProfileForEmail("goal-owner@example.test");
-        const viewer = ensureProfileForEmail("goal-viewer@example.test");
-        await seedSession({
-          visibility: "read-only",
-          createdActor: { type: "human", source: "profile", id: owner.id },
-        });
-        const request = operation(method === "sessions.goal.clear" ? "clear" : "resume");
-        const readOnly = await invoke(request, {
-          method,
-          client: client(["operator.read"], owner.id),
-        });
-        expect(readOnly).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "FORBIDDEN",
-            message: "missing scope: operator.write",
-          }),
-        );
-        const notParticipant = await invoke(request, {
-          method,
-          client: client(["operator.write"], viewer.id),
-        });
-        expect(notParticipant).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
-          }),
-        );
-        expect(loadSessionEntry({ agentId: "main", sessionKey })?.goal).toEqual(initialGoal());
-        expect(resumeChat).not.toHaveBeenCalled();
-      });
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async () => {
+          setRuntimeConfigSnapshot(cfg);
+          const owner = ensureProfileForEmail("goal-owner@example.test");
+          const viewer = ensureProfileForEmail("goal-viewer@example.test");
+          await seedSession({
+            visibility: "read-only",
+            createdActor: { type: "human", source: "profile", id: owner.id },
+          });
+          const request = operation(method === "sessions.goal.clear" ? "clear" : "resume");
+          const readOnly = await invoke(request, {
+            method,
+            client: client(["operator.read"], owner.id),
+          });
+          expect(readOnly).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "FORBIDDEN",
+              message: "missing scope: operator.write",
+            }),
+          );
+          const notParticipant = await invoke(request, {
+            method,
+            client: client(["operator.write"], viewer.id),
+          });
+          expect(notParticipant).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
+            }),
+          );
+          expect(loadSessionEntry({ agentId: "main", sessionKey })?.goal).toEqual(initialGoal());
+          expect(resumeChat).not.toHaveBeenCalled();
+        },
+      );
     },
   );
 
@@ -326,7 +329,7 @@ describe("typed Goal management RPCs", () => {
     { name: "Goal identity", patch: { goalId: "replaced-goal" } },
     { name: "agent owner", patch: { agentId: "other" } },
   ])("rejects stale $name without changing state", async ({ patch }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot(cfg);
       await seedSession();
       const result = await invoke(operation("pause", patch));
@@ -341,7 +344,7 @@ describe("typed Goal management RPCs", () => {
   });
 
   it("rejects a revoked caller without persisting a Goal change or receipt", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot(cfg);
       await seedSession();
       let checks = 0;
@@ -374,7 +377,7 @@ describe("typed Goal management RPCs", () => {
   });
 
   it("rejects a plugin caller that does not own the session", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot(cfg);
       await seedSession({ pluginOwnerId: "owning-plugin" });
       const pluginClient: GatewayClient = {
@@ -395,7 +398,7 @@ describe("typed Goal management RPCs", () => {
   });
 
   it("does not activate a Goal before continuation admission succeeds", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot(cfg);
       await seedSession();
       resumeChat.mockImplementation(async (options: GatewayRequestHandlerOptions) => {

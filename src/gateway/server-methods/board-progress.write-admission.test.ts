@@ -18,8 +18,6 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
-import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { ensureUserProfileRoleSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { boardStore } from "../board-store.js";
 import { progressCardStore } from "../progress-card-store.js";
@@ -43,6 +41,7 @@ const cases = methods.flatMap((method) =>
     cold: false,
   })),
 );
+const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
 describe("board and progress-card database write admission", () => {
   it.each([
@@ -68,9 +67,7 @@ describe("board and progress-card database write admission", () => {
   ])(
     "queues registered $method behind a native reservation ($change, cold=$cold)",
     async ({ method, change, cold }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        ensureUserProfileRoleSchema({});
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      await withOpenClawTestState(stateOptions, async () => {
         let cfg: OpenClawConfig = {
           ...rolePolicyConfig(),
           agents: { ownership: "explicit", entries: { main: {}, work: {} } },

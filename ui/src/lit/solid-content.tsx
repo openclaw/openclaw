@@ -6,6 +6,7 @@ import {
   createComponent,
   createContext,
   createEffect,
+  createMemo,
   createRoot,
   createSignal,
   flush,
@@ -19,10 +20,15 @@ import {
 } from "solid-js";
 
 export type { TemplateResult as LegacyTemplateResult } from "lit";
+export type { DirectiveResult as LegacyDirectiveResult } from "lit/directive.js";
 
 /** Render opaque plugin SDK templates with their event receiver. */
 export function renderLegacyTemplate(template: unknown, target: HTMLElement, host?: object): void {
-  renderLit(template, target, { host });
+  if (template === undefined) {
+    unmountLitContent(target);
+  } else {
+    mountLitContent(template, target, { host });
+  }
 }
 
 /** Retained content keeps its DOM while foreground directive work is disconnected. */
@@ -41,6 +47,18 @@ type NestedSolidRoot = { element: HTMLElement; dispose: () => void };
 let currentLitRoots: Set<NestedSolidRoot> | undefined;
 const litContentMounts = new WeakMap<HTMLElement | DocumentFragment, LitContentMount>();
 
+/** Retire the existing range without restoring a possibly disposed creator. */
+function unmountLitContent(container: HTMLElement | DocumentFragment): void {
+  litContentMounts.get(container)?.dispose();
+}
+
+/** A top-level Lit caller settles now; nested Solid work settles with its owner. */
+export function flushLegacyContent(): void {
+  if (!getOwner() && !currentLitRoots) {
+    flush();
+  }
+}
+
 /** One retained Lit range owns each legacy content container. */
 export function mountLitContent(
   value: unknown,
@@ -57,17 +75,18 @@ export function mountLitContent(
   const owner = getOwner();
   const renderOptions = { ...options, renderBefore: end };
   const roots = new Set<NestedSolidRoot>();
-  // Later commits restore the creator owner for nested directive resources.
-  const commit = (next: unknown) => {
+  // Restore the creator for nested resources; keep the handoff marked so those
+  // roots register here without starting a reentrant flush.
+  const commit = <T,>(run: () => T): T => {
     const previous = currentLitRoots;
     currentLitRoots = roots;
     try {
-      return runWithOwner(owner, () => renderLit(next, container, renderOptions));
+      return runWithOwner(owner, run);
     } finally {
       currentLitRoots = previous;
     }
   };
-  const part = commit(value);
+  const part = commit(() => renderLit(value, container, renderOptions));
   let ownedNodes: Node[] = [];
   const readOwnedNodes = (): Node[] => {
     const start = part.startNode;
@@ -84,7 +103,7 @@ export function mountLitContent(
   let disposed = false;
   const mount: LitContentMount = {
     update(next) {
-      commit(next);
+      commit(() => renderLit(next, container, renderOptions));
       ownedNodes = readOwnedNodes();
       // Lit does not notify a second disconnection when parked content is removed.
       for (const root of roots) {
@@ -104,7 +123,7 @@ export function mountLitContent(
       nodes.push(end);
       return nodes;
     },
-    setConnected: (connected) => runWithOwner(owner, () => part.setConnected(connected)),
+    setConnected: (connected) => commit(() => part.setConnected(connected)),
     dispose() {
       if (disposed) {
         return;
@@ -196,9 +215,7 @@ class SolidContent extends AsyncDirective {
     }
     if (this.dispose) {
       this.updateProps?.(props);
-      if (!getOwner()) {
-        flush();
-      }
+      flushLegacyContent();
     } else {
       this.mount();
     }
@@ -213,18 +230,52 @@ class SolidContent extends AsyncDirective {
     }
     const owner = this.owner ?? getOwner();
     const view = () => {
-      // A legacy host can publish props during its parent's Solid commit.
-      const [props, setProps] = createSignal(this.props, { ownedWrite: true });
+      // Legacy hosts can reuse mutable props and publish during a parent's Solid commit.
+      const [props, setProps] = createSignal(this.props, { ownedWrite: true, equals: false });
       const [presented, setPresented] = createSignal(this.isConnected, { ownedWrite: true });
       this.updateProps = (next) => setProps(() => next);
       this.updatePresented = setPresented;
+      const projectionOwner = getOwner();
+      const values = new Map<PropertyKey, Accessor<unknown>>();
+      const presence = new Map<PropertyKey, Accessor<boolean>>();
+      const value = (key: PropertyKey) => {
+        let projection = values.get(key);
+        if (!projection) {
+          projection = runWithOwner(projectionOwner, () =>
+            createMemo(() => Reflect.get(props(), key), {
+              // Legacy callers mutate nested objects and getter closures in place.
+              equals: (previous, next) =>
+                (next === null || (typeof next !== "object" && typeof next !== "function")) &&
+                Object.is(previous, next),
+            }),
+          );
+          values.set(key, projection);
+        }
+        return projection();
+      };
+      const has = (key: PropertyKey) => {
+        let projection = presence.get(key);
+        if (!projection) {
+          projection = runWithOwner(projectionOwner, () =>
+            createMemo(() => Reflect.has(props(), key)),
+          );
+          presence.set(key, projection);
+        }
+        return projection();
+      };
+      const keys = createMemo(() => Reflect.ownKeys(props()), {
+        equals: (previous, next) =>
+          previous.length === next.length && previous.every((key, index) => key === next[index]),
+      });
+      // Unrelated props must not rewrite native input values or selection.
       const liveProps = new Proxy<Record<string, unknown>>(
         {},
         {
-          get: (_target, key: string) => props()[key],
-          has: (_target, key: string) => key in props(),
-          ownKeys: () => Reflect.ownKeys(props()),
-          getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+          get: (_target, key) => value(key),
+          has: (_target, key) => has(key),
+          ownKeys: () => keys(),
+          getOwnPropertyDescriptor: (_target, key) =>
+            has(key) ? { configurable: true, enumerable: true, value: value(key) } : undefined,
         },
       );
       return (
@@ -235,7 +286,7 @@ class SolidContent extends AsyncDirective {
     };
     // Nested top-level rendering can flush effects under the parent's render owner.
     this.dispose = runWithOwner(owner, () =>
-      owner
+      owner || currentLitRoots
         ? createRoot((dispose) => {
             insert(element, view());
             return () => {

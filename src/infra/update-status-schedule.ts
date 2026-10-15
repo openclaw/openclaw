@@ -193,7 +193,7 @@ export function refreshGatewayUpdateStatus(getConfig: () => OpenClawConfig): Pro
       ) {
         campaign?.refreshGitTarget(update.target);
         if (!campaign?.getState()) {
-          lifecycle.announceDevGitUpdate?.(update.target, { root, status, installReceipt });
+          await lifecycle.announceDevGitUpdate?.(update.target, { root, status, installReceipt });
         }
       } else {
         campaign?.clear();

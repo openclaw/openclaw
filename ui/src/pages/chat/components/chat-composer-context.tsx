@@ -15,7 +15,7 @@ import {
 } from "../../../lib/provider-quota-summary.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { resolveSessionContextLimit } from "../../../lib/sessions/context-budget.ts";
-import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
+import { createChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 
@@ -71,7 +71,7 @@ function latestAssistantProvider(messages: unknown[] | undefined): string | null
   return null;
 }
 
-function getContextNoticeViewModel(session: GatewaySessionRow | undefined) {
+export function getContextNoticeViewModel(session: GatewaySessionRow | undefined) {
   const used = asNonNegativeFiniteNumber(session?.totalTokens);
   const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(session);
   if (used === undefined || !limit) {
@@ -310,103 +310,106 @@ export function ContextNotice(props: ContextNoticeProps) {
   };
   return (
     <Show when={Boolean(model() || currentGroup())}>
-      <div class="context-usage" style={colors()}>
-        <details
-          onToggle={(event: Event) => {
-            handleChatComposerDetailsToggle(event);
-            if (event.currentTarget instanceof HTMLDetailsElement) {
-              syncChatPickerOverlay(event.currentTarget);
-            }
-          }}
-        >
-          <summary
-            class={["context-ring", { "context-ring--warning": model()?.warning }]}
-            aria-label={summary()}
-            title={t("chat.composer.contextUsage.open")}
-          >
-            <svg
-              class="context-ring__dial"
-              viewBox="0 0 16 16"
-              width="16"
-              height="16"
-              aria-hidden="true"
-            >
-              <circle class="context-ring__track" cx="8" cy="8" r={RING_RADIUS} />
-              <circle
-                class="context-ring__fill"
-                cx="8"
-                cy="8"
-                r={RING_RADIUS}
-                stroke-dasharray={RING_CIRCUMFERENCE.toFixed(2)}
-                stroke-dashoffset={dashOffset().toFixed(2)}
-              />
-            </svg>
-            <span>{t("chat.composer.contextUsage.label")}</span>
-          </summary>
-          <wa-popup data-anchored-overlay>
-            <section
-              class="context-usage__popover"
-              aria-label={t("chat.composer.contextUsage.title")}
-            >
-              <Show when={model()}>
-                {(context) => (
-                  <>
-                    <div class="context-usage__header">
-                      <span class="context-usage__title">
-                        {t(
-                          context().fromLastPrompt
-                            ? "chat.composer.contextUsage.promptBudget"
-                            : "chat.composer.contextUsage.contextWindow",
-                        )}
-                      </span>
-                      <strong class="context-usage__context-value">
-                        {context().detail} · {context().approximate ? "~" : ""}
-                        {context().pct}%
-                      </strong>
-                    </div>
-                    <div
-                      class="context-usage__bar"
-                      role="progressbar"
-                      aria-label={summary()}
-                      aria-valuemin="0"
-                      aria-valuemax="100"
-                      aria-valuenow={context().pct}
-                    >
-                      <span style={{ width: `${context().pct}%` }} />
-                    </div>
-                    <div class="context-usage__section-label">
-                      {t("chat.composer.contextUsage.latestRunTokens")}
-                    </div>
-                    <dl class="context-usage__stats">
-                      {renderContextStat(t("usage.breakdown.input"), formatStat(context().input))}
-                      {renderContextStat(t("usage.breakdown.output"), formatStat(context().output))}
-                      {showCosts() ? renderEstimate(context().cost) : null}
-                    </dl>
-                  </>
-                )}
-              </Show>
-              <Show when={hasProviderCosts() ? providerCosts() : null}>
-                {(costs) => (
-                  <>
-                    <div class="context-usage__section-label">
-                      {t("usage.breakdown.costByType")}
-                    </div>
-                    <dl class="context-usage__stats">
-                      {renderCostStat(t("usage.breakdown.input"), costs().input)}
-                      {renderCostStat(t("usage.breakdown.output"), costs().output)}
-                      {renderCostStat(t("usage.breakdown.cacheRead"), costs().cacheRead)}
-                      {renderCostStat(t("usage.breakdown.cacheWrite"), costs().cacheWrite)}
-                    </dl>
-                  </>
-                )}
-              </Show>
-              <Show when={currentGroup()}>
-                {(group) => <QuotaGroup group={group()} usageHref={usageHref()} />}
-              </Show>
-            </section>
-          </wa-popup>
-        </details>
-      </div>
+      {(_visible) => {
+        const pickerRef = createChatPickerOverlay();
+        return (
+          <div class="context-usage" style={colors()}>
+            <details ref={pickerRef}>
+              <summary
+                class={["context-ring", { "context-ring--warning": model()?.warning }]}
+                aria-label={summary()}
+                title={t("chat.composer.contextUsage.open")}
+              >
+                <svg
+                  class="context-ring__dial"
+                  viewBox="0 0 16 16"
+                  width="16"
+                  height="16"
+                  aria-hidden="true"
+                >
+                  <circle class="context-ring__track" cx="8" cy="8" r={RING_RADIUS} />
+                  <circle
+                    class="context-ring__fill"
+                    cx="8"
+                    cy="8"
+                    r={RING_RADIUS}
+                    stroke-dasharray={RING_CIRCUMFERENCE.toFixed(2)}
+                    stroke-dashoffset={dashOffset().toFixed(2)}
+                  />
+                </svg>
+              </summary>
+              <div class="oc-overlay chat-picker-overlay" data-anchored-overlay popover="manual">
+                <section
+                  class="context-usage__popover"
+                  aria-label={t("chat.composer.contextUsage.title")}
+                >
+                  <Show when={model()}>
+                    {(context) => (
+                      <>
+                        <div class="context-usage__header">
+                          <span class="context-usage__title">
+                            {t(
+                              context().fromLastPrompt
+                                ? "chat.composer.contextUsage.promptBudget"
+                                : "chat.composer.contextUsage.contextWindow",
+                            )}
+                          </span>
+                          <strong class="context-usage__context-value">
+                            {context().detail} · {context().approximate ? "~" : ""}
+                            {context().pct}%
+                          </strong>
+                        </div>
+                        <div
+                          class="context-usage__bar"
+                          role="progressbar"
+                          aria-label={summary()}
+                          aria-valuemin="0"
+                          aria-valuemax="100"
+                          aria-valuenow={context().pct}
+                        >
+                          <span style={{ width: `${context().pct}%` }} />
+                        </div>
+                        <div class="context-usage__section-label">
+                          {t("chat.composer.contextUsage.latestRunTokens")}
+                        </div>
+                        <dl class="context-usage__stats">
+                          {renderContextStat(
+                            t("usage.breakdown.input"),
+                            formatStat(context().input),
+                          )}
+                          {renderContextStat(
+                            t("usage.breakdown.output"),
+                            formatStat(context().output),
+                          )}
+                          {showCosts() ? renderEstimate(context().cost) : null}
+                        </dl>
+                      </>
+                    )}
+                  </Show>
+                  <Show when={hasProviderCosts() ? providerCosts() : null}>
+                    {(costs) => (
+                      <>
+                        <div class="context-usage__section-label">
+                          {t("usage.breakdown.costByType")}
+                        </div>
+                        <dl class="context-usage__stats">
+                          {renderCostStat(t("usage.breakdown.input"), costs().input)}
+                          {renderCostStat(t("usage.breakdown.output"), costs().output)}
+                          {renderCostStat(t("usage.breakdown.cacheRead"), costs().cacheRead)}
+                          {renderCostStat(t("usage.breakdown.cacheWrite"), costs().cacheWrite)}
+                        </dl>
+                      </>
+                    )}
+                  </Show>
+                  <Show when={currentGroup()}>
+                    {(group) => <QuotaGroup group={group()} usageHref={usageHref()} />}
+                  </Show>
+                </section>
+              </div>
+            </details>
+          </div>
+        );
+      }}
     </Show>
   );
 }

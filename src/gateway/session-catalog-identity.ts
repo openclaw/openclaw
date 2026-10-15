@@ -6,6 +6,7 @@ import {
   sessionCreatorProfileId,
   type SessionCreatedActor as StoredSessionActor,
 } from "../config/sessions/session-entry-provenance.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -151,11 +152,16 @@ function projectSourceActor(
 
 /**
  * Prepare portable creator claims for one synchronous page; claims never grant access.
- * @deprecated Use prepareSessionCatalogSourceActorProjector before rendering the page.
+ * @deprecated Use prepareSessionCatalogSourceActorProjector before rendering the page. Final compatibility day: 2026-12-31.
  */
 export function createSessionCatalogSourceActorProjector(
   params: CatalogSourceIdentity & { actors: readonly (StoredSessionActor | undefined)[] },
 ): (actor: StoredSessionActor | undefined) => SessionCreatedActor | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-catalog-identity",
+    method: "createSessionCatalogSourceActorProjector",
+    replacement: "await prepareSessionCatalogSourceActorProjector before rendering the page",
+  });
   const ids = [
     ...new Set(
       params.actors.flatMap((actor) => {
@@ -278,9 +284,14 @@ export async function prepareSessionCatalogGitHubLinker(params: {
 
 /**
  * Snapshot attribution links once per catalog page; claims never grant access.
- * @deprecated Use prepareSessionCatalogGitHubLinker before rendering the page.
+ * @deprecated Use prepareSessionCatalogGitHubLinker before rendering the page. Final compatibility day: 2026-12-31.
  */
 export function createSessionCatalogGitHubLinker() {
+  warnPluginSdkDeprecation({
+    family: "session-catalog-identity",
+    method: "createSessionCatalogGitHubLinker",
+    replacement: "await prepareSessionCatalogGitHubLinker before rendering the page",
+  });
   const profilesByAccountId = new Map<string, string>();
   const profilesByLogin = new Map<string, string>();
   const profiles: Parameters<typeof projectSessionParticipant>[1] = new Map();

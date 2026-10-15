@@ -3,15 +3,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { resolveAutomaticUpdateTriage, UpdateCommandFailure } from "./update-command-result.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
 import { withUpdateFailureTriage, type UpdateTriageTarget } from "./update-command-triage.js";
 
 const runInteractiveUpdateFailureAction = vi.hoisted(() =>
@@ -24,6 +22,12 @@ vi.mock("./update-command-report.js", () => ({ runInteractiveUpdateFailureAction
 vi.mock("@clack/prompts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clack/prompts")>()),
   confirm: async () => true,
+}));
+
+const triageAfterFailure = vi.hoisted(() => vi.fn());
+vi.mock("../../commands/triage-failure.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/triage-failure.js")>()),
+  triageAfterFailure,
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -45,67 +49,6 @@ const failedUpdate: UpdateRunResult = {
   ],
   durationMs: 1,
 };
-
-it.each<{
-  name: string;
-  mutationStarted?: boolean;
-  result?: Partial<UpdateRunResult>;
-  serviceMutationAllowed?: boolean;
-  allowed: boolean;
-}>([
-  {
-    name: "unhealthy restart",
-    mutationStarted: false,
-    result: { reason: "restart-unhealthy" },
-    allowed: true,
-  },
-  { name: "revoked service ownership", serviceMutationAllowed: false, allowed: false },
-  {
-    name: "operator changes blocking rollback",
-    result: { recovery: { serviceRestartSafe: false, reason: "rollback-checkout-dirty" } },
-    allowed: false,
-  },
-  {
-    name: "unapproved plugin capabilities",
-    result: {
-      postUpdate: {
-        plugins: {
-          status: "error",
-          changed: false,
-          sync: {
-            changed: false,
-            switchedToBundled: [],
-            switchedToNpm: [],
-            warnings: [],
-            errors: [],
-          },
-          npm: {
-            changed: false,
-            outcomes: [
-              {
-                pluginId: "approval-required",
-                status: "error",
-                code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
-                message: "Operator capability approval is required.",
-              },
-            ],
-          },
-          integrityDrifts: [],
-        },
-      },
-    },
-    allowed: false,
-  },
-])("keeps automatic admission within update ownership: $name", (trial) => {
-  const context = resolveAutomaticUpdateTriage({ ...failedUpdate, ...trial.result }, undefined, {
-    root: "/installation",
-    mutationStarted: trial.mutationStarted ?? true,
-    installKindChanged: false,
-    gateway: "preserve",
-    preManagedServiceStop: { serviceMutationAllowed: trial.serviceMutationAllowed ?? true },
-  });
-  expect(Boolean(context)).toBe(trial.allowed);
-});
 
 async function createInstalledTriage(exitCode = 0) {
   const root = await fs.realpath(tempDirs.make("openclaw-update-triage-"));
@@ -180,6 +123,7 @@ async function createManagedTriageTarget() {
 }
 
 beforeEach(() => {
+  triageAfterFailure.mockClear();
   runInteractiveUpdateFailureAction.mockReset();
   runInteractiveUpdateFailureAction.mockResolvedValue("triage");
   vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
@@ -227,74 +171,53 @@ describe("update failure triage boundary", () => {
     },
   );
 
-  it.each(["verify-running"] as const)(
-    "admits exactly one owned repair after cleanup with unchanged JSON failure (%s)",
-    async (gateway) => {
-      const result: UpdateRunResult = {
-        ...failedUpdate,
-        reason: "restart-unhealthy",
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        ...(gateway === "verify-running" && { steps: [] }),
-      };
+  it.each([
+    { opts: { yes: true }, terminal: true, flag: "--non-interactive" },
+    { opts: { json: true }, terminal: true, flag: "--json" },
+    { opts: {}, terminal: false, flag: "--non-interactive" },
+  ])(
+    "collects diagnostics without repair admission ($opts, TTY=$terminal)",
+    async ({ opts, terminal, flag }) => {
+      const result: UpdateRunResult = { ...failedUpdate, reason: "restart-unhealthy" };
       const target = await createInstalledTriage();
       const entry = path.join(target.root, "dist", "index.js");
-      const receiptPath = path.join(target.root, "attempts.jsonl");
       const installed = await fs.readFile(entry, "utf8");
       await fs.writeFile(
         entry,
         `
       (async () => {
-        const { acceptTriageContinuation } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.continuation).href)});
-        const admission = await acceptTriageContinuation();
+        if (process.connected) throw new Error("Unattended update admitted a repair agent");
         ${installed}
-        fs.appendFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({ admitted: Boolean(admission), failure: admission?.failure }) + "\\n");
-        if (admission) await admission.finish("closed");
       })().catch(error => { console.error(error); process.exitCode = 1; });
     `,
       );
-      const automaticTriage = {
-        kind: "update" as const,
-        phase: result.reason!,
-        error: "ENOSPC",
-        installationRoot: target.root,
-        gateway,
-      };
-      await expect(
-        withUpdateFailureTriage({ json: true }, target, async () => {
-          try {
-            defaultRuntime.writeJson(result);
-            throw new UpdateCommandFailure(result, 1, undefined, { automaticTriage });
-          } finally {
-            await fs.writeFile(path.join(target.root, "released"), "done");
-          }
-        }),
-      ).rejects.toMatchObject({ code: 1 });
-      const attempts = (await fs.readFile(receiptPath, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      expect(attempts).toEqual([{ admitted: true, failure: automaticTriage }]);
-      const receipt = await readReceipt(target);
-      expect(receipt).toMatchObject({
-        released: true,
-        failure: {
-          result: {
-            reason: result.reason,
-            recovery: result.recovery,
-            steps: [
-              {
-                name: "update",
-                exitCode: null,
-                failureFacts: [{ check: "update", code: "restart-unhealthy" }],
-              },
-            ],
-          },
-        },
+      await withTriageTerminal(terminal, async () => {
+        await expect(
+          withUpdateFailureTriage(opts, target, async () => {
+            try {
+              defaultRuntime.writeJson(result);
+              throw new UpdateCommandFailure(result);
+            } finally {
+              await fs.writeFile(path.join(target.root, "released"), "done");
+            }
+          }),
+        ).rejects.toMatchObject({ code: 1 });
       });
-      expect(receipt.args).toEqual(["triage", "--update-result", expect.any(String)]);
+      expect(await readReceipt(target)).toMatchObject({
+        released: true,
+        args: ["triage", "--update-result", expect.any(String), flag],
+      });
       expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
-      expect(defaultRuntime.log).not.toHaveBeenCalled();
-      expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("triage report"));
+      const output = [
+        ...vi.mocked(defaultRuntime.log).mock.calls,
+        ...vi.mocked(defaultRuntime.error).mock.calls,
+      ]
+        .flat()
+        .join("\n");
+      expect(output).toContain("openclaw triage --run --update-result");
+      expect(output).toContain("Triage diagnostics saved; no repair agent was started.");
+      expect(triageAfterFailure).not.toHaveBeenCalled();
+      expect(runInteractiveUpdateFailureAction).not.toHaveBeenCalled();
     },
   );
 
@@ -372,6 +295,9 @@ describe("update failure triage boundary", () => {
           steps: [{ stderrTail: "ENOSPC" }],
         },
       });
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("openclaw triage --run --update-result"),
+      );
       expect(raw).not.toContain(secret);
       expect(raw).not.toContain("Stale pre-recovery result");
       expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(4 * 1024 + 1);

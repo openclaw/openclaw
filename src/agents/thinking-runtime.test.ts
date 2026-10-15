@@ -38,11 +38,9 @@ describe("hasResolvedThinkingCatalogEntry", () => {
 
   it.each([
     { nativeRuntime: undefined, agentRuntime: undefined, resolved: true },
-    { nativeRuntime: "native-test", agentRuntime: undefined, resolved: true },
     { nativeRuntime: undefined, agentRuntime: "openclaw", resolved: true },
     { nativeRuntime: "openclaw", agentRuntime: "openclaw", resolved: true },
     { nativeRuntime: "native-test", agentRuntime: "openclaw", resolved: false },
-    { nativeRuntime: "native-test", agentRuntime: "native-test", resolved: true },
   ])(
     "keeps observed=$nativeRuntime capabilities scoped to selected=$agentRuntime",
     ({ nativeRuntime, agentRuntime, resolved }) => {

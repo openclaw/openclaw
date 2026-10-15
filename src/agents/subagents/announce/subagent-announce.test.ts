@@ -1,7 +1,6 @@
 // Subagent announce flow tests cover the seam-level orchestration between wait
 // outcomes, requester lookup, delivery, and cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import * as announceDelivery from "./subagent-announce-delivery.js";
@@ -261,54 +260,47 @@ describe("subagent announce seam flow", () => {
     outputTesting.setDepsForTest();
   });
 
-  it.each([false, true])(
-    "delivers the result while deleting the encoded child owner: terminal=%s",
-    async (terminal) => {
-      loadSessionStoreMock.mockReturnValue({
-        "agent:main:subagent:test": {
-          sessionId: "child-session-id",
-          lifecycleRevision: "child-lifecycle-revision",
-        },
-      });
-      const didAnnounce = await runAnnounceFlow({
-        startedAt: 10,
-        endedAt: 20,
-        childRunId: "run-direct-skip-whitespace",
-        childAgentId: "main",
-        childSessionIdentity: {
-          sessionId: "child-session-id",
-          lifecycleRevision: "child-lifecycle-revision",
-        },
-        cleanup: "delete",
-        roundOneReply: "  child result  ",
-        ...(terminal
-          ? {
-              terminalReply: { disposition: "visible" as const, text: "child result" },
-              fallbackReply: "stale result",
-            }
-          : {}),
-      });
+  it("delivers the terminal result while deleting the encoded child owner", async () => {
+    loadSessionStoreMock.mockReturnValue({
+      "agent:main:subagent:test": {
+        sessionId: "child-session-id",
+        lifecycleRevision: "child-lifecycle-revision",
+      },
+    });
+    const didAnnounce = await runAnnounceFlow({
+      startedAt: 10,
+      endedAt: 20,
+      childRunId: "run-direct-skip-whitespace",
+      childAgentId: "main",
+      childSessionIdentity: {
+        sessionId: "child-session-id",
+        lifecycleRevision: "child-lifecycle-revision",
+      },
+      cleanup: "delete",
+      roundOneReply: "  child result  ",
+      terminalReply: { disposition: "visible", text: "child result" },
+      fallbackReply: "stale result",
+    });
 
-      expect(didAnnounce).toBe("delivered");
-      expect(agentSpy).toHaveBeenCalledTimes(1);
-      expect(requireAgentCall().params?.message).toContain("child result");
-      expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
-      expect(sessionsDeleteSpy).toHaveBeenCalledWith({
-        method: "sessions.delete",
-        params: {
-          key: "agent:main:subagent:test",
-          agentId: "main",
-          deleteTranscript: true,
-          emitLifecycleHooks: false,
-          expectedSessionId: "child-session-id",
-          expectedLifecycleRevision: "child-lifecycle-revision",
-        },
-        timeoutMs: 10_000,
-        prepareDispatchCurrent: expect.any(Function),
-        assertDispatchCurrent: expect.any(Function),
-      });
-    },
-  );
+    expect(didAnnounce).toBe("delivered");
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(requireAgentCall().params?.message).toContain("child result");
+    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
+    expect(sessionsDeleteSpy).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:subagent:test",
+        agentId: "main",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+        expectedSessionId: "child-session-id",
+        expectedLifecycleRevision: "child-lifecycle-revision",
+      },
+      timeoutMs: 10_000,
+      prepareDispatchCurrent: expect.any(Function),
+      assertDispatchCurrent: expect.any(Function),
+    });
+  });
 
   it("skips delete cleanup when the lifecycle owner invalidates the attempt", async () => {
     const didAnnounce = await runAnnounceFlow({
@@ -489,39 +481,49 @@ describe("subagent announce seam flow", () => {
     });
   });
 
-  it("uses the stored canonical delivery target when mocked completion origins omit to", async () => {
-    loadSessionStoreMock.mockImplementation(() => ({
-      "agent:main:main": {
-        sessionId: "session-tg-group",
-        updatedAt: Date.now(),
-        delivery: normalizeSessionDeliveryState({
-          context: {
-            channel: "telegram",
-            to: "-1001234567890",
-            accountId: "bot:123",
-          },
+  it.each([
+    { error: "requester lookup unavailable", disposition: "retryable" },
+    {
+      error: "Session transcript keyed user is outside the current turn: old-input",
+      disposition: "permanent_failure",
+    },
+  ] as const)(
+    "reports thrown announce failures to the delivery owner ($disposition)",
+    async ({ error, disposition }) => {
+      vi.spyOn(announceDelivery, "deliverSubagentAnnouncement").mockRejectedValueOnce(
+        new Error(error),
+      );
+      const onDeliveryResult = vi.fn();
+
+      expect(
+        await runAnnounceFlow({
+          roundOneReply: "finished result",
+          expectsCompletionMessage: true,
+          onDeliveryResult,
         }),
-      },
-    }));
+      ).toBe(disposition);
+      expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith({
+        delivered: false,
+        path: "none",
+        error,
+        disposition,
+      });
+    },
+  );
 
-    const didAnnounce = await runAnnounceFlow({
-      startedAt: 10,
-      endedAt: 20,
-      childSessionKey: "agent:main:subagent:tg",
-      childRunId: "run-tg-group-completion",
-      requesterOrigin: { channel: "telegram" },
-      task: "telegram group task",
-      roundOneReply: "task done",
-      expectsCompletionMessage: true,
-    });
-
-    expect(didAnnounce).toBe("delivered");
-    expect(agentSpy).toHaveBeenCalledTimes(1);
-    const agentCall = requireAgentCall();
-    expect(agentCall.params?.deliver).toBe(true);
-    expect(agentCall.params?.channel).toBe("telegram");
-    expect(agentCall.params?.accountId).toBe("bot-123");
-    expect(agentCall.params?.to).toBe("-1001234567890");
+  it("does not replace a confirmed delivery when its receipt callback throws", async () => {
+    const onDeliveryResult = vi
+      .fn()
+      .mockRejectedValue(new Error("receipt persistence unavailable"));
+    expect(
+      await runAnnounceFlow({
+        roundOneReply: "finished result",
+        expectsCompletionMessage: true,
+        onDeliveryResult,
+      }),
+    ).toBe("delivered");
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(onDeliveryResult).toHaveBeenCalledWith(expect.objectContaining({ delivered: true }));
   });
 
   it("does not treat ambiguous direct completion failures as announced", async () => {

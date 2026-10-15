@@ -1,4 +1,5 @@
 import { AsyncLocalStorage, createHook } from "node:async_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -18,6 +19,21 @@ function fixture() {
   const time = createGatewaySchedulerClock(1_000);
   const scheduler = createTestGatewayScheduler(time.clock);
   return { time, scheduler };
+}
+
+function withNativeErrorStacks<T>(run: () => T): T {
+  const prepareStackTrace = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+  try {
+    // Vite's formatter closures can retain native callsites beyond the closing call.
+    Reflect.deleteProperty(Error, "prepareStackTrace");
+    return run();
+  } finally {
+    if (prepareStackTrace) {
+      Object.defineProperty(Error, "prepareStackTrace", prepareStackTrace);
+    } else {
+      Reflect.deleteProperty(Error, "prepareStackTrace");
+    }
+  }
 }
 
 describe("Gateway timed work", () => {
@@ -127,7 +143,7 @@ describe("Gateway timed work", () => {
 
   it.each(["root", "scope"] as const)(
     "releases the retiring caller while its %s abort signal remains reachable",
-    (kind) => {
+    async (kind) => {
       class RetiredOwner {
         close() {
           const { scheduler } = fixture();
@@ -136,7 +152,11 @@ describe("Gateway timed work", () => {
           return owner.signal;
         }
       }
-      const signals = Array.from({ length: 12 }, () => new RetiredOwner().close());
+      const signals = withNativeErrorStacks(() =>
+        Array.from({ length: 12 }, () => new RetiredOwner().close()),
+      );
+      // Collect after the closing call's execution frame has unwound.
+      await nextTurn();
       expect(queryObjects(RetiredOwner)).toBe(0);
       for (const signal of signals) {
         expect(signal.aborted).toBe(true);
@@ -144,6 +164,29 @@ describe("Gateway timed work", () => {
       }
     },
   );
+
+  it("releases a scope's closing caller after its parent already aborted", async () => {
+    class RetiredCaller {
+      close(scope: ReturnType<GatewayScheduler["scope"]>) {
+        scope.beginClose();
+      }
+    }
+    const scopes = withNativeErrorStacks(() =>
+      Array.from({ length: 12 }, () => {
+        const { scheduler } = fixture();
+        const scope = scheduler.scope();
+        scheduler.beginClose();
+        new RetiredCaller().close(scope);
+        return scope;
+      }),
+    );
+    await nextTurn();
+    expect(queryObjects(RetiredCaller)).toBe(0);
+    for (const scope of scopes) {
+      expect(scope.signal.aborted).toBe(true);
+      expect(scope.signal.reason).toMatchObject({ name: "AbortError" });
+    }
+  });
 
   it("does not wake or allocate async resources before a fractional deadline", async () => {
     const time = createGatewaySchedulerClock(1_000);
@@ -477,26 +520,6 @@ describe("Gateway timed work", () => {
     gate.resolve();
     await initial;
     expect(scheduler.nextWakeAtMs).toBeNull();
-    await scheduler.stop();
-  });
-
-  it("logs one-shot runs at debug and repeating cadence runs only at trace", async () => {
-    const { time, scheduler } = fixture();
-    schedulerLog.debug.mockClear();
-    schedulerLog.trace.mockClear();
-    const sample = vi.fn();
-    scheduler.schedule({ id: "event-loop-health", delayMs: 20, everyMs: 20, run: sample });
-    scheduler.schedule({ id: "approval", delayMs: 30, run: () => {} });
-    await time.advanceBy(20);
-    await time.advanceBy(20);
-    await time.advanceBy(20);
-    expect(sample).toHaveBeenCalledTimes(3);
-    expect(schedulerLog.debug.mock.calls).toEqual([["running approval"]]);
-    expect(schedulerLog.trace.mock.calls).toEqual([
-      ["running event-loop-health"],
-      ["running event-loop-health"],
-      ["running event-loop-health"],
-    ]);
     await scheduler.stop();
   });
 

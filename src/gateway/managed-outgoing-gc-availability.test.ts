@@ -18,6 +18,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { cleanupManagedOutgoingMediaRecords } from "./managed-image-attachments.js";
 import {
   claimManagedImageRecordCleanupIfCurrent,
@@ -186,10 +187,13 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
         .prepare("SELECT * FROM managed_outgoing_image_records ORDER BY attachment_id")
         .all();
     const persistedBefore = readPersistedRecords();
-    const counter = trackSqliteStatementExecutions(database.db, ["records"], (sql) =>
-      /^\s*select\b/i.test(sql) && sql.includes('from "managed_outgoing_image_records"')
-        ? "records"
-        : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["records"],
+      (sql) =>
+        /^\s*select\b/i.test(sql) && sql.includes('from "managed_outgoing_image_records"')
+          ? "records"
+          : null,
     );
     try {
       await expect(

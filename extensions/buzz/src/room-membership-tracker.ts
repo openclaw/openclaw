@@ -24,18 +24,6 @@ const BUZZ_ROOM_METADATA_EDIT_KIND = 9_002;
 const MEMBERSHIP_REFRESH_DELAYS_MS = [100, 500, 1_500, 3_000] as const;
 const MEMBERSHIP_EVENT_CACHE_MAX_ENTRIES = 10_000;
 
-async function sleepWithSignal(delayMs: number, signal?: AbortSignal): Promise<void> {
-  signal?.throwIfAborted();
-  try {
-    await sleepWithAbort(delayMs, signal);
-  } catch {
-    const error = signal?.reason ?? new Error("Buzz room membership refresh aborted");
-    throw error instanceof Error
-      ? error
-      : new Error("Buzz room membership refresh failed", { cause: error });
-  }
-}
-
 export async function createBuzzRoomMembershipTracker(params: {
   relay: Relay;
   relayPublicKey: string;
@@ -151,7 +139,7 @@ export async function createBuzzRoomMembershipTracker(params: {
     for (const delayMs of MEMBERSHIP_REFRESH_DELAYS_MS) {
       const generation = state.generation;
       state.lastAttemptedGeneration = generation;
-      await sleepWithSignal(delayMs, params.signal);
+      await sleepWithAbort(delayMs, params.signal);
       if (state.generation !== generation) {
         continue;
       }
@@ -207,9 +195,7 @@ export async function createBuzzRoomMembershipTracker(params: {
       promise: Promise.resolve(),
     } satisfies RefreshState;
     state.promise = refreshMembership(channelId, state).finally(() => {
-      if (refreshes.get(channelId) === state) {
-        refreshes.delete(channelId);
-      }
+      refreshes.delete(channelId);
       if (
         state.generation !== state.lastAttemptedGeneration &&
         pendingMemberships.has(channelId) &&

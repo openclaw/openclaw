@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyModelOverrideWithAuthProfileCompatibility,
   ModelSelectionLockedError,
+  prepareAuthProfileProvider,
   resolvePersistedSessionRuntimeId,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import { isValidAgentHarnessSessionStoreEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -291,7 +292,7 @@ export async function generateVoiceResponse(
                 sessionId: crypto.randomUUID(),
                 updatedAt: now,
               },
-              prepare: (entry) => {
+              prepare: async (entry) => {
                 const next = entry.sessionId
                   ? { ...entry }
                   : {
@@ -300,10 +301,15 @@ export async function generateVoiceResponse(
                       updatedAt: now,
                     };
                 if (voiceConfig.responseModel) {
+                  const profileId = entry.authProfileOverride?.trim();
+                  const recordedProvider = profileId
+                    ? await prepareAuthProfileProvider({ agentDir, profileId })
+                    : undefined;
                   applyModelOverrideWithAuthProfileCompatibility({
                     cfg,
                     agentDir,
                     entry: next,
+                    recordedProvider,
                     currentProvider:
                       entry.providerOverride?.trim() ||
                       entry.modelProvider?.trim() ||

@@ -69,6 +69,51 @@ async function listDeletedArchiveFiles(root: string): Promise<string[]> {
 }
 
 describe("runSessionRegistryMaintenanceForStore", () => {
+  it("prunes bloated cron rows in bounded pages while preserving recent and running rows", async () => {
+    const now = Date.now();
+    const usageFamilySessionIds = Array.from({ length: 1024 }, (_, i) => `previous-run-${i}`);
+    const staleKeys = Array.from({ length: 65 }, (_, i) => `agent:main:cron:done:run:${i}`);
+    const recentKey = "agent:main:cron:done:run:recent";
+    const runningKey = "agent:main:cron:running:run:old";
+    const entries = Object.fromEntries(
+      [...staleKeys, recentKey, runningKey].map((key) => [
+        key,
+        {
+          ...sessionEntry(key, key === recentKey ? now : now - 8 * DAY_MS),
+          usageFamilySessionIds,
+        },
+      ]),
+    );
+    const storePath = await createStore(entries);
+    const readRegistry = entryReadRuntime.withSessionRegistryEntriesInWorker;
+    let seen = 0;
+    const reader = vi
+      .spyOn(entryReadRuntime, "withSessionRegistryEntriesInWorker")
+      .mockImplementation((scope, consume) =>
+        readRegistry(scope, async (page, assertCurrent) => {
+          seen += page.length;
+          expect(page.length).toBeLessThanOrEqual(32);
+          expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(1024 * 1024);
+          await consume(page, assertCurrent);
+        }),
+      );
+    const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
+      storePath,
+      apply: true,
+      retentionMs: 7 * DAY_MS,
+      runningCronJobIds: new Set(["running"]),
+    }).finally(() => reader.mockRestore());
+    expect(seen).toBe(67);
+    expect(result).toMatchObject({ pruned: 65, preservedRunning: 1 });
+    for (const sessionKey of staleKeys) {
+      expect(loadSessionEntry({ storePath, sessionKey })).toBeUndefined();
+    }
+    for (const sessionKey of [recentKey, runningKey]) {
+      expect(loadSessionEntry({ storePath, sessionKey })).toEqual(entries[sessionKey]);
+    }
+  });
+
   it("reports the next retention deadline and goes dormant after the final removal", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:cron:deadline:run:recent";

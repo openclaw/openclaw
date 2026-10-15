@@ -2,15 +2,16 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 export const PROGRESS_CARD_MAX_UTF8_BYTES = 8192;
 export const PROGRESS_CARD_MAX_STEPS = 50;
 export const PROGRESS_CARD_MAX_STEP_UTF8_BYTES = 512;
 
-export const ProgressCardStepStatusSchema = Type.Union([
-  Type.Literal("pending"),
-  Type.Literal("in_progress"),
-  Type.Literal("completed"),
+export const ProgressCardStepStatusSchema = stringLiteralUnion([
+  "pending",
+  "in_progress",
+  "completed",
 ]);
 export type ProgressCardStepStatus = Static<typeof ProgressCardStepStatusSchema>;
 

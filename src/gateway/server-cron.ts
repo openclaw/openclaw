@@ -113,7 +113,6 @@ import {
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   invalidateSessionAutomationIndex,
-  claimSessionAutomationEpoch,
   registerSessionAutomationSource,
   unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
@@ -371,7 +370,7 @@ export function buildGatewayCronService(params: {
       if (cronEnabled) {
         exitWatchers.reconcile(jobs);
       } else {
-        void exitWatchers.cancelAll();
+        await exitWatchers.cancelAll();
       }
     } catch (err) {
       cronLogger.warn({ err: String(err) }, "cron-exit: reconcile failed");
@@ -577,6 +576,7 @@ export function buildGatewayCronService(params: {
         deps: params.deps,
         agentId,
         sessionKey,
+        trigger: "cron",
         lane: "cron",
       });
     },
@@ -1119,7 +1119,15 @@ export function buildGatewayCronService(params: {
     // Fence new requests before cancellation so stopped children cannot respawn.
     exitWatchersStopped = true;
     exitWatcherGeneration += 1;
-    exitWatchersStopPromise ??= exitWatchers?.cancelAll() ?? Promise.resolve();
+    if (!exitWatchersStopPromise) {
+      exitWatchersStopPromise = exitWatchers?.cancelAll() ?? Promise.resolve();
+      void exitWatchersStopPromise.catch((err: unknown) => {
+        cronLogger.warn(
+          { err: formatErrorMessage(err) },
+          "cron-exit: asynchronous teardown failed",
+        );
+      });
+    }
   };
   // cron.stop launches this teardown asynchronously and stopAndDrain awaits
   // it; memoizing keeps that one drain instead of queueing every owner a
@@ -1148,7 +1156,6 @@ export function buildGatewayCronService(params: {
     getJobs: () => cron.getLoadedJobs(),
     getDefaultAgentId: () => cron.getDefaultAgentId(),
   };
-  const automationEpoch = claimSessionAutomationEpoch();
   const stopCron = cron.stop.bind(cron);
   const stopCronLifecycle = (preserveExitWatchers = false) => {
     settleExitWatcherHandoff(false);
@@ -1237,9 +1244,7 @@ export function buildGatewayCronService(params: {
     if (lifecycleChanged()) {
       return;
     }
-    // Register only once started, under the build-time epoch, so a stale lazy
-    // service resolving after a config reload cannot clobber the replacement.
-    registerSessionAutomationSource(automationSource, automationEpoch);
+    registerSessionAutomationSource(automationSource);
     // Nudge subscribed clients into a canonical list refresh so automation
     // badges match this scheduler's bindings — including clearing them when a
     // reload lands on an empty or disabled store.

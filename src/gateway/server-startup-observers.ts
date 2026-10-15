@@ -1,5 +1,7 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
+import { formatErrorMessageWithCode } from "../infra/errors.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
 import type { createHookRunner } from "../plugins/hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -108,6 +110,20 @@ export async function runGatewayStartupObservers(params: {
           includeMaintenance: true,
           isCancelled: () => params.signal.aborted || params.isClosing?.() === true,
         });
+        // A crash can leave agent databases under background integrity admission.
+        // Discover saved deliveries only after the existing reader startup joins it.
+        if (context && !params.signal.aborted && !params.isClosing?.()) {
+          try {
+            const { recoverSessionSendDeliveries } = await import("./session-send-recovery.js");
+            await recoverSessionSendDeliveries(context, params.signal);
+          } catch (error) {
+            if (!params.signal.aborted) {
+              params.log.warn(
+                `Session delivery restart recovery could not complete; saved inputs remain available: ${formatErrorMessageForDisplay(error, formatErrorMessageWithCode(error))}`,
+              );
+            }
+          }
+        }
         const activateSubagentRegistry = await params.loadSubagentRegistryActivation();
         if (!params.signal.aborted && params.isClosing?.() !== true) {
           await activateSubagentRegistry(params.resolveGatewayContext);

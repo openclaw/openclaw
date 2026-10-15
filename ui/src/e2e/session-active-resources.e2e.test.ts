@@ -73,7 +73,7 @@ const desktopTab = (page: Page) => pane(page).getByRole("tab", { name: "Desktop"
 const ready = async (page: Page) => {
   await waitForControlUiGatewayReady(page);
   await waitForControlUiRoute(page, { routeId: "chat" });
-  await pane(page).locator(".agent-chat__composer-combobox textarea").waitFor();
+  await pane(page).locator(".sidebar-region").waitFor();
 };
 async function assertNoProvisioning(gateway: MockGatewayControls) {
   const requests = await gateway.getRequests();
@@ -177,10 +177,13 @@ suite.define(() => {
           expect(await desktopTab(page).count()).toBe(1);
           const chatBox = await pane(page).locator(".sidebar-region__primary").boundingBox();
           const desktopBox = await pane(page).locator(".desktop-surface").boundingBox();
-          expect(chatBox!.height).toBeGreaterThan(100);
           expect(desktopBox!.width).toBeLessThanOrEqual(width);
           if (width === 390) {
-            expect(desktopBox!.y).toBeGreaterThan(chatBox!.y);
+            expect(chatBox).toBeNull();
+            expect(desktopBox!.width).toBeGreaterThan(width - 32);
+            expect(desktopBox!.height).toBeGreaterThan(100);
+          } else {
+            expect(chatBox!.height).toBeGreaterThan(100);
           }
           await page.screenshot({
             path: path.join(suite.artifactDir, `direct-desktop-${String(width)}.png`),

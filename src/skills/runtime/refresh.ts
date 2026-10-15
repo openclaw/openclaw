@@ -259,7 +259,7 @@ function readRegisteredSource({ key, source }: Awaited<ReturnType<typeof registe
 
 async function publishRegisteredSource(registration: Awaited<ReturnType<typeof registerSource>>) {
   const { source } = registration;
-  if (source.dirty || !source.sources || state.pending) {
+  if (source.dirty || !source.sources) {
     await scanDirtySources();
   }
   return readRegisteredSource(registration);

@@ -17,17 +17,24 @@ openclaw team-reports generate --intraday
 openclaw team-reports list --json
 ```
 
-Reports use UTC windows, remain in the plugin-owned SQLite store, and are
+Reports use UTC windows, remain in the plugin-owned database, and are
 served behind Gateway authentication at `/plugins/team-reports/` by default.
 Source collection and report generation run in a worker. Collected events flow in
-batches of at most 100 into connection-owned SQLite scratch tables; aggregation
+batches of at most 100 into connection-owned scratch tables; aggregation
 reads bounded payload batches and keeps only the report's evidence limits.
-SQLite lock waits and source parsing stay off the Gateway event loop. Plugin
+Database work and source parsing stay off the Gateway event loop. Plugin
 shutdown drains admitted worker and database work before closing the connection.
+SQLite is the default. The host's experimental PostgreSQL configuration also
+supports Team Reports, including database port and matched backup/restore.
+Collected activity is temporary and is discarded when its connection closes;
+saved reports, person-day counts, and run history are durable.
 Startup does not trigger collection. The first scheduled run catches up yesterday,
 reusing accepted closed days when retrying a partially failed run; manual generation
 still refreshes the requested day. Automatic collection waits at least five minutes
 after service start, and intraday runs keep their aligned UTC boundaries.
+Set `schedule.enabled: false` to stop automatic collection and catch-up while keeping
+stored reports, work sessions, and explicit `generate` commands available. Status
+then reports `scheduleEnabled: false` with no scheduled runs. The default is `true`.
 The Control UI tab opens at `/reports` (prefixed by the Control UI base path).
 Model summary calls are optional; set `summaries.enabled: false` for text without a model.
 
@@ -52,4 +59,4 @@ node --expose-gc --import ./scripts/tsx.mjs extensions/team-reports/src/report-r
 The performance check uses 2,000 issues, 1,000 commits, and 1,500 messages. It reports
 main-thread heap growth and synchronous callback duration, including worker startup,
 and verifies report counts. Omit `--worker` to measure the streaming collector's
-calling isolate separately; SQLite aggregation still runs in its worker.
+calling isolate separately; database aggregation still runs in its worker.
