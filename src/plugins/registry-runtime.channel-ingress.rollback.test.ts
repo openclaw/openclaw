@@ -23,6 +23,30 @@ import {
   stageActivePluginRegistry,
 } from "./runtime.js";
 
+type RuntimeBuilder = ReturnType<typeof createRuntimeBuilder>;
+
+function resolveChannelRuntimeFor(builder: RuntimeBuilder) {
+  const runtime = builder.registryBuilder.registry.channels
+    .find((candidate) => candidate.plugin.id === builder.record.id)
+    ?.resolveChannelRuntime?.();
+  if (!runtime) {
+    throw new Error(`missing registered channel runtime for ${builder.record.id}`);
+  }
+  return runtime;
+}
+
+/** Admit a fresh participant through `builder` and read the Gateway binding it retains. */
+async function admitFresh(builder: RuntimeBuilder, participantId: string) {
+  const runtime = resolveChannelRuntimeFor(builder);
+  const ingress = await resolveIngressForRuntime(runtime, participantId, {
+    channelId: builder.record.id,
+  });
+  const context = runtime.inbound.buildContext(
+    contextParams({ ingress, channelId: builder.record.id, senderId: participantId }),
+  );
+  return readChannelContextGatewayContextResolver(context);
+}
+
 // A staged replacement claims the channel's Gateway slot before activation commits.
 // Rollback must hand that slot back to the exact predecessor; commit must not.
 describe("channel Gateway slot across staged registry activation", () => {
@@ -37,25 +61,6 @@ describe("channel Gateway slot across staged registry activation", () => {
         id: "staged-channel-owner",
         gatewayContextResolver,
       });
-      const resolveRuntime = (builder: typeof first) => {
-        const runtime = builder.registryBuilder.registry.channels
-          .find((candidate) => candidate.plugin.id === builder.record.id)
-          ?.resolveChannelRuntime?.();
-        if (!runtime) {
-          throw new Error(`missing registered channel runtime for ${builder.record.id}`);
-        }
-        return runtime;
-      };
-      const admitFresh = async (builder: typeof first, participantId: string) => {
-        const runtime = resolveRuntime(builder);
-        const ingress = await resolveIngressForRuntime(runtime, participantId, {
-          channelId: builder.record.id,
-        });
-        const context = runtime.inbound.buildContext(
-          contextParams({ ingress, channelId: builder.record.id, senderId: participantId }),
-        );
-        return readChannelContextGatewayContextResolver(context);
-      };
       let replacement: typeof first | undefined;
       try {
         setActivePluginRegistry(first.registryBuilder.registry);
@@ -77,7 +82,7 @@ describe("channel Gateway slot across staged registry activation", () => {
         gatewayContextResolver.mockClear();
         expect(retained?.()).toBeUndefined();
         // The predecessor's live channel keeps resolving its runtime while the candidate stages.
-        expect(resolveRuntime(first).inbound.ingress).toBeUndefined();
+        expect(resolveChannelRuntimeFor(first).inbound.ingress).toBeUndefined();
         expect(gatewayContextResolver).not.toHaveBeenCalled();
 
         if (outcome === "rolled back") {
@@ -93,7 +98,7 @@ describe("channel Gateway slot across staged registry activation", () => {
           );
           expect(getActivePluginRegistry()).toBe(replacement.registryBuilder.registry);
           expect(retained?.()).toBeUndefined();
-          expect(resolveRuntime(first).inbound.ingress).toBeUndefined();
+          expect(resolveChannelRuntimeFor(first).inbound.ingress).toBeUndefined();
           expect(gatewayContextResolver).not.toHaveBeenCalled();
           expect((await admitFresh(replacement, "person-b"))?.()).toBe(gatewayContext);
         }
@@ -104,4 +109,64 @@ describe("channel Gateway slot across staged registry activation", () => {
       }
     },
   );
+
+  // Repeated failures must each hand the slot back to the same original owner, and a later
+  // commit must still take it: the retired candidates are compacted out, not stacked up.
+  it("restores the same predecessor after repeated failed replacements", async () => {
+    const original = captureActivePluginRegistrySnapshot();
+    const gatewayContext = {} as GatewayRequestContext;
+    const gatewayContextResolver = vi.fn<GatewayContextResolver>(() => gatewayContext);
+    const first = createRuntimeBuilder({
+      origin: "bundled",
+      id: "restaged-channel-owner",
+      gatewayContextResolver,
+    });
+    const candidates: RuntimeBuilder[] = [];
+    const stageCandidate = () => {
+      const candidate = createRuntimeBuilder({
+        origin: "bundled",
+        id: first.record.id,
+        gatewayContextResolver,
+      });
+      candidates.push(candidate);
+      stageActivePluginRegistry(candidate.registryBuilder.registry, null, "gateway-bindable");
+      return candidate;
+    };
+    try {
+      setActivePluginRegistry(first.registryBuilder.registry);
+      const committed = captureActivePluginRegistrySnapshot();
+      const ingress = await first.resolveIngress("person-a", { channelId: first.record.id });
+      const context = first.buildContext(contextParams({ ingress, channelId: first.record.id }));
+      const copied = { ...context };
+      copyChannelParticipantAdmissionEvidence(context, copied);
+      const retained = readChannelContextGatewayContextResolver(copied);
+      expect(retained?.()).toBe(gatewayContext);
+
+      // No traffic reaches the predecessor between failures, so nothing re-heads the slot
+      // history for it; each candidate claims behind the one before it.
+      for (const attempt of ["first", "second", "third"]) {
+        stageCandidate();
+        expect(retained?.(), `staged ${attempt} candidate`).toBeUndefined();
+        rollbackStagedPluginRegistry(committed);
+        expect(getActivePluginRegistry()).toBe(first.registryBuilder.registry);
+        expect(retained?.(), `rolled back ${attempt} candidate`).toBe(gatewayContext);
+      }
+      expect((await admitFresh(first, "person-b"))?.()).toBe(gatewayContext);
+
+      const successor = stageCandidate();
+      commitStagedPluginRegistry(
+        first.registryBuilder.registry,
+        successor.registryBuilder.registry,
+      );
+      expect(getActivePluginRegistry()).toBe(successor.registryBuilder.registry);
+      expect(retained?.()).toBeUndefined();
+      expect((await admitFresh(successor, "person-c"))?.()).toBe(gatewayContext);
+    } finally {
+      restoreActivePluginRegistrySnapshot(original);
+      markPluginRegistryRetired(first.registryBuilder.registry);
+      for (const candidate of candidates) {
+        markPluginRegistryRetired(candidate.registryBuilder.registry);
+      }
+    }
+  });
 });
