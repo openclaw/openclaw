@@ -10,6 +10,7 @@ import {
   createScenario,
   gateway,
   humanReplies,
+  observeProofSteeringAdmission,
   outbound,
   providerErrors,
   registerProofModelScript,
@@ -818,7 +819,9 @@ async function verifyCrossHumanAdmission(
   const previousSetting = getRuntimeConfig().messages?.queue?.allowCollaborativeSteering;
   const firstReply = humanReplies.length;
   let alice: ReturnType<typeof runHuman> | undefined;
+  let bob: ReturnType<typeof runHuman> | undefined;
   let stage = "queue-setting application";
+  using steering = await observeProofSteeringAdmission(scenario.sourcePrompt);
   // Disposal retains a body failure when restoring config also fails.
   await using _ = {
     async [Symbol.asyncDispose]() {
@@ -826,7 +829,7 @@ async function verifyCrossHumanAdmission(
       try {
         scenario.releaseIncumbent.resolve();
         scenario.releaseTarget.resolve();
-        await Promise.allSettled([alice]);
+        await Promise.allSettled([alice, bob]);
         await waitForGatewayActiveWork(30_000);
         cleanupStage = "config restoration";
         await patchProofConfig(
@@ -874,8 +877,17 @@ async function verifyCrossHumanAdmission(
       signal,
     );
     stage = "Bob steering admission";
-    const receipt = await runHuman(scenario, "bob", scenario.sourcePrompt, "steer", signal);
-    expect(receipt.deferredToActiveRun).toBe(collaborative ? "steer" : "followup");
+    bob = runHuman(scenario, "bob", scenario.sourcePrompt, "steer", signal);
+    if (collaborative) {
+      // The receipt waits for transcript commitment, which needs Alice's held
+      // tool to finish. Observe real admission before releasing that tool.
+      await withinTest(
+        awaitGateBeforeSettlement(steering.admitted, bob, "Bob settled before steering admission"),
+        signal,
+      );
+    } else {
+      expect((await bob).deferredToActiveRun).toBe("followup");
+    }
     expect(humanReplies.slice(firstReply).filter((reply) => reply.sender === "bob")).toEqual(
       collaborative
         ? []
@@ -904,6 +916,7 @@ async function verifyCrossHumanAdmission(
     expect(getRuntimeConfig().tools?.toolsBySender?.["id:bob"]).toEqual({ deny: ["message"] });
     stage = "Alice and delegate completion";
     scenario.releaseIncumbent.resolve();
+    expect((await bob).deferredToActiveRun).toBe(collaborative ? "steer" : "followup");
     await alice;
     await withinTest(scenario.targetStarted.promise, signal);
     await waitForGatewayActiveWork(30_000);

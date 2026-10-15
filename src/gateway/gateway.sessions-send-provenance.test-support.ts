@@ -72,6 +72,22 @@ export function registerProofModelScript(
 ) {
   modelScripts.push({ marker, respond: handleRequest });
 }
+
+export async function observeProofSteeringAdmission(prompt: string) {
+  const { AgentSession } = await import("../agents/sessions/agent-session.js");
+  const admitted = createDeferred();
+  const steer = AgentSession.prototype.steer;
+  const observer = vi.spyOn(AgentSession.prototype, "steer").mockImplementation(async function (
+    this: InstanceType<typeof AgentSession>,
+    ...args: Parameters<typeof steer>
+  ) {
+    await steer.apply(this, args);
+    if (args[0].includes(prompt)) {
+      admitted.resolve();
+    }
+  });
+  return { admitted: admitted.promise, [Symbol.dispose]: () => observer.mockRestore() };
+}
 export type Scenario = {
   spec: ProofCase;
   sourcePrompt: string;
