@@ -27,6 +27,7 @@ import {
   persistValidatedDowngradeConfig,
 } from "./update-command-config.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 import {
   collectPostCorePluginAdvisories,
   collectPostCorePluginFailureFacts,
@@ -138,7 +139,7 @@ export async function convergeUpdatePlugins(params: {
         status: "in_progress",
         startedAtMs: Date.now(),
       },
-      { env: params.opts.run.env },
+      updateRunLedgerOptions(params.opts.run),
     );
   }
 
@@ -399,7 +400,11 @@ export async function convergeUpdatePlugins(params: {
       if (params.opts.run) {
         for (const step of resultWithPostUpdate.steps.flatMap(updateRunStepsFromResultStep)) {
           if (step.step.startsWith("warning:")) {
-            recordUpdateRunStep(params.opts.run.runId, step, { env: params.opts.run.env });
+            recordUpdateRunStep(
+              params.opts.run.runId,
+              step,
+              updateRunLedgerOptions(params.opts.run),
+            );
           }
         }
         recordUpdateRunStep(
@@ -410,7 +415,7 @@ export async function convergeUpdatePlugins(params: {
             endedAtMs: Date.now(),
             ...(failureFacts.length ? { failureFacts } : {}),
           },
-          { env: params.opts.run.env },
+          updateRunLedgerOptions(params.opts.run),
         );
       }
 

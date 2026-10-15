@@ -15,6 +15,7 @@ import {
 } from "./update-command-failure-recovery.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import { runPostActivationInspections } from "./update-command-post-activation-inspections.js";
 import {
@@ -236,7 +237,7 @@ async function finishSettledUpdate(
           detail:
             "No retained previous package transaction is available; automatic package restoration was not attempted.",
         },
-        { env: params.opts.run.env },
+        updateRunLedgerOptions(params.opts.run),
       );
     }
     const recoveryParams = { ...params, preManagedServiceStop: currentServiceStop() };

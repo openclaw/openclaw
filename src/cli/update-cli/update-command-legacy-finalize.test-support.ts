@@ -78,6 +78,30 @@ const overrides = new Map<string, string>([
     export async function tryWriteCompletionCache() { return false; }`,
   ],
 ]);
+if (process.env.OPENCLAW_TEST_LEDGER_WAIT_PROBE === "1") {
+  overrides.set(
+    source("../../state/openclaw-state-db-existing-write.ts"),
+    `import {runExistingOpenClawStateWriteTransaction as actual} from ${JSON.stringify(source("../../state/openclaw-state-db-existing-write.ts") + "?fixture-original")};
+     import {readLatestUpdateRun} from ${JSON.stringify(source("../../infra/update-run-read.kernel.ts"))};
+     import fs from "node:fs";
+     export function runExistingOpenClawStateWriteTransaction(operation, options, contract) {
+       return actual(database => {
+         if(contract.operationLabel !== "update.run") return operation(database);
+         const before = readLatestUpdateRun(database.db);
+         const timeoutMs = database.db.prepare("PRAGMA busy_timeout").get().timeout;
+         const result = operation(database);
+         const after = readLatestUpdateRun(database.db);
+         const changedSteps = (after?.steps ?? []).filter(step =>
+           JSON.stringify(step) !== JSON.stringify(before?.steps.find(prior => prior.step === step.step)));
+         fs.appendFileSync(${JSON.stringify(scratch + "/ledger-wait-probe")}, JSON.stringify({
+           timeoutMs, changedSteps, phaseChanged: before?.phase !== after?.phase,
+           statusChanged: before?.status !== after?.status,
+         }) + "\\n");
+         return result;
+       }, options, contract);
+     }`,
+  );
+}
 if (process.env.OPENCLAW_TEST_COMPLETED_TERMINAL === "1") {
   overrides.set(
     source("./update-command-terminal.ts"),

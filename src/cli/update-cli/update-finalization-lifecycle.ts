@@ -84,7 +84,7 @@ export class UpdateFinalizationLifecycle {
   handoff?: ManagedHandoffRepair;
   private runId?: string;
   private driver?: UpdateRunDriver;
-  private ledgerOptions?: { env: NodeJS.ProcessEnv };
+  private ledgerOptions?: { env: NodeJS.ProcessEnv; busyTimeoutMs: number };
   private ownsRun = false;
   private ownsRepairRun = false;
   private warnedHeartbeat = false;
@@ -110,8 +110,11 @@ export class UpdateFinalizationLifecycle {
   attachLedger(repair = false): string {
     this.driver = readUpdateRunDriver();
     const inherited = process.env[UPDATE_RUN_ID_ENV]?.trim();
-    this.ledgerOptions = { env: { ...process.env } };
-    const admissionOptions = { ...this.ledgerOptions, busyTimeoutMs: this.budget("preflight") };
+    this.ledgerOptions = {
+      env: { ...process.env },
+      busyTimeoutMs: this.budget("preflight"),
+    };
+    const admissionOptions = this.ledgerOptions;
     this.runId = createUpdateRun(
       { runId: inherited || undefined, trigger: "cli" },
       admissionOptions,
@@ -490,7 +493,10 @@ export class UpdateFinalizationLifecycle {
       this.failureObservation = await verifyUpdateFailureRecovery({
         result,
         root: this.root,
-        opts: { json: this.json, run: { runId: this.runId, env } },
+        opts: {
+          json: this.json,
+          run: { runId: this.runId, env, ledgerBusyTimeoutMs: this.ledgerOptions?.busyTimeoutMs },
+        },
         env,
         timeoutMs: this.timeoutMs,
         serviceUpdateVerdict: this.serviceUpdateVerdict,

@@ -8,6 +8,7 @@ import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as existingStateWrite from "../../state/openclaw-state-db-existing-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as nativeLaunchAgentRecovery from "../daemon-cli/launchd-recovery.js";
@@ -340,7 +341,28 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         OPENCLAW_PROFILE: "stomme",
         OPENCLAW_PORT: "18790",
       };
-      const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+      const ledgerBusyTimeoutMs = 71_000;
+      const runId = createUpdateRun(
+        { trigger: "cli" },
+        { env, busyTimeoutMs: ledgerBusyTimeoutMs },
+      ).runId;
+      const observedWriterBudgets: number[] = [];
+      const actualWrite = existingStateWrite.runExistingOpenClawStateWriteTransaction;
+      vi.spyOn(existingStateWrite, "runExistingOpenClawStateWriteTransaction").mockImplementation(
+        (operation, options, contract) =>
+          actualWrite(
+            (database) => {
+              if (contract.operationLabel === "update.run") {
+                observedWriterBudgets.push(
+                  Number(database.db.prepare("PRAGMA busy_timeout").get()?.timeout),
+                );
+              }
+              return operation(database);
+            },
+            options,
+            contract,
+          ),
+      );
       const service = {} as never;
       const unhealthy = {
         runtime: { status: "stopped" },
@@ -378,7 +400,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
 
       await expect(
         recoverLaunchAgentAndRecheckGatewayHealth({
-          updateRun: { runId, env },
+          updateRun: { runId, env, ledgerBusyTimeoutMs },
           health: unhealthy,
           service,
           port: 18790,
@@ -407,6 +429,8 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         expect(waitForHealthy).not.toHaveBeenCalled();
       }
       const repair = getUpdateRun(runId, { env })?.repair;
+      expect(observedWriterBudgets.length).toBeGreaterThan(0);
+      expect(new Set(observedWriterBudgets)).toEqual(new Set([ledgerBusyTimeoutMs]));
       {
         expect(repair).toEqual([
           {

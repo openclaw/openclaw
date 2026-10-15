@@ -10,6 +10,7 @@ import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-a
 import { defaultRuntime } from "../../runtime.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-exit-barrier.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 import { withMutableUpdateSignals } from "./update-command-mutable-signals.js";
 
 // Identity in this map is minted only for a new local preview, never reconstructed
@@ -32,7 +33,7 @@ export function recordUpdateCommandTarget(
     run.runId,
     "requested",
     patch,
-    { env: run.env },
+    updateRunLedgerOptions(run),
     (record) => {
       before = record;
     },

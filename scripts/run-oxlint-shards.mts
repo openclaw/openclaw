@@ -396,7 +396,19 @@ export async function main(
         shell: false,
         args: distArtifactEntryArgs(
           path.resolve("scripts/prepare-extension-package-boundary-artifacts.mts"),
-          ["--mode=package-boundary"],
+          shardArgs.extensionRoots
+            ? [
+                "--mode=all",
+                `--extensions=${JSON.stringify([
+                  ...new Set(
+                    selectedShards
+                      .flatMap((shard) => shard.args.slice(2))
+                      .map((root) => root.slice("extensions/".length)),
+                  ),
+                ])}`,
+                "--lint",
+              ]
+            : ["--mode=package-boundary"],
         ),
         env,
         requireProcessTreeExit: process.platform !== "win32",

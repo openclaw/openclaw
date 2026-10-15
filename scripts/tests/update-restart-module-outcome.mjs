@@ -263,6 +263,7 @@ async function fixture({
   });
   const realNames = [
     "update-command-service",
+    "update-command-ledger",
     "update-command-post-update",
     "update-command-mutable-signals",
     "update-command-execution-guards",

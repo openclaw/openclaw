@@ -39,7 +39,11 @@ async function withProgressRun(
   const control = path.join(root, "control");
   fs.mkdirSync(control);
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+  const run = {
+    runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+    env,
+    ledgerBusyTimeoutMs: 71_000,
+  };
   const guards = createUpdateCommandExecutionGuards({ run }, root);
   try {
     await withUpdateCommandExecutor(run.runId, async (executor) => {

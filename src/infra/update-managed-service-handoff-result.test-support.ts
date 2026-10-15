@@ -20,8 +20,10 @@ export function registerManagedTerminalResultTests(
   itUnix.each(["ready", "unready"] as const)(
     "finishes a cancelled handoff ledger when recovery is %s without a Gateway boot",
     async (gatewayHealth) => {
-      const { run } = await runManagedServiceManagerBoundary("systemd", {
+      const { run, ledgerWriteBudgets } = await runManagedServiceManagerBoundary("systemd", {
         ledger: true,
+        observeLedgerBudget: true,
+        ...(gatewayHealth === "ready" ? { ledgerBusyTimeoutMs: 71_000 } : {}),
         cancelAfterPark: true,
         gatewayHealth,
       });
@@ -34,6 +36,10 @@ export function registerManagedTerminalResultTests(
             : "managed-service-handoff-restore-failed",
         verification: { serviceRunning: true, runningVersion: "1.0.0", versionMatch: true },
       });
+      expect(ledgerWriteBudgets!.length).toBeGreaterThanOrEqual(4);
+      expect(new Set(ledgerWriteBudgets)).toEqual(
+        new Set([gatewayHealth === "ready" ? 71_000 : null]),
+      );
       expect(run?.verification.booted).toBeUndefined();
       expect(run?.downtimeMs).toEqual(gatewayHealth === "ready" ? expect.any(Number) : null);
       expect(run?.steps).toEqual(

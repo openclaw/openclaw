@@ -25,8 +25,12 @@ function exportTargets(value: unknown): string[] {
   return value && typeof value === "object" ? Object.values(value).flatMap(exportTargets) : [];
 }
 
-/** Build-only leaf projects retain the shared package config and its SDK aliases. */
-export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: string[]) {
+/** Leaf projects retain package SDK aliases and optionally include the complete lint surface. */
+export function prepareExtensionBoundaryProjects(
+  rootDir: string,
+  extensionIds: string[],
+  { lint = false }: { lint?: boolean } = {},
+) {
   const inventory = new Map(
     collectBundledPluginBuildEntries({
       cwd: rootDir,
@@ -40,7 +44,9 @@ export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: 
       throw new Error(`No packaged surface for extension boundary: ${extensionId}`);
     }
     const pluginRoot = path.resolve(rootDir, "extensions", extensionId);
-    const sources = collectFilesSync(pluginRoot, { includeFile: isTypeScriptPackageEntry });
+    const sources = collectFilesSync(pluginRoot, {
+      includeFile: lint ? (file) => /\.[cm]?[jt]sx?$/u.test(file) : isTypeScriptPackageEntry,
+    });
     const candidates = new Map<string, Set<string>>();
     const addCandidate = (target: string, source: string) => {
       const key = path.resolve(pluginRoot, target);
@@ -71,7 +77,9 @@ export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: 
       ...exportTargets(pkg.main),
     ]);
     // Ambient module declarations need roots even when there is no import edge to them.
-    const roots = new Set(declarations);
+    // Lint also visits tests and unexported files excluded from the packaged surface.
+    // Keep entrypoint roots too, so both consumers use the same closure owner.
+    const roots = new Set([...declarations, ...(lint ? sources : [])]);
     for (const target of targets) {
       if (!/\.[cm]?[jt]sx?$/u.test(target)) {
         continue;
@@ -102,7 +110,7 @@ export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: 
     const contents = `${JSON.stringify(
       {
         extends: path.join(pluginRoot, "tsconfig.json"),
-        compilerOptions: { rootDir: parsed.options.rootDir },
+        compilerOptions: { rootDir: parsed.options.rootDir, ...(lint ? { allowJs: true } : {}) },
         files: [...roots].toSorted(),
         include: [],
         exclude: [],
@@ -126,7 +134,7 @@ export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: 
 export async function resolveExtensionBoundaryPreparation(
   rootDir: string,
   extensionIds: string[],
-  { preparedSdk = false }: { preparedSdk?: boolean } = {},
+  { preparedSdk = false, lint = false }: { preparedSdk?: boolean; lint?: boolean } = {},
 ) {
   const boundary = createDeclarationInputBoundary(rootDir);
   const sdkOutput = boundary.assert(LOCAL_SDK_ROOT);
@@ -192,6 +200,7 @@ export async function resolveExtensionBoundaryPreparation(
   const queue: { config: string; producerId?: string }[] = prepareExtensionBoundaryProjects(
     boundary.root,
     extensionIds,
+    { lint },
   ).map(({ config }) => ({ config }));
   const visited = new Set<string>();
   for (const { config: candidate, producerId } of queue) {

@@ -26,6 +26,7 @@ import {
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
@@ -254,7 +255,7 @@ async function updateCommandInternal(
         },
         before: { version: currentVersion ?? VERSION },
       },
-      { env: run.env },
+      updateRunLedgerOptions(run),
     );
     if (
       opts.channel &&
@@ -280,7 +281,11 @@ async function updateCommandInternal(
     }
 
     if (opts.dryRun) {
-      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, { env: run.env });
+      finishUpdateRun(
+        run.runId,
+        { status: "skipped", reason: "dry-run" },
+        updateRunLedgerOptions(run),
+      );
       return await previewUpdateCommand({
         target,
         prepared,

@@ -23,6 +23,7 @@ import {
 import { withPrivateStagedPackageInstall } from "./update-command-artifact.js";
 import { inspectUpdateManagedServices } from "./update-command-database-context.js";
 import { handoffUpdateFromGateway } from "./update-command-handoff.js";
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import type { UpdateAdmissionReportParams } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
@@ -195,7 +196,7 @@ export function applyUpdateCandidateAdmission(params: {
             }
           : {}),
       },
-      { env: run.env },
+      updateRunLedgerOptions(run),
     );
     for (const warning of [
       ...(result.warning ? [result.warning] : []),
@@ -204,7 +205,7 @@ export function applyUpdateCandidateAdmission(params: {
       recordUpdateRunStep(
         run.runId,
         { step: `warning:${warning.code}`, status: "completed", detail: warning.message },
-        { env: run.env },
+        updateRunLedgerOptions(run),
       );
       defaultRuntime.error(`Warning: ${warning.message}`);
     }

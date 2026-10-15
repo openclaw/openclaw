@@ -40,6 +40,7 @@ import { formatInstallationTargetCommand } from "../installation-target-format.j
 import { printResult } from "./progress.js";
 import { resolveNodeRunner, UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { releaseUpdateCommandPreflightForHandoff } from "./update-command-executor.js";
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 import { resolveOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 function parsePositivePid(value: unknown): number | null {
@@ -206,6 +207,7 @@ export async function handoffUpdateFromGateway(params: {
   }
   const started = await startManagedServiceUpdateHandoff({
     runId: params.opts.run?.runId,
+    ledgerBusyTimeoutMs: params.opts.run?.ledgerBusyTimeoutMs,
     root: params.root,
     invocationCwd: params.invocationCwd,
     parentPid,
@@ -283,7 +285,7 @@ export async function handoffUpdateFromGateway(params: {
     recordUpdateRunStep(
       params.opts.run.runId,
       { step: "managed-service update handoff", status: "completed", endedAtMs: Date.now() },
-      { env: params.opts.run.env },
+      updateRunLedgerOptions(params.opts.run),
     );
   }
   await printResult(result, params.opts, { nextAction: guidance });

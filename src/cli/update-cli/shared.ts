@@ -42,6 +42,7 @@ import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../../shared/update-outcome.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 import { resolveNodeRunner } from "./node-runner.js";
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 
 export { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 export { resolveNodeRunner } from "./node-runner.js";
@@ -63,6 +64,8 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     /** Immutable original bytes for this invocation; never restoration authority. */
     originalRecoveryCapture?: UpdateRecoveryBaselineRef;
     defaultStepTimeoutMs?: number;
+    /** Per-run SQLite writer wait budget; scoped to this admitted update only. */
+    ledgerBusyTimeoutMs?: number;
     activationTimeoutMs?: number;
     /** Explicit operator budget, minted once by this invocation’s admission. */
     deadline?: import("../daemon-cli/restart-health-deadline.js").GatewayRestartDeadline;
@@ -609,7 +612,7 @@ export async function confirmUpdateDowngrade(params: {
       status: "skipped",
       reason: decision === "cancelled" ? "cancelled" : "downgrade-confirmation-required",
     },
-    { env: run.env },
+    updateRunLedgerOptions(run),
   );
   if (decision === "confirmation-required") {
     defaultRuntime.error(

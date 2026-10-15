@@ -246,6 +246,10 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
   const mode = parseMode(argv);
   await ensureKyselyTypes(repoRoot);
   const selectedArgument = argv.find((arg) => arg.startsWith("--extensions="));
+  const lint = argv.includes("--lint");
+  if (lint && !selectedArgument) {
+    throw new Error("Lint preparation requires selected extensions");
+  }
   let selected: string[] | undefined;
   let discoverPreparation: typeof resolveExtensionBoundaryPreparation | undefined;
   let preparation: Awaited<ReturnType<typeof resolveExtensionBoundaryPreparation>> | undefined;
@@ -262,7 +266,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     selected = requested;
     ({ resolveExtensionBoundaryPreparation: discoverPreparation } =
       await import("./lib/extension-boundary-projects.mts"));
-    preparation = await discoverPreparation(repoRoot, selected);
+    preparation = await discoverPreparation(repoRoot, selected, { lint });
     process.stdout.write(
       `selected preparation: ${preparation.sdkRoots.length} SDK roots; plugin producers: ${preparation.pluginIds.join(", ") || "none"}\n`,
     );
@@ -421,6 +425,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     // their SDK inputs before compiling any producer or selected package.
     const discovered = await discoverPreparation!(repoRoot, selected!, {
       preparedSdk: true,
+      lint,
     });
     if (sharedSdk) {
       if (discovered.sdkRoots.length) {

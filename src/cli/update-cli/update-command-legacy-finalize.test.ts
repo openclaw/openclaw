@@ -16,6 +16,7 @@ import {
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { isRequiredUpdateRunStep } from "../../infra/update-run-write.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
@@ -66,6 +67,8 @@ function assertLegacyCommandJoined(
 }
 
 const scenarios = [
+  "ledger-timeout-legacy",
+  "ledger-timeout-explicit",
   "rollback-state-unverified",
   "revoked",
   "retargeted",
@@ -197,6 +200,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       OPENCLAW_TEST_RUNTIME_LOG: "1",
+      ...(scenario.startsWith("ledger-timeout-") ? { OPENCLAW_TEST_LEDGER_WAIT_PROBE: "1" } : {}),
       ...(completedByGateway ? { OPENCLAW_TEST_COMPLETED_TERMINAL: "1" } : {}),
       ...(scratchEnvironment
         ? {
@@ -371,7 +375,15 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
           channel: "stable",
           downgradeRisk: false,
           shouldRestart: true,
-          opts: { json: true, yes: true, run: { runId, env } },
+          opts: {
+            json: true,
+            yes: true,
+            run: {
+              runId,
+              env,
+              ...(scenario === "ledger-timeout-explicit" ? { ledgerBusyTimeoutMs: 71_000 } : {}),
+            },
+          },
           result: {
             status: "ok",
             ...(completedByGateway
@@ -485,6 +497,40 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
         );
         expect(receiver.pid).not.toBe(receiver.parent);
         expect(getUpdateRun(runId, { env })).toMatchObject({ status: "succeeded" });
+        if (scenario.startsWith("ledger-timeout-")) {
+          const writes = fs
+            .readFileSync(path.join(scratch, "ledger-wait-probe"), "utf8")
+            .trim()
+            .split("\n")
+            .map(
+              (line) =>
+                JSON.parse(line) as {
+                  timeoutMs: number;
+                  changedSteps: Parameters<typeof isRequiredUpdateRunStep>[0][];
+                  phaseChanged: boolean;
+                  statusChanged: boolean;
+                },
+            );
+          const optional = writes.filter(
+            (write) =>
+              !write.phaseChanged &&
+              !write.statusChanged &&
+              write.changedSteps.length > 0 &&
+              write.changedSteps.every((step) => !isRequiredUpdateRunStep(step)),
+          );
+          expect(optional.flatMap((write) => write.changedSteps.map((step) => step.step))).toEqual([
+            "managed-service-executor-check",
+            "managed-service-restart",
+          ]);
+          expect(new Set(optional.map((write) => write.timeoutMs))).toEqual(new Set([1_000]));
+          const required = writes.filter((write) => !optional.includes(write));
+          expect(required.length).toBeGreaterThanOrEqual(3);
+          expect(new Set(required.map((write) => write.timeoutMs)), details).toEqual(
+            new Set([
+              scenario === "ledger-timeout-explicit" ? 71_000 : input.params.updateStepTimeoutMs,
+            ]),
+          );
+        }
         if (legacyParent) {
           expect(store.current(acquired.lease)).toBe(true);
           expect(store.hasUnsettledChildren(acquired.lease)).toBe(false);

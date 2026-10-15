@@ -132,13 +132,20 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
       signal.removeEventListener("abort", abort);
     }
   };
-  const run = (declared = root, pwd = declared, extensionIds?: string[], env?: NodeJS.ProcessEnv) =>
+  const run = (
+    declared = root,
+    pwd = declared,
+    extensionIds?: string[],
+    env?: NodeJS.ProcessEnv,
+    lint = false,
+  ) =>
     step(
       "native-fixture",
       [
         path.join(declared, "scripts/prepare-extension-package-boundary-artifacts.mts"),
         `--mode=${extensionIds ? "all" : mode}`,
         ...(extensionIds ? [`--extensions=${JSON.stringify(extensionIds)}`] : []),
+        ...(lint ? ["--lint"] : []),
       ],
       undefined,
       { ...env, PWD: pwd },
@@ -219,6 +226,45 @@ function writeSelectedConsumer(f: ReturnType<typeof createPreparationFixture>) {
 }
 
 describe("native declaration preparation", () => {
+  it(
+    "prepares test-only SDK imports for selected package lint without compiling unrelated SDK roots",
+    { timeout: 30_000 },
+    ({ signal }) =>
+      fixture.run(async () => {
+        const f = createPreparationFixture("package-boundary", signal);
+        writeSelectedConsumer(f);
+        f.write("src/plugin-sdk/testing.ts", "export const testValue = 42;");
+        f.write("src/plugin-sdk/javascript.ts", "export const jsValue = 7;");
+        f.write("src/plugin-sdk/unused.ts", "export const broken = ;");
+        f.write(
+          "scripts/lib/plugin-sdk-entrypoints.json",
+          '["core", "testing", "javascript", "unused"]',
+        );
+        f.write(
+          "extensions/chosen/index.test.ts",
+          'import { testValue } from "openclaw/plugin-sdk/testing"; export const observed: number = testValue;',
+        );
+        f.write(
+          "extensions/chosen/fixture.test.js",
+          'export { jsValue } from "openclaw/plugin-sdk/javascript";',
+        );
+        await f.run(f.root, f.root, ["chosen"], undefined, true);
+        expect(
+          fs.readFileSync(path.join(f.root, f.output, "src/plugin-sdk/javascript.d.ts"), "utf8"),
+        ).toContain("jsValue = 7");
+        const declaration = path.join(f.root, f.output, "src/plugin-sdk/testing.d.ts");
+        expect(fs.readFileSync(declaration, "utf8")).toContain("testValue = 42");
+        expect(readArtifactRecord(f.recordPath)?.inputs).not.toContain("src/plugin-sdk/unused.ts");
+        const checked = spawnSync(
+          f.native,
+          ["-p", ".artifacts/extension-package-boundary/compile/chosen.tsconfig.json", "--noEmit"],
+          { cwd: f.root, encoding: "utf8", timeout: 20_000 },
+        );
+        expect(checked.error).toBeUndefined();
+        expect(checked.status, checked.stdout + checked.stderr).toBe(0);
+      }),
+  );
+
   it(
     "narrows SDK roots without weakening imports, ambient types, or full receipts",
     { timeout: 30_000 },
