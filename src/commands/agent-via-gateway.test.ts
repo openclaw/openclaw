@@ -515,28 +515,37 @@ describe("agentCliCommand", () => {
     );
   });
 
-  it("reads a UTF-8 message file for gateway dispatch", async () => {
-    await withTempStore(async ({ dir }) => {
-      const messageFile = path.join(dir, "task.md");
-      const messageBody = 'first line\n```json\n{"ok":true}\n```\nsecond line\n';
-      fs.writeFileSync(messageFile, `\uFEFF${messageBody}`, "utf8");
-      mockGatewaySuccessReply();
+  it.each(["task.md", ...(process.platform === "win32" ? [] : [" task.md "])])(
+    "reads the literal UTF-8 message file %s for gateway dispatch",
+    async (filename) => {
+      await withTempStore(async ({ dir }) => {
+        const messageFile = path.join(dir, filename);
+        const messageBody = 'first line\n```json\n{"ok":true}\n```\nsecond line\n';
+        fs.writeFileSync(messageFile, `\uFEFF${messageBody}`, "utf8");
+        if (filename !== filename.trim()) {
+          fs.writeFileSync(messageFile.trim(), "wrong neighboring prompt", "utf8");
+        }
+        mockGatewaySuccessReply();
 
-      await agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime);
+        await agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime);
 
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
-      const params = requireRecord(request.params, "gateway request params");
-      expect(params.message).toBe(messageBody);
-      expect(params.sessionKey).toBe("agent:main:incident-42");
-      expect(params.sessionId).toBeUndefined();
-      expect(params.to).toBeUndefined();
-      expect(request.config).toBe(loadConfig.mock.results[0]?.value);
-      expect(loadConfig).toHaveBeenCalledWith();
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
-    });
-  });
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.message).toBe(messageBody);
+        expect(params.sessionKey).toBe("agent:main:incident-42");
+        expect(params.sessionId).toBeUndefined();
+        expect(params.to).toBeUndefined();
+        expect(request.config).toBe(loadConfig.mock.results[0]?.value);
+        expect(loadConfig).toHaveBeenCalledWith();
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("refuses --local before embedded startup when a live Gateway owns the state directory", async () => {
     await withTempStore(async ({ dir }) => {

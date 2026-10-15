@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -338,7 +341,7 @@ async function readAgentMessageFile(messageFile: string): Promise<string> {
 
 async function resolveAgentMessageOpts(opts: AgentCliOpts): Promise<AgentDispatchOpts> {
   const { messageFile: rawMessageFile, ...rest } = opts;
-  const messageFile = rawMessageFile?.trim();
+  const messageFile = readNonBlankString(rawMessageFile);
   const hasInlineMessage = opts.message !== undefined;
   if (hasInlineMessage && messageFile) {
     throw new Error("Use either --message or --message-file, not both.");
