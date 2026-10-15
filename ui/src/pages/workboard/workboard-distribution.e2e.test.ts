@@ -6,6 +6,7 @@ import {
   readPluginControlUiAssets,
 } from "../../../../src/plugins/control-ui-assets.ts";
 import { loadPluginManifest } from "../../../../src/plugins/manifest.ts";
+import { normalizeControlUiBuildInfo } from "../../build-info-normalizers.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -34,6 +35,9 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("loads entry, CSS and lazy Workboard chunks from the UI origin with an authenticated remote Gateway", async () => {
+    const buildInfo = normalizeControlUiBuildInfo(
+      JSON.parse(await fs.readFile(path.join(repoRoot, "dist/build-info.json"), "utf8")),
+    );
     const pluginRoot = path.join(repoRoot, "dist/extensions/workboard");
     const manifest = loadPluginManifest(pluginRoot, false);
     if (!manifest.ok || !manifest.manifest.controlUi) {
@@ -54,6 +58,8 @@ suite.define(() => {
       page.on("pageerror", (error) => errors.push(error.message));
       page.on("request", (request) => requests.push(request.url()));
       const gateway = await installMockGateway(page, {
+        serverBuildId: buildInfo.buildId,
+        serverVersion: buildInfo.version ?? undefined,
         controlUiTabs: workboardUi.controlUiTabs,
         pluginAssetsRequireAuth: true,
         featureMethods: [

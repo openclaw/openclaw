@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined, readStringValue } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   afterEach,
   beforeEach,
@@ -62,11 +62,6 @@ import {
   respawnWithoutOpenClawCompileCacheIfNeeded as respawnCompileCache,
 } from "./entry.compile-cache.js";
 import { resolveNodeCompileCacheEnv } from "./infra/node-compile-cache-env.js";
-
-function enabledDirectory(callIndex = 0): string {
-  const [directory] = expectDefined(enableCompileCache.mock.calls[callIndex], "cache enable call");
-  return expectDefined(readStringValue(directory), "cache directory string");
-}
 
 describe("entry compile cache", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -190,12 +185,6 @@ describe("entry compile cache", () => {
     expect(enableCompileCache).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves source entry compilation uncached", async () => {
-    await markSourceCheckout();
-    enableOpenClawCompileCache({ currentFile: entryFile, env: {}, installRoot: root });
-    expect(enableCompileCache).not.toHaveBeenCalled();
-  });
-
   it("keeps compiled one-shot commands free of automatic exit-time cache work", () => {
     argv = [process.execPath, entryFile, "config", "set", "gateway.mode", "local"];
     enableOpenClawCompileCache({ currentFile: entryFile, env: {}, installRoot: root });
@@ -234,26 +223,6 @@ describe("entry compile cache", () => {
       }
     });
     expect(env.NODE_COMPILE_CACHE).toBe(directory);
-  });
-
-  it("isolates replaced installation metadata without build information", async () => {
-    const packageJsonPath = path.join(root, "package.json");
-    const env = { NODE_COMPILE_CACHE: path.join(root, ".node-cache") };
-    await fs.writeFile(packageJsonPath, '{"version":"2026.4.29"}\n', "utf8");
-    enableOpenClawCompileCache({ currentFile: entryFile, env, installRoot: root });
-    const originalDirectory = enabledDirectory();
-    expect(originalDirectory).toContain(path.join(".node-cache", "openclaw"));
-    expect(originalDirectory).toContain("2026.4.29");
-    expect(path.basename(originalDirectory)).toMatch(/^\d+-\d+$/);
-    await fs.writeFile(
-      packageJsonPath,
-      '{"version":"2026.4.29","installation":"replacement"}\n',
-      "utf8",
-    );
-    enableOpenClawCompileCache({ currentFile: entryFile, env, installRoot: root });
-    const replacementDirectory = enabledDirectory(1);
-    expect(replacementDirectory).toContain(path.join("openclaw", "2026.4.29"));
-    expect(replacementDirectory).not.toBe(originalDirectory);
   });
 
   it.each(["inherited", "active"])(

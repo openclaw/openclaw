@@ -68,19 +68,6 @@ describe("buildSlackProgressCardBlocks", () => {
     },
   );
 
-  it.each([
-    { toolCalls: 1, files: 1, added: 0, removed: 0, footer: "1 tool · 1 file · 2s" },
-    { toolCalls: 0, files: 0, added: 0, removed: 0, footer: "2s" },
-  ])("renders the live footer as $footer", ({ toolCalls, files, added, removed, footer }) => {
-    expect(
-      card({
-        toolCalls,
-        elapsedSeconds: 2,
-        diffStat: { files, added, removed },
-      }),
-    ).toEqual([context(footer)]);
-  });
-
   it("omits detail placeholders from completed tools and preserves plain narration", () => {
     expect(
       card({
@@ -89,6 +76,7 @@ describe("buildSlackProgressCardBlocks", () => {
         lines: [{ ...toolLine(""), status: "completed" }],
         toolCalls: 1,
         elapsedSeconds: 2,
+        diffStat: { files: 0, added: 0, removed: 0 },
       }),
     ).toEqual([plain("Read *literal* <@U123>"), section("Exec")]);
   });

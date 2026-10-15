@@ -182,6 +182,7 @@ export type CronActiveJobMarker = {
   jobId: string;
   standingGrantAuthority?: CronStandingGrantAuthority;
   agentId?: string;
+  sessionKey?: string;
   stateIdentityKey?: string;
   generation: number;
   token: number;
@@ -272,6 +273,7 @@ export function markCronJobActive(
   jobId: string,
   opts?: {
     agentId?: string;
+    sessionKey?: string;
     stateIdentityKey?: string;
     preserveAcrossGenerationAdvance?: boolean;
     isMessageActionAuthorityCurrent?: () => boolean;
@@ -287,6 +289,7 @@ export function markCronJobActive(
   const marker: CronActiveJobMarker = {
     jobId,
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+    ...(opts?.sessionKey ? { sessionKey: opts.sessionKey } : {}),
     ...(opts?.stateIdentityKey ? { stateIdentityKey: opts.stateIdentityKey } : {}),
     ...(opts?.isMessageActionAuthorityCurrent
       ? { isMessageActionAuthorityCurrent: opts.isMessageActionAuthorityCurrent }
@@ -486,11 +489,18 @@ export function hasActiveCronJobs() {
 }
 
 /** Ignores only the exact cron executions represented by one coalesced heartbeat wake. */
-export function hasActiveCronJobsExceptMarkers(markersToIgnore: readonly CronActiveJobMarker[]) {
+export function hasActiveCronJobsExceptMarkers(
+  markersToIgnore: readonly CronActiveJobMarker[],
+  matches: (marker: CronActiveJobMarker) => boolean = () => true,
+) {
   const state = getCronActiveJobState();
   const ignoredMarkers = new Set(markersToIgnore);
   for (const marker of state.activeJobs.values()) {
-    if (!ignoredMarkers.has(marker) && isMarkerActiveInGeneration(marker, state.generation)) {
+    if (
+      !ignoredMarkers.has(marker) &&
+      isMarkerActiveInGeneration(marker, state.generation) &&
+      matches(marker)
+    ) {
       return true;
     }
   }

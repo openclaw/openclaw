@@ -115,7 +115,7 @@ describe("Slack presence monitor", () => {
       scheduler,
       accountId: "default",
       accountConfig: { mode: "auto" },
-      client: { getPresence } as never,
+      resolveClient: () => ({ getPresence }),
       cooldownStore: createCooldownStore(),
       enqueue,
       wake: vi.fn(),
@@ -155,7 +155,7 @@ describe("Slack presence monitor", () => {
     const monitor = createPresenceFixture({
       accountId: "default",
       accountConfig: { mode: "auto" },
-      client: { getPresence } as never,
+      resolveClient: () => ({ getPresence }),
       cooldownStore,
       enqueue,
       wake: vi.fn(),
@@ -196,7 +196,7 @@ describe("Slack presence monitor", () => {
       {
         accountId: "default",
         accountConfig: { mode: "auto", prompt: "Account guidance" },
-        client: { getPresence } as never,
+        resolveClient: () => ({ getPresence }),
         cooldownStore: createCooldownStore(),
         enqueue,
         wake: vi.fn(),
@@ -232,7 +232,7 @@ describe("Slack presence monitor", () => {
       {
         accountId: "default",
         accountConfig: { mode: "auto", prompt: "Account guidance" },
-        client: { getPresence } as never,
+        resolveClient: () => ({ getPresence }),
         cooldownStore: createCooldownStore(),
         enqueue,
         wake: vi.fn(),
@@ -270,7 +270,7 @@ describe("Slack presence monitor", () => {
       {
         accountId: "default",
         accountConfig: { mode: "auto" },
-        client: { getPresence } as never,
+        resolveClient: () => ({ getPresence }),
         cooldownStore: createCooldownStore(),
         enqueue,
         wake,
@@ -335,7 +335,7 @@ describe("Slack presence monitor", () => {
       {
         accountId: "default",
         accountConfig: { mode: "auto" },
-        client: { getPresence } as never,
+        resolveClient: () => ({ getPresence }),
         cooldownStore: createCooldownStore(),
         enqueue,
         wake: vi.fn(),
@@ -448,7 +448,7 @@ describe("Slack presence monitor", () => {
     const monitor = createPresenceFixture({
       accountId: "default",
       accountConfig: { mode: "auto" },
-      client: { getPresence } as never,
+      resolveClient: () => ({ getPresence }),
       cooldownStore: createCooldownStore(),
       enqueue: vi.fn(() => true),
       wake: vi.fn(),
@@ -484,7 +484,7 @@ describe("Slack presence monitor", () => {
       const monitor = createPresenceFixture({
         accountId: "default",
         accountConfig: { mode: "auto" },
-        client: { getPresence } as never,
+        resolveClient: () => ({ getPresence }),
         cooldownStore: createCooldownStore(),
         enqueue: vi.fn(() => true),
         wake: vi.fn(),
@@ -520,7 +520,7 @@ describe("Slack presence monitor", () => {
       {
         accountId: "default",
         accountConfig: { mode: "on" },
-        client: { getPresence } as never,
+        resolveClient: () => ({ getPresence }),
         cooldownStore: createCooldownStore(),
         enqueue: vi.fn(() => true),
         wake: vi.fn(),
@@ -550,8 +550,8 @@ describe("Slack presence monitor", () => {
 
   it("bounds stop while a presence request is stalled", async () => {
     vi.useFakeTimers();
-    let resolveStalled!: (value: { presence: string }) => void;
-    const stalled = new Promise<{ presence: string }>((resolve) => {
+    let resolveStalled!: (value: { ok: boolean; presence: string }) => void;
+    const stalled = new Promise<{ ok: boolean; presence: string }>((resolve) => {
       resolveStalled = resolve;
     });
     let polling: Promise<void> | undefined;
@@ -560,7 +560,7 @@ describe("Slack presence monitor", () => {
       const monitor = createPresenceFixture({
         accountId: "default",
         accountConfig: { mode: "auto" },
-        client: { getPresence } as never,
+        resolveClient: () => ({ getPresence }),
         cooldownStore: createCooldownStore(),
         enqueue: vi.fn(() => true),
         wake: vi.fn(),
@@ -579,7 +579,7 @@ describe("Slack presence monitor", () => {
 
       expect(getPresence).toHaveBeenCalledOnce();
     } finally {
-      resolveStalled({ presence: "away" });
+      resolveStalled({ ok: true, presence: "away" });
       await polling;
       vi.useRealTimers();
     }
@@ -621,7 +621,7 @@ describe("Slack presence monitor", () => {
         {
           accountId: "default",
           accountConfig: { mode: "auto" },
-          client: { getPresence } as never,
+          resolveClient: () => ({ getPresence }),
           cooldownStore,
           enqueue,
           wake,
@@ -691,18 +691,17 @@ describe("Slack presence monitor", () => {
   it("does not publish when cooldown persistence rejects", async () => {
     const cooldownStore = createCooldownStore();
     cooldownStore.registerIfAbsent = vi.fn().mockRejectedValue(new Error("storage unavailable"));
+    const getPresence = vi
+      .fn()
+      .mockResolvedValueOnce({ presence: "away" })
+      .mockResolvedValueOnce({ presence: "active" });
     const enqueue = vi.fn(() => true);
     const wake = vi.fn();
     const error = vi.fn();
     const monitor = createPresenceFixture({
       accountId: "default",
       accountConfig: { mode: "auto" },
-      client: {
-        getPresence: vi
-          .fn()
-          .mockResolvedValueOnce({ presence: "away" })
-          .mockResolvedValueOnce({ presence: "active" }),
-      } as never,
+      resolveClient: () => ({ getPresence }),
       cooldownStore,
       enqueue,
       wake,
@@ -729,7 +728,7 @@ describe("Slack presence monitor", () => {
     const monitor = createPresenceFixture({
       accountId: "default",
       accountConfig: { mode: "auto" },
-      client: { getPresence } as never,
+      resolveClient: () => ({ getPresence }),
       cooldownStore: createCooldownStore(),
       enqueue,
       wake: vi.fn(),

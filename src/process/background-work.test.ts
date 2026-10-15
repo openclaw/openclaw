@@ -36,7 +36,7 @@ describe("background work admission", () => {
       lane,
       width: lane.maxConcurrent,
       queue: lane.queue,
-      activeTaskIds: [...lane.activeTaskIds],
+      activeTasks: [...lane.activeTasks],
       generation: lane.generation,
     }));
     const memberships = [...state.laneGroupByLane];
@@ -73,7 +73,7 @@ describe("background work admission", () => {
       expect(saved.lane.maxConcurrent).toBe(saved.width);
       expect(saved.lane.queue).toBe(saved.queue);
       expect(saved.lane.queue.length).toBe(0);
-      expect([...saved.lane.activeTaskIds]).toEqual(saved.activeTaskIds);
+      expect([...saved.lane.activeTasks]).toEqual(saved.activeTasks);
       expect(saved.lane.generation).toBe(saved.generation);
       expect(saved.lane.draining).toBe(false);
     }
@@ -173,7 +173,7 @@ describe("background work admission", () => {
       const group = queueState.laneGroups.get("background-work");
       const before = [...lanes.values()].map((state) => ({
         state,
-        activeTaskIds: [...state.activeTaskIds],
+        activeTasks: [...state.activeTasks],
         queue: state.queue,
         head: state.queue.normal.head,
         tail: state.queue.normal.tail,
@@ -214,7 +214,7 @@ describe("background work admission", () => {
       expect(lanes.size).toBe(3);
       for (const saved of before) {
         expect(lanes.get(saved.state.lane)).toBe(saved.state);
-        expect([...saved.state.activeTaskIds]).toEqual(saved.activeTaskIds);
+        expect([...saved.state.activeTasks]).toEqual(saved.activeTasks);
         expect(saved.state.queue).toBe(saved.queue);
         expect(saved.state.queue.normal.head).toBe(saved.head);
         expect(saved.state.queue.normal.tail).toBe(saved.tail);

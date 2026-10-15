@@ -328,14 +328,9 @@ export class CodexAssistantProjection {
     if (this.persistedAssistantBoundary) {
       return [];
     }
-    const recoveredAudible = this.collectPersistableAssistantTexts(0).filter(
-      (text) => !isSilentReplyPayloadText(text),
-    );
-    if (recoveredAudible.length > 0) {
-      return recoveredAudible.slice(-1);
-    }
-    const recovered = this.resolveFinalAssistantText();
-    return recovered ? [recovered] : [];
+    const recovered = this.collectPersistableAssistantTexts(0);
+    const recoveredAudible = recovered.filter((text) => !isSilentReplyPayloadText(text));
+    return (recoveredAudible.length > 0 ? recoveredAudible : recovered).slice(-1);
   }
 
   collectCommentaryMessages(): Array<{ itemId: string; message: AssistantMessage }> {
@@ -672,18 +667,6 @@ export class CodexAssistantProjection {
     this.latestTerminalAssistantCandidateSuperseded = true;
     this.terminalAssistantCandidateEarlierActiveItemIds.clear();
     this.supersedeVisibleAnswerCandidate();
-  }
-
-  private resolveFinalAssistantText(): string | undefined {
-    const selectedId = this.assistantItemOrder.findLast((itemId) => {
-      const text = this.remainingAssistantText(itemId)?.trim();
-      return Boolean(
-        text &&
-        !this.isNonTerminalAssistantItem(itemId) &&
-        !this.isToolProgressEchoText(itemId, text),
-      );
-    });
-    return selectedId ? this.remainingAssistantText(selectedId)?.trim() : undefined;
   }
 
   private collectPersistableAssistantTexts(minIndex: number): string[] {

@@ -235,6 +235,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/get-reply-native-slash-fast-path.test.ts",
   "src/auto-reply/reply/get-reply.cancelled-interrupt.test.ts",
   "src/auto-reply/reply/agent-runner-completion.persistence.test.ts",
+  "src/auto-reply/reply/agent-runner-result-accounting.final-delivery.test.ts",
   "src/auto-reply/reply/agent-runner-result-accounting.persistence.test.ts",
   "src/auto-reply/reply/agent-runner-result-accounting.restoration.test.ts",
   "src/auto-reply/reply/session-usage.test.ts",

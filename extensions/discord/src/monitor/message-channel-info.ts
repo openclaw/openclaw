@@ -48,14 +48,9 @@ export function resolveDiscordMessageChannelId(params: {
   );
 }
 
-export function buildDiscordChannelInfo(
-  channel: unknown,
-  options?: { rawTypeFallback?: boolean },
-): DiscordChannelInfo | null {
+export function buildDiscordChannelInfo(channel: unknown): DiscordChannelInfo | null {
   const info = resolveDiscordChannelInfoSafe(channel);
-  const type =
-    (info.type as ChannelType | undefined) ??
-    (options?.rawTypeFallback ? (channel as { type?: ChannelType }).type : undefined);
+  const type = info.type as ChannelType | undefined;
   return type === undefined
     ? null
     : { type, name: info.name, topic: info.topic, parentId: info.parentId, ownerId: info.ownerId };
@@ -79,7 +74,7 @@ export async function resolveDiscordChannelInfo(
       cacheDiscordChannelInfo(channelId, null, DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS, now);
       return null;
     }
-    const payload = buildDiscordChannelInfo(channel, { rawTypeFallback: true });
+    const payload = buildDiscordChannelInfo(channel);
     if (!payload) {
       return null;
     }

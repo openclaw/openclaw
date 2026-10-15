@@ -1132,11 +1132,6 @@ export async function createManagedOutgoingMediaBlocks(params: {
               transparent: { format: "png", compressionLevel: 9 },
               transparency: "auto",
             });
-            // The encoder owns limit fitting; reject an invalid result instead of re-encoding it.
-            const resizedLimitError = getManagedImageMetadataLimitError(resized, label, limits);
-            if (resizedLimitError) {
-              throw createManagedImageAttachmentError(resizedLimitError);
-            }
             assertManagedMediaByteLimit(resized.data.byteLength, "image", label, limits.maxBytes);
             const replacement = await saveMediaBuffer(
               resized.data,

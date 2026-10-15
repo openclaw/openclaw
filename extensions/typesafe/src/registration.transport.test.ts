@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import type { DecisionBatch } from "openclaw/plugin-sdk/decisions";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
@@ -54,6 +55,17 @@ const context = (signal = new AbortController().signal) => ({
   agentId: "research",
   signal,
   deadlineMonotonicMs: performance.now() + 1000,
+});
+
+beforeAll(async () => {
+  // Response-contract assertions start after loader/policy setup; cold-import
+  // deadline admission is covered separately by registration.lazy.test.ts.
+  await import("./client.js");
+  resolveProviderHttpRequestConfigWithOriginTrust({
+    provider: "typesafe",
+    baseUrl: "https://api.typesafe.ai/v1",
+    defaultBaseUrl: "https://api.typesafe.ai/v1",
+  });
 });
 
 beforeEach(() => {

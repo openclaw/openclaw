@@ -1,29 +1,21 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
-import type {
-  AgentsListResult,
-  GatewaySessionRow,
-  SessionsListResult,
-} from "../../../api/types.ts";
+import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Kbd } from "../../../components/solid/kbd.tsx";
 import "../../../components/openclaw-mascot.ts";
 import { registerCommandPaletteEnglish } from "../../../i18n/locales/en-command-palette.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";
 import {
-  resolveChannelSessionInfo,
-  resolveSessionDisplayName,
-  resolveSessionWorkSubtitle,
-} from "../../../lib/session-display.ts";
-import { filterVisibleSessionRows } from "../../../lib/sessions/navigation.ts";
-import {
-  areUiSessionKeysEquivalent,
-  parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
   type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
-import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import {
+  prepareWelcomeRecentSessions,
+  resolveAssistantDisplayAvatar,
+  type WelcomeRecentSession,
+} from "./chat-welcome.ts";
 
 registerCommandPaletteEnglish();
 
@@ -58,41 +50,6 @@ const WELCOME_SUGGESTION_KEYS = [
   "chat.welcome.suggestions.checkSystemHealth",
 ];
 
-const WELCOME_RECENT_SESSION_LIMIT = 5;
-
-/**
- * Recent user-created chats for the welcome screen: the sidebar's visible-row
- * rules (no archived/cron/subagent/spawned rows, scoped to the active agent)
- * minus channel-originated sessions — those live in their channel sections and
- * are not something the user "starts" from here.
- */
-function selectWelcomeRecentSessions(props: ChatWelcomeProps): GatewaySessionRow[] {
-  if (!props.sessions) {
-    return [];
-  }
-  const host = props.sessionHost ?? {};
-  // Bare global keys carry no agent; the selected agent lives in host state
-  // (assistantAgentId). Mirrors resolveSessionNavigation's agent resolution.
-  const defaultAgentId = resolveUiSelectedGlobalAgentId(host);
-  const agentId = parseAgentSessionKey(props.sessionKey)?.agentId ?? defaultAgentId;
-  return (
-    filterVisibleSessionRows(props.sessions.sessions, {
-      agentId,
-      defaultAgentId,
-      filterByAgent: true,
-    })
-      .filter(
-        (row) =>
-          !areUiSessionKeysEquivalent(row.key, props.sessionKey) &&
-          !resolveChannelSessionInfo(row.key, row.channel).channelSession,
-      )
-      // Pure recency, unlike the sidebar's pin-aware sort: a "Recent chats"
-      // list capped at five must not let stale pinned rows hide newer chats.
-      .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.key.localeCompare(b.key))
-      .slice(0, WELCOME_RECENT_SESSION_LIMIT)
-  );
-}
-
 function WelcomeClawd() {
   return (
     <div class="agent-chat__welcome-clawd" aria-hidden="true">
@@ -102,7 +59,7 @@ function WelcomeClawd() {
 }
 
 function WelcomeRecentSessions(props: {
-  rows: GatewaySessionRow[];
+  rows: readonly WelcomeRecentSession[];
   onOpenSession: ChatWelcomeProps["onOpenSession"];
 }) {
   return (
@@ -115,8 +72,8 @@ function WelcomeRecentSessions(props: {
             class="agent-chat__recent"
             onClick={() => props.onOpenSession?.(row.key)}
           >
-            <span class="agent-chat__recent-name">{resolveSessionDisplayName(row.key, row)}</span>
-            <Show when={resolveSessionWorkSubtitle(row)}>
+            <span class="agent-chat__recent-name">{row.name}</span>
+            <Show when={row.subtitle}>
               {(subtitle) => <span class="agent-chat__recent-sub">{subtitle()}</span>}
             </Show>
             <span class="agent-chat__recent-time">
@@ -176,8 +133,20 @@ function WelcomeHero(props: ChatWelcomeProps) {
 }
 
 /** The start-screen welcome block, shared by the empty chat and the new-session draft. */
-export function ChatWelcome(props: ChatWelcomeProps) {
-  const recentSessions = createMemo(() => selectWelcomeRecentSessions(props));
+export function ChatWelcome(
+  props: ChatWelcomeProps & { preparedRecents?: readonly WelcomeRecentSession[] },
+) {
+  const recentSessions = createMemo(() => {
+    if (props.preparedRecents) {
+      return props.preparedRecents;
+    }
+    i18nRevision();
+    return prepareWelcomeRecentSessions(
+      props.sessions,
+      props.sessionKey,
+      resolveUiSelectedGlobalAgentId(props.sessionHost ?? {}),
+    );
+  });
   return (
     <Show
       when={!props.modelSetupRequired}

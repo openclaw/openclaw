@@ -76,8 +76,15 @@ describe("remote model catalog refresh", () => {
     }
   });
 
-  it("refreshes and revalidates without caller-thread SQL", async () => {
+  it("persists valid rows and revalidates without caller-thread SQL", async () => {
     const databaseOptions = options();
+    const downloaded = {
+      ...bundle,
+      models: [
+        { ...bundle.models[0], input: ["text", "future"] },
+        { id: "bad-pricing", provider: "anthropic", pricing: { status: "unknown", input: 0 } },
+      ],
+    };
     openOpenClawStateDatabase(databaseOptions);
     const sql = observeMainThreadSql();
     sql.calibrate();
@@ -88,9 +95,9 @@ describe("remote model catalog refresh", () => {
           databaseOptions,
           force: true,
           bundledGeneratedAt: () => bundle.generatedAt - 1,
-          fetchImpl: async () => new Response(JSON.stringify(bundle)),
+          fetchImpl: async () => new Response(JSON.stringify(downloaded)),
         }),
-      ).resolves.toMatchObject({ status: "updated" });
+      ).resolves.toMatchObject({ status: "updated", models: 1 });
       await expect(
         refreshRemoteModelCatalog({
           config: {},
@@ -103,6 +110,10 @@ describe("remote model catalog refresh", () => {
     } finally {
       sql.restore();
     }
+    expect(JSON.parse(readRemoteModelCatalog(databaseOptions)?.bundle_json ?? "null")).toEqual({
+      ...bundle,
+      models: [{ ...bundle.models[0], input: ["text"] }],
+    });
   });
 
   it("keeps the original physical store while the download yields", async () => {
@@ -312,7 +323,7 @@ describe("remote model catalog refresh", () => {
     ).resolves.toMatchObject({ status: "error" });
   });
 
-  it.each(["invalid UTF-8", "unsupported schema", "rates on unknown pricing"])(
+  it.each(["invalid UTF-8", "unsupported schema", "empty models", "rates on unknown pricing"])(
     "preserves the previous catalog without a fallback request after %s",
     async (failure) => {
       const databaseOptions = options();
@@ -335,6 +346,7 @@ describe("remote model catalog refresh", () => {
           ...bundle,
           generatedAt: bundle.generatedAt + 1,
           ...(failure === "unsupported schema" ? { schemaVersion: 3 } : {}),
+          ...(failure === "empty models" ? { models: [] } : {}),
           ...(failure === "rates on unknown pricing"
             ? { models: [{ ...bundle.models[0], pricing: { status: "unknown", input: 0 } }] }
             : {}),
