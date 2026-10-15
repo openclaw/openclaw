@@ -258,6 +258,25 @@ describe("doctor config flow", () => {
 
   afterEach(() => clearRuntimeConfigSnapshot());
 
+  it.each([false, true])(
+    "preserves explicit collaborative steering %s without a repair",
+    async (value) => {
+      const config: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        gateway: { mode: "local" },
+        messages: {
+          responsePrefix: "keep-prefix",
+          queue: { allowCollaborativeSteering: value, debounceMs: 125 },
+        },
+      };
+
+      await using result = await runConfig({ config, repair: true });
+
+      expect(result.cfg).toEqual(config);
+      expect(result.shouldWriteConfig).toBe(false);
+    },
+  );
+
   it.each([
     {
       name: "valid config",

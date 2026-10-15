@@ -239,15 +239,23 @@ describe("automatic config repair", () => {
       outputPath: "browser.executablePath",
       authored: "${BROWSER_BIN}",
       resolved: "/opt/example/browser-current",
+      allowCollaborativeSteering: true,
     },
-    ...["${STARTUP_MEMORY_KEY}", "$${STARTUP_MEMORY_KEY}"].map((apiKey) => ({
-      name: `moved ${apiKey} reference`,
-      config: { agents: { defaults: { memorySearch: { remote: { apiKey } } } } },
+    ...[
+      { apiKey: "${STARTUP_MEMORY_KEY}", allowCollaborativeSteering: false },
+      { apiKey: "$${STARTUP_MEMORY_KEY}", allowCollaborativeSteering: true },
+    ].map(({ apiKey, allowCollaborativeSteering }) => ({
+      name: `moved ${apiKey} reference and explicit steering ${allowCollaborativeSteering}`,
+      config: {
+        agents: { defaults: { memorySearch: { remote: { apiKey } } } },
+        messages: { queue: { allowCollaborativeSteering } },
+      },
       env: { STARTUP_MEMORY_KEY: "fixture-memory-key" },
       commitEnv: {},
       outputPath: "memory.search.remote.apiKey",
       authored: apiKey,
       resolved: apiKey.startsWith("$$") ? "${STARTUP_MEMORY_KEY}" : "fixture-memory-key",
+      allowCollaborativeSteering,
     })),
   ])("preserves $name through Doctor repair", async (testCase) => {
     await withDoctorConfigPreflightHome((home) =>
@@ -267,9 +275,10 @@ describe("automatic config repair", () => {
         }
         await withEnvAsync(testCase.commitEnv, async () => {
           await commitAutomaticConfigRepair(plan, snapshot);
-          expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toHaveProperty(
-            testCase.outputPath,
-            testCase.authored,
+          const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+          expect(saved).toHaveProperty(testCase.outputPath, testCase.authored);
+          expect(saved.messages.queue.allowCollaborativeSteering).toBe(
+            testCase.allowCollaborativeSteering,
           );
           const reloaded = await readConfigFileSnapshot();
           expect(reloaded.valid).toBe(true);
@@ -316,6 +325,7 @@ describe("automatic config repair", () => {
         });
         expect(resolved?.sourceConfig).not.toHaveProperty("meta.lastTouchedAt");
         expect(resolved?.sourceConfig.agents?.entries?.work).toEqual({ name: "Operator" });
+        expect(resolved?.sourceConfig.messages?.queue?.allowCollaborativeSteering).toBeUndefined();
       });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
