@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { CronJob } from "../cron/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -28,7 +29,33 @@ import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("serves a sidebar page while off-page runtime ownership is pending", async ({ signal }) => {
+it.for([
+  { name: "off-page", options: {}, first: "response", keys: ["agent:main:visible"] },
+  {
+    name: "selected",
+    options: { limit: 2 },
+    first: "off-page ownership",
+    keys: ["agent:main:visible", "agent:main:off-page"],
+  },
+  {
+    name: "search",
+    options: { search: "visible" },
+    first: "off-page ownership",
+    keys: ["agent:main:visible"],
+  },
+  {
+    name: "without Board",
+    options: { hasBoard: false },
+    first: "off-page ownership",
+    keys: ["agent:main:visible"],
+  },
+  {
+    name: "with Board",
+    options: { hasBoard: true },
+    first: "off-page ownership",
+    keys: [],
+  },
+])("preserves $name readiness when listing a sidebar page", async (scenario, { signal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     const visible = { agentId: "main", sessionKey: "agent:main:visible" };
@@ -80,9 +107,15 @@ it("serves a sidebar page while off-page runtime ownership is pending", async ({
       projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
       const client = identifiedClient("sidebar-viewer");
-      const request = { rowMode: "sidebar" as const, limit: 1 };
+      const request: SessionsListParams = { rowMode: "sidebar", limit: 1, ...scenario.options };
       expect(
-        (await listSessions({ context, client, request })).sessions.map((row) => row.key),
+        (
+          await listSessions({
+            context,
+            client,
+            request: { rowMode: "sidebar", limit: 1 },
+          })
+        ).sessions.map((row) => row.key),
       ).toEqual([visible.sessionKey]);
       const first = await projection.withSelectionPreparation(async () => {
         holdOwnership = true;
@@ -94,15 +127,16 @@ it("serves a sidebar page while off-page runtime ownership is pending", async ({
           entered.promise.then(() => "off-page ownership" as const),
         ]);
         console.info("sidebar-page-readiness", {
+          scenario: scenario.name,
           first: winner,
           elapsedMs: performance.now() - started,
         });
         release.resolve();
         const result = await reading;
-        expect(result.sessions.map((row) => row.key)).toEqual([visible.sessionKey]);
+        expect(result.sessions.map((row) => row.key)).toEqual(scenario.keys);
         return winner;
       });
-      expect(first).toBe("response");
+      expect(first).toBe(scenario.first);
     } finally {
       release.resolve();
       await Promise.allSettled(reading ? [reading] : []);
