@@ -10,11 +10,10 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import {
   closeOpenClawAgentDatabasesAsync,
-  runOpenClawAgentWriteTransaction,
+  openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -124,19 +123,19 @@ it("settles legacy liveness once before startup returns, preserving recovery cla
         before.set(fixture.sessionKey, loadSessionEntryReadOnly(scope)!);
         history.set(fixture.sessionKey, await loadTranscriptEvents(scope));
       }
-      runOpenClawAgentWriteTransaction((database) => {
-        const update = database.db.prepare(
-          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.status', ?) WHERE session_key = ?",
-        );
-        for (const fixture of legacy) {
-          update.run(fixture.status, fixture.sessionKey);
-        }
-        // Older-schema upgrades revoke proof even when the previous writer certified each row.
-        markCanonicalSessionValidationPending(
-          database,
-          legacy.map((fixture) => fixture.sessionKey),
-        );
-      }, databaseOptions);
+      const database = openOpenClawAgentDatabase(databaseOptions);
+      // Retain legacy bytes alongside certification; current writers accept outcomes only.
+      const update = database.db.prepare(
+        "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.status', ?) WHERE session_key = ?",
+      );
+      const certify = database.db.prepare(
+        "UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?",
+      );
+      for (const fixture of legacy) {
+        update.run(fixture.status, fixture.sessionKey);
+        // Preserve row certification so startup must discover the legacy outcomes itself.
+        certify.run(fixture.sessionKey);
+      }
       await closeOpenClawAgentDatabasesAsync(stateDir);
 
       await prepareGatewayStartupSessions({ cfg, env, log });

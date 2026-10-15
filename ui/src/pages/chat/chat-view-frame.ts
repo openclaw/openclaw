@@ -37,7 +37,7 @@ import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
 import { showChatAnnotationEditor } from "./components/chat-selection-popup.ts";
 import type { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
-import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.ts";
+import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
 import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";

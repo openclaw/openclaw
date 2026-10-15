@@ -9,7 +9,6 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { markCanonicalSessionValidationPending } from "../../config/sessions/session-canonical-key.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import {
   abortActiveCronTaskRuns,
@@ -25,7 +24,7 @@ import {
 } from "../../infra/agent-events.js";
 import {
   closeOpenClawAgentDatabasesAsync,
-  runOpenClawAgentWriteTransaction,
+  openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { finishAgentCommandCleanup } from "../command/cleanup.js";
@@ -56,18 +55,12 @@ afterEach(() => {
 });
 
 async function migrateLegacyInterruption(sessionKey: string, stateDir: string) {
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      database.db
-        .prepare(
-          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.status', 'running') WHERE session_key = ?",
-        )
-        .run(sessionKey);
-      // Upgrading older writer bytes revokes current canonical proof before startup.
-      markCanonicalSessionValidationPending(database, [sessionKey]);
-    },
-    { agentId: "main" },
-  );
+  const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+  // Retain certification with legacy bytes; startup must still normalize them.
+  db.prepare(
+    "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.status', 'running') WHERE session_key = ?",
+  ).run(sessionKey);
+  db.prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?").run(sessionKey);
   await closeOpenClawAgentDatabasesAsync(stateDir);
   await prepareGatewayStartupSessions({
     cfg: { agents: { entries: { main: {} } } },

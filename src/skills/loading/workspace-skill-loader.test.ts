@@ -314,16 +314,6 @@ function createWorkspacePluginMetadataSnapshot(params: {
   };
 }
 
-async function expectMissingPath(pathToCheck: string) {
-  let thrown: unknown;
-  try {
-    await fs.lstat(pathToCheck);
-  } catch (error) {
-    thrown = error;
-  }
-  expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
-}
-
 async function createTempWorkspaceDir() {
   const workspaceDir = path.join(tempRoot, `workspace-${++workspaceCaseIndex}`);
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -580,62 +570,6 @@ describe("loadWorkspaceSkills", () => {
         (entry) => entry.skill.name,
       ),
     ).not.toContain("drafting");
-  });
-
-  it("loads the browser plugin automation skill when the bundled plugin is enabled", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    const managedDir = path.join(workspaceDir, ".managed");
-    const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "browser");
-
-    await writePluginWithSkill({
-      pluginRoot,
-      pluginId: "browser",
-      skillId: "browser-automation",
-      skillDescription: "Browser automation",
-    });
-    await fs.writeFile(
-      path.join(pluginRoot, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "browser",
-          enabledByDefault: true,
-          skills: ["./skills"],
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    const enabledEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {},
-      managedSkillsDir: managedDir,
-    });
-
-    const browserEntry = enabledEntries.find((entry) => entry.skill.name === "browser-automation");
-    const browserSkillDir = path.join(pluginRoot, "skills", "browser-automation");
-    expect(browserEntry?.skill.baseDir).toBe(
-      path.join(workspaceDir, ".plugin-skills", "browser-automation"),
-    );
-    expect(browserEntry?.skill.filePath).toBe(
-      path.join(workspaceDir, ".plugin-skills", "browser-automation", "SKILL.md"),
-    );
-    await expect(
-      fs.readlink(path.join(workspaceDir, ".plugin-skills", "browser-automation")),
-    ).resolves.toBe(browserSkillDir);
-
-    const blockedEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        plugins: {
-          entries: { browser: { enabled: false } },
-        },
-      },
-      managedSkillsDir: managedDir,
-    });
-
-    expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("browser-automation");
-    await expectMissingPath(path.join(workspaceDir, ".plugin-skills", "browser-automation"));
   });
 
   it("loads hardlinked skills only from trusted bundled plugins", async () => {

@@ -446,7 +446,7 @@ function matchesCompiledInclude(file, compiledPatterns) {
   );
 }
 
-export function classifyUnitFastTestFileContent(source) {
+function classifyUnitFastTestFileContent(source) {
   const reasons = [];
   for (const { code, pattern } of disqualifyingPatterns) {
     if (pattern.test(source)) {

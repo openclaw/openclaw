@@ -308,7 +308,7 @@ suite.define(() => {
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
         expect(samples).toHaveLength(20);
         for (const frame of samples) {
-          expect(Math.abs(frame.max - frame.top)).toBeLessThanOrEqual(1);
+          expect(Math.abs(frame.max - frame.top), JSON.stringify(samples)).toBeLessThanOrEqual(1);
           expect(frame).toMatchObject({ duration: true, reply: true, progress: true });
         }
         await gateway.waitForRequest("connect");

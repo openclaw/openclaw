@@ -221,8 +221,8 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           const adapter = watcher.attach(options);
           return {
             ...adapter,
-            start() {
-              adapter.start();
+            async start() {
+              await adapter.start();
               queueMicrotask(() => watcher.emit("ready"));
             },
           };

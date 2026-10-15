@@ -134,7 +134,8 @@ async function startConfigRpcGateway(
       }
       // Managed writes and the real read cache remain active without independent notifications.
       return {
-        start: () => {},
+        start: async () => {},
+        whenSettled: async () => {},
         observePaths: async () => {},
         acceptPaths: async () => {},
         stop: async () => {},

@@ -1,12 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
-  renderChatTaskSuggestionTray,
+  ChatTaskSuggestionTray,
   type ChatTaskSuggestionTrayProps,
-} from "./components/chat-task-suggestions.ts";
+} from "./components/chat-task-suggestions.tsx";
 
 const suggestion: TaskSuggestion = {
   id: "task_123",
@@ -24,20 +25,18 @@ function renderSuggestion(overrides: Partial<ChatTaskSuggestionTrayProps> = {}) 
   const onAccept = vi.fn();
   const onDismiss = vi.fn();
   const onCopyPrompt = vi.fn();
-  render(
-    renderChatTaskSuggestionTray({
-      taskSuggestions: [suggestion],
-      taskSuggestionBusyIds: new Set(),
-      canAcceptTaskSuggestions: true,
-      canDismissTaskSuggestions: true,
-      onAcceptTaskSuggestion: onAccept,
-      onDismissTaskSuggestion: onDismiss,
-      onCopyTaskSuggestionPrompt: onCopyPrompt,
-      taskSuggestionCopiedIds: new Set<string>(),
-      ...overrides,
-    }),
-    container,
-  );
+  const view: ChatTaskSuggestionTrayProps = {
+    taskSuggestions: [suggestion],
+    taskSuggestionBusyIds: new Set(),
+    canAcceptTaskSuggestions: true,
+    canDismissTaskSuggestions: true,
+    onAcceptTaskSuggestion: onAccept,
+    onDismissTaskSuggestion: onDismiss,
+    onCopyTaskSuggestionPrompt: onCopyPrompt,
+    taskSuggestionCopiedIds: new Set<string>(),
+    ...overrides,
+  };
+  mountSolid(() => <ChatTaskSuggestionTray view={view} />, { container });
   return { container, onAccept, onDismiss, onCopyPrompt };
 }
 
@@ -98,68 +97,86 @@ describe("chat task suggestions", () => {
     expect(onAccept).not.toHaveBeenCalled();
   });
 
-  it("keeps reactive navigation active across rerenders and restarts repeated animations", () => {
+  it("keeps reactive navigation active across rerenders and restarts repeated animations", async () => {
     const secondSuggestion = { ...suggestion, id: "task_456", title: "Trim old fixtures" };
     const container = document.createElement("div");
     document.body.append(container);
     let activeId = suggestion.id;
     let direction: "next" | "previous" | undefined;
     let generation = 0;
+    const [view, setView] = createSignal<ChatTaskSuggestionTrayProps>({});
+    mountSolid(() => <ChatTaskSuggestionTray view={view()} />, { container });
     const draw = () =>
-      render(
-        renderChatTaskSuggestionTray({
-          taskSuggestions: [suggestion, secondSuggestion],
-          activeTaskSuggestionId: activeId,
-          taskSuggestionSwapDirection: direction,
-          taskSuggestionSwapGeneration: generation,
-          onNavigateTaskSuggestion: (taskId, nextDirection) => {
-            const current = taskId === suggestion.id ? 0 : 1;
-            activeId = [suggestion, secondSuggestion][
-              (current + (nextDirection === "next" ? 1 : -1) + 2) % 2
-            ]!.id;
-            direction = nextDirection;
-            generation += 1;
-            draw();
+      setView({
+        taskSuggestions: [suggestion, secondSuggestion],
+        activeTaskSuggestionId: activeId,
+        taskSuggestionSwapDirection: direction,
+        taskSuggestionSwapGeneration: generation,
+        onNavigateTaskSuggestion: (taskId, nextDirection) => {
+          const current = taskId === suggestion.id ? 0 : 1;
+          activeId = [suggestion, secondSuggestion][
+            (current + (nextDirection === "next" ? 1 : -1) + 2) % 2
+          ]!.id;
+          direction = nextDirection;
+          generation += 1;
+          draw();
+          queueMicrotask(() =>
             container
               .querySelector<HTMLElement>(
                 `.task-suggestion:not([hidden]) [data-task-${nextDirection === "next" ? "next" : "prev"}]`,
               )
-              ?.focus();
-          },
-        }),
-        container,
-      );
+              ?.focus(),
+          );
+        },
+      });
     draw();
+    flush();
 
     let cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
     expect(cards.map((card) => card.hidden)).toEqual([false, true]);
     expect(cards[0]?.querySelector(".task-suggestion__position")?.textContent).toContain("1 / 2");
 
     cards[0]?.querySelector<HTMLButtonElement>("[data-task-next]")?.click();
+    await Promise.resolve();
+    flush();
     cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
     expect(cards.map((card) => card.hidden)).toEqual([true, false]);
     expect(cards[1]?.dataset.swapDirection).toBe("next");
     expect(document.activeElement).toBe(cards[1]?.querySelector("[data-task-next]"));
 
-    // An unrelated Lit update must render the owner-selected card, not card zero.
+    const retainedCard = cards[1];
+    const details = retainedCard!.querySelector<HTMLDetailsElement>("details")!;
+    details.open = true;
+    // An unrelated update keeps the selected card and its manually opened disclosure.
     draw();
+    flush();
     cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
     expect(cards.map((card) => card.hidden)).toEqual([true, false]);
+    expect(cards[1]).toBe(retainedCard);
+    expect(details.open).toBe(true);
 
     cards[1]?.querySelector<HTMLButtonElement>("[data-task-next]")?.click();
+    await Promise.resolve();
+    flush();
     cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
     expect(cards.map((card) => card.hidden)).toEqual([false, true]);
     expect(cards[0]?.dataset.swapDirection).toBe("next");
     const firstVisit = cards[0];
 
     cards[0]?.querySelector<HTMLButtonElement>("[data-task-next]")?.click();
+    await Promise.resolve();
+    flush();
     cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
     cards[1]?.querySelector<HTMLButtonElement>("[data-task-next]")?.click();
+    await Promise.resolve();
+    flush();
     cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
     expect(cards[0]).not.toBe(firstVisit);
     expect(cards[0]?.dataset.swapDirection).toBe("next");
 
     cards[0]?.querySelector<HTMLButtonElement>("[data-task-prev]")?.click();
+    await Promise.resolve();
+    flush();
     cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
     expect(document.activeElement).toBe(cards[1]?.querySelector("[data-task-prev]"));
     container.remove();
