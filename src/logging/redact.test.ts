@@ -805,7 +805,7 @@ describe("redactSensitiveLines", () => {
     const secret = "opaque-registry-value-1234567890";
     registerSecretValueForRedaction(secret);
     expect(redactSensitiveLines([`TOKEN=abcdef1234567890ghij ${secret}`], resolved)).toEqual([
-      "TOKEN=abcdef…ghij opaque…7890",
+      "TOKEN=*** opaque…7890",
     ]);
   });
 
