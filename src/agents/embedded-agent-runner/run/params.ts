@@ -167,6 +167,13 @@ export type RunEmbeddedAgentParams = {
   /** Verified setup continuation: pin both the harness and its local implementation. */
   expectedAgentHarnessRuntimeArtifact?: ExpectedAgentHarnessRuntimeArtifact;
   authProfileIdSource?: "auto" | "user";
+  /** Caller-owned credential lifetime; independent of interactive pin provenance. */
+  authProfileBinding?: {
+    profileId: string;
+    authRequirement: import("../../../plugin-sdk/provider-model-types.js").ProviderModelRouteAuthRequirement;
+    assertCurrent(): void;
+    revalidate(): Promise<void>;
+  };
   /** Disable fallback from the user-selected auth profile for a verification run. */
   allowAuthProfileFallback?: boolean;
   verboseLevel?: VerboseLevel;

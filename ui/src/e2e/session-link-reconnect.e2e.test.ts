@@ -21,11 +21,7 @@ suite.define(() => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const gateway = await installMockGateway(page, {
           sessionKey: sourceKey,
-          // Keep link titling local so request counts measure navigation resolution.
-          sessions: [
-            createControlUiSessionRow(sourceKey, "Source conversation", 1),
-            createControlUiSessionRow(destinationKey, "Linked conversation", 2),
-          ],
+          sessions: [createControlUiSessionRow(sourceKey, "Source conversation", 1)],
           sessionTranscripts: {
             [sourceKey]: {
               // URL chips need Gateway identity resolution; raw keys can already load literally.
@@ -59,17 +55,26 @@ suite.define(() => {
           `.chat-thread a.markdown-session-link[href="${destinationPath}"]`,
         );
         await link.waitFor({ state: "visible" });
+        // Settle title decoration before deferring the separate navigation lookup.
+        await link
+          .and(page.locator(`[data-session-key="${destinationKey}"]`))
+          .waitFor({ state: "visible" });
         await page.locator('openclaw-app-sidebar [data-navigation-view="pages"]').click();
         await page
           .locator('openclaw-app-sidebar a[href="/activity"]')
           .waitFor({ state: "visible" });
         const initialHistoryLength = await page.evaluate(() => history.length);
         const resolutionMatch = { shortId: "12345678", agentId: "main" };
-        const previousResolves = await gateway.deferNext("sessions.resolve", resolutionMatch);
+        // Lazy hovercard initialization resolves before and after receiving its context.
+        const initialTitleResolutions = 2;
+        expect(await gateway.getRequests("sessions.resolve", resolutionMatch)).toHaveLength(
+          initialTitleResolutions,
+        );
+        await gateway.deferNext("sessions.resolve", resolutionMatch);
         await link.click();
         await gateway.waitForRequest("sessions.resolve", {
-          after: previousResolves,
           match: resolutionMatch,
+          after: initialTitleResolutions,
         });
         expect(await gateway.getRequests("chat.startup", { sessionKey: destinationKey })).toEqual(
           [],
@@ -108,7 +113,7 @@ suite.define(() => {
           initialHistoryLength + (navigateAway ? 2 : 1),
         );
         expect(await gateway.getRequests("sessions.resolve", resolutionMatch)).toHaveLength(
-          navigateAway ? 1 : 2,
+          initialTitleResolutions + (navigateAway ? 1 : 2),
         );
         expect(await page.locator(".lazy-view-error").count()).toBe(0);
       });

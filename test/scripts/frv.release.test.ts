@@ -744,6 +744,12 @@ describe("publication status real CLI", () => {
       runAttempt: 1,
       conclusion: kind === "successful verification" ? "success" : "failure",
     });
+    expect(publication.release).toEqual({
+      version: "2026.9.9",
+      tag: "v2026.9.9",
+      distTag: "latest",
+      sourceSha: TARGET_SHA,
+    });
     expect(publication.surfaces.activation.operation.state).toBe("unknown");
     expect(value.children).toHaveLength(4);
     expect(result.calls.length).toBeGreaterThan(0);
@@ -796,6 +802,11 @@ describe("publication status real CLI", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("Publication observation (not release authorization)");
     expect(result.stdout).toContain("selected-attempt=2");
+    expect(result.stdout).toContain(
+      `release: version=2026.9.9 tag=v2026.9.9 dist-tag=latest source-sha=${TARGET_SHA} (producer diagnostic)`,
+    );
+    expect(result.stdout).toContain("pnpm release:stable 2026.9.9 --status");
+    expect(result.stdout).toContain("Website deployment is not observed here");
     expect(result.stdout).toContain(
       "pluginNpm: selection=unknown operation=unknown verification=failure",
     );
@@ -1356,6 +1367,7 @@ describe("publication status real CLI", () => {
       });
       expect(result.status, result.stdout).toBe(0);
       const surface = JSON.parse(result.stdout).publication.surfaces.nativeWindows;
+      expect(surface.target).toEqual({ tag: "v2026.9.9", sourceTag: "windows-v1" });
       expect(surface.children[0].recordedAttempt).toBeNull();
       expect(surface.children[0].status).toBe(native.status);
       expect(surface.children[0].conclusion).toBe(native.conclusion);

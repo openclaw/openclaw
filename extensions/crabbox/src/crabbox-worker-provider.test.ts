@@ -802,6 +802,10 @@ describe("Crabbox worker provider", () => {
     let inspections = 0;
     const provider = providerWithRunner(async (argv) => {
       calls.push(argv[1]!);
+      if (argv[1] === "inspect" && inspections === 1) {
+        // Keep the background lease timer independent of filesystem scheduling.
+        await vi.advanceTimersByTimeAsync(0);
+      }
       return commandResult({
         stdout:
           argv[1] === "inspect"
@@ -809,10 +813,19 @@ describe("Crabbox worker provider", () => {
             : "",
       });
     });
-    await expect(provider.provision(PROFILE, OPERATION_ID)).resolves.toMatchObject({
-      leaseId: LEASE_ID,
-    });
-    expect(calls).toEqual(["warmup", "inspect", "inspect", "heartbeat", "run"]);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await expect(provider.provision(PROFILE, OPERATION_ID)).resolves.toMatchObject({
+        leaseId: LEASE_ID,
+      });
+      expect(calls).toEqual(["warmup", "inspect", "inspect", "heartbeat", "run"]);
+    } finally {
+      try {
+        await Promise.all([...providers].map((entry) => entry.dispose()));
+      } finally {
+        vi.useRealTimers();
+      }
+    }
   });
 
   it.each([
