@@ -137,9 +137,7 @@ suite.define(() => {
         .locator(".chat-notice")
         .filter({ hasText: "System · restart recovery" });
       await notice.waitFor();
-      expect(await notice.textContent()).toContain(
-        "Gateway restarted. Resuming your interrupted request.",
-      );
+      expect(await notice.locator(".chat-notice__body").count()).toBe(0);
       expect(await notice.getAttribute("role")).toBeNull();
       expect(await notice.locator("button").count()).toBe(0);
       await gateway.emitGatewayEvent("chat", {
@@ -170,9 +168,7 @@ suite.define(() => {
       await answer.waitFor();
       expect(await partialOutput.count()).toBe(1);
       expect(await notice.count()).toBe(1);
-      expect(await notice.textContent()).toContain(
-        "Gateway restarted. Resuming your interrupted request.",
-      );
+      expect(await notice.locator(".chat-notice__body").count()).toBe(0);
       expect(await page.locator(".chat-run-failure, .chat-error").count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await capture(page, "restart-recovery-after-reload", [partialOutput, notice, answer]);
@@ -239,7 +235,8 @@ suite.define(() => {
         data: { text: "Continuing the review." },
       });
       await page.clock.runFor(32);
-      await expect.poll(() => status.textContent()).not.toContain("Trying fallback");
+      await expect.poll(() => status.count()).toBe(0);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
       await gateway.emitChatFinal({ runId, text: "The review is complete." });
       await page.clock.runFor(32);
       await page

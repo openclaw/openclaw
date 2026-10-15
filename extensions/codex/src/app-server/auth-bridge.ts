@@ -47,6 +47,7 @@ import {
   resolveCodexAppServerLocalHomeDir,
   withClearedEnvironmentVariables,
   withEphemeralCodexAuthStore,
+  withManagedCodexThreadUnloading,
 } from "./auth-start-options.js";
 import type {
   CodexAppServerAuthRequirement,
@@ -118,7 +119,10 @@ export async function bridgeCodexAppServerStartOptions(
     return params.startOptions;
   }
   const scopeStartOptions = () =>
-    withCodexHomeEnvironment(withEphemeralCodexAuthStore(params), params.agentDir);
+    withCodexHomeEnvironment(
+      withManagedCodexThreadUnloading(withEphemeralCodexAuthStore(params)),
+      params.agentDir,
+    );
 
   if (params.preparedAuth) {
     const scopedStartOptions = await scopeStartOptions();
@@ -959,7 +963,7 @@ async function resolveOAuthCredentialForCodexAppServer(
     ? resolveOpenAICodexAuthIdentity(currentCredential).accountId?.trim()
     : undefined;
   const callbackAccountId =
-    params.authHandoff?.chatgptAccountId.trim() ?? params.previousAccountId?.trim() ?? undefined;
+    params.authHandoff?.chatgptAccountId.trim() ?? params.previousAccountId?.trim();
   if (callbackAccountId && selectedAccountId && callbackAccountId !== selectedAccountId) {
     throw codexWorkspaceChangedError("before");
   }

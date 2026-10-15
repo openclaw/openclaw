@@ -10,6 +10,7 @@ export {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
   assertProviderBinaryResponseContent,
+  createProviderCredentialMatcher,
   createProviderHttpError,
   ProviderHttpError,
   extractProviderErrorDetail,
@@ -51,6 +52,7 @@ export {
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "../media-understanding/shared.js";
+export { postJsonResponse } from "../media-understanding/provider-json-post.js";
 export { openProviderWebSocket } from "../infra/net/provider-websocket.js";
 export {
   runHttpTlsPreflight,
@@ -90,6 +92,7 @@ export type {
   ProviderRequestTransportOverrides,
 } from "../agents/provider-request-config.types.js";
 export { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+export { resolveProviderTransportSsrFPolicy } from "../agents/provider-network-policy.js";
 export {
   resolveProviderEndpoint,
   resolveProviderRequestCapabilities,

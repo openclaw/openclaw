@@ -186,7 +186,6 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
       id: "copy-url",
       label: t("browser.copyUrl"),
       class: "session-menu__item",
-      attributes: { value: "copy-url" },
       icon: (
         <span class="session-menu__icon" aria-hidden="true">
           <Icon name="copy" />
@@ -198,7 +197,6 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
       label: opensExternally() ? t("browser.openWithinOpenClaw") : t("browser.openNewTab"),
       class: "session-menu__item",
       attributes: {
-        value: opensExternally() ? "open-within-openclaw" : "open-new-tab",
         "data-new-tab-action": !opensExternally() ? "" : undefined,
       },
       icon: (
@@ -331,14 +329,18 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
     </>
   );
 }
-defineSolidBridge<BrowserTabCardProps>("openclaw-browser-tab-card", BrowserTabCard, {
-  properties: {
-    context: { default: undefined, attribute: false },
-    preview: { default: undefined, attribute: false },
-    revision: { default: undefined, attribute: false },
-    latest: { default: false },
+export const BrowserTabCardHost = defineSolidBridge<BrowserTabCardProps>(
+  "openclaw-browser-tab-card",
+  BrowserTabCard,
+  {
+    properties: {
+      context: { default: undefined, attribute: false },
+      preview: { default: undefined, attribute: false },
+      revision: { default: undefined, attribute: false },
+      latest: { default: false },
+    },
   },
-});
+);
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-browser-tab-card": SolidBridgeElement<BrowserTabCardProps>;

@@ -11,6 +11,7 @@ import {
   leaseRunArgs,
   runCrabboxCommand,
   runCrabboxCommandWithCoordinatorRetry,
+  sanitizeCrabboxNotice,
   type CrabboxCommandRunner,
   type LeaseCommandContext,
 } from "./crabbox-worker-command.js";
@@ -64,6 +65,7 @@ type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
 // resources, and Machine0 maps both DELETING and DELETED to `deleted`. Always stop explicitly.
 const NON_RUNNABLE_STATES = new Set([
   "archived",
+  "cleanup",
   "deleted",
   "deleting",
   "destroyed",
@@ -113,6 +115,10 @@ export async function inspectWithContext(
     let inspect: ParsedInspect;
     try {
       inspect = parseInspectJson(result.stdout);
+      const notice = sanitizeCrabboxNotice(result.stderr);
+      if (notice) {
+        inspect.lifetime = { ...inspect.lifetime, policyNotice: notice };
+      }
     } catch (error) {
       throw new WorkerProviderError(
         error instanceof Error ? error.message : "Crabbox inspect returned invalid output",
@@ -126,7 +132,12 @@ export async function inspectWithContext(
   if (isUnrecognizedLease(result, params.id, "inspect")) {
     return undefined;
   }
-  throw crabboxCommandError(action, result);
+  // An inspect response may contain connection material, even on a failed
+  // command. Diagnostics must never echo that JSON back to the caller.
+  throw crabboxCommandError(action, {
+    ...result,
+    stdout: /^\s*[[{]/u.test(result.stdout) ? "" : result.stdout,
+  });
 }
 
 export function remainingProvisionTimeout(deadline: number, maximum: number): number {

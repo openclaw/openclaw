@@ -50,6 +50,7 @@ async function createRegion(
   const region = document.createElement("openclaw-chat-sidebar-region");
   region.panelIdPrefix = `sidebar-region-fixture-${regions.length}`;
   region.layout = layout;
+  // oxlint-disable-next-line typescript/no-generated-empty-object-type -- Lit intentionally exposes DirectiveResult as an empty opaque interface.
   const content: Partial<Record<SidebarPanelDefinition["slot"], ReturnType<typeof solidContent>>> =
     {
       detail: solidContent(() => element('<div data-panel="detail">Detail panel</div>'), {}),

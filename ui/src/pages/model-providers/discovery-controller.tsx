@@ -1,8 +1,8 @@
-import { createMemo, Show } from "solid-js";
+import { createComponent, createMemo, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ControllerHost } from "./page-controller.ts";
+import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
 
 registerModelSetupEnglish();
 
@@ -18,7 +18,10 @@ type DiscoveryOptions = {
 };
 
 export class ModelProviderDiscoveryController {
-  private state: "closed" | "loading" | "ready" = "closed";
+  private state:
+    | "closed"
+    | "loading"
+    | typeof import("../model-setup/model-setup-page.tsx").ModelSetupPage = "closed";
   private owner: DiscoveryOwner | null = null;
 
   constructor(
@@ -73,9 +76,9 @@ export class ModelProviderDiscoveryController {
     this.state = "loading";
     this.host.requestUpdate();
     try {
-      await import("../model-setup/model-setup-page.tsx");
+      const { ModelSetupPage } = await import("../model-setup/model-setup-page.tsx");
       if (this.state === "loading") {
-        this.state = "ready";
+        this.state = ModelSetupPage;
         this.host.requestUpdate();
       }
     } catch (error) {
@@ -117,21 +120,25 @@ export class ModelProviderDiscoveryController {
                   <div class="model-setup-wizard__body" role="status">
                     {t("common.loading")}
                   </div>
-                  <div class="model-setup-wizard__footer">
+                  <openclaw-modal-actions class="model-setup-wizard__footer">
                     <button class="btn" onClick={() => close()}>
                       {t("common.cancel")}
                     </button>
-                  </div>
+                  </openclaw-modal-actions>
                 </div>
               </openclaw-modal-dialog>
             ) : (
-              <openclaw-model-setup-page
-                prop:routeData={{ firstRun: false }}
-                prop:embedded={true}
-                prop:credentialChoices={data().credentialChoices}
-                prop:agentLabel={data().agentLabel}
-                prop:onClose={() => close(true)}
-              />
+              createComponent(phase, {
+                routeData: { firstRun: false },
+                embedded: true,
+                get credentialChoices() {
+                  return data().credentialChoices;
+                },
+                get agentLabel() {
+                  return data().agentLabel;
+                },
+                onClose: () => close(true),
+              })
             );
           }}
         </Show>

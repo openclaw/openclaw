@@ -278,12 +278,13 @@
   display: contents;
 }
 
-.chat-pane__workspace-menu {
+.chat-pane__workspace-menu,
+.chat-pane__placement-menu {
+  display: flex;
   flex: 0 1 auto;
   min-width: 0;
 }
 
-.chat-pane__placement-menu,
 .chat-pane__branches-menu,
 .chat-pane__sharing-menu {
   flex: 0 0 auto;
@@ -296,7 +297,7 @@
   gap: 6px;
 }
 
-.chat-pane__placement-menu::part(menu) {
+.chat-pane__placement-menu > .oc-menu {
   width: 250px;
   padding: 6px;
   border: 1px solid var(--overlay-border);
@@ -394,14 +395,14 @@
 }
 
 .chat-pane__versions-help {
-  --max-width: 280px;
+  --oc-overlay-max-width: 280px;
 
   font-size: 13px;
   font-weight: 400;
   line-height: 1.5;
 }
 
-.chat-pane__branches-menu::part(menu) {
+.chat-pane__branches-menu > .oc-menu {
   width: min(360px, calc(100vw - 24px));
 }
 
@@ -495,10 +496,20 @@
   line-height: 1;
 }
 
-.chat-pane__actions .chat-icon-btn > svg {
+.chat-pane__actions .chat-icon-btn svg {
   width: 16px;
   height: 16px;
   stroke-width: 1.6px;
+}
+
+.chat-header-session-menu {
+  display: flex;
+}
+
+.chat-header-session-menu__trigger > .oc-menu-item__label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .chat-pane__public-share-indicator {
@@ -522,7 +533,7 @@
   height: 13px;
 }
 
-.chat-pane__sharing-menu::part(menu) {
+.chat-pane__sharing-menu > .oc-menu {
   width: 260px;
   min-width: min(260px, calc(100vw - 24px));
   max-width: min(260px, calc(100vw - 24px));
@@ -530,7 +541,7 @@
   overscroll-behavior: contain;
 }
 
-.chat-pane__sharing-menu--capped::part(menu) {
+.chat-pane__sharing-menu--capped > .oc-menu {
   height: min(420px, 60vh);
 }
 
@@ -588,11 +599,11 @@
 }
 
 .chat-pane__sharing-member {
-  gap: 0;
+  gap: 10px;
   font-size: 12px;
 }
 
-.chat-pane__sharing-member::part(icon) {
+.chat-pane__sharing-member > .oc-menu-item__icon {
   display: flex;
   align-items: center;
 }
@@ -650,8 +661,12 @@
   min-height: 34px;
 }
 
-.chat-header-session-menu--compact-sharing::part(menu) {
+.chat-header-session-menu--compact-sharing > .oc-menu {
   height: min(420px, 60vh);
+}
+
+.chat-pane__sharing-visibility-item > .oc-menu-item__check {
+  display: none;
 }
 
 .continue-in-terminal-dialog__card {
@@ -680,4 +695,9 @@
   min-width: 0;
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+.chat-pane__workspace-chip > .oc-menu-item__label,
+.chat-pane__layout-trigger > .oc-menu-item__label {
+  display: contents;
 }

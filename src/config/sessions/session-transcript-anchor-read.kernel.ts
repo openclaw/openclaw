@@ -131,6 +131,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
   readMessage?: AnchorMessageReader,
   projection?: CurrentTranscriptProjection,
   preparedEntry?: SessionTranscriptAnchorEntry,
+  messagePresence?: true,
 ): SessionTranscriptAnchorFacts {
   if (
     projection &&
@@ -224,7 +225,12 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         ? { metadata: readSessionTranscriptMetadataInDatabase(database, resolved.sessionId) }
         : {}),
       ...(selection.includeMessagePresence
-        ? { messagePresence: hasSessionTranscriptMessageInDatabase(database, resolved.sessionId) }
+        ? {
+            // A selected message proves presence; a bounded window cannot prove absence.
+            messagePresence:
+              messagePresence ??
+              hasSessionTranscriptMessageInDatabase(database, resolved.sessionId),
+          }
         : {}),
       ...(contextAuthority ? { contextAuthority } : {}),
       ...(context ? { contextValidated: true as const } : {}),

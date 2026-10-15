@@ -302,13 +302,13 @@ describe("placement session retirement", () => {
 
     expect(harness.listAsync).toHaveBeenCalledOnce();
     expect(harness.createSessionEvidenceResolver).toHaveBeenCalledOnce();
-    expect(harness.createSessionEvidenceResolver).toHaveBeenCalledWith([first, second]);
+    expect(harness.createSessionEvidenceResolver).toHaveBeenCalledWith([first, second], undefined);
 
     harness.resolveSessionEvidence.mockResolvedValue("absent");
     harness.retirement.markPending(first.sessionId);
     await harness.retirement.reconcile();
 
-    expect(harness.createSessionEvidenceResolver).toHaveBeenLastCalledWith([first]);
+    expect(harness.createSessionEvidenceResolver).toHaveBeenLastCalledWith([first], undefined);
     expect(harness.placements.has(first.sessionId)).toBe(false);
     expect(harness.placements.has(second.sessionId)).toBe(true);
     expect(harness.listAsync).toHaveBeenCalledOnce();

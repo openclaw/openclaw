@@ -11,7 +11,7 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
@@ -227,28 +227,14 @@ async function withAsyncReadHook<T>(
 function afterNextModelContextSnapshot(afterSnapshot: () => Promise<void>) {
   // The concurrent writer must not borrow the reader's transcript admission fence.
   const mutate = AsyncResource.bind(afterSnapshot);
-  let read = vi.spyOn(WorkerTaskPool.prototype, "run");
-  async function intercept(
-    this: WorkerTaskPool<unknown, unknown>,
-    ...args: Parameters<WorkerTaskPool<unknown, unknown>["run"]>
-  ) {
-    read.mockRestore();
-    const run = this.run.bind(this);
-    const input = args[0];
-    if (
-      !input ||
-      typeof input !== "object" ||
-      !("kind" in input) ||
-      input.kind !== "model-context"
-    ) {
-      read = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(intercept);
-      return await run(...args);
-    }
-    const snapshot = await run(...args);
-    await mutate();
-    return snapshot;
-  }
-  read.mockImplementation(intercept);
+  const run = contextWorker.readSessionTranscriptModelContextInWorker;
+  const read = vi
+    .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+    .mockImplementationOnce(async (...args) => {
+      const snapshot = await run(...args);
+      await mutate();
+      return snapshot;
+    });
   return () => read.mockRestore();
 }
 

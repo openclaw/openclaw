@@ -20,12 +20,12 @@ import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { presentedContent } from "../../../lit/presentation-binding.ts";
 import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
-import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
+import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import "../../../components/person-reference.ts";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
-import { renderChatPermissionCard } from "./chat-divider.ts";
+import { ChatPermissionCard } from "./chat-divider.tsx";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
@@ -554,30 +554,27 @@ function ToolMessage(props: ContentProps) {
     readNodePermissionRequest(
       asNullableRecord(props.state().singleToolCard?.details)?.permissionMissing,
     );
-  const fallback = solidContent(ToolMessageFallback, props);
   return (
     <Show
       when={permission()}
       fallback={
-        <Show when={props.state().singleToolCard} fallback={<LitContent value={fallback} />}>
+        <Show when={props.state().singleToolCard} fallback={<ToolMessageFallback {...props} />}>
           {(card) => (
-            <LitContent
-              value={renderPluginSurface(
-                "tool-result",
-                toolResultSurfaceProps(card(), {
-                  ...props.state().toolRenderOptions,
-                  expanded: props.state().toolMessageExpanded,
-                }),
-                fallback,
-                props.options.presented ?? true,
-              )}
+            <PluginSurface
+              surface="tool-result"
+              props={toolResultSurfaceProps(card(), {
+                ...props.state().toolRenderOptions,
+                expanded: props.state().toolMessageExpanded,
+              })}
+              presented={props.options.presented ?? true}
+              renderDefault={() => <ToolMessageFallback {...props} />}
             />
           )}
         </Show>
       }
     >
       {(request) => (
-        <LitContent value={renderChatPermissionCard(request(), props.options.onPermissionRetry)} />
+        <ChatPermissionCard request={request()} onRetry={props.options.onPermissionRetry} />
       )}
     </Show>
   );

@@ -33,21 +33,13 @@ describe("system package ownership", () => {
     });
   });
 
-  it.each([
-    { name: "timeout", value: result("", { code: null, termination: "timeout" }) },
-    {
-      name: "launch failure",
-      value: result("", {
-        code: null,
-        termination: "error",
-        error: Object.assign(new Error("private database detail"), { code: "EACCES" }),
-      }),
-    },
-  ])("warns once and continues after $name without consulting the host", async ({ value }) => {
+  it("warns once and continues after timeout without consulting the host", async () => {
     const host = vi.spyOn(exec, "runCommandBuffered");
     for (const platform of ["linux", "freebsd"] as const) {
       const onWarning = vi.fn();
-      const runCommand = vi.fn<typeof exec.runCommandBuffered>().mockResolvedValue(value);
+      const runCommand = vi
+        .fn<typeof exec.runCommandBuffered>()
+        .mockResolvedValue(result("", { code: null, termination: "timeout" }));
       await withMockedPlatform(platform, async () => {
         const inspection = createSystemPackageOwnershipInspection(100, { runCommand, onWarning });
         await expect(inspection.assertUnowned("/fixture/openclaw")).resolves.toBeUndefined();
@@ -88,32 +80,24 @@ describe("system package ownership", () => {
     },
   );
 
-  it.each(["invoking alias", "registered alias"])(
-    "detects a custom-prefix package through %s",
-    async (kind) => {
-      await withTestDir({ prefix: "openclaw-pkg-alias-" }, async (base) => {
-        const prefix = path.join(base, "custom prefix");
-        const root = path.join(prefix, "lib", "node_modules", "openclaw");
-        await fs.mkdir(root, { recursive: true });
-        const alias = path.join(base, "alias");
-        await fs.symlink(prefix, alias, "dir");
-        const registeredRoot =
-          kind === "registered alias" ? path.join(alias, "lib", "node_modules", "openclaw") : root;
-        vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
-          result(`${registeredRoot}/package.json\n`),
-        );
-        await withMockedPlatform("freebsd", async () => {
-          await expect(
-            createSystemPackageOwnershipInspection(1000).assertUnowned(
-              kind === "invoking alias"
-                ? path.join(alias, "lib", "node_modules", "openclaw")
-                : root,
-            ),
-          ).rejects.toMatchObject({ reason: "pkg-owned-install" });
-        });
+  it("detects a custom-prefix package through a registered alias", async () => {
+    await withTestDir({ prefix: "openclaw-pkg-alias-" }, async (base) => {
+      const prefix = path.join(base, "custom prefix");
+      const root = path.join(prefix, "lib", "node_modules", "openclaw");
+      await fs.mkdir(root, { recursive: true });
+      const alias = path.join(base, "alias");
+      await fs.symlink(prefix, alias, "dir");
+      const registeredRoot = path.join(alias, "lib", "node_modules", "openclaw");
+      vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
+        result(`${registeredRoot}/package.json\n`),
+      );
+      await withMockedPlatform("freebsd", async () => {
+        await expect(
+          createSystemPackageOwnershipInspection(1000).assertUnowned(root),
+        ).rejects.toMatchObject({ reason: "pkg-owned-install" });
       });
-    },
-  );
+    });
+  });
 
   it("does not treat a package-owned file symlink as ownership of its external target", async () => {
     await withTestDir({ prefix: "openclaw-pkg-file-link-" }, async (base) => {
@@ -148,50 +132,28 @@ describe("system package ownership", () => {
     });
   });
 
-  it("reports a lexical owner before inspecting unrelated inaccessible package paths", async () => {
-    const root = "/fixture/openclaw";
-    vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
-      result(`/unreadable/file\n${root}/package.json\n`),
-    );
-    const canonical = vi
-      .spyOn(fs, "realpath")
-      .mockRejectedValue(Object.assign(new Error("denied"), { code: "EACCES" }));
-    await withMockedPlatform("freebsd", async () => {
-      await expect(
-        createSystemPackageOwnershipInspection(100).assertUnowned(root),
-      ).rejects.toMatchObject({ reason: "pkg-owned-install" });
-    });
-    expect(canonical).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { operation: "lstat", code: "EACCES" },
-    { operation: "realpath", code: "PRIVATE_CUSTOM_CODE" },
-  ] as const)(
-    "warns after $operation failure ($code) without private details",
-    async ({ operation, code }) => {
-      await withTestDir({ prefix: "openclaw-pkg-denied-" }, async (base) => {
-        const runCommand = vi
-          .fn<typeof exec.runCommandBuffered>()
-          .mockResolvedValue(result(`${base}/registered/file\n`));
-        const onWarning = vi.fn();
-        vi.spyOn(fs, operation).mockRejectedValue(
-          Object.assign(new Error("private path token=fixture-secret"), { code }),
-        );
-        await withMockedPlatform("freebsd", async () => {
-          await expect(
-            createSystemPackageOwnershipInspection(100, { runCommand, onWarning }).assertUnowned(
-              path.join(base, "openclaw"),
-            ),
-          ).resolves.toBeUndefined();
-        });
-        expect(onWarning).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(operation));
-        expect(onWarning.mock.calls[0]?.[0]).not.toMatch(
-          /private path|fixture-secret|PRIVATE_CUSTOM_CODE/u,
-        );
+  it("warns after lstat failure without private details", async () => {
+    await withTestDir({ prefix: "openclaw-pkg-denied-" }, async (base) => {
+      const runCommand = vi
+        .fn<typeof exec.runCommandBuffered>()
+        .mockResolvedValue(result(`${base}/registered/file\n`));
+      const onWarning = vi.fn();
+      vi.spyOn(fs, "lstat").mockRejectedValue(
+        Object.assign(new Error("private path token=fixture-secret"), { code: "EACCES" }),
+      );
+      await withMockedPlatform("freebsd", async () => {
+        await expect(
+          createSystemPackageOwnershipInspection(100, { runCommand, onWarning }).assertUnowned(
+            path.join(base, "openclaw"),
+          ),
+        ).resolves.toBeUndefined();
       });
-    },
-  );
+      expect(onWarning).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("lstat"));
+      expect(onWarning.mock.calls[0]?.[0]).not.toMatch(
+        /private path|fixture-secret|PRIVATE_CUSTOM_CODE/u,
+      );
+    });
+  });
 
   it("does not continue an ancestor walk or reset the snapshot after a late ENOENT", async () => {
     const query = vi

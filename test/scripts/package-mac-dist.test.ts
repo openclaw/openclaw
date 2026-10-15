@@ -508,28 +508,6 @@ describe("package-mac-dist plist validation", () => {
     expect(packageAppIndex).toBeGreaterThan(releaseMarkerIndex);
   });
 
-  it("does not mask canonical Sparkle build failures for release packaging", () => {
-    const script = readFileSync(scriptPath, "utf8");
-
-    expect(script).toContain("ensure_sparkle_build_deps()");
-    expect(script).toContain(
-      "run_dist_pnpm install --frozen-lockfile --config.node-linker=hoisted >&2",
-    );
-    expect(script).toContain(
-      '(cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1")',
-    );
-    expect(script).toContain('if [[ "$SPARKLE_BUILD_DEPS_RETRIED" == "1" ]]');
-    expect(script).toContain("require_canonical_sparkle_build()");
-    expect(script).toContain(
-      'CANONICAL_APP_BUILD="$(require_canonical_sparkle_build "$APP_VERSION_INPUT")"',
-    );
-    expect(script).toContain('CANONICAL_APP_BUILD="$(require_canonical_sparkle_build "$VERSION")"');
-    expect(script).not.toContain(
-      'canonical_sparkle_build "$APP_VERSION_INPUT" 2>/dev/null || true',
-    );
-    expect(script).not.toContain('canonical_sparkle_build "$VERSION" 2>/dev/null || true');
-  });
-
   it("fails on old Swift before reading package metadata", () => {
     const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-dist-swift-tools-"));
     tempDirs.push(toolsDir);

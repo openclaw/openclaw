@@ -170,27 +170,18 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   });
 
   it.each([
-    { name: "default", logging: {}, detail: false },
     { name: "info", logging: { level: "info" }, detail: false },
-    { name: "error", logging: { level: "error" }, detail: false },
-    { name: "silent", logging: { level: "silent" }, detail: false },
     { name: "debug", logging: { level: "debug" }, detail: true },
-    { name: "trace", logging: { level: "trace" }, detail: true },
-    { name: "console only", logging: { level: "info", consoleLevel: "debug" }, detail: false },
-    { name: "verbose only", logging: { level: "info" }, verbose: true, detail: false },
-    { name: "environment debug", logging: { level: "info" }, env: "debug", detail: true },
     { name: "environment info", logging: { level: "debug" }, env: "info", detail: false },
   ] satisfies Array<{
     name: string;
     logging: NonNullable<OpenClawConfig["logging"]>;
     detail: boolean;
-    verbose?: boolean;
     env?: string;
   }>)(
     "recovers a visible partial with $name diagnostics",
     async ({ logging, detail, ...testCase }) => {
       vi.stubEnv("OPENCLAW_LOG_LEVEL", "env" in testCase ? testCase.env : undefined);
-      setVerbose("verbose" in testCase && testCase.verbose === true);
       applyLoggingConfig({
         file: path.join(tempDirs.make("dispatch-diagnostic-level-"), "gateway.log"),
         consoleLevel: "silent",

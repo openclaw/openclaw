@@ -22,18 +22,8 @@ vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const execFileSync = (...args: unknown[]) => {
-    const mock = execFileSyncMock.getMockImplementation();
-    return mock
-      ? mock(...args)
-      : (actual.execFileSync as unknown as (...actualArgs: unknown[]) => unknown)(...args);
-  };
-  return {
-    ...actual,
-    default: { ...actual, execFileSync },
-    execFileSync,
-    spawn: (...args: unknown[]) => spawnMock(...args),
-  };
+  const { createChromeInternalProcessMock } = await import("./chrome.internal.test-support.js");
+  return createChromeInternalProcessMock(actual, execFileSyncMock, spawnMock);
 });
 
 const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
@@ -1045,10 +1035,16 @@ describe("chrome.ts internal", () => {
       const executablePath = await stubExistingProfile();
       const portBusy = new Error("Port is already in use.");
       portBusy.name = "PortInUseError";
-      ensurePortAvailableMock.mockRejectedValueOnce(portBusy).mockResolvedValue(undefined);
-
       const stalePid = 43210;
       let staleProcessAlive = true;
+      const probeAlive: boolean[] = [];
+      ensurePortAvailableMock.mockImplementation(async () => {
+        const alive = staleProcessAlive;
+        probeAlive.push(alive);
+        if (alive) {
+          throw portBusy;
+        }
+      });
       const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid, signal) => {
         if (pid !== stalePid) {
           return true;
@@ -1101,9 +1097,23 @@ describe("chrome.ts internal", () => {
             try {
               const running = await launchOpenClawChrome(makeResolved(), profile);
               expect(running.proc).toBe(fakeProc);
-              expect(ensurePortAvailableMock).toHaveBeenCalledTimes(2);
               expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
               expect(spawnMock).toHaveBeenCalledTimes(1);
+              const stopCallIndex = killSpy.mock.calls.findIndex(
+                ([pid, signal]) => pid === stalePid && signal === "SIGTERM",
+              );
+              const stopOrder = killSpy.mock.invocationCallOrder[stopCallIndex]!;
+              const spawnOrder = spawnMock.mock.invocationCallOrder[0]!;
+              expect(probeAlive[0]).toBe(true);
+              expect(ensurePortAvailableMock.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
+              const freeProbeOrders = ensurePortAvailableMock.mock.invocationCallOrder.filter(
+                (_, index) => probeAlive[index] === false,
+              );
+              expect(freeProbeOrders.length).toBeGreaterThan(0);
+              for (const probeOrder of freeProbeOrders) {
+                expect(probeOrder).toBeGreaterThan(stopOrder);
+                expect(probeOrder).toBeLessThan(spawnOrder);
+              }
               expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
               expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(false);
               running.proc.kill?.("SIGTERM");

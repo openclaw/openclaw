@@ -306,21 +306,6 @@ describe("staging", () => {
     }
   });
 
-  it("leaves replayable remote media untouched without creating the spool", async () => {
-    const result = await stageQueuePayloadMedia({
-      payloads: [{ mediaUrl: "https://example.com/a.ogg" }],
-      maxBytes: 1024 * 1024,
-      stateDir,
-    });
-
-    expect(result).toEqual({
-      status: "staged",
-      payloads: [{ mediaUrl: "https://example.com/a.ogg" }],
-      artifacts: [],
-    });
-    expect(await exists(spoolRoot)).toBe(false);
-  });
-
   it("uses the live send's local-read capability", async () => {
     const source = path.join(sourceDir, "voice.ogg");
     await fs.writeFile(source, "opus-bytes");

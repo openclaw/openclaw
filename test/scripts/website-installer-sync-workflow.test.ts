@@ -63,6 +63,118 @@ describe("website installer sync workflow", () => {
     }
   });
 
+  it.each([
+    { name: "installed", packageStatus: 0, installStatus: 0, expectedStatus: 0, installs: false },
+    { name: "missing", packageStatus: 1, installStatus: 0, expectedStatus: 0, installs: true },
+    {
+      name: "install failure",
+      packageStatus: 1,
+      installStatus: 42,
+      expectedStatus: 42,
+      installs: true,
+    },
+  ])("prepares $name Fedora prerequisites before creating the installer user", (scenario) => {
+    const config = parse(workflow) as {
+      jobs: Record<string, { steps: { name: string; run?: string }[] }>;
+    };
+    const run = config.jobs["fedora-installer"]?.steps.find(
+      (step) => step.name === "install.sh on Fedora",
+    )?.run;
+    if (!run) {
+      throw new Error("Missing Fedora installer step");
+    }
+    const root = tempDirs.make("fedora-workflow-prerequisites-");
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "-e",
+        "-o",
+        "pipefail",
+        "-c",
+        `timeout() { shift 2; "$@"; }
+docker() { /bin/bash -se; }
+rpm() { [[ "$*" == "-q sudo shadow-utils" ]] || return 64; return ${scenario.packageStatus}; }
+dnf() { [[ "$*" == "install -y -q sudo shadow-utils" ]] || return 64; printf 'install\\n'; return ${scenario.installStatus}; }
+useradd() { printf 'create-user\\n'; exit 0; }
+export -f timeout docker rpm dnf useradd
+${run}`,
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: { PATH: root, HOME: root, BASH_ENV: "", ENV: "", INSTALL_USER: "non-root" },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(scenario.expectedStatus);
+    expect(result.stdout.trim().split(/\r?\n/u)).toEqual([
+      ...(scenario.installs ? ["install"] : []),
+      ...(scenario.expectedStatus === 0 ? ["create-user"] : []),
+    ]);
+  });
+
+  it.each(["root", "non-root"])(
+    "retains DNF diagnostics after a killed %s Fedora container",
+    (user) => {
+      const config = parse(workflow) as {
+        jobs: Record<string, { steps: { name: string; if?: string; run?: string }[] }>;
+      };
+      const steps = config.jobs["fedora-installer"]?.steps ?? [];
+      const run = steps.find((step) => step.name === "install.sh on Fedora")?.run;
+      if (!run) {
+        throw new Error("Missing Fedora installer step");
+      }
+      const root = tempDirs.make("fedora-workflow-diagnostics-");
+      const env = {
+        PATH: process.env.PATH,
+        HOME: root,
+        RUNNER_TEMP: root,
+        BASH_ENV: "",
+        ENV: "",
+        INSTALL_USER: user,
+      };
+      const install = spawnSync(
+        "/bin/bash",
+        [
+          "-e",
+          "-o",
+          "pipefail",
+          "-c",
+          `timeout() { shift 2; "$@"; }
+docker() {
+  for argument in "$@"; do
+    if [[ "$argument" == *:/var/log ]]; then
+      directory="\${argument%:/var/log}"
+      mkdir -p "$directory"
+      printf 'librepo: fixture mirror connection stalled\\n' > "$directory/dnf5.log"
+    fi
+  done
+  return 137
+}
+${run}`,
+        ],
+        { cwd: root, encoding: "utf8", env },
+      );
+      expect(install.status, install.stderr).toBe(137);
+      const diagnostics = spawnSync(
+        "/bin/bash",
+        [
+          "-e",
+          "-o",
+          "pipefail",
+          "-c",
+          `sudo() { "$@"; }\n${steps
+            .filter((step) => step.if === "failure()")
+            .map((step) => step.run ?? "")
+            .join("\n")}`,
+        ],
+        { cwd: root, encoding: "utf8", env },
+      );
+      expect(diagnostics.status, diagnostics.stderr).toBe(0);
+      expect(diagnostics.stdout).toContain("librepo: fixture mirror connection stalled");
+    },
+  );
+
   it("verifies installers across Linux privilege and package-manager paths", () => {
     expect(workflow).toContain("linux-docker:");
     expect(workflow).toContain("debian-installer:");

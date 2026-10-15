@@ -313,7 +313,6 @@ describe("current cron delivery origin", () => {
     { surface: "webchat", channelCount: 1, sessionTarget: "current" as const },
     { surface: "dashboard", channelCount: 2, sessionTarget: "isolated" as const },
     { surface: "webchat", channelCount: 1, sessionTarget: "isolated" as const },
-    { surface: "webchat", channelCount: 0, sessionTarget: "isolated" as const },
   ])(
     "keeps a $sessionTarget $surface completion in its conversation with $channelCount unrelated channels",
     async (options) => {

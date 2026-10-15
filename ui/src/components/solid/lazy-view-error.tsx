@@ -104,12 +104,16 @@ export function PanelErrorState(props: {
       </div>
       <div class="lazy-view-error__title">{props.title}</div>
       <div class="lazy-view-error__subtitle">{props.subtitle}</div>
-      {props.actions ? <div class="lazy-view-error__actions">{props.actions}</div> : undefined}
       {props.detail ? (
         <details class="lazy-view-error__details">
           <summary>{t("chat.details")}</summary>
           <code class="lazy-view-error__detail">{props.detail}</code>
         </details>
+      ) : undefined}
+      {props.actions ? (
+        <openclaw-modal-actions class="lazy-view-error__actions">
+          {props.actions}
+        </openclaw-modal-actions>
       ) : undefined}
     </div>
   );

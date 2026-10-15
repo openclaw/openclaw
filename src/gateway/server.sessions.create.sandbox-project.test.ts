@@ -30,96 +30,165 @@ afterEach(async () => {
 });
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-test("guest project-ID creation rejects direct access but admits its managed sandbox worktree", async () => {
-  const root = tempDirs.make("openclaw-session-sandbox-project-");
-  const workspace = await initializeRepository(root, "workspace");
-  const outside = await initializeRepository(root, "outside");
-  testState.agentConfig = { workspace, sandbox: { mode: "all" } };
-  const { storePath } = await createSessionStoreDir();
-  const project = await registerProjectRegistry({ path: outside });
+test.each(["all", "off"] as const)(
+  "guest project checkout eligibility preserves creation admission (agent sandbox=%s)",
+  async (mode) => {
+    const root = tempDirs.make("openclaw-session-sandbox-project-");
+    const workspace = await initializeRepository(root, "workspace");
+    const outside = await initializeRepository(root, "outside");
+    testState.agentConfig = { workspace, sandbox: { mode } };
+    const { storePath } = await createSessionStoreDir();
+    const project = await registerProjectRegistry({ path: outside });
 
-  const profile = ensureProfileForEmail("project-guest@example.test");
-  const client = identifiedClient(profile.id);
-  client.connect.scopes = ["operator.sessions.read", "operator.sessions.write"];
-  const cfg = {
-    ...getRuntimeConfig(),
-    gateway: {
-      roles: {
-        default: "guest",
-        definitions: {
-          guest: {
-            scopes: ["operator.sessions.read" as const, "operator.sessions.write" as const],
-            agents: ["main"],
-            sessions: { others: "none" as const },
-            sandbox: "required" as const,
+    const profile = ensureProfileForEmail("project-guest@example.test");
+    const client = identifiedClient(profile.id);
+    client.connect.scopes = ["operator.sessions.read", "operator.sessions.write"];
+    const baseCfg = getRuntimeConfig();
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        ...baseCfg.agents,
+        entries: {
+          ...baseCfg.agents?.entries,
+          main: { ...baseCfg.agents?.entries?.main, workspace, sandbox: { mode } },
+          other: { workspace: outside },
+        },
+      },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              scopes: ["operator.sessions.read" as const, "operator.sessions.write" as const],
+              agents: ["main"],
+              sessions: { others: "none" as const },
+              sandbox: "required" as const,
+            },
           },
         },
       },
-    },
-  };
-  const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-  context.readPreparedGatewayModelCatalog = async () => {
-    const catalog = await context.loadGatewayModelCatalogSnapshot();
-    return { entries: catalog.entries, routeVariants: catalog.routeVariants };
-  };
-  await initializeSessionReadContext(context);
-  for (const worktree of [false, true]) {
-    const respond = vi.fn();
-    await handleGatewayRequest({
-      req: {
-        type: "req",
-        id: `project-${worktree}`,
-        method: "sessions.create",
-        params: {
-          agentId: "main",
-          projectId: project.id,
-          ...(worktree ? { worktree: true } : {}),
-        },
-      },
-      client,
-      context,
-      respond,
-      isWebchatConnect: () => false,
-    });
-    expect(respond).toHaveBeenCalledOnce();
-    const [ok, result, error] = respond.mock.calls[0]!;
-    const created = {
-      ok,
-      error,
-      payload: result as
-        | {
-            key: string;
-            worktree: { id: string; path: string; branch: string };
-          }
-        | undefined,
     };
-    if (worktree) {
-      expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      const payload = expectDefined(created.payload, "managed sandbox session payload");
-      const record = await managedWorktrees.findLiveByOwner("session", payload.key);
-      expect(record).toMatchObject({
-        id: payload.worktree.id,
-        path: payload.worktree.path,
-        repoRoot: outside,
+    let activeCfg: ReturnType<typeof getRuntimeConfig> = cfg;
+    const context = createDirectChatContext({ getRuntimeConfig: () => activeCfg });
+    context.readPreparedGatewayModelCatalog = async () => {
+      const catalog = await context.loadGatewayModelCatalogSnapshot();
+      return { entries: catalog.entries, routeVariants: catalog.routeVariants };
+    };
+    await initializeSessionReadContext(context);
+    const checkoutOptions = async (projectId: string) => {
+      const respond = vi.fn();
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "checkout-options",
+          method: "projects.checkoutOptions",
+          params: { projectId, agentId: "main" },
+        },
+        client,
+        context,
+        respond,
+        isWebchatConnect: () => false,
       });
-      expect(payload.worktree.path).not.toBe(outside);
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: payload.key, storePath }),
-      ).toMatchObject({
-        worktree: { id: payload.worktree.id },
-        createdActor: { type: "human", id: profile.id },
-      });
-      expect(await fs.readFile(path.join(payload.worktree.path, "README.md"), "utf8")).toBe(
-        "outside\n",
-      );
-      continue;
+      expect(respond).toHaveBeenCalledOnce();
+      return respond.mock.calls[0];
+    };
+    if (mode === "off") {
+      activeCfg = {
+        ...cfg,
+        gateway: {
+          roles: {
+            ...cfg.gateway.roles,
+            definitions: {
+              guest: { ...cfg.gateway.roles.definitions.guest, sandbox: undefined },
+            },
+          },
+        },
+      };
+      expect(await checkoutOptions(project.id)).toEqual([
+        true,
+        { current: true, worktree: true },
+        undefined,
+      ]);
+      // A prior availability response grants nothing after the effective requirement changes.
+      activeCfg = cfg;
     }
-    expect(created).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "sessions.create project is outside the sandboxed agent workspace",
-      },
-    });
-  }
-});
+    expect(await checkoutOptions(project.id)).toEqual([
+      true,
+      { current: false, worktree: true },
+      undefined,
+    ]);
+    expect(await checkoutOptions("workspace:main")).toEqual([
+      true,
+      { current: true, worktree: true },
+      undefined,
+    ]);
+    expect(await checkoutOptions("workspace:other")).toEqual([
+      true,
+      { current: false, worktree: false },
+      undefined,
+    ]);
+    for (const { projectId, worktree } of [
+      { projectId: project.id, worktree: false },
+      { projectId: project.id, worktree: true },
+      { projectId: "workspace:other", worktree: true },
+    ]) {
+      const respond = vi.fn();
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: `${projectId}-${worktree}`,
+          method: "sessions.create",
+          params: {
+            agentId: "main",
+            projectId,
+            ...(worktree ? { worktree: true } : {}),
+          },
+        },
+        client,
+        context,
+        respond,
+        isWebchatConnect: () => false,
+      });
+      expect(respond).toHaveBeenCalledOnce();
+      const [ok, result, error] = respond.mock.calls[0]!;
+      const created = {
+        ok,
+        error,
+        payload: result as
+          | {
+              key: string;
+              worktree: { id: string; path: string; branch: string };
+            }
+          | undefined,
+      };
+      if (worktree && projectId === project.id) {
+        expect(created.ok, JSON.stringify(created.error)).toBe(true);
+        const payload = expectDefined(created.payload, "managed sandbox session payload");
+        const record = await managedWorktrees.findLiveByOwner("session", payload.key);
+        expect(record).toMatchObject({
+          id: payload.worktree.id,
+          path: payload.worktree.path,
+          repoRoot: outside,
+        });
+        expect(payload.worktree.path).not.toBe(outside);
+        expect(
+          loadSessionEntry({ agentId: "main", sessionKey: payload.key, storePath }),
+        ).toMatchObject({
+          worktree: { id: payload.worktree.id },
+          createdActor: { type: "human", id: profile.id },
+        });
+        expect(await fs.readFile(path.join(payload.worktree.path, "README.md"), "utf8")).toBe(
+          "outside\n",
+        );
+        continue;
+      }
+      expect(created).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "sessions.create project is outside the sandboxed agent workspace",
+        },
+      });
+    }
+  },
+);

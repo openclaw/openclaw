@@ -6,6 +6,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
+import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 import {
   captureSidebarUiProof,
@@ -475,12 +476,23 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      awaitInitialRoster: false,
       featureMethods: ["system.info"],
       methodResponses: { "system.info": deviceSystemInfo },
     });
 
     try {
+      const routeModule = await holdModuleResponse(
+        page,
+        /\/assets\/connection-page-[^/]+\.js(?:\?|$)/u,
+      );
       await page.goto(`${suite.server.baseUrl}settings/connection`);
+      await routeModule.request;
+      await page.bringToFront();
+      await expect.poll(() => page.evaluate(() => document.visibilityState)).toBe("visible");
+      // The route must start diagnostics even when connection and focus precede its mount.
+      await gateway.waitForRequest("connect");
+      routeModule.release();
 
       const gatewayUrl = page.getByLabel("Gateway URL", { exact: true });
       const credential = page.getByLabel("Gateway secret", { exact: true });

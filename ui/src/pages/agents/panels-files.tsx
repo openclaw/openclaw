@@ -407,31 +407,18 @@ export function AgentFiles(
                                     </span>
                                   </button>
                                 </openclaw-tooltip>
-                                <For
-                                  each={
-                                    [
-                                      ["editFile", "edit", true],
-                                      ["closePreview", "x", false],
-                                    ] as const
-                                  }
-                                >
-                                  {([label, icon, focusEditor]) => (
-                                    <openclaw-tooltip prop:content={t(`agents.files.${label}`)}>
-                                      <button
-                                        type="button"
-                                        class="btn btn--sm md-preview-icon-btn"
-                                        aria-label={t(`agents.files.${label}`)}
-                                        onClick={(event: Event) =>
-                                          closeAgentFilePreview(event, focusEditor)
-                                        }
-                                      >
-                                        <span aria-hidden="true">
-                                          <Icon name={icon} />
-                                        </span>
-                                      </button>
-                                    </openclaw-tooltip>
-                                  )}
-                                </For>
+                                <openclaw-tooltip prop:content={t("agents.files.closePreview")}>
+                                  <button
+                                    type="button"
+                                    class="btn btn--sm md-preview-icon-btn"
+                                    aria-label={t("agents.files.closePreview")}
+                                    onClick={(event: Event) => closeAgentFilePreview(event)}
+                                  >
+                                    <span aria-hidden="true">
+                                      <Icon name="x" />
+                                    </span>
+                                  </button>
+                                </openclaw-tooltip>
                               </div>
                             </div>
                             <div class="md-preview-dialog__meta">
@@ -465,6 +452,16 @@ export function AgentFiles(
                                 options={{ codeBlockChrome: "none", mode: "document" }}
                               />
                             </div>
+                            <openclaw-modal-actions class="md-preview-dialog__footer">
+                              <button
+                                type="button"
+                                class="btn btn--sm"
+                                aria-label={t("agents.files.editFile")}
+                                onClick={(event: Event) => closeAgentFilePreview(event, true)}
+                              >
+                                <Icon name="edit" /> {t("agents.files.editFile")}
+                              </button>
+                            </openclaw-modal-actions>
                           </div>
                         )}
                       </AgentFilePreview>

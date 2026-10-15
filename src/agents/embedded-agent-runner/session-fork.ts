@@ -26,7 +26,7 @@ type Snapshot = EmbeddedSessionForkIdentity & {
   options: StreamOptions;
   publications: Message[];
   streamFn: StreamFn;
-  payload: Buffer;
+  payload: Blob;
   expires: number;
   bytes: number;
   expiryTimer: NodeJS.Timeout;
@@ -116,8 +116,12 @@ export function wrapStreamFnWithSessionFork(
   identity: EmbeddedSessionForkIdentity,
 ): StreamFn {
   return (model, context, options) => {
-    // A transport without a payload boundary must not leave the previous turn replayable.
-    forgetSnapshot(identity.sessionId);
+    // A new run or transport cannot reuse old prepared data. Within the same run,
+    // keep the last committed request until its replacement finishes preparing.
+    const previous = snapshots.get(identity.sessionId);
+    if (previous && (previous.runId !== identity.runId || previous.streamFn !== streamFn)) {
+      forgetSnapshot(identity.sessionId);
+    }
     if (!captures.has(identity.sessionId) && captures.size >= MAX_ENTRIES) {
       const oldest = captures.keys().next().value;
       if (oldest !== undefined) {
@@ -147,7 +151,7 @@ export function wrapStreamFnWithSessionFork(
         Reflect.deleteProperty(savedOptions, key);
       }
     }
-    const save = (savedPayload: Uint8Array) => {
+    const save = (savedPayload: Blob) => {
       if (!authority.active || authority.capture !== capture) {
         return;
       }
@@ -170,7 +174,7 @@ export function wrapStreamFnWithSessionFork(
         return;
       }
       const bytes =
-        savedPayload.byteLength + metadata.length + Buffer.byteLength(JSON.stringify(savedOptions));
+        savedPayload.size + metadata.length + Buffer.byteLength(JSON.stringify(savedOptions));
       forgetSnapshot(identity.sessionId);
       if (bytes <= MAX_BYTES) {
         snapshots.set(identity.sessionId, {
@@ -178,11 +182,7 @@ export function wrapStreamFnWithSessionFork(
           metadata,
           options: savedOptions,
           publications: [],
-          payload: Buffer.from(
-            savedPayload.buffer,
-            savedPayload.byteOffset,
-            savedPayload.byteLength,
-          ),
+          payload: savedPayload,
           streamFn,
           authority,
           bytes,
@@ -203,22 +203,26 @@ export function wrapStreamFnWithSessionFork(
       onPayload: async (payload, payloadModel) => {
         const replacement = await onPayload?.(payload, payloadModel);
         const finalPayload = replacement === undefined ? payload : replacement;
-        preparedPayload = finalPayload;
         // Native ChatGPT, Anthropic, and custom transports do not use the encoded-body boundary.
-        if (isRecord(finalPayload) && !modelRequestBodyState(capturedOptions).enabled) {
-          save(Buffer.from(JSON.stringify(finalPayload)));
+        if (modelRequestBodyState(capturedOptions).enabled) {
+          preparedPayload = finalPayload;
+        } else if (isRecord(finalPayload)) {
+          save(new Blob([JSON.stringify(finalPayload)]));
         }
         return finalPayload;
       },
     };
-    modelRequestBodyState(capturedOptions).onEncoded = (encoded, payload) => {
+    modelRequestBodyState(capturedOptions).onEncoded = (body, payload) => {
       if (!isRecord(payload)) {
         return;
       }
       // HTTP continuations send only a suffix; an independent fork still needs the full prefix.
-      save(
-        payload.previous_response_id ? Buffer.from(JSON.stringify(preparedPayload)) : encoded.body,
-      );
+      // Suffix-only retries reuse the captured prefix; a rebuilt request calls onPayload again.
+      if (payload.previous_response_id && preparedPayload === undefined) {
+        return;
+      }
+      save(payload.previous_response_id ? new Blob([JSON.stringify(preparedPayload)]) : body);
+      preparedPayload = undefined;
     };
     return streamFn(model, context, capturedOptions);
   };
@@ -295,7 +299,7 @@ export async function runEmbeddedSessionFork(params: {
     tools: metadata.tools,
     messages: structuredClone(snapshot.publications),
   };
-  const parentPayload: unknown = JSON.parse(snapshot.payload.toString("utf8"));
+  const parentPayload: unknown = JSON.parse(await snapshot.payload.text());
   if (!isRecord(parentPayload)) {
     throw new Error("Cache-parity session fork requires an object provider request.");
   }

@@ -80,7 +80,7 @@ up provider credentials on the server.
 
 ## Discovery and pricing
 
-When Cerebras auth is configured and the inference base URL is the canonical
+When Cerebras auth is configured and the inference base URL is the official
 `https://api.cerebras.ai/v1`, OpenClaw reads
 [`GET /public/v1/models`](https://inference-docs.cerebras.ai/api-reference/models/public-models).
 This request uses public headers only: inference API keys and discovery

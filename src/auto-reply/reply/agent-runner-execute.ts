@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
@@ -14,7 +17,10 @@ import {
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
-import { markPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
+import {
+  buildPreflightCompactionFailureText,
+  markPostCompactionModelFailurePayload,
+} from "./agent-runner-failure-reply.js";
 import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import { accountAgentTurnCompaction } from "./agent-runner-result-accounting.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
@@ -196,21 +202,46 @@ export async function executePreparedReplyAgentRun(
   };
 
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
-  activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
-    runSessionCompactionIfNeeded({
-      ...context,
-      replyOperation,
-      pendingUserEntryId: preflightAdmission?.entryId,
-      promptForEstimate: followupRun.prompt,
-      sessionEntry: activeSessionEntry,
-      sessionStore: activeSessionStore,
-      abortSignal: replyOperation.abortSignal,
-      beforeCompaction: checkpointMemory,
-      onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
-      onSessionIdChanged: (sessionId) => replyOperation.updateSessionId(sessionId),
-      onCompactionNotice: sendDirectCompactionNotice,
-    }),
-  );
+  try {
+    activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
+      runSessionCompactionIfNeeded({
+        ...context,
+        replyOperation,
+        pendingUserEntryId: preflightAdmission?.entryId,
+        promptForEstimate: followupRun.prompt,
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        abortSignal: replyOperation.abortSignal,
+        beforeCompaction: checkpointMemory,
+        onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
+        onSessionIdChanged: (sessionId) => replyOperation.updateSessionId(sessionId),
+        onCompactionNotice: sendDirectCompactionNotice,
+      }),
+    );
+  } catch (error) {
+    const recorder = followupRun.userTurnTranscriptRecorder;
+    if (recorder && buildPreflightCompactionFailureText(formatErrorMessage(error)) !== null) {
+      try {
+        // Preserve the input without claiming restart recovery. Both the recorder's
+        // source assertion and this run's authority are checked at the fresh write.
+        await recorder.persistApproved({
+          expectedSessionId: replyOperation.sessionId,
+          beforeFreshMessageCommit: () => {
+            replyOperation.abortSignal.throwIfAborted();
+            followupRun.operatorAuthority?.assertCurrent();
+            if (replyOperation.lifecycleGeneration) {
+              assertAgentRunLifecycleGenerationCurrent(replyOperation.lifecycleGeneration);
+            }
+          },
+        });
+      } catch (persistError) {
+        logVerbose(
+          `user turn not kept after failed preflight: ${formatErrorMessage(persistError)}`,
+        );
+      }
+    }
+    throw error;
+  }
   setActiveSessionEntry(activeSessionEntry);
   const preflightCompactionApplied =
     (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;

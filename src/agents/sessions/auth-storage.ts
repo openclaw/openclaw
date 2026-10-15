@@ -219,16 +219,14 @@ class SqliteAuthStorageBackend implements StorageBackend {
 
   read(): string {
     this.assertSynchronousAccess("reloadAsync");
-    const store = this.scope.read();
-    const content = JSON.stringify(
-      projectAuthoritativeAuthStorageData(store, this.resolveMaterializedRuntimeStores()),
-    );
-    this.captureCredentialSources(store);
-    return content;
+    return this.projectRead(this.scope.read());
   }
 
   async readAsync(): Promise<string> {
-    const store = await this.scope.readAsync();
+    return this.projectRead(await this.scope.readAsync());
+  }
+
+  private projectRead(store: RuntimeAuthProfileStore): string {
     const content = JSON.stringify(
       projectAuthoritativeAuthStorageData(store, this.resolveMaterializedRuntimeStores()),
     );
@@ -533,15 +531,7 @@ export class AuthStorage {
       this.loadError = null;
       this.setData(persistedData);
     } catch (error) {
-      const persistenceError =
-        error instanceof AuthStoragePersistenceError
-          ? error
-          : new AuthStoragePersistenceError(
-              `Failed to persist auth storage update for provider "${provider}": ${error instanceof Error ? error.message : String(error)}`,
-              error,
-            );
-      this.recordError(persistenceError);
-      throw persistenceError;
+      this.failProviderChange(provider, error);
     }
   }
 
@@ -558,16 +548,20 @@ export class AuthStorage {
       this.loadError = null;
       this.setData(persistedData);
     } catch (error) {
-      const persistenceError =
-        error instanceof AuthStoragePersistenceError
-          ? error
-          : new AuthStoragePersistenceError(
-              `Failed to persist auth storage update for provider "${provider}": ${error instanceof Error ? error.message : String(error)}`,
-              error,
-            );
-      this.recordError(persistenceError);
-      throw persistenceError;
+      this.failProviderChange(provider, error);
     }
+  }
+
+  private failProviderChange(provider: string, error: unknown): never {
+    const persistenceError =
+      error instanceof AuthStoragePersistenceError
+        ? error
+        : new AuthStoragePersistenceError(
+            `Failed to persist auth storage update for provider "${provider}": ${error instanceof Error ? error.message : String(error)}`,
+            error,
+          );
+    this.recordError(persistenceError);
+    throw persistenceError;
   }
 
   get(provider: string): AuthCredential | undefined {

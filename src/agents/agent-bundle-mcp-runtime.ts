@@ -848,7 +848,7 @@ function createServerMcpRuntime(
     if (catalog && !catalogRetryIsDue()) {
       return catalog;
     }
-    if (!catalog) {
+    if (!catalog || !lastListedCatalog) {
       const retryExitedProcess = currentSession?.transportType === "stdio";
       const loadedCatalog = await loadCatalog();
       // Recover a previously healthy process once; HTTP list failures retain their diagnostic.

@@ -6,7 +6,6 @@ import { runWithOpenClawStateLeaseWorker } from "../state/openclaw-state-lease-w
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
-import { prepareTranscriptDateReader } from "./store-date-preparation.js";
 import type { TranscriptExportChunk, TranscriptExportCommand } from "./store-export-contract.js";
 import { TranscriptLibraryError } from "./store-read.js";
 import type { TranscriptReadRequests } from "./store-worker-contract.js";
@@ -79,16 +78,12 @@ export function createTranscriptStoreOperation(
     ): Promise<TranscriptReadRequests[Key]["output"]> {
       const input = structuredClone(request);
       input.readOnly = readOnly;
-      const preparation =
-        type === "transcripts.readEntries"
-          ? prepareTranscriptDateReader(assertCurrent, context.admission.databasePath)
-          : { assertCurrent };
       const result = await runOpenClawStateWorkerOperation(
         context,
         (scope) => scope.execute<Key>({ type, input }),
-        preparation,
+        { assertCurrent },
       );
-      preparation.assertCurrent();
+      assertCurrent();
       if (!result.ok) {
         throw new TranscriptLibraryError(
           result.error.type,

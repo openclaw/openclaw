@@ -23,7 +23,6 @@ import {
   isTurnHandoffAbort,
 } from "./turn-interruption.js";
 import type {
-  AgentContext,
   AgentEvent,
   AgentLoopConfig,
   AgentLoopTurnUpdate,
@@ -556,21 +555,18 @@ export class Agent {
     await this.runWithLifecycle(async (signal) => {
       await runAgentLoop(
         messages,
-        this.createContextSnapshot(),
+        {
+          systemPrompt: this.mutableState.systemPrompt,
+          // The loop copies messages synchronously before emitting its first event.
+          messages: this.mutableState.messages,
+          tools: this.mutableState.tools.slice(),
+        },
         this.createLoopConfig(options),
         (event) => this.processEvents(event),
         signal,
         this.streamFn,
       );
     });
-  }
-
-  private createContextSnapshot(): AgentContext {
-    return {
-      systemPrompt: this.mutableState.systemPrompt,
-      messages: this.mutableState.messages.slice(),
-      tools: this.mutableState.tools.slice(),
-    };
   }
 
   private createLoopConfig(options: { skipInitialSteeringPoll?: boolean } = {}): AgentLoopConfig {

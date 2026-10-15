@@ -12,6 +12,7 @@ export function projectSessionActorContextMetadata(
   const { active, coldArchive, contextMetadata, identities, navigation, payloads, projection } =
     actor.transcript;
   if (
+    !actor.transcript.complete ||
     coldArchive ||
     !contextMetadata ||
     !projection ||
@@ -20,7 +21,13 @@ export function projectSessionActorContextMetadata(
     [...identities.values()].some(
       (row) => row.event_type === "reset" || row.event_type === "compaction",
     ) ||
-    navigation.some((row) => ["reset", "compaction", "leaf", "branch_summary"].includes(row.type))
+    navigation.some(
+      (row) =>
+        row.type === "reset" ||
+        row.type === "compaction" ||
+        row.type === "leaf" ||
+        row.type === "branch_summary",
+    )
   ) {
     return undefined;
   }
@@ -91,6 +98,9 @@ export function seedSessionActorContextMetadata(
     serialized_bytes: number;
   }>,
 ): void {
+  if (!actor.transcript.complete) {
+    return;
+  }
   const rows = stored.flatMap((row) => {
     const active = actor.transcript.active.get(row.seq);
     return active?.context_eligible === 1

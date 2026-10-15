@@ -296,22 +296,16 @@ suite.define(() => {
           await captureUiProof(page, `model-picker-${colorScheme}.png`);
           await page.keyboard.press("Escape");
 
-          // The shadow-DOM lane: a Web Awesome ::part() menu picks up the same
-          // profile through the grouped rule in base.css.
+          // Native top-layer menus keep the same scrollbar profile as the shell.
           const composer = page.locator(".agent-chat__input");
           await composer.getByRole("button", { name: "Add attachment" }).click();
-          const capabilityMenu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+          const capabilityMenu = composer.locator(".agent-chat__capability-menu");
           await expect
-            .poll(() =>
-              capabilityMenu.evaluate((node) => (node as HTMLElement & { open: boolean }).open),
-            )
+            .poll(() => capabilityMenu.evaluate((node) => node.hasAttribute("open")))
             .toBe(true);
-          // Regression guard: base.css's ::-webkit-scrollbar* rules do not cross
-          // a shadow boundary on their own. Only the grouped ::part() rule gives
-          // this menu's shadow-root scrollbar the canonical width and a real
-          // thumb color instead of silently falling back to the UA default.
-          const shadowScrollbar = await capabilityMenu.evaluate((node) => {
-            const part = (node as HTMLElement).shadowRoot?.querySelector('[part~="menu"]');
+          // The top-layer menu must retain the canonical width and thumb color.
+          const menuScrollbar = await capabilityMenu.evaluate((node) => {
+            const part = node.querySelector(".oc-menu");
             if (!part) {
               return null;
             }
@@ -320,16 +314,13 @@ suite.define(() => {
               thumbBackground: getComputedStyle(part, "::-webkit-scrollbar-thumb").backgroundColor,
             };
           });
-          expect(shadowScrollbar).toEqual({ width: "12px", thumbBackground: expect.any(String) });
-          expect(shadowScrollbar?.thumbBackground).not.toBe("rgba(0, 0, 0, 0)");
-          await captureUiProof(page, `capability-menu-shadow-dom-${colorScheme}.png`);
+          expect(menuScrollbar).toEqual({ width: "12px", thumbBackground: expect.any(String) });
+          expect(menuScrollbar?.thumbBackground).not.toBe("rgba(0, 0, 0, 0)");
+          await captureUiProof(page, `capability-menu-native-${colorScheme}.png`);
 
-          // Genericity guard, not a second sample of the menu above: base.css
-          // reaches these parts through bare wa-dropdown/wa-select/wa-popover
-          // selectors, so every Web Awesome scroll part rendered on this page
-          // must report the canonical width -- including the ones no stylesheet
-          // names. A class allowlist would leave some at the platform default.
-          const shadowScrollbarWidths = await page.evaluate(() => {
+          // Every native menu and remaining Web Awesome scroll part must retain
+          // the canonical width, including closed surfaces.
+          const menuScrollbarWidths = await page.evaluate(() => {
             // One part per host tag, matching the base.css rule exactly: sampling
             // whichever part came first would read a part that rule never targets.
             const partSelectorByTag: Record<string, string> = {
@@ -337,15 +328,19 @@ suite.define(() => {
               "WA-POPOVER": '[part~="body"]',
               "WA-SELECT": '[part~="listbox"]',
             };
-            const hosts = document.querySelectorAll("wa-dropdown, wa-select, wa-popover");
+            const hosts = document.querySelectorAll(".oc-menu, wa-dropdown, wa-select, wa-popover");
             return Array.from(hosts, (host) => {
               const partSelector = partSelectorByTag[host.tagName];
-              const part = partSelector ? host.shadowRoot?.querySelector(partSelector) : null;
+              const part = host.classList.contains("oc-menu")
+                ? host
+                : partSelector
+                  ? host.shadowRoot?.querySelector(partSelector)
+                  : null;
               return part ? getComputedStyle(part, "::-webkit-scrollbar").width : null;
             }).filter((width): width is string => width !== null);
           });
-          expect(shadowScrollbarWidths.length).toBeGreaterThan(1);
-          expect([...new Set(shadowScrollbarWidths)]).toEqual(["12px"]);
+          expect(menuScrollbarWidths.length).toBeGreaterThan(1);
+          expect([...new Set(menuScrollbarWidths)]).toEqual(["12px"]);
         },
       );
     }

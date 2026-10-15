@@ -65,9 +65,11 @@ import {
   uiIsolatedTestFiles,
 } from "../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
+  getRepositoryFileInventory,
   isControlUiSourcePath,
   isPluginControlUiPath,
   isUiBrowserTestFile,
+  isUiTestTarget,
   uiE2eRealGatewayTestFiles,
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
@@ -501,7 +503,9 @@ const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
 const FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT = 6;
 const FULL_SUITE_INFRA_TEST_TARGET_CHUNK_SIZE = 64;
-const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 2;
+const FULL_SUITE_GATEWAY_DATABASE_TEST_TARGET_CHUNK_SIZE = 50;
+const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 8;
+const FULL_SUITE_UI_TEST_TARGET_CHUNK_SIZE = 8;
 const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const FULL_SUITE_UNIT_SRC_TEST_TARGET_CHUNK_SIZE = 150;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
@@ -632,7 +636,7 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     ["src/agents/bash-tools.process.liveness.test.ts"],
   ],
   [
-    "patches/vitest@5.0.1.patch",
+    "patches/vitest@5.0.3.patch",
     [
       "test/scripts/run-vitest-profile.test.ts",
       "test/scripts/run-vitest-state-cleanup.test.ts",
@@ -1173,6 +1177,24 @@ function listUnitSrcFullSuiteTestTargets(cwd: string) {
     .toSorted((left, right) => left.localeCompare(right));
   cachedUnitSrcFullSuiteTestTargetsCwd = cwd;
   return cachedUnitSrcFullSuiteTestTargets;
+}
+
+function listUiFullSuiteTestTargets(cwd: string) {
+  const files =
+    getRepositoryFileInventory(cwd) ??
+    [path.join(cwd, "ui", "src"), path.join(cwd, "extensions")].flatMap((root) =>
+      fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
+    );
+  return [...files]
+    .filter(
+      (file) =>
+        isUiTestTarget(file) &&
+        !isSharedVitestExcludedPath(file) &&
+        !isUiIsolatedTestFile(file) &&
+        !isUiBrowserTestFile(file) &&
+        !uiTimingTestFiles.includes(file),
+    )
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function listAgentsCoreFullSuiteTestTargets(cwd: string) {
@@ -3644,7 +3666,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["check-composite-action-input-interpolation", "check-no-conflict-markers", workflowGuards],
   ],
   [/^apps\/android\/fastlane\/Fastfile$/u, ["android-release-fastlane-gates"]],
-  [/^apps\/ios\/fastlane\/Fastfile$/u, ["ios-release-fastlane-gates"]],
+  [
+    /^apps\/ios\/fastlane\/Fastfile$/u,
+    ["ios-release-fastlane-gates", "ios-release-screenshot-upload"],
+  ],
   [/^scripts\/ios-release-cut\.(?:sh|ts)$/u, ["ios-release-plan"]],
   [/^scripts\/ios-release-prepare\.sh$/u, ["ios-release-prepare", "ios-release-wrapper-args"]],
   [
@@ -5737,11 +5762,30 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
             Math.ceil(targets.length / FULL_SUITE_INFRA_TEST_TARGET_CHUNK_SIZE),
           );
         } else if (config === TOOLING_VITEST_CONFIG) {
-          // Tooling tests spawn package managers and native helpers. Keep native
-          // process lifetime short enough that unrelated files cannot crash together.
+          // Bound package-manager/native-helper lifetimes without paying for a new
+          // Vitest config and worker startup after every two ordinary tooling files.
           const targets = listToolingFullSuiteTestTargets(cwd);
           const chunkCount = Math.ceil(targets.length / FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE);
           chunks = splitTargetChunks(targets, chunkCount);
+        } else if (config === UI_VITEST_CONFIG) {
+          // A retained jsdom worker made a 16-case file grow from 8.56s alone
+          // to 542s of case time in the full run. Keep its existing harness,
+          // but retire the shared document/module generation between small batches.
+          const targets = listUiFullSuiteTestTargets(cwd);
+          chunks = splitTargetChunks(
+            targets,
+            Math.ceil(targets.length / FULL_SUITE_UI_TEST_TARGET_CHUNK_SIZE),
+          );
+        } else if (config === GATEWAY_DATABASE_WORKERS_VITEST_CONFIG) {
+          // The 485-file shared fork exhausted its 4 GiB V8 heap in a full run.
+          // Keep native worker custody and exclusive scheduling; bound its graph lifetime.
+          chunks = splitTargetChunks(
+            gatewayDatabaseWorkerTestFiles,
+            Math.ceil(
+              gatewayDatabaseWorkerTestFiles.length /
+                FULL_SUITE_GATEWAY_DATABASE_TEST_TARGET_CHUNK_SIZE,
+            ),
+          );
         } else if (config === GATEWAY_SERVER_VITEST_CONFIG) {
           chunks = createGatewayServerTestTargetChunks(cwd);
         } else {

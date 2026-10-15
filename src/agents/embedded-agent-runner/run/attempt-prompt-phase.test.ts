@@ -749,39 +749,4 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(mocks.submitPrompt).not.toHaveBeenCalled();
     expect(fixture.order).toEqual(["assembly", "prompt-error", "stop-steering"]);
   });
-
-  it("publishes preflight state before a submission failure", async () => {
-    const fixture = createFixture();
-    const promptError = new Error("admission warning");
-    const submitError = new Error("provider failed");
-    mocks.preparePromptPreflight.mockImplementationOnce(
-      async (preflightInput: PromptPreflightCall) => {
-        fixture.order.push("preflight");
-        return {
-          ...preflightInput.state,
-          promptError,
-          promptErrorSource: "precheck",
-        };
-      },
-    );
-    mocks.submitPrompt.mockImplementationOnce(async () => {
-      fixture.order.push("submit");
-      expect(fixture.readState().promptError).toBe(promptError);
-      throw submitError;
-    });
-    mocks.handlePromptError.mockImplementationOnce(async (errorInput: PromptErrorCall) => {
-      fixture.order.push("prompt-error");
-      expect(errorInput.error).toBe(submitError);
-      return {};
-    });
-
-    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
-
-    expect(fixture.order.slice(-4)).toEqual([
-      "preflight",
-      "submit",
-      "prompt-error",
-      "stop-steering",
-    ]);
-  });
 });

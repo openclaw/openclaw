@@ -11,6 +11,7 @@ import {
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createAuthProfileStoreFixture } from "./credential-fixtures.test-support.js";
 import { isSettledOAuthRefreshFailure, OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { buildRefreshContentionError } from "./oauth-refresh-lock-errors.js";
@@ -140,7 +141,8 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("persists forced plugin refresh before returning", async () => {
+  it("persists a forced model-auth plugin refresh before returning", async () => {
+    const { getApiKeyForModelCore } = await import("../model-auth.js");
     const expiresIn = 86_400_000;
     const forceRefresh = true;
     const profileId = "openai:default";
@@ -162,7 +164,19 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     };
     refreshCredentialMock.mockResolvedValueOnce(rotated);
     await expect(
-      resolveApiKeyForProfile({ store, profileId, agentDir: mainAgentDir, forceRefresh }),
+      getApiKeyForModelCore({
+        model: makeProviderModelFixture({
+          id: "test-model",
+          provider: "openai",
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        }),
+        store,
+        profileId,
+        agentDir: mainAgentDir,
+        forceRefresh,
+        lockedProfile: true,
+      }),
     ).resolves.toMatchObject({ apiKey: rotated.access, profileId });
     expect(refreshCredentialMock).toHaveBeenCalledOnce();
     expect(refreshCredentialMock.mock.calls[0]?.[0]).toMatchObject(store.profiles[profileId]!);

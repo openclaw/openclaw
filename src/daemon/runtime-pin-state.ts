@@ -2,8 +2,12 @@
 import { z } from "zod";
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state-row.js";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseCurrentReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import { resolveNodeServiceIdentityEnvironment } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import type { DaemonRuntimePinSnapshot, DaemonRuntimePinUpdate } from "./runtime-pin-types.js";
@@ -17,7 +21,12 @@ import { resolveSystemdServiceName } from "./systemd-service-files.js";
 const pinSchema = z.object({ runtime: z.enum(["node", "bun"]), path: z.string().min(1) });
 const recordSchema = z.object({ version: z.literal(1), pin: pinSchema, definition: z.string() });
 
-type PinScope = { kind: "gateway" | "node"; env: NodeJS.ProcessEnv };
+type PinScope = {
+  kind: "gateway" | "node";
+  env: NodeJS.ProcessEnv;
+  /** Live mutation guards need current rows; cold inspection preserves source artifacts. */
+  allowNativeRead?: true;
+};
 function resolveScope({ kind, env }: PinScope) {
   const nativeEnv = kind === "node" ? { ...env, ...resolveNodeServiceIdentityEnvironment() } : env;
   const name =
@@ -30,6 +39,19 @@ function resolveScope({ kind, env }: PinScope) {
     key: `daemon-runtime-pin:${sha256Hex(JSON.stringify([kind, process.platform, name, resolveConfigPathCandidate(env)]))}`,
     options: { env },
   };
+}
+function readPinValue(scope: PinScope): unknown {
+  const { key, options } = resolveScope(scope);
+  const read = scope.allowNativeRead
+    ? withExistingOpenClawStateDatabaseCurrentReadOnly
+    : withExistingOpenClawStateDatabaseArtifactPreservingReadOnly;
+  return read(
+    ({ db }) => {
+      const row = readConfigMachineStateRowInDatabase(db, key);
+      return row ? JSON.parse(row.value_json) : undefined;
+    },
+    { ...options, allowNativeRead: true },
+  );
 }
 function revision(value: unknown): string {
   return sha256Hex(JSON.stringify(value ?? null));
@@ -47,8 +69,7 @@ export function readDaemonRuntimePin(
   scope: PinScope,
   command: GatewayServiceCommandConfig | null,
 ): DaemonRuntimePinSnapshot {
-  const { key, options } = resolveScope(scope);
-  const value = readConfigMachineState<unknown>(key, options, { artifactPreservingReadOnly: true });
+  const value = readPinValue(scope);
   const snapshot: DaemonRuntimePinSnapshot = {
     revision: revision(value),
     stored: value !== undefined,
@@ -83,12 +104,7 @@ export function assertDaemonRuntimePinCurrent(
   scope: PinScope,
   expected: DaemonRuntimePinSnapshot,
 ): void {
-  const { key, options } = resolveScope(scope);
-  if (
-    revision(
-      readConfigMachineState<unknown>(key, options, { artifactPreservingReadOnly: true }),
-    ) !== expected.revision
-  ) {
+  if (revision(readPinValue({ ...scope, allowNativeRead: true })) !== expected.revision) {
     throw new Error("Runtime pin changed during service planning; rerun the install.");
   }
 }

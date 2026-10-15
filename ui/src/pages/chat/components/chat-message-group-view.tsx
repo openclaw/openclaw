@@ -9,7 +9,7 @@ import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
+import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import { ActivityGroupContent } from "./chat-message-activity-view.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -44,8 +44,9 @@ import {
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
-import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
-import { renderTurnRecapRow } from "./chat-working-indicator.ts";
+import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
+import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { TurnRecapRow } from "./chat-working-indicator.tsx";
 
 export type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 
@@ -185,7 +186,7 @@ export function MessageGroupContent(props: {
         )}
       </For>
       {options().showToolCalls === false ? undefined : (
-        <LitContent value={renderBrowserTabPreviews([props.group], options())} />
+        <BrowserTabPreviews previews={selectBrowserTabPreviews([props.group], options())} />
       )}
     </Show>
   );
@@ -306,6 +307,7 @@ function FramedMessage(props: {
         : undefined,
   }));
   const showActions = () =>
+    prepared().ownsActions &&
     hasMessageActionButtons(prepared().actions, frame().options) &&
     props.index < frame().lastMessageIndex &&
     !frame().isTurnBlock;
@@ -398,7 +400,7 @@ function FramedMessageGroup(props: {
       </Show>
       <div class="chat-group-messages">
         <Show when={frame().forwardedSource}>
-          <LitContent value={renderForwardedAttribution(props.group, options())} />
+          <ForwardedAttribution group={props.group} options={options()} />
         </Show>
         <LitContent value={renderReplyLine(frame().replyLine, options())} />
         <Show
@@ -414,15 +416,13 @@ function FramedMessageGroup(props: {
           {options().frameContent}
         </Show>
         {frame().ownsRunFrame || options().showToolCalls === false ? undefined : (
-          <LitContent value={renderBrowserTabPreviews([props.group], options())} />
+          <BrowserTabPreviews previews={selectBrowserTabPreviews([props.group], options())} />
         )}
         <Show
           when={Boolean(options().activeContinuation)}
           fallback={
             options().turnRecap ? (
-              <LitContent
-                value={renderTurnRecapRow(options().turnRecap!, { presentation: "continuation" })}
-              />
+              <TurnRecapRow recap={options().turnRecap!} presentation="continuation" />
             ) : undefined
           }
         >

@@ -20,7 +20,7 @@ import {
   type LoginFailureStep,
   resolveLoginFailureFeedback,
 } from "./login-gate-feedback.ts";
-import { CopyButton } from "./solid/copy-button.tsx";
+import { ConnectCommand } from "./solid/connect-command.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import "./theme-brand-icon.ts";
 import "./tooltip.ts";
@@ -50,38 +50,6 @@ const STATUS_ICONS: Record<LoginFailureFeedback["tone"], IconName> = {
   warn: "clock",
   danger: "shieldAlert",
 };
-
-function ConnectCommand(props: { command: string; variant?: "hero" }) {
-  const copyCommand = (event: { currentTarget: HTMLElement }) => {
-    event.currentTarget.querySelector<HTMLButtonElement>(".chat-copy-btn")?.click();
-  };
-  return (
-    <openclaw-tooltip prop:content={t("connection.help.copyCommand")}>
-      <div
-        class={["login-gate__command", { "login-gate__command--hero": props.variant === "hero" }]}
-        role="button"
-        tabindex={0}
-        aria-label={t("connection.help.copyCommandAria", { command: props.command })}
-        onClick={(event) => {
-          if (!(event.target instanceof Element && event.target.closest(".chat-copy-btn"))) {
-            copyCommand(event);
-          }
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            copyCommand(event);
-          }
-        }}
-      >
-        <code translate="no">{props.command}</code>
-        {props.command && (
-          <CopyButton text={props.command} idleLabel={t("connection.help.copyCommand")} />
-        )}
-      </div>
-    </openclaw-tooltip>
-  );
-}
 
 function FailureStep(props: { step: LoginFailureStep }) {
   const segments = createMemo(() => {

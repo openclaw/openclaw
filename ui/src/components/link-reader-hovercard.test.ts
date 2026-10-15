@@ -235,10 +235,15 @@ describe("openclaw-link-reader-hovercard-provider", () => {
   });
 
   it.each([
-    { url: href + "#issuecomment-123", label: "PR #99816", reader: github, branded: true },
+    {
+      url: href + "#issuecomment-123",
+      label: "PR openclaw/openclaw#99816",
+      reader: github,
+      branded: true,
+    },
     {
       url: "https://github.com/openclaw/openclaw/issues/99815",
-      label: "Issue #99815",
+      label: "Issue openclaw/openclaw#99815",
       reader: github,
       branded: true,
     },

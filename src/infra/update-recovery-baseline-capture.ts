@@ -360,6 +360,8 @@ export function captureUpdateRecoveryBaseline(params: {
         additionalPaths: [...forcedSqlite],
         additionalFiles: [...files.keys()].filter((pathname) => !configPaths.has(pathname)),
         rehearsal,
+        // Capture is best effort; its callers continue and own the next-step guidance.
+        retryAdvice: false,
       });
       assertCurrent();
       const databasePaths = new Set([
@@ -487,6 +489,7 @@ export function captureUpdateRecoveryBaseline(params: {
               signal: params.signal,
               timeoutMs: params.timeoutMs,
               acquisition: params.acquisition,
+              retryAdvice: false,
             });
       const unverified = [...databasePaths].flatMap((pathname): [string, string][] =>
         !Object.hasOwn(databases.sourceGenerations, pathname)

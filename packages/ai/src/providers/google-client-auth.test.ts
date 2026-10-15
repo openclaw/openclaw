@@ -28,7 +28,7 @@ vi.mock("@google/genai", () => ({
 }));
 
 import { streamGoogleVertex, streamSimpleGoogleVertex } from "./google-vertex.js";
-import { streamGoogle } from "./google.js";
+import { streamGoogle, streamSimpleGoogle } from "./google.js";
 
 const context = {
   messages: [{ role: "user", content: "hello", timestamp: 0 }],
@@ -69,6 +69,69 @@ describe("Google SDK construction auth", () => {
     vi.unstubAllEnvs();
     configureAiTransportHost({});
   });
+
+  it.each([
+    {
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: 64,
+      expected: {
+        maxOutputTokens: 2112,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 },
+      },
+    },
+    {
+      id: "gemini-2.5-pro",
+      reasoning: "off",
+      maxTokens: 64,
+      expected: { maxOutputTokens: 192, thinkingConfig: { thinkingBudget: 128 } },
+    },
+    {
+      id: "gemini-2.5-flash",
+      reasoning: "off",
+      maxTokens: 64,
+      expected: { maxOutputTokens: 64, thinkingConfig: { thinkingBudget: 0 } },
+    },
+    {
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: undefined,
+      expected: { thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 } },
+    },
+    {
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: 8000,
+      expected: {
+        maxOutputTokens: 8192,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 },
+      },
+    },
+  ] as const)(
+    "preserves the output budget at the Google SDK boundary: $id $reasoning $maxTokens",
+    async ({ id, reasoning, maxTokens, expected }) => {
+      configureAiTransportHost({ resolveSecretSentinel: (value) => value });
+      await streamSimpleGoogle({ ...googleModel(), id }, context, {
+        apiKey: "test-key",
+        reasoning,
+        maxTokens,
+      }).result();
+      await streamSimpleGoogleVertex({ ...vertexModel(), id }, context, {
+        apiKey: "test-key",
+        reasoning,
+        maxTokens,
+      }).result();
+      expect(googleMockState.requests).toHaveLength(2);
+      for (const request of googleMockState.requests) {
+        const serialized = JSON.stringify(request);
+        expect(JSON.parse(serialized)).toEqual({
+          model: id,
+          contents: [{ role: "user", parts: [{ text: "hello" }] }],
+          config: expected,
+        });
+      }
+    },
+  );
 
   it("identifies OpenCode conversations without cache retention", async () => {
     await streamGoogle({ ...googleModel(), baseUrl: "https://opencode.ai/zen/v1" }, context, {

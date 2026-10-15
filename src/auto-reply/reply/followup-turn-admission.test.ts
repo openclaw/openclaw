@@ -7,6 +7,7 @@ import {
   withTempState,
 } from "../../channels/message/ingress-drain.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import type { FollowupRun } from "./queue.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 
@@ -151,6 +152,29 @@ function createActiveGoalEntry(): SessionEntry {
 }
 
 describe("admitFollowupTurn", () => {
+  it("reports a queued event's admission refusal to its source before consuming it", async () => {
+    const error = new SessionWorkStartError("archived", "Restore this session before retrying.");
+    state.admitReply.mockResolvedValue({
+      status: "skipped",
+      reason: "lifecycle-invalidated",
+      error,
+    });
+    const queued = createRun();
+    const onFailed = vi.fn();
+    queued.run.internalEventExecution = {
+      onStarted: vi.fn(),
+      onTerminal: vi.fn(),
+      onFailed,
+    };
+
+    await expect(admitFollowupTurn({ queued, defaults: createDefaults() })).resolves.toEqual({
+      kind: "skipped",
+      reason: "lifecycle-invalidated",
+    });
+    expect(onFailed).toHaveBeenCalledExactlyOnceWith(error);
+    expect(state.preflight).not.toHaveBeenCalled();
+  });
+
   it.each([
     "paused",
     "blocked",

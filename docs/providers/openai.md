@@ -9,7 +9,7 @@ title: "OpenAI"
 ---
 
 OpenClaw uses one provider id, `openai`, for both direct API-key auth and
-ChatGPT/Codex subscription auth. `openai/*` is the canonical model route.
+ChatGPT/Codex subscription auth. `openai/*` is the standard model route.
 For embedded agent turns with runtime policy unset or `auto`, OpenAI's route
 facts decide whether OpenClaw may select the bundled Codex app-server runtime
 implicitly. The `openai/*` prefix alone does not select a runtime.
@@ -68,7 +68,7 @@ working. Each entry points at the page that now holds the content.
 - <a id="verify-the-model-is-available" />[Verify the model is available](/providers/openai/setup#verify-the-model-is-available)
 - <a id="codex-subscription" />[Codex subscription](/providers/openai/setup#codex-subscription)
 - <a id="run-codex-oauth" />[Run Codex OAuth](/providers/openai/setup#run-codex-oauth)
-- <a id="use-the-canonical-openai-model-route" />[Use the canonical OpenAI model route](/providers/openai/setup#use-the-canonical-openai-model-route)
+- <a id="use-the-canonical-openai-model-route" />[Use the standard OpenAI model route](/providers/openai/setup#use-the-canonical-openai-model-route)
 - <a id="verify-codex-auth-is-available" />[Verify Codex auth is available](/providers/openai/setup#verify-codex-auth-is-available)
 
 **[OpenAI models](/providers/openai/models)**
@@ -174,7 +174,12 @@ and transport settings. A custom Platform-compatible `baseUrl` must implement
 `POST /decisions`; ChatGPT backend URLs are rejected.
 
 Boolean questions map to predicates; choices retain their string labels; score
-levels use zero-based rubric positions. Structured evidence and criteria are
+levels use zero-based rubric positions. A batch supports up to 200 questions,
+with up to 255 alternatives per choice question. Larger requests return
+`unsupported-input` before credential resolution or an API call. Split independent
+questions into separate batches, or reduce the alternatives.
+
+Structured evidence and criteria are
 serialized as JSON text. The current Decision V1 contract carries text/JSON
 evidence, so this adapter does not send image parts. A per-question refusal
 makes the entire batch unavailable with `unsupported-input`; malformed or

@@ -63,9 +63,7 @@ function inspectPlainData(value: unknown, freeze: boolean, requireFrozen = true)
     }
   }
   // A cycle is proven only when every reachable member passes, not on a back edge.
-  if (plain && freeze) {
-    deeplyFrozenPlainData.add(value);
-  } else if (plain && requireFrozen) {
+  if (plain && (freeze || requireFrozen)) {
     for (const candidate of inspected) {
       deeplyFrozenPlainData.add(candidate);
     }

@@ -86,7 +86,7 @@ suite.define(() => {
             return {
               nav: centerY(".chat-pane__nav-toggle svg"),
               projectIcon: centerY(".workspace-icon"),
-              projectText: centerY(".chat-pane__workspace-chip span"),
+              projectText: centerY(".chat-pane__workspace-chip > .oc-menu-item__label > span"),
               menu: centerY(".chat-header-session-menu__trigger svg"),
               parentText: centerY(".chat-pane__parent-session-text"),
               sessionText: centerY(".chat-pane__session-title-text"),

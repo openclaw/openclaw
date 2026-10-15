@@ -7,6 +7,25 @@ const { fixture, reconciledMergeAfterCleanup, outcomeRef, describePosix, unknown
   createMergeOutcomeFixtureHarness();
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it("lands ordinary green CI with a MAINTAIN writer without exception policy reads", () => {
+    const f = fixture();
+    const state = f.state();
+    state.repoAuthority.permissions = { admin: false, maintain: true, push: true };
+    state.restPolicy = "not-found";
+    state.priorCi.membership = "member";
+    f.save(state);
+
+    const result = f.run();
+
+    expect(result.status, result.output).toBe(0);
+    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+    expect(f.state().mutations).toBe(1);
+    expect(f.state().calls.some((call) => call.some((arg) => arg.includes("/protection")))).toBe(
+      false,
+    );
+    expect(f.state().calls.some((call) => call.some((arg) => arg.startsWith("orgs/")))).toBe(false);
+  });
+
   it.each([
     { phase: "initial", settles: true },
     { phase: "initial", settles: false },
@@ -54,6 +73,51 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         expect(() => f.record()).toThrow();
       }
       expect(f.state().posts).toBe(0);
+    },
+  );
+
+  it.each([
+    { name: "timely known", known: true, readSeconds: 0, proofSeconds: 65, admitted: true },
+    { name: "late known", known: true, readSeconds: 65, proofSeconds: 0, admitted: false },
+    { name: "still UNKNOWN", known: false, readSeconds: 0, proofSeconds: 65, admitted: false },
+  ])(
+    "uses projection time for $name admission after local Git proof",
+    ({ known, readSeconds, proofSeconds, admitted }) => {
+      const f = fixture();
+      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+      f.save({
+        ...f.state(),
+        mainProofDelaySeconds: proofSeconds,
+        observations: [
+          { pr: unknownProjection },
+          {
+            main,
+            pr: known ? { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } : unknownProjection,
+            advanceSeconds: readSeconds,
+          },
+        ],
+      });
+
+      const result = f.run();
+      const state = f.state();
+
+      expect(state.mainProofDelayedAt, result.output).toBe(proofSeconds ? 2 : null);
+      expect(state.settlementSleeps[0]).toBe(2);
+      expect(state.settlementSleeps.reduce((total, delay) => total + delay, 0)).toBe(
+        known ? 2 : 60,
+      );
+      expect(result.status, result.output).toBe(admitted ? 0 : 1);
+      expect(state.mutations).toBe(admitted ? 1 : 0);
+      if (admitted) {
+        expect(state.graphqlMergePayloads[0]?.expectedHeadOid).toBe(f.head);
+        expect(f.record()).toMatchObject({ phase: "complete", head: f.head, main });
+      } else {
+        expect(result.output).toContain(
+          known ? "mergeability exceeded the 60s settle limit" : "mergeability remained UNKNOWN",
+        );
+        expect(f.captures()).toEqual([]);
+        expect(() => f.record()).toThrow();
+      }
     },
   );
 

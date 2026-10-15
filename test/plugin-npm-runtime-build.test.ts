@@ -70,6 +70,39 @@ function copyPluginBuildFixture(plugin: string) {
 }
 
 describe("plugin npm runtime build planning", () => {
+  it("loads the canonical Team Reports schema from the built package", async () => {
+    const fixtureRoot = tempDirs.make("openclaw-plugin-runtime-schema-");
+    const packageDir = path.join(fixtureRoot, "extensions", "team-reports");
+    const sourceDir = path.join(packageDir, "src");
+    mkdirSync(sourceDir, { recursive: true });
+    writeFileSync(path.join(fixtureRoot, "package.json"), JSON.stringify({ exports: {} }));
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/team-reports",
+        version: "1.0.0",
+        type: "module",
+        openclaw: { extensions: ["./index.ts"] },
+      }),
+    );
+    writeFileSync(
+      path.join(packageDir, "index.ts"),
+      'export { TEAM_REPORTS_POSTGRES_SCHEMA_SQL } from "./src/store-postgres-schema.js";',
+    );
+    for (const file of ["store-postgres-schema.ts", "team-reports-schema.postgres.sql"]) {
+      cpSync(path.join(repoRoot, "extensions/team-reports/src", file), path.join(sourceDir, file));
+    }
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      await buildPluginNpmRuntime({ repoRoot: fixtureRoot, packageDir, logLevel: "silent" }),
+    );
+    const built = await import(
+      pathToFileURL(path.join(packageDir, plan.runtimeExtensions[0]!)).href
+    );
+    expect(built.TEAM_REPORTS_POSTGRES_SCHEMA_SQL).toBe(
+      readFileSync(path.join(sourceDir, "team-reports-schema.postgres.sql"), "utf8"),
+    );
+  });
+
   it("keeps newer compatibility bindings out of frozen source roots that predate their files or exports", async () => {
     const frozenRoot = tempDirs.make("openclaw-plugin-runtime-frozen-root-");
     const packageDir = path.join(frozenRoot, "extensions", "frozen-fixture");

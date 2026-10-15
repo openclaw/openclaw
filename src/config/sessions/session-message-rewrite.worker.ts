@@ -1,17 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
-import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
-import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
-import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import type {
   SessionTranscriptContextVersion,
@@ -74,8 +69,9 @@ import {
   readSessionColdTranscript,
 } from "./session-cold-storage-state.js";
 import {
-  createSessionWorkerOperationContext,
+  bindSessionWorkerBackend,
   transferSessionEntryWorkerCandidate,
+  type SessionWorkerDatabaseBinding,
 } from "./session-entry-patch.worker.js";
 import {
   compactManualTranscript,
@@ -149,29 +145,13 @@ export type SessionMessageRewriteOperations = {
 /** Borrow the canonical executor connection without extending the released command union. */
 export function bindSqliteWorkerBackend(
   input: { agentId: string },
-  bound: {
-    database: DatabaseSync;
-    databasePath: string;
-    admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
-  },
+  bound: SessionWorkerDatabaseBinding,
 ): SqliteWorkerBackend<SessionMessageRewriteOperations> {
-  const options = {
-    agentId: input.agentId,
-    path: bound.databasePath,
-    env: getSqliteWorkerStateContext().environment,
-  };
-  const database = getOpenClawAgentDatabaseIfOpen(options);
-  if (!database || database.db !== bound.database || database.path !== bound.databasePath) {
-    throw new Error("Transcript rewrite lost its canonical database owner");
-  }
-  const context = createSessionWorkerOperationContext(
-    database,
-    options,
+  return bindSessionWorkerBackend<SessionMessageRewriteOperations>(
+    input,
     bound,
     "Transcript rewrite",
-  );
-  return {
-    execute(command) {
+    (context, database) => (command) => {
       switch (command.type) {
         case "session.transcript.lock.cold":
           return { archive: readSessionColdTranscript(database.db, command.input.scope.sessionId) };
@@ -198,14 +178,7 @@ export function bindSqliteWorkerBackend(
       }
       throw new Error("Unknown transcript rewrite domain operation");
     },
-    assertSettled() {
-      assertTransactionUsable(bound.database);
-      if (bound.database.isTransaction) {
-        throw new Error("Transcript rewrite transaction did not settle");
-      }
-    },
-    close() {},
-  };
+  );
 }
 
 type LockedTranscriptTarget = {
@@ -531,11 +504,11 @@ export function prepareSessionMessageRewrite(
   );
 }
 
-function prepareMessageRewrite(
+function assertMessageRewriteAllowed(
   input: SessionMessageRewriteSelection,
   database: OpenClawAgentDatabase,
   facts: SessionActorRewriteFacts | undefined,
-): SessionMessageRewriteSnapshot | null {
+): void {
   const { scope, target, expectedEntry } = input;
   if (!facts) {
     assertSessionTranscriptHot(database.db, scope.sessionId);
@@ -554,25 +527,34 @@ function prepareMessageRewrite(
       throw new SessionTranscriptWriterClaimReboundError();
     }
   }
+  if (target.kind === "anchor" && target.active) {
+    const active = facts
+      ? facts.anchor
+      : readActiveTranscriptEntryAnchorInTransaction({
+          database,
+          resolved: scope,
+          entryId: target.anchor.entryId,
+        });
+    if (
+      target.active === "exact"
+        ? !isDeepStrictEqual(active, target.anchor)
+        : active?.rawSeq !== target.anchor.rawSeq
+    ) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+  }
+}
+
+function prepareMessageRewrite(
+  input: SessionMessageRewriteSelection,
+  database: OpenClawAgentDatabase,
+  facts: SessionActorRewriteFacts | undefined,
+): SessionMessageRewriteSnapshot | null {
+  assertMessageRewriteAllowed(input, database, facts);
+  const { scope, target } = input;
   let seq: number;
   if (target.kind === "anchor") {
     seq = target.anchor.rawSeq;
-    if (target.active) {
-      const active = facts
-        ? facts.anchor
-        : readActiveTranscriptEntryAnchorInTransaction({
-            database,
-            resolved: scope,
-            entryId: target.anchor.entryId,
-          });
-      if (
-        target.active === "exact"
-          ? !isDeepStrictEqual(active, target.anchor)
-          : active?.rawSeq !== seq
-      ) {
-        throw new SessionTranscriptWriterClaimReboundError();
-      }
-    }
   } else {
     const found = findTranscriptEventInDatabase(
       database,
@@ -645,29 +627,31 @@ export function applySessionMessageRewrite<T>(
         input.scope,
         input.target.kind === "anchor" ? input.target.anchor.entryId : undefined,
       );
-      const current = prepareMessageRewrite(input, database, facts);
-      if (
-        !current ||
-        current.seq !== input.expected.seq ||
-        current.eventJson !== input.expected.eventJson
-      ) {
-        throw new SessionTranscriptWriterClaimReboundError();
-      }
+      assertMessageRewriteAllowed(input, database, facts);
+      // Changed bytes are checked by the CAS; a no-op can acknowledge its prepared selection.
+      const current = input.expected;
       const changed = input.message !== undefined;
       let generation: string | undefined;
       if (changed) {
-        generation = rewriteSqliteTranscriptEventRowsInTransaction(
-          database,
-          input.scope,
-          [
-            {
-              event: { ...current.event, message: input.message },
-              expectedEventJson: current.eventJson,
-              seq: current.seq,
-            },
-          ],
-          { projectionCurrent: facts !== undefined },
-        );
+        try {
+          generation = rewriteSqliteTranscriptEventRowsInTransaction(
+            database,
+            input.scope,
+            [
+              {
+                event: { ...current.event, message: input.message },
+                expectedEventJson: current.eventJson,
+                seq: current.seq,
+              },
+            ],
+            { projectionCurrent: facts !== undefined },
+          );
+        } catch (error) {
+          if (error instanceof SqliteTranscriptMutationConflictError) {
+            throw new SessionTranscriptWriterClaimReboundError();
+          }
+          throw error;
+        }
       }
       generation ??= facts
         ? facts.generation

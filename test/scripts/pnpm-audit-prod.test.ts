@@ -292,7 +292,11 @@ snapshots:
       vi.mocked(delay).mockClear();
       const events: (string | number)[] = [];
       const logs: string[] = [];
+      const signals: AbortSignal[] = [];
       const fetchImpl = vi.fn(async (_url, init) => {
+        if (init?.signal) {
+          signals.push(init.signal);
+        }
         const outcome = sequence[events.filter((event) => event !== "wait").length];
         if (outcome === undefined) {
           throw new Error("Unexpected extra advisory attempt");
@@ -331,6 +335,10 @@ snapshots:
         );
         expect(logs.join("")).toMatch(/attempt 1\/4.*503|attempt 1\/4.*timeout/u);
         expect(logs.join("")).toContain("attempt 4/4 succeeded");
+        expect(signals).toHaveLength(4);
+        expect(new Set(signals).size).toBe(4);
+        expect(signals[1]?.aborted).toBe(true);
+        expect(signals[3]?.aborted).toBe(false);
         for (const [index, [ms]] of vi.mocked(delay).mock.calls.entries()) {
           expect(ms).toBeGreaterThanOrEqual(1000 * 2 ** index);
           expect(ms).toBeLessThanOrEqual(2000 * 2 ** index);
@@ -364,39 +372,6 @@ snapshots:
     }
   });
 
-  it("retries a timed-out bulk advisory request with a fresh request lifecycle", async () => {
-    const signals: AbortSignal[] = [];
-    const fetchImpl = vi.fn(((_url, init) => {
-      const signal = init?.signal;
-      if (signal) {
-        signals.push(signal);
-      }
-      if (signals.length === 2) {
-        return Promise.resolve(new Response("{}", { status: 200 }));
-      }
-      return new Promise((_resolve, reject) => {
-        signal?.addEventListener(
-          "abort",
-          () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
-          { once: true },
-        );
-      });
-    }) as typeof fetch);
-
-    await expect(
-      fetchBulkAdvisories({
-        payload: { axios: ["1.0.0"] },
-        timeoutMs: 5,
-        fetchImpl,
-      }),
-    ).resolves.toEqual({});
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(signals).toHaveLength(2);
-    expect(signals[0]).not.toBe(signals[1]);
-    expect(signals[0]?.aborted).toBe(true);
-    expect(signals[1]?.aborted).toBe(false);
-  });
-
   it.each([
     {
       caseName: "empty bodies",
@@ -416,36 +391,6 @@ snapshots:
     ).rejects.toThrow(expectedError);
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
-
-  it.each([{ status: 403, attempts: 1 }])(
-    "cancels stalled HTTP $status bodies without retrying client failures",
-    async ({ status, attempts }) => {
-      let cancellations = 0;
-      const fetchImpl = vi.fn(
-        async () =>
-          new Response(
-            new ReadableStream({
-              pull() {
-                return new Promise(() => {});
-              },
-              cancel() {
-                cancellations += 1;
-              },
-            }),
-            { status },
-          ),
-      );
-      await expect(
-        fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, timeoutMs: 5, fetchImpl }),
-      ).rejects.toThrow(
-        status === 403
-          ? /Bulk advisory request failed \(403/u
-          : /Bulk advisory request exceeded timeout/u,
-      );
-      expect(fetchImpl).toHaveBeenCalledTimes(attempts);
-      expect(cancellations).toBe(attempts);
-    },
-  );
 
   it("bounds successful bulk advisory response bodies", async () => {
     let cancelled = false;
@@ -582,8 +527,10 @@ snapshots:
     },
     {
       name: "HTTP 403 with a stalled error body",
-      response: () =>
-        new Response(new ReadableStream({ pull: () => new Promise(() => {}) }), { status: 403 }),
+      response: (onCancel: () => void) =>
+        new Response(new ReadableStream({ pull: () => new Promise(() => {}), cancel: onCancel }), {
+          status: 403,
+        }),
       exit: null,
     },
     {
@@ -616,7 +563,7 @@ snapshots:
     { name: "invalid JSON", response: () => new Response("{"), exit: null },
   ])(
     "preserves whole-graph audit failure outcomes: $name",
-    async ({ response, exit, attempts = 1 }) => {
+    async ({ name, response, exit, attempts = 1 }) => {
       const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-audit-partial-"));
       const packages = Array.from({ length: 401 }, (_, index) => `pkg-${index}`);
       await writeFile(
@@ -635,6 +582,7 @@ snapshots:
       const stderr: string[] = [];
       const summaryPath = path.join(tempDir, "summary.md");
       let requests = 0;
+      let cancellations = 0;
       vi.stubEnv("OPENCLAW_PNPM_AUDIT_BULK_TIMEOUT_MS", "10");
       vi.stubEnv("GITHUB_STEP_SUMMARY", summaryPath);
       try {
@@ -646,7 +594,9 @@ snapshots:
               throw new Error("Expected a JSON request body");
             }
             expect(Object.keys(JSON.parse(init.body))).toHaveLength(401);
-            return response();
+            return response(() => {
+              cancellations += 1;
+            });
           },
           stdout: {
             write: (chunk: string) => {
@@ -662,13 +612,20 @@ snapshots:
           },
         });
         if (exit === null) {
-          await expect(audit).rejects.toThrow();
+          await expect(audit).rejects.toThrow(
+            name === "HTTP 403 with a stalled error body"
+              ? /Bulk advisory request failed \(403/u
+              : undefined,
+          );
         } else {
           await expect(audit).resolves.toBe(exit);
           expect(stderr.join("")).toContain("incomplete");
         }
         expect(stdout).toEqual([]);
         expect(requests).toBe(attempts);
+        if (name === "HTTP 403 with a stalled error body") {
+          expect(cancellations).toBe(1);
+        }
         const summary = await readFile(summaryPath, "utf8");
         expect(summary).toContain(`Outcome: **${exit === null ? "error" : "unavailable"}**`);
         expect(summary).toContain("Packages: 401");

@@ -57,8 +57,8 @@ function projection(
 }
 async function openSkills(page: Page) {
   const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-  const menu = pane.locator("wa-dropdown.agent-chat__capability-menu");
-  if (!(await menu.evaluate((node) => (node as HTMLElement & { open: boolean }).open))) {
+  const menu = pane.locator(".agent-chat__capability-menu");
+  if (!(await menu.evaluate((node) => node.hasAttribute("open")))) {
     await pane.getByRole("button", { name: "Add attachment", exact: true }).click();
   }
   if ((await menu.getAttribute("data-view"))?.startsWith("library:")) {
@@ -127,15 +127,15 @@ suite.define(() => {
       let menu = await openSkills(page);
       expect((await gateway.waitForRequest("skills.library.list")).params).toEqual({ sessionKey });
       const aliceItem = menu.locator(
-        `wa-dropdown-item[value="library-selected:${alice.entry.skillId}"]`,
+        `.oc-menu-item[data-value="library-selected:${alice.entry.skillId}"]`,
       );
       await aliceItem.waitFor();
       expect(await aliceItem.textContent()).toContain("release-notes · Alice");
       await menu
         .getByRole("menuitem", { name: "Attach release-notes · Bob", exact: false })
         .waitFor();
-      const attachables = menu.locator('wa-dropdown-item[value^="library-attach:"]');
-      const menuPanel = menu.locator('[part="menu"]');
+      const attachables = menu.locator('.oc-menu-item[data-value^="library-attach:"]');
+      const menuPanel = menu.locator(".oc-menu");
       // Visible content can still share the dropdown's opening scale animation.
       await waitForControlUiProofSurface(menuPanel, [aliceItem, attachables.first()]);
       const rows = await attachables.evaluateAll((items) =>
@@ -165,7 +165,7 @@ suite.define(() => {
           .getAttribute("title"),
       ).toBe(bobEntry.description);
       const listWidth = await menuPanel.evaluate((node) => node.getBoundingClientRect().width);
-      // Native navigation keeps Web Awesome's active item aligned with browser focus.
+      // Native menu navigation keeps the active item aligned with browser focus.
       await page.keyboard.press("Home");
       await page.keyboard.press("ArrowDown");
       await expect.poll(() => aliceItem.evaluate((node) => node.matches(":focus"))).toBe(true);
@@ -199,7 +199,7 @@ suite.define(() => {
       expect(actionBounds.width).toBeCloseTo(listWidth, 0);
       expect(actionBounds.left).toBeGreaterThanOrEqual(0);
       expect(actionBounds.right).toBeLessThanOrEqual(375);
-      const actions = menu.locator('wa-dropdown-item[value^="library-"]');
+      const actions = menu.locator('.oc-menu-item[data-value^="library-"]');
       expect(await actions.allTextContents()).toEqual([
         "Read selected revision",
         "Refresh revision",
@@ -238,14 +238,14 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: "Add MCP server…", exact: true }).waitFor();
       expect(await menu.getByText("Selected for this session", { exact: true }).count()).toBe(0);
       expect(await menu.getByText("Add from your libraries", { exact: true }).count()).toBe(0);
-      expect(await menu.locator('wa-dropdown-item[value^="library-"]').count()).toBe(0);
+      expect(await menu.locator('.oc-menu-item[data-value^="library-"]').count()).toBe(0);
       await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
       menu = await openSkills(page);
       await gateway.setMethodResponse("skills.library.list", projection([]));
       const metadataBeforeActivation = (await gateway.getRequests("chat.metadata")).length;
       await gateway.deferNext("chat.metadata");
       await menu
-        .locator(`wa-dropdown-item[value="library-selected:${alice.entry.skillId}"]`)
+        .locator(`.oc-menu-item[data-value="library-selected:${alice.entry.skillId}"]`)
         .click();
       await menu.getByRole("menuitem", { name: "Detach", exact: true }).click();
       expect((await gateway.waitForRequest("skills.library.activate")).params).toEqual({
@@ -292,7 +292,7 @@ suite.define(() => {
         revision: bob.entry.revision,
       });
       const bobItem = menu.locator(
-        `wa-dropdown-item[value="library-selected:${bob.entry.skillId}"]`,
+        `.oc-menu-item[data-value="library-selected:${bob.entry.skillId}"]`,
       );
       await bobItem.waitFor();
       const newer = { ...bob, entry: { ...bob.entry, revision: "2".repeat(64) } };

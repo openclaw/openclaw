@@ -39,7 +39,6 @@ import {
   updatePairedDeviceMetadata,
   updatePairedDevicePresence,
 } from "./device-pairing.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
@@ -504,7 +503,7 @@ test("retains pairing admission through final publication preparation and synchr
   expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
 });
 
-test.each(["worker commit", "sibling owner commit"] as const)(
+test.each(["worker commit", "native owner commit"] as const)(
   "does not restore revoked node authority from a read delayed past a newer %s",
   async (commit) => {
     await listDevicePairing(baseDir);
@@ -555,12 +554,11 @@ test.each(["worker commit", "sibling owner commit"] as const)(
             releaseMutation.resolve();
             await mutation;
           } else {
-            const other = openNodeSqliteDatabase(database.path);
-            try {
-              other.prepare("DELETE FROM device_pairing_paired WHERE device_id = ?").run("node");
-            } finally {
-              other.close();
-            }
+            persistDevicePairingStoreState(
+              { pendingById: {}, pairedByDeviceId: {} },
+              baseDir,
+              "paired",
+            );
             expect(await getPairedDevice("node", baseDir)).toBeNull();
           }
           expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();

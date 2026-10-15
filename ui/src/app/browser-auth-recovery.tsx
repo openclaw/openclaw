@@ -114,7 +114,7 @@ export function startBrowserAuthRecovery(
                       ? t("connection.browserSignIn.stillRequired")
                       : null}
               </p>
-              <div class="exec-approval-actions">
+              <openclaw-modal-actions class="exec-approval-actions">
                 <button class="btn primary" onClick={() => void signIn()}>
                   {t("connection.browserSignIn.action")}
                 </button>
@@ -126,7 +126,7 @@ export function startBrowserAuthRecovery(
                 <button class="btn" onClick={dismiss}>
                   {t("connection.browserSignIn.dismiss")}
                 </button>
-              </div>
+              </openclaw-modal-actions>
             </div>
           </openclaw-modal-dialog>
         );

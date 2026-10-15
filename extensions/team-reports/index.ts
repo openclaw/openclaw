@@ -57,6 +57,7 @@ export default definePluginEntry({
           );
         }
         const nextStore = await createTeamReportsStore({
+          config: ctx.config,
           stateDir: ctx.stateDir,
           workerModuleUrl: new URL(
             `./src/store.worker${path.extname(api.runtimeSource)}`,

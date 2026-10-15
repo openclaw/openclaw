@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
 import {
   OpenClawAgentDatabaseReadOnlyScope,
@@ -60,6 +61,8 @@ it.each([false, true])(
           __openclaw: { steerTargetRunId: "steered-run" },
         },
         { role: "assistant", content: "Visible answer", __openclaw: { runId: "steered-run" } },
+        { role: "user", content: "Ordinary question", idempotencyKey: "visible-run:user" },
+        { role: "assistant", content: "Ordinary answer", __openclaw: { runId: "visible-run" } },
         ...Array.from({ length: 2_000 }, (_, index) => ({
           role: "user",
           content: `Unrelated later input ${index}`,
@@ -87,6 +90,16 @@ it.each([false, true])(
             summary: "Retained worker report",
           });
         }
+      }
+      for (let index = 0; index < 16; index++) {
+        events.push({
+          type: "custom_message",
+          id: `later-marker-${index}`,
+          parentId: index === 0 ? `message-${messages.length - 1}` : `later-marker-${index - 1}`,
+          customType: "display-report",
+          display: true,
+          content: "Unrelated later marker",
+        });
       }
       await replaceTranscriptEvents(scope, events);
       await waitForSessionTranscriptProjection(scope);
@@ -130,6 +143,16 @@ it.each([false, true])(
           expect(resolver.isSubagentRunMessage("steered-run", 4 + boundaryOffset)).toBe(true);
           expect(hiddenSteerInspections).toBe(inspectedHiddenSteer);
           expect(laterInputInspections).toBe(0);
+          const reads = trackSqliteStatementExecutions(opened.value.db, ["selected"], (sql) =>
+            /^select\b/i.test(sql.trimStart()) ? "selected" : null,
+          );
+          try {
+            expect(resolver.isSubagentRunMessage("visible-run", 10 + boundaryOffset)).toBe(false);
+            // An ordinary input needs only its own facts, regardless of later display markers.
+            expect(reads.rowCounts.selected).toBeLessThanOrEqual(8);
+          } finally {
+            reads.restore();
+          }
         });
       } finally {
         retained.close();

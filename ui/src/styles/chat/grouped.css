@@ -356,10 +356,20 @@
   pointer-events: var(--chat-message-action-pointer-events, none);
 }
 
+/* Rest at the sibling footer actions' revealed opacity so the row reads as one
+   color; the trigger itself owns the accent hover color. */
 .chat-group:hover .chat-reaction-action,
 .chat-group:focus-within .chat-reaction-action {
-  opacity: 1;
+  opacity: 0.6;
   pointer-events: auto;
+}
+
+.chat-group .chat-reaction-action:hover {
+  opacity: 1;
+}
+
+.chat-group .chat-reaction-action:has(.trigger[aria-expanded="true"]) {
+  opacity: 1;
 }
 
 /* Keep long configurable sender names compact while footer actions retain

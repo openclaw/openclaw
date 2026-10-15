@@ -8,7 +8,11 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
-import { normalizeDiagnosticWorkerScript } from "./worker-diagnostic-script.js";
+import {
+  MAX_DIAGNOSTIC_WORKER_SLOTS,
+  normalizeDiagnosticWorkerScript,
+} from "./worker-diagnostic-script.js";
+import type { WorkerGcStorm } from "./worker-memory.js";
 import {
   recordWorkerMessage,
   observeWorkerMessage,
@@ -32,6 +36,7 @@ type WorkerSource = {
   internalMessages?: true;
   lifecycleMessages?: boolean;
   poolId?: number;
+  workerSlot?: number;
   started?: boolean;
   retirementReason?: WorkerRetirementReason;
   cpuUsage: () => Promise<NodeJS.CpuUsage | undefined>;
@@ -56,7 +61,7 @@ function workerScriptName(filename: string | URL, evalSource = false): string {
     return "other";
   }
   const name = basename(filename instanceof URL ? fileURLToPath(filename) : filename).replace(
-    /\.[cm]?ts$/u,
+    /\.[cm]?[jt]s$/u,
     ".js",
   );
   return normalizeDiagnosticWorkerScript(name);
@@ -69,7 +74,9 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
   process.on("worker", trackWorker);
   return {
     // SAFETY: The optional callback starts unset and only receives the typed observer below.
-    gcObserver: undefined as ((samples: GcSample[], thread: string) => void) | undefined,
+    gcObserver: undefined as
+      | ((samples: GcSample[], thread: string, workerSlot?: number) => void)
+      | undefined,
     revision: 0,
     nextPoolId: 0,
     poolIds: new WeakMap<object, number>(),
@@ -98,6 +105,16 @@ export function trackNativeWorkerForCpu(
   trackWorker(worker);
   const source = trackedWorkers.workers.get(worker)!;
   source.script = workerScriptName(filename, evalSource);
+  if (source.script === "code-mode-node.worker.js" && source.workerSlot === undefined) {
+    // Reuse slots only after native exit; overflow keeps the script-level attribution.
+    const occupied = new Set([...trackedWorkers.workers.values()].map((entry) => entry.workerSlot));
+    for (let slot = 1; slot <= MAX_DIAGNOSTIC_WORKER_SLOTS; slot++) {
+      if (!occupied.has(slot)) {
+        source.workerSlot = slot;
+        break;
+      }
+    }
+  }
   // Heartbeat verification shares SQLite's id/ok reply shape; its owner identifies the protocol.
   source.lifecycleMessages =
     source.script === "openclaw-state-lease-heartbeat.worker.js" ||
@@ -236,6 +253,12 @@ function trackWorker(worker: WorkerCpuHandle): void {
     // oxlint-disable-next-line typescript/unbound-method -- call preserves custom own/subclass methods and the receiver.
     const emit = !nativePrototype || Object.hasOwn(worker, "emit") ? worker.emit : undefined;
     worker.emit = function (this: Worker, event: string | symbol, ...args: unknown[]) {
+      if (event === "error" && source.script === "code-mode-node.worker.js") {
+        // Capture native failure before the pool's generic failure/close cleanup runs.
+        const error = args[0];
+        source.retirementReason ??=
+          isRecord(error) && error.code === "ERR_CODE_MODE_GC_THRASH" ? "gc-thrash" : "crash";
+      }
       if (event === "message") {
         if (source.lifecycleMessages) {
           recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]));
@@ -319,7 +342,7 @@ async function refreshWorkerHeap(worker: WorkerCpuHandle, source: WorkerSource):
 
 /** Heartbeat demand also applies to workers attaching after observer activation. */
 export function setTrackedWorkerGcObserver(
-  observer: ((samples: GcSample[], thread: string) => void) | undefined,
+  observer: ((samples: GcSample[], thread: string, workerSlot?: number) => void) | undefined,
 ): void {
   const wasEnabled = Boolean(trackedWorkers.gcObserver);
   trackedWorkers.gcObserver = observer;
@@ -353,30 +376,78 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     source.memoryUnavailable = true;
     port.close();
   };
-  port.on("message", (record: WorkerMemorySample | { gc: GcSample[] }) => {
-    // Known numeric payload bytes; object envelopes and GC kind labels are excluded.
-    recordWorkerMessage(
-      "memory",
-      "from_worker",
-      ("heapUsed" in record ? 32 + (record.heapSizeLimitBytes === undefined ? 0 : 8) : 0) +
-        (record.gc?.length ?? 0) * 8,
-    );
-    // This private port is handed off by our isolate telemetry owner, not task input.
-    if (record.gc) {
-      trackedWorkers.gcObserver?.(record.gc, source.script);
-    }
-    if (!("heapUsed" in record)) {
-      return;
-    }
-    // The private producer supplies native counters; retain the cloned sample as-is.
-    delete record.gc;
-    source.heap = {
-      value: record,
-      sampledAt: performance.now(),
-    };
-    source.memoryPending = false;
-    source.memoryUnavailable = false;
-  });
+  port.on(
+    "message",
+    (record: WorkerMemorySample | { gc: GcSample[] } | { gcStorm: WorkerGcStorm }) => {
+      if ("gcStorm" in record) {
+        recordWorkerMessage("memory", "from_worker");
+        // Capture registry-owned identity before a native exit can free this slot.
+        const workerThreadId = worker.threadId;
+        const workerSlot = source.workerSlot;
+        void import("../logging/subsystem.js").then(async ({ createSubsystemLogger }) => {
+          const { profiles, ...storm } = record.gcStorm;
+          const metadata = {
+            ...storm,
+            workerThreadId,
+            workerSlot,
+          };
+          const log = createSubsystemLogger("agents/code-mode");
+          if (profiles) {
+            try {
+              const { writeWorkerGcProfiles } =
+                await import("../logging/diagnostic-worker-gc-profile.js");
+              const profileFiles = await writeWorkerGcProfiles(profiles);
+              log.warn("Code Mode worker GC storm", { ...metadata, profileFiles });
+            } catch {
+              log.warn("Code Mode worker GC storm", {
+                ...metadata,
+                captureStatus: "unavailable",
+                captureReason: "profile-write-failed",
+              });
+            }
+          } else {
+            log.warn("Code Mode worker GC storm", metadata);
+          }
+          if (storm.captureStatus === "requested") {
+            // Workers cannot query process-wide tracing. Admit here before enabling their profiler.
+            const { getEnabledCategories } = await import("node:trace_events");
+            if (getEnabledCategories()) {
+              log.warn("Code Mode worker GC storm", {
+                ...metadata,
+                captureStatus: "unavailable",
+                captureReason: "tracing-active",
+              });
+            } else if (source.memoryPort === port) {
+              port.postMessage({ captureGcProfile: storm });
+            }
+          }
+        });
+        return;
+      }
+      // Known numeric payload bytes; object envelopes and GC kind labels are excluded.
+      recordWorkerMessage(
+        "memory",
+        "from_worker",
+        ("heapUsed" in record ? 32 + (record.heapSizeLimitBytes === undefined ? 0 : 8) : 0) +
+          (record.gc?.length ?? 0) * 8,
+      );
+      // This private port is handed off by our isolate telemetry owner, not task input.
+      if (record.gc) {
+        trackedWorkers.gcObserver?.(record.gc, source.script, source.workerSlot);
+      }
+      if (!("heapUsed" in record)) {
+        return;
+      }
+      // The private producer supplies native counters; retain the cloned sample as-is.
+      delete record.gc;
+      source.heap = {
+        value: record,
+        sampledAt: performance.now(),
+      };
+      source.memoryPending = false;
+      source.memoryUnavailable = false;
+    },
+  );
   port.once("close", close);
   port.once("messageerror", close);
   port.unref();
@@ -431,6 +502,7 @@ export function sampleTrackedWorkerMemory() {
       memory.workerHeaps.push({
         script: source.script,
         threadId: worker.threadId,
+        workerSlot: source.workerSlot,
         ...source.heap.value,
         sampleAgeMs: Math.round(sampleAgeMs),
       });

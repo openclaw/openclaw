@@ -86,7 +86,7 @@ describe("nvidia provider catalog", () => {
     mockInventoryAndFeatured({
       ids: [
         "nvidia/nemotron-3-ultra-550b-a55b",
-        "nvidia/nemotron-3-super-120b-a12b",
+        "nvidia/nemotron-3.5-super-vl-120b-a12b",
         "nvidia/nemotron-3.5-lightning-30b-a3b",
         "nvidia/unclassified-new-model",
         "nvidia/nemotron-4-340b-reward",
@@ -99,9 +99,9 @@ describe("nvidia provider catalog", () => {
           "max-output": 8192,
         },
         {
-          model: "nemotron-3-super-120b-a12b",
-          "model-name": "Nemotron 3 Super",
-          context: 1000000,
+          model: "nemotron-3.5-super-vl-120b-a12b",
+          "model-name": "Nemotron 3.5 Super VL",
+          context: 1048576,
           "max-output": 8192,
         },
       ],
@@ -110,10 +110,11 @@ describe("nvidia provider catalog", () => {
     const provider = await buildLiveNvidiaProvider();
 
     expect(provider.models.map((model) => model.id)).toEqual([
-      "nvidia/nemotron-3-super-120b-a12b",
+      "nvidia/nemotron-3.5-super-vl-120b-a12b",
       "nvidia/nemotron-3-ultra-550b-a55b",
       "nvidia/nemotron-3.5-lightning-30b-a3b",
     ]);
+    expect(provider.models[0]?.input).toEqual(["text", "image", "video"]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
       auditContext: "nvidia-featured-model-catalog",
       init: { headers: expect.any(Headers) },
@@ -158,8 +159,9 @@ describe("nvidia provider catalog", () => {
       },
     });
     expect(provider.models[2]).toMatchObject({
-      id: "nvidia/nemotron-3-super-120b-a12b",
-      contextWindow: 1_000_000,
+      id: "nvidia/nemotron-3.5-super-vl-120b-a12b",
+      input: ["text", "image", "video"],
+      contextWindow: 1_048_576,
     });
     expect(provider.models.find((model) => model.id === "moonshotai/kimi-k2.6")).toMatchObject({
       input: ["text", "image"],

@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
 import {
   isPairedDeviceTokenIdentityCurrent,
   resolveAuthenticatedDeviceTokenIdentity,
+  resolveNodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "./device-pairing-store-readonly.js";
@@ -27,9 +29,9 @@ import {
   listDevicePairingReadOnly,
   requestDevicePairing,
   updatePairedDeviceMetadata,
+  updatePairedDevicePresence,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
@@ -203,21 +205,15 @@ test("rolls back owner approval when live policy is revoked before worker commit
   );
 });
 
-test("refreshes cached reads after a sibling owner replaces pairing authority", async () => {
+test("refreshes cached reads after a native owner replaces pairing authority", async () => {
   await expect(getPairedDevice("paired-rich", baseDir)).resolves.toMatchObject({
     publicKey: "synthetic-original-key",
   });
   await listDevicePairing(baseDir);
-  const other = openNodeSqliteDatabase(database.path);
-  try {
-    other
-      .prepare(
-        "UPDATE device_pairing_paired SET public_key = ?, display_name = ? WHERE device_id = ?",
-      )
-      .run("synthetic-sibling-key", "Sibling fixture", "paired-rich");
-  } finally {
-    other.close();
-  }
+  const state = readDevicePairingStoreStateFromDatabase(database.db);
+  state.pairedByDeviceId["paired-rich"]!.publicKey = "synthetic-sibling-key";
+  state.pairedByDeviceId["paired-rich"]!.displayName = "Sibling fixture";
+  persistDevicePairingStoreState(state, baseDir, "paired");
   const native = readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId[
     "paired-rich"
   ];
@@ -307,18 +303,13 @@ test("reconnect receipts ignore pending rows and leave sibling pairing changes t
   await listDevicePairing(baseDir);
   const previousBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
   expect(previousBinding).not.toBeNull();
-  const other = openNodeSqliteDatabase(database.path);
-  try {
-    other
-      .prepare("UPDATE device_pairing_paired SET public_key = ? WHERE device_id = ?")
-      .run("synthetic-sibling-key", "paired-rich");
-    // A receipt must not decode unrelated pending requests.
-    other
-      .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
-      .run("synthetic-unreadable-json", "refreshed");
-  } finally {
-    other.close();
-  }
+  const state = readDevicePairingStoreStateFromDatabase(database.db);
+  state.pairedByDeviceId["paired-rich"]!.publicKey = "synthetic-sibling-key";
+  persistDevicePairingStoreState(state, baseDir, "paired");
+  // A receipt must not decode unrelated pending requests.
+  database.db
+    .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
+    .run("synthetic-unreadable-json", "refreshed");
   try {
     await expect(
       updatePairedDeviceMetadata("paired-minimal", { displayName: "Reconnected" }, baseDir),
@@ -346,6 +337,51 @@ test("reconnect receipts ignore pending rows and leave sibling pairing changes t
   }
   expect((await getPendingDevicePairing("refreshed", baseDir))?.roles).toEqual([]);
 });
+
+test.each(["metadata", "presence"] as const)(
+  "publishes a device's %s update without loading unrelated paired rows",
+  async (kind) => {
+    await listDevicePairing(baseDir);
+    const originalBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
+    const device = await getPairedDevice("paired-rich", baseDir);
+    const generation = resolveNodePairingGeneration(device);
+    expect(originalBinding).not.toBeNull();
+    if (!generation) {
+      throw new Error("expected fixture node generation");
+    }
+    const unavailable = vi
+      .spyOn(stateReads, "executeExistingOpenClawStateRead")
+      .mockRejectedValueOnce(new Error("synthetic unavailable pairing read"));
+    try {
+      await expect(getPairedDevice("paired-rich", baseDir)).rejects.toThrow(
+        "synthetic unavailable pairing read",
+      );
+    } finally {
+      unavailable.mockRestore();
+    }
+    expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
+      "Device pairing authority requires a current worker publication",
+    );
+    database.db
+      .prepare("UPDATE device_pairing_paired SET tokens_json = ? WHERE device_id = ?")
+      .run("synthetic-unreadable-json", "paired-minimal");
+    try {
+      const patch = { lastSeenAtMs: 1234, lastSeenReason: "connect" };
+      await expect(
+        kind === "metadata"
+          ? updatePairedDeviceMetadata(" paired-rich ", patch, baseDir)
+          : updatePairedDevicePresence(" paired-rich ", patch, generation, baseDir),
+      ).resolves.toBe(true);
+      expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(originalBinding);
+      expect(await getPairedDevice("paired-rich", baseDir)).toMatchObject(patch);
+      expect(getPublishedPairedDeviceBinding("paired-minimal", baseDir)).toBeNull();
+    } finally {
+      database.db
+        .prepare("UPDATE device_pairing_paired SET tokens_json = NULL WHERE device_id = ?")
+        .run("paired-minimal");
+    }
+  },
+);
 
 test.each(["reply lost", "policy revoked", "callback throws"] as const)(
   "retires narrowed bootstrap grants only after native settlement (%s)",

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
@@ -416,7 +416,8 @@ module.exports = { id: "source-fixture", register(api) {
                   }
 
                   setRuntimeConfigSnapshot(candidate, structuredClone(source));
-                  expect(loadOpenClawPlugins({ ...options, config: candidate }) === registry).toBe(
+                  expect(getRuntimeConfigSnapshot()).toBe(runtime);
+                  expect(loadOpenClawPlugins({ ...options, config: runtime }) === registry).toBe(
                     true,
                   );
                 }

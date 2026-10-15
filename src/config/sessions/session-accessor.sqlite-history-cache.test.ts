@@ -2,6 +2,7 @@ import { renameSync } from "node:fs";
 import { backup } from "node:sqlite";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { disposeNodeSqliteDependents } from "../../infra/kysely-sync-cache-state.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -112,6 +113,40 @@ describe("SQLite transcript history cache", () => {
       }).events.map(historyEventId, readSessionTranscriptHistoryEventCount),
     ).toEqual(["appended"]);
   });
+
+  it.each(["close", "replace"] as const)(
+    "retires only the disposed database's recent payloads on %s",
+    async (reason) => {
+      const other = { ...fixtureScope, agentId: "other", sessionKey: "agent:other:history" };
+      const marker = "dispose-history-payload";
+      for (const scope of [fixtureScope, other]) {
+        await replaceTranscriptEvents(scope, [
+          {
+            type: "message",
+            id: "root",
+            parentId: null,
+            message: { role: "user", content: marker },
+          },
+        ]);
+        readRecentSessionTranscriptHistoryEvents(scope, limits);
+      }
+      const database = openOpenClawAgentDatabase({
+        agentId: fixtureScope.agentId,
+        env: fixtureScope.env,
+      });
+      // The database closer retires its dependents before native close; replacement uses it too.
+      disposeNodeSqliteDependents(database.db, reason);
+      const parse = vi.spyOn(JSON, "parse");
+      const payloadReads = () => parse.mock.calls.filter(([json]) => json.includes(marker));
+      expect(readRecentSessionTranscriptHistoryEvents(other, limits).events).toHaveLength(1);
+      expect(payloadReads()).toHaveLength(0);
+      expect(read().events).toHaveLength(1);
+      expect(payloadReads()).toHaveLength(1);
+      parse.mockClear();
+      expect(read().events).toHaveLength(1);
+      expect(payloadReads()).toHaveLength(0);
+    },
+  );
 
   it.each(["rollback", "savepoint rollback"] as const)(
     "retains only committed recent windows after a nested writer %s",

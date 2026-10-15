@@ -468,7 +468,7 @@ function PaletteActions(props: { readProps: () => CommandPaletteProps }) {
   );
 }
 
-function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
+export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
   const current = () => props.readProps();
   const hideSearch = () =>
     current().promptMode || current().mentionMenu.open || current().draft.mentions.length > 0;
@@ -593,13 +593,5 @@ function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
       </openclaw-modal-dialog>
       <PaletteSessionAuxiliary draft={current().draft} revision={current()} />
     </>
-  );
-}
-
-export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
-  return (
-    <Show when={props.readProps().open}>
-      <OpenPalette readProps={props.readProps} />
-    </Show>
   );
 }

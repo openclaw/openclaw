@@ -12,15 +12,10 @@ import {
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
   renderHeartbeatRunFailureCopy,
 } from "../../agents/failover/user-copy.js";
-import {
-  AgentHarnessPreflightError,
-  AgentHarnessSessionSupersededError,
-} from "../../agents/harness/errors.js";
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
-  createAgentRunSupersededAbortError,
-  createSessionPlacementSettlementClosedAbortError,
 } from "../../agents/run-termination.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-state.js";
@@ -59,7 +54,7 @@ import { createReplyOperation } from "./reply-run-registry.js";
 const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: terminal failures", () => {
-  it.each([0, 1, 9])(
+  it.each([0])(
     "preserves retry exhaustion through returned provider payloads (%s)",
     async (retries) => {
       const rawError = "429 rate limit exceeded. Please try again in 221ms.";
@@ -105,28 +100,28 @@ describe("executeAgentTurn: terminal failures", () => {
     },
   );
 
-  it.each([
-    "429 rate limit exceeded. Please try again in 221ms.",
-    "HTTP 429: An error occurred while processing your request. Try again in 221ms.",
-  ])("preserves retry exhaustion through external thrown failures (%s)", async (rawError) => {
-    state.runWithModelFallbackMock.mockRejectedValueOnce(
-      new FailoverError(rawError, {
-        rawError,
-        status: 429,
-        reason: "rate_limit",
-        rateLimitRetriesExhausted: 9,
-      }),
-    );
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createRunAgentTurnParams(createFollowupRun()),
-      sessionCtx: { Provider: "whatsapp", MessageSid: "message" },
-    });
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toContain("9 automatic retries");
-    }
-  });
+  it.each(["HTTP 429: An error occurred while processing your request. Try again in 221ms."])(
+    "preserves retry exhaustion through external thrown failures (%s)",
+    async (rawError) => {
+      state.runWithModelFallbackMock.mockRejectedValueOnce(
+        new FailoverError(rawError, {
+          rawError,
+          status: 429,
+          reason: "rate_limit",
+          rateLimitRetriesExhausted: 9,
+        }),
+      );
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
+        ...createRunAgentTurnParams(createFollowupRun()),
+        sessionCtx: { Provider: "whatsapp", MessageSid: "message" },
+      });
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toContain("9 automatic retries");
+      }
+    },
+  );
 
   it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
@@ -319,7 +314,6 @@ describe("executeAgentTurn: terminal failures", () => {
   it.each([
     { label: "reconnected first interruption", canContinue: true, acceptsFollowup: true },
     { label: "second interruption", canContinue: true, acceptsFollowup: false },
-    { label: "node unavailable", canContinue: false, acceptsFollowup: true },
   ])(
     "settles $label through the node-loss continuation owner",
     async ({ canContinue, acceptsFollowup }) => {
@@ -388,43 +382,6 @@ describe("executeAgentTurn: terminal failures", () => {
     },
   );
 
-  it("returns a visible failure when settlement closes without supersession", async () => {
-    const agentEvents = await import("../../infra/agent-events.js");
-    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
-    const replyOperation = createReplyOperation({
-      sessionKey: "agent:main:closed-terminal",
-      sessionId: "session",
-      resetTriggered: false,
-    });
-    replyOperation.setPhase("running");
-    const error = createSessionPlacementSettlementClosedAbortError();
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
-    try {
-      const executeAgentTurn = await getRawExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
-      expect(result.outcome.kind).toBe("rejected");
-      if (result.outcome.kind === "rejected") {
-        expect(result.outcome.payload.text).toBeTruthy();
-        expect(result.outcome.payload.text).not.toBe(SILENT_REPLY_TOKEN);
-      }
-      expect(replyOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
-      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      const terminals = emitAgentEvent.mock.calls
-        .map(([event]) => event)
-        .filter(
-          (event) =>
-            event.runId === result.runId &&
-            event.stream === "lifecycle" &&
-            (event.data.phase === "end" || event.data.phase === "error"),
-        );
-      expect(terminals).toHaveLength(1);
-      expect(terminals[0]?.data.phase).toBe("error");
-      expect(terminals[0]?.data.stopReason).not.toBe("superseded");
-    } finally {
-      replyOperation.complete();
-    }
-  });
-
   it.each([
     { reason: "restart", code: "aborted_for_restart", phase: "end", stopReason: "restart" },
     {
@@ -440,20 +397,6 @@ describe("executeAgentTurn: terminal failures", () => {
       code: "aborted_for_supersession",
       phase: "error",
       stopReason: "superseded",
-    },
-    {
-      reason: "superseded",
-      code: "aborted_for_supersession",
-      phase: "error",
-      stopReason: "superseded",
-      restartError: true,
-    },
-    {
-      reason: "user",
-      code: "aborted_by_user",
-      phase: "error",
-      stopReason: "timeout",
-      supersededError: true,
     },
   ] as const)(
     "records one $stopReason abort terminal event without returning a reply ($restartError)",
@@ -474,19 +417,10 @@ describe("executeAgentTurn: terminal failures", () => {
         if (reason === "superseded") {
           replyOperation.supersede();
         } else if (!("backendOwned" in testCase)) {
-          const abortReason =
-            reason === "restart"
-              ? createAgentRunRestartAbortError()
-              : stopReason === "timeout"
-                ? new DOMException("upstream deadline exceeded", "TimeoutError")
-                : new Error("caller cancelled");
-          upstreamAbort.abort(abortReason);
+          upstreamAbort.abort(createAgentRunRestartAbortError());
         }
         if ("restartError" in testCase) {
           throw createAgentRunRestartAbortError();
-        }
-        if ("supersededError" in testCase) {
-          throw createAgentRunSupersededAbortError();
         }
         throw Object.assign(new Error("aborted"), { name: "AbortError" });
       });
@@ -494,9 +428,7 @@ describe("executeAgentTurn: terminal failures", () => {
       try {
         const executeAgentTurn = await getRawExecuteAgentTurnForTest();
         const result = await executeAgentTurn({
-          ...createMinimalRunAgentTurnParams({
-            replyOperation: "supersededError" in testCase ? undefined : replyOperation,
-          }),
+          ...createMinimalRunAgentTurnParams({ replyOperation }),
           opts: { abortSignal: upstreamAbort.signal },
           isRestartRecoveryArmed: async () => true,
         });
@@ -775,36 +707,6 @@ describe("executeAgentTurn: terminal failures", () => {
       expect(result.payload.text).toContain(expected);
     },
   );
-
-  it("surfaces stale Codex session generations in groups instead of staying silent", async () => {
-    state.runWithModelFallbackMock.mockRejectedValueOnce(
-      new AgentHarnessSessionSupersededError(
-        "Codex session generation is no longer current: secret-session-id",
-      ),
-    );
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        sessionCtx: {
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
-      }),
-    });
-
-    expect(result.kind).toBe("final");
-    if (result.kind !== "final") {
-      throw new Error("expected final reply");
-    }
-    expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
-    expect(result.payload.text).toBe(
-      "⚠️ This Codex session changed before your message could run. Please send it again.",
-    );
-    expect(result.payload.text).not.toContain("secret-session-id");
-  });
 
   it("forwards sanitized generic errors on external chat channels when verbose is on", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(

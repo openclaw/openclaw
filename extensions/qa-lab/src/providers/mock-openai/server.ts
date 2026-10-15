@@ -328,9 +328,13 @@ const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
 // Complete ordinary retries inside their diagnostic request allowance, then
 // leave the fifth request active so recovery can honor both the cumulative
-// no-progress bound and the current request's own allowance.
+// no-progress bound and the current request's own allowance. The stalled
+// request starts its response, then stays live with SSE keepalives, which reset
+// the client's idle watchdog but not its progress deadline, so it outlives that
+// allowance.
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
 const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
+const QA_REPEATED_REQUEST_STALLED_KEEPALIVE_MS = 5_000;
 const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
 // Stalled-turn recovery mirrors the repeated-request e2e timings: short failing
 // retries, then one held request the QA-tuned stuck detector must abort.
@@ -983,7 +987,11 @@ async function buildResponsesPayload(
       ].join("\n"),
     );
   }
-  if (terminalWorkerCase === "visible" || terminalWorkerCase === "restart") {
+  if (
+    terminalWorkerCase === "visible" ||
+    terminalWorkerCase === "restart" ||
+    terminalWorkerCase === "race"
+  ) {
     return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS[terminalWorkerCase]);
   }
   if (terminalCompletionCase && terminalTurn?.kind === "kickoff") {
@@ -2222,12 +2230,12 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       // Stall one request; later failures let the normal retry budget settle the turn.
       ...(repeatedRequestRecovery &&
       scenarioState.repeatedRequestRecoveryAttempts <= QA_REPEATED_REQUEST_STALL_ATTEMPT
-        ? {
-            responsePauseMs:
-              scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
-                ? repeatedRequestStalledResponsePauseMs
-                : repeatedRequestResponsePauseMs,
-          }
+        ? scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
+          ? {
+              responsePauseMs: repeatedRequestStalledResponsePauseMs,
+              responseKeepaliveMs: QA_REPEATED_REQUEST_STALLED_KEEPALIVE_MS,
+            }
+          : { responsePauseMs: repeatedRequestResponsePauseMs }
         : {}),
       ...(stalledTurnAttempt
         ? {
@@ -2236,6 +2244,11 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
                 ? QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS
                 : QA_STALLED_TURN_RESPONSE_PAUSE_MS,
           }
+        : {}),
+      // Hold the silent requester completion so a queued follow-up turn is
+      // admitted behind it before direct fallback mirrors the child result.
+      ...(subagentTurn?.kind === "completion" && subagentTurn.caseName === "race"
+        ? { responsePauseMs: 5_000 }
         : {}),
     };
   };

@@ -21,6 +21,7 @@ import {
 import { runWithSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import { withSqliteDatabaseAdmissionExchange } from "../infra/sqlite-database-admission.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
+import { trackWorkerRequest } from "../infra/worker-request-diagnostics.js";
 import * as logging from "../logging/logger.js";
 import {
   runOpenClawAgentWorkerWrite,
@@ -248,7 +249,7 @@ function fixture() {
 }
 
 it.each(["ok", "error"] as const)(
-  "reports the slow direct holder, not its long-waiting fast follower (%s)",
+  "reports both the slow direct holder and its long-waiting fast follower (%s)",
   async (outcome) => {
     const { options, clock, warnings } = fixture();
     const entered = createDeferred();
@@ -324,6 +325,17 @@ it.each(["ok", "error"] as const)(
           },
           "slow agent database reservation",
         ],
+        [
+          expect.objectContaining({
+            operation: "direct",
+            outcome: "ok",
+            queueWaitMs: 1_500,
+            writerExecutionMs: 25,
+            blockingOperation: "direct",
+            blockingCaller: "session-manager.write",
+          }),
+          "slow agent database reservation",
+        ],
       ]);
       expect(JSON.stringify(warnings)).not.toContain("synthetic-private");
       expect(JSON.stringify(warnings)).not.toContain(options.path);
@@ -341,6 +353,85 @@ it.each(["ok", "error"] as const)(
   },
 );
 
+it.each([959, 960, 5_000])(
+  "warns only when queue wait (%i ms) plus execution reaches 1 second",
+  async (queueWaitMs) => {
+    const { options, clock, warnings } = fixture();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const holder = runOpenClawAgentWriteAdmission(options, () => {
+      entered.resolve();
+      return release.promise;
+    });
+    await entered.promise;
+    const follower = runOpenClawAgentWriteAdmission(options, () => {
+      clock.now += 40;
+    });
+    try {
+      clock.now = queueWaitMs;
+      release.resolve();
+      await Promise.all([holder, follower]);
+      if (queueWaitMs < 960) {
+        expect(warnings).toEqual([]);
+        expect(logging.getChildLogger).not.toHaveBeenCalled();
+      } else {
+        expect(warnings).toHaveLength(queueWaitMs >= 1_000 ? 2 : 1);
+        expect(warnings.at(-1)).toEqual([
+          expect.objectContaining({
+            queueWaitMs,
+            writerExecutionMs: 40,
+            blockingOperation: "direct",
+          }),
+          "slow agent database reservation",
+        ]);
+      }
+      warnings.length = 0;
+      await runOpenClawAgentWriteAdmission(options, () => {
+        clock.now += 40;
+      });
+      expect(warnings).toEqual([]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([holder, follower]);
+    }
+  },
+);
+
+it("attributes a reentrant Worker reservation without letting foreground callbacks borrow it", async () => {
+  const { options, clock, warnings } = fixture();
+  const order: string[] = [];
+  let follower: Promise<void> | undefined;
+  await runOpenClawAgentWriteAdmission(options, async () => {
+    await runOpenClawAgentWorkerWrite(options, async () => {
+      follower = runOpenClawAgentWriteAdmission(
+        options,
+        () => {
+          order.push("follower");
+        },
+        true,
+      );
+      const request = trackWorkerRequest("sqlite_writer", "session.entry.patch.commit");
+      request.started();
+      clock.now = 1_000;
+      request.completed();
+      await Promise.resolve();
+      order.push("worker settled");
+    });
+    order.push("holder settled");
+  });
+  await follower;
+  expect(order).toEqual(["worker settled", "holder settled", "follower"]);
+  expect(warnings.at(-1)).toEqual([
+    expect.objectContaining({
+      queueWaitMs: 1_000,
+      writerExecutionMs: 0,
+      blockingOperation: "worker",
+      blockingWorkerOperations: ["session.entry.patch.commit"],
+    }),
+    "slow agent database reservation",
+  ]);
+});
+
 it("keeps an aborted worker reservation until settlement and reports it once", async () => {
   const { options, clock, warnings } = fixture();
   const release = createDeferred();
@@ -354,6 +445,9 @@ it("keeps an aborted worker reservation until settlement and reports it once", a
       order.push("holder");
       entered.resolve();
       await release.promise;
+      const request = trackWorkerRequest("sqlite_writer", "session.entry.patch.commit");
+      request.started();
+      request.completed();
       controller.signal.throwIfAborted();
     },
     undefined,
@@ -379,6 +473,17 @@ it("keeps an aborted worker reservation until settlement and reports it once", a
           outcome: "error",
           writerExecutionMs: 1_000,
           reentrant: false,
+        }),
+        "slow agent database reservation",
+      ],
+      [
+        expect.objectContaining({
+          operation: "worker",
+          outcome: "ok",
+          queueWaitMs: 1_000,
+          writerExecutionMs: 0,
+          blockingOperation: "worker",
+          blockingWorkerOperations: ["session.entry.patch.commit"],
         }),
         "slow agent database reservation",
       ],

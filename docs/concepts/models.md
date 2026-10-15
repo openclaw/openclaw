@@ -39,6 +39,14 @@ OpenAI API-key and ChatGPT/Codex subscription credentials remain distinct. See
 [Agent runtimes](/concepts/agent-runtimes) and
 [GitHub Copilot agent runtime](/plugins/copilot).
 
+Creating a session with a native runtime acquires that runtime's current model
+and account observation when needed, including when the runtime comes from model
+policy. You do not need to open the model picker first. Cached observations are
+reused only while their runtime owner and account remain current. Native reads
+share session creation's catalog deadline and stop waiting if the caller disconnects
+or loses authority; an unfinished catalog returns a retryable error without creating
+the session.
+
 ## Selection order
 
 <Steps>
@@ -66,6 +74,16 @@ Related model-config surfaces:
 - Per-agent `agents.entries.*.model` (plus bindings) overrides `agents.defaults.model` — see [Multi-agent routing](/concepts/multi-agent).
 
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
+
+Title generation requests thinking off where supported. Custom OpenAI-compatible
+endpoints with an inferred Z.AI (`zai`) thinking format keep the provider's default
+unless an explicit thinking format, supported off effort, or reasoning-effort mapping
+declares the contract.
+This avoids rejected requests on always-thinking GLM models. Other thinking formats
+retain their existing off controls; explicit compatibility settings remain authoritative.
+Failed title attempts log a warning naming the provider/model and suggesting that
+you check its configuration or choose another `utilityModel`, at most once per
+provider/model per minute. The warning excludes source text and raw provider errors.
 
 Utility tasks request thinking off so their bounded output budgets go to the
 title, observer digest, or summary rather than hidden reasoning. This also
@@ -137,8 +155,9 @@ to 30 minutes while it keeps failing. A selected native model can load its own
 metadata while that acquisition is still running.
 
 In chat apps, `/models` and model picker buttons reuse the newest completed provider
-list. First use of an idle native agent can take a few seconds to start its harness
-and discover models. Pending providers show `checking models…`.
+list. Gateway model pickers return prepared rows immediately while an idle native
+agent starts its harness and discovers models in the background. Pending providers
+show `checking models…`.
 Open the menu again to see newly discovered models; completing discovery does not
 edit a list that was already sent. If optional native discovery fails, ordinary
 catalog requests keep the published rows and report `refreshFailed`; selecting a

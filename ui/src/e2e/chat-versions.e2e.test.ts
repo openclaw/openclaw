@@ -78,18 +78,22 @@ suite.define(() => {
         const trigger = pane.getByRole("button", { name: "Versions", exact: true });
         await trigger.press("Enter");
         const menu = pane.locator(".chat-pane__branches-menu");
-        const menuSurface = menu.locator('[part="menu"]');
+        const menuSurface = menu.locator(".oc-menu");
         const info = menu.getByRole("button", { name: "About versions" });
         const help = page.getByRole("dialog", { name: "About versions" });
-        const helpSurface = menu.locator('wa-popover [part="body"]');
+        const helpSurface = menu.locator(".chat-pane__versions-help");
         await expect
           .poll(() => info.evaluate((element) => element === document.activeElement))
           .toBe(true);
         expect(await help.isVisible()).toBe(false);
-        await waitForControlUiProofSurface(menuSurface, [info]);
+        const current = menu.locator('.chat-pane__branch-item[data-active="true"]');
+        await waitForControlUiProofSurface(menuSurface, [
+          info,
+          current.locator(".chat-pane__branch-copy"),
+          current.locator(".chat-pane__branch-active svg"),
+        ]);
         const infoIconBox = await info.locator("svg").boundingBox();
         expect(infoIconBox).not.toBeNull();
-        const current = menu.locator('.chat-pane__branch-item[data-active="true"]');
         expect(await current.locator(".chat-pane__branch-headline").textContent()).toBe(
           "A simpler way to stay organized",
         );
@@ -118,7 +122,9 @@ suite.define(() => {
 
         await info.press("Enter");
         await help.waitFor();
-        expect((await menu.locator("wa-popover").textContent())?.trim()).toBe(helpText);
+        expect((await menu.locator(".chat-pane__versions-help").textContent())?.trim()).toBe(
+          helpText,
+        );
         const helpFrame = await takeControlUiScreenshotFrame(page, help, [help], {
           animations: "disabled",
         });

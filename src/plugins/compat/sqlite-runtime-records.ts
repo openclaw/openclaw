@@ -33,7 +33,7 @@ export const SQLITE_RUNTIME_COMPAT_RECORDS = [
     ],
     tests: [
       "src/plugin-sdk/sqlite-runtime.legacy-compat.test.ts",
-      "src/plugin-sdk/sqlite-runtime.preparation-compat.test.ts",
+      "test/type-contracts/sqlite-runtime.preparation-compat.ts",
       "src/state/openclaw-agent-worker-store.test.ts",
     ],
     releaseNote:

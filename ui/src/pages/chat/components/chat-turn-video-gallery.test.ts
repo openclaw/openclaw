@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
-import { nothing, render } from "lit";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { buildCachedChatItems, resetChatThreadState } from "../chat-thread.ts";
 import * as turnBoundary from "../chat-turn-boundary.ts";
-import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
+import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import {
   createAssistantMessage,
   createAttachmentBlock,
@@ -16,7 +16,7 @@ import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 
 const container = document.createElement("div");
 afterEach(() => {
-  render(nothing, container);
+  cleanupSolid();
   container.remove();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -160,24 +160,22 @@ it("keeps duplicate video slots and each sibling message's source authority, but
   ];
   let opened: ImageLightboxItem | undefined;
   document.body.append(container);
+  const harness = createMessageGroupHarness(container);
   const rerender = () =>
-    render(
-      renderMessageGroup(
-        createMessageGroup(message, "assistant", { messages: [{ key: "first", message }] }),
-        {
-          showReasoning: false,
-          showToolCalls: false,
-          assistantName: "OpenClaw",
-          assistantAvatar: null,
-          sessionKey: "agent:main:video-gallery",
-          onRequestUpdate: rerender,
-          getTurnVideoMessages: () => turn,
-          onOpenImage: (item) => {
-            opened = item;
-          },
+    harness.render(
+      createMessageGroup(message, "assistant", { messages: [{ key: "first", message }] }),
+      {
+        showReasoning: false,
+        showToolCalls: false,
+        assistantName: "OpenClaw",
+        assistantAvatar: null,
+        sessionKey: "agent:main:video-gallery",
+        onRequestUpdate: rerender,
+        getTurnVideoMessages: () => turn,
+        onOpenImage: (item) => {
+          opened = item;
         },
-      ),
-      container,
+      },
     );
   onTestFinished(() => releaseChatMediaResourceSubscriber(rerender));
   rerender();

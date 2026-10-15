@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html } from "lit";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { t } from "../../../i18n/index.ts";
@@ -18,7 +18,7 @@ export function renderChatDetailSlot(params: {
   content: SidebarContent;
   host: ChatPageHost;
   requestUpdate: () => void;
-}): TemplateResult {
+}) {
   const { content, host } = params;
   if (content.kind === "tool-output") {
     return html`<openclaw-chat-tool-output

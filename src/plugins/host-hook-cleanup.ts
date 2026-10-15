@@ -211,7 +211,7 @@ export async function runPluginHostCleanup(params: {
   if (!shouldCleanup()) {
     return { cleanupCount: 0, failures };
   }
-  return withPluginRunContextCleanup(params, async (clearRunContext) => {
+  const result = await withPluginRunContextCleanup(params, async (clearRunContext) => {
     const registry = params.registry;
     const cleanupRegistry = registry ?? getActivePluginRegistry();
     const sessionEntrySlotKeys = collectSessionEntrySlotKeys(cleanupRegistry, params.pluginId);
@@ -292,6 +292,15 @@ export async function runPluginHostCleanup(params: {
     }
     return { cleanupCount, failures };
   });
+  if (params.reason === "reset" || params.reason === "delete") {
+    for (const { pluginId, hookId, error } of result.failures) {
+      log.warn(
+        `Plugin host cleanup failed during session ${params.reason}; check the reported cleanup error and retry.`,
+        { pluginId, hookId, error: String(error) },
+      );
+    }
+  }
+  return result;
 }
 
 function collectHostHookPluginIds(registry: PluginRegistry): string[] {

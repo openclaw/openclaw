@@ -115,19 +115,11 @@ function assertCronStoreChangesCurrent(
   }
 }
 
-/** Applies prepared changes inside the caller's synchronous write transaction. */
-export function saveCronStoreChangesInDatabase(
-  db: EngineConnection,
-  storeKey: string,
-  resolvedStorePath: string,
-  prepared: PreparedCronStoreChanges,
-  opts?: CronStoreChangesOptions,
-  hooks?: CronAdmittedStoreTransactionHooks,
-): CronStoreFile {
-  const { previousById, nextById, changedIds } = prepared;
+/** Load once inside the write transaction and share with mutation planning. */
+export function loadCronStoreForChanges(db: EngineConnection, storeKey: string) {
   const rows = loadCronRows(db, storeKey);
-  const rowsById = new Map(rows.map((row) => [row.job_id, row] as const));
-  const currentJobs = loadedCronStoreFromRows(rows).store.jobs;
+  const store = loadedCronStoreFromRows(rows).store;
+  const currentJobs = store.jobs;
   const authority = loadCronRuntimeAuthorities({ db, storeKey, jobs: currentJobs });
   if (authority.repairJobIds.length > 0) {
     repairCronRuntimeAuthorityRows({
@@ -137,7 +129,23 @@ export function saveCronStoreChangesInDatabase(
       jobIds: authority.repairJobIds,
     });
   }
-  const currentById = new Map(currentJobs.map((job) => [job.id, job] as const));
+  return { rows, store };
+}
+
+/** Applies prepared changes inside the caller's synchronous write transaction. */
+export function saveCronStoreChangesInDatabase(
+  db: EngineConnection,
+  storeKey: string,
+  resolvedStorePath: string,
+  prepared: PreparedCronStoreChanges,
+  inventory: ReturnType<typeof loadCronStoreForChanges>,
+  opts?: CronStoreChangesOptions,
+  hooks?: CronAdmittedStoreTransactionHooks,
+): CronStoreFile {
+  const { previousById, nextById, changedIds } = prepared;
+  const { rows, store } = inventory;
+  const rowsById = new Map(rows.map((row) => [row.job_id, row] as const));
+  const currentById = new Map(store.jobs.map((job) => [job.id, job] as const));
   hooks?.hooks.beforeWrite?.(db, hooks.receiptSchema);
   assertCronStoreChangesCurrent(prepared, currentById, resolvedStorePath, opts);
   let nextSortOrder = rows.reduce((max, row) => Math.max(max, row.sort_order), -1) + 1;

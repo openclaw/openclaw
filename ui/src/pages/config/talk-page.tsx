@@ -12,7 +12,6 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import type { VoiceWakeEditorState } from "./talk-device.tsx";
 import {
   isTalkGptLiveModel,
@@ -298,8 +297,6 @@ class TalkSettingsController {
   private catalogValue: TalkCatalogState = { kind: "unavailable" };
   private resetIntentValue: ModelDefaultResetIntent | null = null;
   private connection: CatalogConnection | null = null;
-  private catalogRequestId = 0;
-  private disposed = false;
   /** `undefined` = baseline not yet observed; `null` = no public revision token. */
   private lastCatalogConfigRevision: string | null | undefined;
   private readonly stopGateway: () => void;
@@ -361,7 +358,6 @@ class TalkSettingsController {
   };
 
   dispose() {
-    this.disposed = true;
     window.removeEventListener("focus", this.refreshOnFocus);
     this.stopGateway();
     this.stopConfig();
@@ -394,38 +390,26 @@ class TalkSettingsController {
   }
 
   private async loadCatalog(client: GatewayClient, connection: CatalogConnection) {
-    // Initial load, config-hash refresh, and focus refresh can overlap on the
-    // same connection; only the newest request may write the catalog, or a
-    // slow older response would overwrite a fresher one.
-    const requestId = ++this.catalogRequestId;
     try {
       const result = await client.request<TalkCatalogResult>("talk.catalog", {});
-      const applied = this.applyCatalog(connection, requestId, {
+      if (this.connection !== connection) {
+        return;
+      }
+      // Same-connection catalog refreshes are best effort; focus/config changes refresh again.
+      this.catalog = {
         kind: "ready",
         ready: result.realtime.ready === true,
         activeProvider: result.realtime.activeProvider ?? null,
         providers: result.realtime.providers,
-      });
-      if (applied) {
-        this.acknowledgeModelDefaultReset(connection);
-      }
+      };
+      this.acknowledgeModelDefaultReset(connection);
     } catch {
       // The catalog only powers the pickers; the page still renders the raw
       // configured values when it cannot be read.
-      this.applyCatalog(connection, requestId, { kind: "unavailable" });
+      if (this.connection === connection) {
+        this.catalog = { kind: "unavailable" };
+      }
     }
-  }
-
-  private applyCatalog(
-    connection: CatalogConnection,
-    requestId: number,
-    catalog: TalkCatalogState,
-  ): boolean {
-    if (this.disposed || this.connection !== connection || this.catalogRequestId !== requestId) {
-      return false;
-    }
-    this.catalog = catalog;
-    return true;
   }
 
   private acknowledgeModelDefaultReset(connection: CatalogConnection) {
@@ -606,7 +590,7 @@ class TalkSettingsController {
   }
 }
 
-function TalkSettingsContent(props: TalkSettingsPageProps) {
+export function TalkSettingsPage(props: TalkSettingsPageProps) {
   const context = useApplication();
   const controller = new TalkSettingsController(context, props);
   const catalog = projectSource(controller, {
@@ -632,41 +616,31 @@ function TalkSettingsContent(props: TalkSettingsPageProps) {
     controller.dispose();
   });
   return (
-    <Talk
-      nativeDeviceSettings={context.nativeDeviceSettings}
-      nativeDeviceSnapshot={device?.read()}
-      voiceWake={{
-        get state() {
-          return voiceWakeState.read();
-        },
-        onInput: (text) => voiceWake.edit(text),
-        onRetry: () => voiceWake.retry(),
-      }}
-      selection={resolveTalkRealtimeSelection(props.configObject ?? {})}
-      catalog={catalog.read().catalog}
-      modelDefaultPending={catalog.read().modelDefaultPending}
-      configBusy={
-        props.mutationDisabled ||
-        runtime.read().state.configLoading ||
-        runtime.read().state.configSaving ||
-        runtime.read().state.configApplying
-      }
-      onProviderChange={(providerId) => controller.changeProvider(providerId)}
-      onModelChange={(model) => controller.changeModel(model)}
-      onVoiceChange={(voice) => controller.changeVoice(voice)}
-      editor={props.buildEditor?.()}
-    />
+    <openclaw-talk-settings>
+      <Talk
+        nativeDeviceSettings={context.nativeDeviceSettings}
+        nativeDeviceSnapshot={device?.read()}
+        voiceWake={{
+          get state() {
+            return voiceWakeState.read();
+          },
+          onInput: (text) => voiceWake.edit(text),
+          onRetry: () => voiceWake.retry(),
+        }}
+        selection={resolveTalkRealtimeSelection(props.configObject ?? {})}
+        catalog={catalog.read().catalog}
+        modelDefaultPending={catalog.read().modelDefaultPending}
+        configBusy={
+          props.mutationDisabled ||
+          runtime.read().state.configLoading ||
+          runtime.read().state.configSaving ||
+          runtime.read().state.configApplying
+        }
+        onProviderChange={(providerId) => controller.changeProvider(providerId)}
+        onModelChange={(model) => controller.changeModel(model)}
+        onVoiceChange={(voice) => controller.changeVoice(voice)}
+        editor={props.buildEditor?.()}
+      />
+    </openclaw-talk-settings>
   );
 }
-
-export const TalkSettingsPage = defineSolidBridge<TalkSettingsPageProps>(
-  "openclaw-talk-settings",
-  (props) => <TalkSettingsContent {...props} />,
-  {
-    properties: {
-      configObject: { default: {}, attribute: false },
-      mutationDisabled: { default: false, type: Boolean },
-      buildEditor: { default: () => null, attribute: false },
-    },
-  },
-);

@@ -1,32 +1,41 @@
 import type { JSX } from "@solidjs/web";
-import { icons } from "../../../components/icons.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
+import type { MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
 
-export function menuDivider(): JSX.Element {
-  return <div class="agent-chat__capability-menu-divider" role="separator"></div>;
+export function menuDivider(id: string): MenuEntry {
+  return {
+    kind: "content",
+    id,
+    content: <div class="agent-chat__capability-menu-divider" role="separator" />,
+  };
 }
 
-export function renderCapabilityMenuState(message: string, role?: "status" | "alert") {
-  return (
-    <div class="agent-chat__capability-menu-state" role={role}>
-      {message}
-    </div>
-  );
+export function renderCapabilityMenuState(
+  id: string,
+  message: JSX.Element,
+  role?: "status" | "alert",
+): MenuEntry {
+  return {
+    kind: "content",
+    id,
+    content: (
+      <div class="agent-chat__capability-menu-state" role={role}>
+        {message}
+      </div>
+    ),
+  };
 }
 
-export function renderBackRow() {
-  return (
-    <>
-      <wa-dropdown-item class="agent-chat__capability-menu-item" value="back">
-        <span slot="icon" aria-hidden="true">
-          <LitContent value={icons.arrowLeft} />
-        </span>
-        <span>{t("chat.composer.menu.back")}</span>
-      </wa-dropdown-item>
-      {menuDivider()}
-    </>
-  );
+export function renderBackRow(): MenuItem {
+  return {
+    id: "back",
+    label: t("chat.composer.menu.back"),
+    class: "agent-chat__capability-menu-item",
+    icon: <Icon name="arrowLeft" />,
+    closeOnSelect: false,
+  };
 }
 
 export function renderCapabilityToggleRow(options: {
@@ -36,39 +45,40 @@ export function renderCapabilityToggleRow(options: {
   disabled: boolean;
   title?: string | null;
   icon?: unknown;
-  note?: JSX.Element | null;
+  note?: string | null;
+  sessionNote?: string;
   checkbox?: boolean;
-}) {
-  return (
-    <wa-dropdown-item
-      class="agent-chat__capability-menu-item agent-chat__capability-menu-toggle"
-      value={options.value}
-      type="checkbox"
-      prop:checked={options.checked}
-      disabled={options.disabled}
-      title={options.title ?? ""}
-    >
-      {options.icon ? (
-        <span slot="icon" aria-hidden="true">
-          <LitContent value={options.icon} />
-        </span>
-      ) : null}
+}): MenuItem {
+  return {
+    id: options.value,
+    label: [options.label, options.note, options.sessionNote].filter(Boolean).join(" "),
+    type: "checkbox",
+    checked: options.checked,
+    disabled: options.disabled,
+    class: `agent-chat__capability-menu-item agent-chat__capability-menu-toggle${options.checkbox ? "" : " agent-chat__capability-menu-toggle--switch"}`,
+    attributes: { title: options.title ?? "" },
+    icon: options.icon ? <LitContent value={options.icon} /> : undefined,
+    content: (
       <span class="agent-chat__capability-menu-label">
         <span>{options.label}</span>
-        {options.note ?? null}
+        {options.note ? (
+          <span class="agent-chat__capability-menu-note">
+            {options.note}
+            {options.sessionNote ? (
+              <span class="agent-chat__capability-menu-session-tag">{options.sessionNote}</span>
+            ) : null}
+          </span>
+        ) : null}
       </span>
-      {options.checkbox ? null : (
-        <wa-switch
-          slot="details"
-          class="agent-chat__capability-menu-switch"
-          size="s"
-          tabindex="-1"
-          inert
-          aria-hidden="true"
-          prop:checked={options.checked}
-          disabled={options.disabled}
-        ></wa-switch>
-      )}
-    </wa-dropdown-item>
-  );
+    ),
+    details: options.checkbox ? undefined : (
+      <span
+        class={`agent-chat__capability-menu-switch chat-controls__speed-toggle ${options.checked ? "chat-controls__speed-toggle--active" : ""}`}
+        aria-hidden="true"
+      >
+        <span class="chat-controls__speed-toggle-thumb" />
+      </span>
+    ),
+    closeOnSelect: false,
+  };
 }

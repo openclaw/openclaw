@@ -46,7 +46,7 @@ import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
-import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
+import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
 import {
   dismissConfirmedActionPopovers,
   isConfirmedActionPopoverFocused,
@@ -152,6 +152,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     persistCommentary?: boolean;
     runActive?: boolean;
     runWorking?: boolean;
+    runFinalizing?: boolean;
     startupLabel?: string;
     retryAt?: number;
     onRetryRun?: (runId: string) => void;

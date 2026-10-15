@@ -97,7 +97,7 @@ export async function prepareSystemdGatewayMaintenance(params: {
                       previous.contents.toString("utf8"),
                       definitionTransaction.preservePolicy,
                     ),
-                    previous.mode,
+                    previous.requiresRegeneration ? 0o600 : previous.mode,
                   );
                   await definitionTransaction.beforeWrite();
                   await assertNoSystemGatewayOwnership(state.env);

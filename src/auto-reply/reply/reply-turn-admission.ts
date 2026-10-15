@@ -112,7 +112,9 @@ function rejectLifecycleInvalidatedWork(params: {
   transientSessionChange?: boolean;
 }): never {
   if (params.kind === "queued_followup") {
-    const error = new QueuedFollowupLifecycleInvalidatedError(params.message);
+    const error = new QueuedFollowupLifecycleInvalidatedError(params.message, {
+      cause: params.error,
+    });
     if (params.restartRecoveryTombstone === true) {
       Object.assign(error, { code: SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE });
     }
@@ -653,7 +655,7 @@ export async function admitReplyTurn(
           return { status: "skipped", reason: "aborted" };
         }
         if (error instanceof QueuedFollowupLifecycleInvalidatedError) {
-          return { status: "skipped", reason: "lifecycle-invalidated" };
+          return { status: "skipped", reason: "lifecycle-invalidated", error: error.cause };
         }
         if (error instanceof ReplyOperationChangedDuringAdmissionError) {
           continue;

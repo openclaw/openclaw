@@ -47,6 +47,11 @@ agents still preparing and `stage` identifies the current acquisition phase.
 The Gateway remains running and completed agents remain usable. Background
 preparation clears the degraded status when all runtimes are ready.
 
+If a newer model-runtime refresh replaces preparation in progress, startup
+follows the admitted replacement through preparation and publication. Cancelling
+the retired acquisition does not stop the Gateway; genuine replacement failures
+still propagate.
+
 Transcript projection repair runs after readiness in yielding worker-backed work.
 An agent deferred by database inspection becomes usable after its session,
 credentials, and model preparation finish; rebuilding its transcript projections
@@ -112,6 +117,12 @@ probes: they still wait for initialization and retain their normal authenticatio
 
 A default or system agent database with pending startup inspection/preparation or a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending`. The HTTP listener, Control UI, and admitted agents remain available while readiness is false; pending optional agents do not hold readiness. Readiness does not wait for post-ready subagent recovery or transcript maintenance. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
 
+If a newer model-runtime publication supersedes deferred agent preparation, admission
+waits for that publication once, then retries preparation against current configuration
+and secrets. Recovery uses the existing four-attempt startup publication budget without
+reopening or migrating the database again. A failed publication or exhausted budget
+keeps the agent unavailable and records its reason and repair hint in readiness.
+
 A broken Telegram or other channel account can also make `/readyz` return `503` while `/startupz` remains started. Neither check replaces the other: startup completion alone does not certify agent or channel availability.
 
 Disabled, unconfigured, and ordinarily unlinked accounts do not fail channel readiness. An enabled, configured account with a recorded terminal disconnect, blocked lifecycle, or unavailable ingress still fails its health check even if it becomes unlinked. For example, a terminal WhatsApp logout makes `/readyz` return `503` with `failing: ["whatsapp"]` in detailed responses. Terminal disconnects and blocked accounts require operator action; the health monitor does not restart them.
@@ -156,10 +167,12 @@ export, native event-loop delay sampling runs at 20 ms resolution and the Gatewa
 publishes completed observations once per second. A healthy idle Gateway publishes
 every ten seconds and pauses the native histogram. Idle windows still track
 blocking callbacks and overdue sampling deadlines; `delayP99Ms` is zero while the
-histogram is paused. Work or an exporter becoming active restores full sampling
-at the next idle deadline, within ten seconds. Long blocking callbacks remain part
-of the observation even when they delay the publisher. No snapshot is available
-until the first window completes. Its
+histogram is paused. Work becoming active restores full sampling at the next idle
+deadline, within ten seconds. A newly interested exporter advances the pending
+sample to the current window's one-second boundary, or schedules it immediately
+if that boundary has already elapsed, without resetting the window. Long blocking
+callbacks remain part of the observation even when they delay the publisher.
+No snapshot is available until the first window completes. Its
 `cpuCoreRatio` measures user and system CPU time across the whole Gateway process,
 including worker and native threads, divided by elapsed wall time. The unit is
 core equivalents: `1` means one CPU core fully occupied over the interval, and

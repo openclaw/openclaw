@@ -1,4 +1,8 @@
 import type { CacheRetention, Context, Model } from "@openclaw/llm-core";
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+} from "@openclaw/normalization-core/cjk-chars";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
@@ -26,6 +30,7 @@ import {
 } from "../providers/openai-tool-projection.js";
 import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
 import { withPreparedToolSchemaNormalization } from "../providers/tool-schema-normalization-cache.js";
+import { normalizeToolSchema } from "../providers/tool-schema-normalization.js";
 import { shortHash } from "../utils/hash.js";
 import { resolveProviderEndpoint } from "./host-policy.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
@@ -59,11 +64,7 @@ import {
   sortTransportToolsByName,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-import {
-  CHARS_PER_TOKEN_ESTIMATE,
-  estimateStringChars,
-  supportsModelTools,
-} from "./transport-utils.js";
+import { supportsModelTools } from "./transport-utils.js";
 
 type OpenAIThinkingProvenanceOptions = OpenAICompletionsOptions & {
   openclawThinkingExplicit?: boolean;
@@ -203,12 +204,15 @@ function convertTools(
     return {
       projection,
       tools: sortTransportToolsByName(projection.tools).map((tool) => {
+        const parameters = compat.requiresTypedUnionBranches
+          ? normalizeToolSchema(tool.parameters, "moonshot")
+          : tool.parameters;
         return prepareOpenAIFunctionTool(
           tool.name,
           tool.description,
           mode === "direct"
-            ? tool.parameters
-            : normalizeOpenAIStrictToolParameters(tool.parameters, strict === true, model.compat),
+            ? parameters
+            : normalizeOpenAIStrictToolParameters(parameters, strict === true, model.compat),
           strict,
         ).completions;
       }),

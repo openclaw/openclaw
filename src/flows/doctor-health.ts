@@ -55,6 +55,8 @@ export async function runDoctorHealthFlow(
   const run = () =>
     withDeferredDebugProxyCapture(async (resumeCapture) => {
       let preparedPreflight = databasePreflight;
+      // Snapshot-time generations must survive Doctor's own pre-maintenance reads.
+      const preserveSourceArtifacts = writeAuthority?.databaseGenerations ? true : undefined;
       const preCaptureRehearsalRoot =
         !writeAuthority?.postCoreSchemaRepair && (options.repair === true || options.yes === true)
           ? resolveUpdateRehearsalRoot(process.env)
@@ -70,6 +72,7 @@ export async function runDoctorHealthFlow(
           runtime,
           json: options.json,
           statePublicationOnly: preCaptureRehearsalRoot !== undefined,
+          preserveSourceArtifacts,
         });
         if (!preCaptureRehearsalRoot) {
           preparedPreflight = guarded ?? preparedPreflight;
@@ -131,6 +134,9 @@ async function runDoctorHealthFlowWithResult(
     ReturnType<typeof import("../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
   let sqliteNoCowPaths: string[] = [];
+  const preflightOptions = {
+    preserveSourceArtifacts: writeAuthority?.databaseGenerations ? (true as const) : undefined,
+  };
   let sqliteReclamationAgents: readonly AgentDatabaseMigrationTarget[] | undefined;
   let exitCode: number | undefined;
   let healthContext: DoctorHealthFlowContext | undefined;
@@ -191,6 +197,7 @@ async function runDoctorHealthFlowWithResult(
       preparedArchiveDiscovery = await prepareDoctorMaintenanceArchives(
         databasePreflight,
         effectiveRuntime,
+        preflightOptions,
       );
     }
     const [{ beginDoctorMaintenance }, { createDoctorOriginalCaptureHook }] = await Promise.all([
@@ -250,7 +257,7 @@ async function runDoctorHealthFlowWithResult(
         databasePreflight && !refreshRecoveryInventory
           ? databasePreflight
           : await measureGatewayBootstrapStep("doctor.database-preflight", () =>
-              prepareDoctorDatabasePreflight(),
+              prepareDoctorDatabasePreflight(preflightOptions),
             );
       const { recordAgentDatabaseAdmissions } =
         await import("../state/agent-database-admission.js");
@@ -297,8 +304,8 @@ async function runDoctorHealthFlowWithResult(
         }
       }
       if (maintenance) {
-        const { backupDoctorMigrationDatabases } =
-          await import("../commands/doctor-migration-backup.js");
+        const { prepareDoctorDatabaseMigrations } =
+          await import("../commands/doctor-schema-migrations.js");
         const { createOpenClawAgentDatabasePathMatcher } =
           await import("../state/openclaw-agent-db.paths.js");
         const { normalizeAgentId } = await import("../routing/session-key.js");
@@ -318,7 +325,7 @@ async function runDoctorHealthFlowWithResult(
                   discovery.sourceIdentities.get(failure.path)?.realPath === realPath),
             ),
         );
-        const backups = await backupDoctorMigrationDatabases({
+        const backups = await prepareDoctorDatabaseMigrations({
           env: process.env,
           databasePaths: databaseTargets?.map((database) => database.path) ?? [],
           agentDatabaseTargets: databaseTargets,
@@ -328,6 +335,9 @@ async function runDoctorHealthFlowWithResult(
         });
         for (const message of [...backups.changes, ...backups.warnings]) {
           effectiveRuntime.log(message);
+        }
+        if (schemas.agentDatabaseMigrationDiscovery && backups.versionMigrations) {
+          schemas.agentDatabaseMigrationDiscovery.versionMigrations = backups.versionMigrations;
         }
       }
 

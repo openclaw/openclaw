@@ -711,6 +711,7 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
     sessions: {
       isPreparedWorkSession: (candidate: string) => candidate === key,
       pullRequestSummary: () => undefined,
+      isRunVisuallyActive: () => false,
     },
   } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];
   const navigation = buildSidebarSessionNavigationState({

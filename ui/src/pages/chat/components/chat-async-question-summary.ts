@@ -97,24 +97,25 @@ export function renderAsyncQuestionSummary(
       unparsedText
         ? html`<div class="chat-question-summary__prompt">${unparsedText}</div>`
         : questions.questions.map(
-            (question, index) => html`<div>
-              <strong>${question.title}</strong>
-              <div>
-                ${
-                  answers
-                    ? questionDraftValues(answers.get(String(index)), {}).join(", ")
-                    : t(
-                        reopening
-                          ? "chat.asyncQuestions.reopening"
-                          : dismissed
-                            ? "chat.asyncQuestions.dismissed"
-                            : archived
-                              ? "chat.asyncQuestions.archived"
-                              : "chat.asyncQuestions.inComposer",
-                      )
-                }
-              </div>
-            </div>`,
+            (question, index) =>
+              html`<div>
+                <strong>${question.title}</strong>
+                <div>
+                  ${
+                    answers
+                      ? questionDraftValues(answers.get(String(index)), {}).join(", ")
+                      : t(
+                          reopening
+                            ? "chat.asyncQuestions.reopening"
+                            : dismissed
+                              ? "chat.asyncQuestions.dismissed"
+                              : archived
+                                ? "chat.asyncQuestions.archived"
+                                : "chat.asyncQuestions.inComposer",
+                        )
+                  }
+                </div>
+              </div>`,
           )
     }
     ${

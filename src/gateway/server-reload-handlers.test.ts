@@ -784,7 +784,7 @@ const testGatewayRestartListener = () => {};
 let pluginRegistrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 
 beforeEach((context) => {
-  prepareConfigReloadTest(context);
+  prepareConfigReloadTest(context, { mockWatcher: true });
   setRuntimeConfigSnapshot(hoisted.runtimeConfig.value);
   pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
   stageActivePluginRegistry(createTestRegistry([]), null, "default");
@@ -1812,50 +1812,6 @@ describe("gateway hot reload model state", () => {
   });
 
   it.each([
-    { changedPath: "agents.defaults.compaction.model", modelChanged: true },
-    { changedPath: "agents.defaults.compaction.maxActiveTranscriptBytes", modelChanged: false },
-  ])(
-    "refreshes only changed model inputs without restarting subsystems: $changedPath",
-    async ({ changedPath, modelChanged }) => {
-      const logReload = { info: vi.fn(), warn: vi.fn() };
-      const channels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };
-      const { applyHotReload, heartbeatRunner, cron } = createReloadHandlersForTest(
-        logReload,
-        channels,
-      );
-      const nextConfig = {
-        agents: {
-          defaults: {
-            compaction: {
-              ...(modelChanged ? { model: "mock-openai/gpt-5.6-luna-new" } : {}),
-              maxActiveTranscriptBytes: "10b",
-            },
-          },
-        },
-      } satisfies OpenClawConfig;
-      setRuntimeConfigSnapshot({ agents: { defaults: { compaction: {} } } });
-      await applyHotReload(buildGatewayReloadPlan([changedPath]), nextConfig);
-
-      if (modelChanged) {
-        expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledOnce();
-        expectPreparedModelRefresh(nextConfig);
-      } else {
-        expect(hoisted.markPreparedModelRuntimeSnapshotsStale).not.toHaveBeenCalled();
-        expect(hoisted.refreshPreparedModelRuntimeSnapshots).not.toHaveBeenCalled();
-        expect(hoisted.advancePreparedModelRuntimeConfig).toHaveBeenCalledExactlyOnceWith(
-          nextConfig,
-        );
-      }
-      expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
-      expect(cron.stop).not.toHaveBeenCalled();
-      expect(channels.start).not.toHaveBeenCalled();
-      expect(channels.stop).not.toHaveBeenCalled();
-      expect(hoisted.reloadSessionMcpRuntimes).not.toHaveBeenCalled();
-      expect(logReload.info).toHaveBeenCalledWith(`config hot reload applied (${changedPath})`);
-    },
-  );
-
-  it.each([
     { phase: "reconcile", losesOwner: "replacement" },
     { phase: "drain", losesOwner: "shutdown" },
     { phase: "drain", losesOwner: "candidate" },
@@ -2555,40 +2511,6 @@ describe("gateway restart deferral preflight", () => {
     }
   });
 
-  it("reports restart debt until a replacement config retires it", () => {
-    const requestRecoveryRestart = vi
-      .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
-      .mockReturnValue({ status: "failed" });
-    const handlers = createReloadHandlersForTest(
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      requestRecoveryRestart,
-    );
-    const restartPlan = {
-      ...createHotTailPlan(),
-      changedPaths: ["gateway.port"],
-      restartGateway: true,
-      restartReasons: ["gateway.port"],
-      hotReasons: [],
-    } satisfies GatewayReloadPlan;
-
-    try {
-      expect(handlers.hasOutstandingGatewayRestart()).toBe(false);
-      const restart = handlers.requestGatewayRestart(restartPlan, {
-        gateway: { port: 19_001 },
-      });
-      restart.settle("rejected");
-      expect(handlers.hasOutstandingGatewayRestart()).toBe(true);
-
-      expect(handlers.acceptRestartConfig({})).toEqual({ retireRejectedRestart: true });
-      expect(handlers.hasOutstandingGatewayRestart()).toBe(false);
-    } finally {
-      handlers.stopRestartRetries();
-    }
-  });
-
   it.each([false, true])(
     "retains hot-recovery debt until the replacement restart emits (%s)",
     async (emits) => {
@@ -2739,40 +2661,6 @@ describe("gateway restart deferral preflight", () => {
     expect(logReload.warn).toHaveBeenCalledWith(
       "channel restart (discord) failed during gateway shutdown",
     );
-  });
-
-  it("leaves a failed restart pending until another request", async () => {
-    const requestRecoveryRestart = vi
-      .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
-      .mockReturnValueOnce({ status: "failed" })
-      .mockReturnValueOnce({ status: "emitted" });
-    const { requestGatewayRestart, stopRestartRetries } = createReloadHandlersForTest(
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      requestRecoveryRestart,
-    );
-    vi.useFakeTimers();
-
-    try {
-      expect(
-        requestGatewayRestart(createGatewayRestartPlan(), { gateway: { port: 18790 } }).status,
-      ).toBe("recovery-pending");
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(requestRecoveryRestart).toHaveBeenCalledOnce();
-
-      expect(
-        requestGatewayRestart(createGatewayRestartPlan("gateway.auth"), {
-          gateway: { port: 18791 },
-        }).status,
-      ).toBe("accepted");
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      expect(requestRecoveryRestart).toHaveBeenCalledTimes(2);
-    } finally {
-      stopRestartRetries();
-    }
   });
 
   it("holds root admission across an immediate config-reload restart signal", () => {

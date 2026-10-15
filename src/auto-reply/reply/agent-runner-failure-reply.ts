@@ -16,7 +16,6 @@ import { classifyCompactionReason } from "../../agents/embedded-agent-runner/com
 import {
   findCliTerminalStopError,
   findCliTimeoutError,
-  hasLocalWorkerTaskTimeout,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
 } from "../../agents/failover-error.js";
@@ -24,6 +23,10 @@ import {
   renderAssistantRequestFailureCopy,
   renderRuntimeCoordinationFailureCopy,
 } from "../../agents/failover/assistant-request-failure-copy.js";
+import {
+  ContextPreparationTimeoutError,
+  findLocalWorkerTaskTimeout,
+} from "../../agents/failover/local-preparation-error.js";
 import { resolveExecutionApprovalFailureMessage } from "../../agents/failover/message-patterns.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
@@ -166,7 +169,11 @@ export function buildPreflightCompactionFailureText(
   )
     .trim()
     .replace(/\s+/gu, " ");
-  const isTimeout = classifyCompactionReason(reason) === "timeout";
+  const classification = classifyCompactionReason(reason);
+  if (classification === "unshrinkable_request") {
+    return `⚠️ ${reason}`;
+  }
+  const isTimeout = classification === "timeout";
   const reasonSuffix = options?.includeDetails && reason && !isTimeout ? ` Reason: ${reason}.` : "";
   const summary = isTimeout
     ? "⚠️ This conversation is too long, and shortening it took too long."
@@ -258,6 +265,16 @@ export function buildExternalRunFailureReply(
       };
     }
     return buildUnclassifiedReply(true);
+  }
+  const localTimeout = findLocalWorkerTaskTimeout(error);
+  if (localTimeout) {
+    return {
+      text:
+        localTimeout instanceof ContextPreparationTimeoutError
+          ? localTimeout.message
+          : "A local worker task timed out. Please try again.",
+      isGenericRunnerFailure: false,
+    };
   }
   const failoverFacts =
     options?.failoverFacts ??
@@ -367,12 +384,6 @@ export function buildExternalRunFailureReply(
   const codexAppServerFailure = renderCodexAppServerFailureCopy(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
-  }
-  if (failoverFacts.reason === "timeout" && hasLocalWorkerTaskTimeout(error)) {
-    return {
-      text: "A local worker task timed out. Please try again.",
-      isGenericRunnerFailure: false,
-    };
   }
   const classifiedFailure =
     failoverFacts.requestFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);
