@@ -15,6 +15,7 @@ import {
   waitForFast,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
+import { matchesSubagentRequesterSession } from "./subagent-registry-queries.js";
 import type { SubagentRegistrySeamFixture } from "./subagent-registry.seam-fixture.test-support.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
@@ -164,8 +165,25 @@ export function registerWaitExpiryProvisionalTests(fixture: SubagentRegistrySeam
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
   });
 
-  it("routes a private child's provisional wait-expiry wake by its completion target", async () => {
+  it("hands a private child's provisional wake a requester binding delivery admits", async () => {
+    // This case used to assert only the *shape* of the announce params, which
+    // let the producer omit `completionRequesterLifecycleRevision` and still
+    // pass. Direct delivery binds a parent-only wake to the requester
+    // incarnation recorded at spawn — the session id *and* its lifecycle
+    // revision — so the shape assertion could not see the omission.
+    //
+    // The mock now applies the real rule instead of describing it:
+    // `matchesSubagentRequesterSession` is the production predicate for "does
+    // this recorded requester binding match that live incarnation", the same
+    // pair `sendSubagentAnnounceDirectly` compares before admitting a private
+    // wake. A producer that forwards an incomplete binding is rejected here
+    // exactly as it is there, and the reporter then accepts
+    // `intentional_non_delivery` as settled and stamps `waitExpiryAnnouncedAt`,
+    // losing a valid parent's warning permanently. The full-stack boundary,
+    // including a genuinely replaced requester, is pinned separately in
+    // `subagent-announce-direct-delivery.private-binding.test.ts`.
     const startedAt = Date.now();
+    const runId = "run-unconfirmed-private-child";
     let waitAttempts = 0;
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
@@ -177,13 +195,30 @@ export function registerWaitExpiryProvisionalTests(fixture: SubagentRegistrySeam
     mocks.entries = createSessionStore({
       updatedAt: startedAt,
     });
+    const bindingAdmissions: boolean[] = [];
+    mocks.runSubagentAnnounceFlow.mockImplementation(async (params) => {
+      const recorded = findRequesterRun(runId);
+      const admitted = matchesSubagentRequesterSession(
+        {
+          completionRequesterSessionId: params.completionRequesterSessionId,
+          completionRequesterLifecycleRevision: params.completionRequesterLifecycleRevision,
+        },
+        {
+          sessionId: recorded?.completionRequesterSessionId ?? "",
+          lifecycleRevision: recorded?.completionRequesterLifecycleRevision,
+        },
+      );
+      bindingAdmissions.push(admitted);
+      return admitted ? "delivered" : "intentional_non_delivery";
+    });
 
     await registry().registerSubagentRun({
-      runId: "run-unconfirmed-private-child",
+      runId,
       task: "private child keeps its provisional wake parent-only",
       expectsCompletionMessage: true,
       completionTarget: "parent",
       completionRequesterSessionId: "sess-private-parent",
+      completionRequesterLifecycleRevision: "rev-private-parent",
       runTimeoutSeconds: 1,
     });
 
@@ -195,17 +230,25 @@ export function registerWaitExpiryProvisionalTests(fixture: SubagentRegistrySeam
     await waitForFast(() => {
       expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     });
+    // The primary assertion: delivery's own rule admitted the binding the
+    // reporter forwarded. A producer that drops either half fails here.
+    expect(bindingAdmissions).toEqual([true]);
     // A parent-only child must have completion notifications on, so the
-    // producer's collect/expectsCompletionMessage skip cannot exclude it. The
-    // terminal producers forward the private-completion fields; the provisional
-    // wake has to as well or the still-running notice takes the public route.
+    // producer's collect/expectsCompletionMessage skip cannot exclude it, and
+    // the provisional wake has to carry the private-completion fields or the
+    // still-running notice takes the public route.
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
       expect.objectContaining({
         deliveryPhase: "wait-expiry",
         outcome: { status: "timeout", disposition: "still-running" },
         completionTarget: "parent",
         completionRequesterSessionId: "sess-private-parent",
+        completionRequesterLifecycleRevision: "rev-private-parent",
       }),
+    );
+    // The forwarded pair is the one the run recorded, not a value invented here.
+    expect(findRequesterRun(runId)?.completionRequesterLifecycleRevision).toBe(
+      "rev-private-parent",
     );
   });
 

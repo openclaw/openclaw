@@ -136,6 +136,18 @@ export async function reportSubagentWaitExpiry({
     expectsCompletionMessage: published.expectsCompletionMessage,
     completionTarget: published.completionTarget,
     completionRequesterSessionId: published.completionRequesterSessionId,
+    // A parent-only child binds its private wake to the requester incarnation
+    // recorded at spawn, which is the session id *and* that session's lifecycle
+    // revision. `sendSubagentAnnounceDirectly` compares both; forwarding only
+    // the id leaves it testing a populated revision against `undefined`, so it
+    // reports `intentional_non_delivery` for a requester that is still the
+    // right one. The settle check below accepts that as settled and stamps
+    // `waitExpiryAnnouncedAt`, which drops the provisional warning for good.
+    // The terminal and requester-settle owners already forward it
+    // (`subagent-registry-lifecycle-announce-cleanup.ts`,
+    // `subagent-announce.requester-settle-state.ts`); this is the one producer
+    // that did not.
+    completionRequesterLifecycleRevision: published.completionRequesterLifecycleRevision,
     spawnMode: published.spawnMode,
     wakeOnDescendantSettle: published.wakeOnDescendantSettle,
     suppressChildSessionEffects: true,

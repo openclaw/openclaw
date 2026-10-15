@@ -25,6 +25,9 @@ import type { SubagentAnnounceFlowOutcome } from "../announce/subagent-announce.
 import type { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+type RunSubagentAnnounceFlow =
+  (typeof import("../announce/subagent-announce.js"))["runSubagentAnnounceFlow"];
+
 const noop = () => {};
 
 export function createSubagentRegistryMockState() {
@@ -132,7 +135,13 @@ export function createSubagentRegistryMockState() {
     ),
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-    runSubagentAnnounceFlow: vi.fn(async (): Promise<SubagentAnnounceFlowOutcome> => "delivered"),
+    // Typed with the real producer's signature so a case can inspect the
+    // forwarded announce params from inside its own implementation and decide
+    // the outcome, rather than only reading them after the fact through
+    // `mockCallArg`.
+    runSubagentAnnounceFlow: vi.fn<RunSubagentAnnounceFlow>(
+      async (): Promise<SubagentAnnounceFlowOutcome> => "delivered",
+    ),
     getGlobalHookRunner: vi.fn(() => null),
     ensureContextEnginesInitialized: vi.fn(),
     loadAgentRuntimePluginRegistryHandle: vi.fn(),
