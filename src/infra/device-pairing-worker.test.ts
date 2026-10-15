@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
 import {
   isPairedDeviceTokenIdentityCurrent,
   resolveAuthenticatedDeviceTokenIdentity,
+  resolveNodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "./device-pairing-store-readonly.js";
@@ -27,6 +29,7 @@ import {
   listDevicePairingReadOnly,
   requestDevicePairing,
   updatePairedDeviceMetadata,
+  updatePairedDevicePresence,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
@@ -334,6 +337,51 @@ test("reconnect receipts ignore pending rows and leave sibling pairing changes t
   }
   expect((await getPendingDevicePairing("refreshed", baseDir))?.roles).toEqual([]);
 });
+
+test.each(["metadata", "presence"] as const)(
+  "publishes a device's %s update without loading unrelated paired rows",
+  async (kind) => {
+    await listDevicePairing(baseDir);
+    const originalBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
+    const device = await getPairedDevice("paired-rich", baseDir);
+    const generation = resolveNodePairingGeneration(device);
+    expect(originalBinding).not.toBeNull();
+    if (!generation) {
+      throw new Error("expected fixture node generation");
+    }
+    const unavailable = vi
+      .spyOn(stateReads, "executeExistingOpenClawStateRead")
+      .mockRejectedValueOnce(new Error("synthetic unavailable pairing read"));
+    try {
+      await expect(getPairedDevice("paired-rich", baseDir)).rejects.toThrow(
+        "synthetic unavailable pairing read",
+      );
+    } finally {
+      unavailable.mockRestore();
+    }
+    expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
+      "Device pairing authority requires a current worker publication",
+    );
+    database.db
+      .prepare("UPDATE device_pairing_paired SET tokens_json = ? WHERE device_id = ?")
+      .run("synthetic-unreadable-json", "paired-minimal");
+    try {
+      const patch = { lastSeenAtMs: 1234, lastSeenReason: "connect" };
+      await expect(
+        kind === "metadata"
+          ? updatePairedDeviceMetadata(" paired-rich ", patch, baseDir)
+          : updatePairedDevicePresence(" paired-rich ", patch, generation, baseDir),
+      ).resolves.toBe(true);
+      expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(originalBinding);
+      expect(await getPairedDevice("paired-rich", baseDir)).toMatchObject(patch);
+      expect(getPublishedPairedDeviceBinding("paired-minimal", baseDir)).toBeNull();
+    } finally {
+      database.db
+        .prepare("UPDATE device_pairing_paired SET tokens_json = NULL WHERE device_id = ?")
+        .run("paired-minimal");
+    }
+  },
+);
 
 test.each(["reply lost", "policy revoked", "callback throws"] as const)(
   "retires narrowed bootstrap grants only after native settlement (%s)",
