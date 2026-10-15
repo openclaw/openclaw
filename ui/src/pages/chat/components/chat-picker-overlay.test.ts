@@ -3,6 +3,12 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createOverlay } from "../../../components/overlay-lifecycle.ts";
 import { settleTooltip, tooltipSurface } from "../../../components/tooltip.test-support.ts";
+import {
+  afterModalHidden,
+  getRenderedModalDialog,
+  installDialogPolyfill,
+} from "../../../test-helpers/modal-dialog.ts";
+import "../../../components/modal-dialog.ts";
 import { closeChatPaneDetails } from "../chat-pane-shared.ts";
 import {
   bindChatPickerOverlay,
@@ -204,6 +210,50 @@ describe("chat picker overlay", () => {
     expect(picker.open).toBe(false);
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("leaves Escape to an open native modal before dismissing retained invocations", async () => {
+    onTestFinished(installDialogPolyfill());
+    onTestFinished(installChatComposerPickerDismissal(document));
+    const composer = document.createElement("div");
+    composer.className = "agent-chat__input";
+    composer.innerHTML =
+      '<div class="agent-chat__composer-combobox"><textarea></textarea></div><div class="slash-menu"></div>';
+    document.body.append(composer);
+    const textarea = composer.querySelector("textarea")!;
+    textarea.focus();
+    const dismissInvocations = vi.fn();
+    composer.addEventListener("openclaw-composer-dismiss-invocations", dismissInvocations);
+
+    const modal = document.createElement("openclaw-modal-dialog");
+    modal.label = "Keyboard shortcuts";
+    modal.innerHTML = "<button>Close</button>";
+    document.body.append(modal);
+    const { dialog } = await getRenderedModalDialog(document.body);
+    expect(dialog.open).toBe(true);
+    const modalEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    dialog.dispatchEvent(modalEscape);
+    expect(modalEscape.defaultPrevented).toBe(false);
+    expect(dismissInvocations).not.toHaveBeenCalled();
+
+    // jsdom does not synthesize the native cancel event from Escape.
+    const hidden = afterModalHidden(modal);
+    dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+    await hidden;
+    expect(dialog.open).toBe(false);
+    const invocationEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(invocationEscape);
+    expect(invocationEscape.defaultPrevented).toBe(true);
+    expect(dismissInvocations).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(textarea);
   });
 
   it("shares dismissal until the final owner releases it and can reconnect", () => {

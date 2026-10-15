@@ -194,7 +194,7 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
     ) {
       return;
     }
-    if (registryFor(ownerDocument).stack.at(-1)?.surface.matches(":popover-open")) {
+    if (registryFor(ownerDocument).stack.at(-1)?.open) {
       return;
     }
     if (clearChatModelSearchOnEscape(event)) {
