@@ -63,7 +63,8 @@ it("excludes an older database that is both pending and indeterminate from versi
           pendingMigrations: preflight.pendingMigrations,
           databasePaths: admitted.map((target) => target.path),
           agentDatabaseTargets: admitted.map((target) => ({
-            ...target,
+            agentId: target.agentId,
+            path: target.path,
             realPath: target.path,
             source: "configured" as const,
           })),
