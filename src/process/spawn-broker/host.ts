@@ -386,9 +386,10 @@ export class SpawnBrokerHost {
     });
     this.process = child;
     const exitError = observeBrokerChildDiagnostics(child);
-    // Exit can precede the last stderr bytes; record diagnostics only after the pipe closes.
+    let closingAtExit = false;
+    // Classify at native exit; the last stderr bytes can arrive after close() starts.
     this.brokerClosed = waitForBrokerChildCompletion(child).then(() => {
-      if (this.closing && child.pid && (child.exitCode !== 0 || child.signalCode !== null)) {
+      if (closingAtExit && child.pid && (child.exitCode !== 0 || child.signalCode !== null)) {
         this.cleanupErrors.push(
           new SpawnBrokerError("Spawn broker shutdown failed", { cause: exitError() }),
         );
@@ -504,6 +505,7 @@ export class SpawnBrokerHost {
     this.markNativeReady = markReady;
     child.once("error", fail);
     child.once("exit", () => {
+      closingAtExit = this.closing;
       brokerExited.resolve();
       fail(exitError());
     });

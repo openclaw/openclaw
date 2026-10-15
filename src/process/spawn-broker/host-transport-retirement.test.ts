@@ -71,6 +71,8 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
   let sendFailure = bootstrapFailure;
   let connected = true;
   let exited = false;
+  let exitCode: number | null = null;
+  let signalCode: NodeJS.Signals | null = null;
   let closed = false;
   const disconnect = vi.fn(() => {
     connected = false;
@@ -80,9 +82,11 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
   const kill = vi.fn(() => true);
   Object.defineProperties(worker, {
     pid: { value: 41001 },
-    stdio: { value: [null, output, null] },
+    stdio: { value: [null, null, output] },
+    stderr: { value: output },
     connected: { get: () => connected },
-    exitCode: { get: () => (exited ? 0 : null) },
+    exitCode: { get: () => exitCode },
+    signalCode: { get: () => signalCode },
     disconnect: { value: disconnect },
     kill: { value: kill },
     send: {
@@ -121,10 +125,13 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
     failSend: (failure: SendFailure) => {
       sendFailure = failure;
     },
-    exit: () => {
+    stderr: (text: string) => output.write(text),
+    exit: (code: number | null = 0, signal: NodeJS.Signals | null = null) => {
       if (!exited) {
         exited = true;
-        worker.emit("exit", 0, null);
+        exitCode = code;
+        signalCode = signal;
+        worker.emit("exit", code, signal);
       }
     },
     close: () => {
@@ -137,6 +144,51 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
   fixtures.push(fixture);
   return fixture;
 }
+
+it.each(["before", "during"] as const)(
+  "classifies a nonzero broker exit %s close while waiting for late stderr",
+  async (exitTiming) => {
+    const fixture = brokerFixture();
+    fixture.worker.emit("message", { type: "ready", pid: fixture.worker.pid });
+    await fixture.host.ready();
+    if (exitTiming === "before") {
+      fixture.exit(null, "SIGKILL");
+    }
+    const closing = fixture.host.close();
+    let settled = false;
+    void closing.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    if (exitTiming === "during") {
+      fixture.exit(1);
+    }
+    await fixture.host.waitForCleanup();
+    expect(settled).toBe(false);
+    fixture.stderr("late broker diagnostic\n");
+    fixture.close();
+    if (exitTiming === "before") {
+      await expect(closing).resolves.toBeUndefined();
+    } else {
+      await expect(closing).rejects.toMatchObject({
+        message: "Spawn broker cleanup did not complete",
+        errors: [
+          expect.objectContaining({
+            message: "Spawn broker shutdown failed",
+            cause: expect.objectContaining({
+              message: expect.stringContaining("late broker diagnostic"),
+            }),
+          }),
+        ],
+      });
+    }
+    fixtures.splice(fixtures.indexOf(fixture), 1);
+  },
+);
 
 it("releases undispatched native claims only after refused startup and broker close", async () => {
   const fixture = brokerFixture();
