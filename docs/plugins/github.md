@@ -10,7 +10,7 @@ read_when:
 # GitHub
 
 The bundled GitHub plugin adds public-repository link previews and a read-only
-reader to the [Control UI](/web/control-ui). It is separate from the
+reader to the [Control UI](/web/control-ui), plus the `github_read` agent tool. It is separate from the
 [GitHub Copilot model provider](/providers/github-copilot).
 
 ## Upgrading with an existing plugin allowlist
@@ -74,6 +74,30 @@ cannot load retain a full-size external link. Each loaded document bounds concur
 cached image data; closing its tab or replacing the document retires that cache.
 Script and connection policies are unchanged; remote content cannot run scripts
 or app widgets.
+
+## Ask the agent to read an item
+
+Give the agent a public GitHub issue, pull request, or commit URL. The
+`github_read` tool reads it through the Gateway and returns the title, description,
+applicable discussion and review comments, file changes, and pull request checks.
+It accepts `url` and optional `refresh: true` to fetch current content.
+
+This tool works for permitted sandboxed agents without GitHub credentials or
+outbound network access inside the sandbox. The Gateway selects the invoking
+agent's managed identity, or uses the same service-token/anonymous fallback as
+the reader. The tool cannot select another agent or expose the credential.
+Current invocation, tool and identity authority remain required through delivery,
+including cached reads.
+
+`github_read` is included in the coding profile and default sandbox tool allowlist.
+Explicit tool allowlists and deny rules remain authoritative. If you maintain a
+custom sandbox allowlist, include `github_read` to permit it. Disabling `github`
+removes the tool as well as the UI reader. The tool reads known references; it
+does not search, post, edit or merge GitHub content.
+
+The same limits below apply. Inspect `partial`, `bodyTruncated`,
+`commentsTruncated`, `filesTruncated`, and individual comment/patch/check markers;
+a bounded result does not establish that the full discussion or diff was read.
 
 ## Enable or disable the plugin
 

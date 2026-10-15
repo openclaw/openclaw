@@ -9,6 +9,7 @@ OpenClaw. This official plugin is included with OpenClaw and enabled by default.
 - Open supported GitHub links in the reader beside chat.
 - Read descriptions, discussion and review comments, and expandable file diffs.
 - Inspect pull request checks for the current head commit and refresh their status.
+- Ask the agent to read a known public issue, pull request, or commit with `github_read`.
 
 ## Get started
 
@@ -21,8 +22,15 @@ GitHub links then open externally.
 
 ## Tools and access
 
-This plugin contributes the Control UI reader and link previews. It does not
-register agent tools or a GitHub Copilot model provider. Reading is limited to
+The `github_read` agent tool accepts a supported `https://github.com/` item URL
+and optional `refresh: true`. It returns the same bounded document as the reader,
+including applicable comments, file changes, checks, and partial-result markers.
+Requests use the invoking agent's Gateway-held identity, so sandboxed agents do
+not need GitHub credentials or network access in their shells.
+
+The tool is included in the coding profile and default sandbox allowlist. Explicit
+tool allowlists and deny rules still apply; disabling the plugin removes the tool.
+It does not search repositories or provide a GitHub Copilot model provider. Reading is limited to
 public repositories and does not change issues, post comments, or merge pull
 requests. Use **Open on GitHub** for private repositories or editing.
 
