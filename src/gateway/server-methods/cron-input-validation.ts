@@ -4,6 +4,9 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
@@ -11,6 +14,10 @@ import {
 } from "../../cron/delivery-channel-validation.js";
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
+import {
+  acquireCronInferenceAuthorization,
+  captureCronInferenceBinding,
+} from "../../cron/inference-binding.runtime.js";
 import {
   requiresExternalCronDelivery,
   resolveDeliveryTarget,
@@ -32,10 +39,46 @@ import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
+import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
+
+type InferenceCaller = Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal">;
+
+async function captureCronInferenceForCaller(
+  params: Parameters<typeof captureCronInferenceBinding>[0],
+  caller: InferenceCaller,
+) {
+  let selection: UserModelAccountSelection | undefined;
+  let authority: AuthProfileAuthorization | undefined;
+  const inferenceBinding = await captureCronInferenceBinding({
+    ...params,
+    retainAuthorization: (captured) => {
+      authority = captured;
+    },
+    authorizeProfile: async (profileId, inherited) => {
+      // Trusted creator selections already carry their owner's permission. New
+      // personal selections require the same live human authority as chat.
+      if (isUserModelAuthProfileId(profileId) && !inherited) {
+        selection = await preparePersonalModelAccountSelection(caller, profileId);
+        return selection.assertCurrent;
+      }
+      return undefined;
+    },
+  });
+  return {
+    inferenceBinding,
+    assertInferenceSelectionCurrent: () => {
+      selection?.assertCurrent();
+      authority?.assertCurrent();
+    },
+    disposeInferenceAuthorization: () => authority?.dispose(),
+  };
+}
 
 export function requiresExplicitAgentRuntimeToolsAllow(params: {
   job: Pick<CronJob, "payload" | "trigger">;
@@ -224,8 +267,9 @@ export async function assertCronDoesNotTargetAgentHarness(
 export async function captureCronCreatorSession(
   job: CronJobCreate,
   callerScope: CronCallerScope | undefined,
-  client: GatewayClient | null,
+  caller: InferenceCaller,
   cfg: OpenClawConfig,
+  hasRuntimeAuthority = false,
 ) {
   const hasConversationResult =
     job.sessionTarget !== "main" &&
@@ -250,16 +294,75 @@ export async function captureCronCreatorSession(
   // Operator-supplied sessions bind delivery only; agent callers inherit creator facts.
   const actor = callerScope
     ? creatorSession?.createdActor
-    : resolveOperatorSessionCreation(client).actor;
+    : resolveOperatorSessionCreation(caller.client).actor;
   const actorId = normalizeOptionalString(actor?.id);
   const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
+  const inference =
+    // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
+    !hasRuntimeAuthority && job.payload.kind === "agentTurn" && job.sessionTarget !== "main"
+      ? await captureCronInferenceForCaller(
+          {
+            cfg,
+            agentId: agentId ?? resolveDefaultAgentId(cfg),
+            model: job.payload.model,
+            sessionEntry: callerScope ? creatorSession : undefined,
+          },
+          caller,
+        )
+      : undefined;
   return {
+    ...inference,
     ...(sourceConversation ? { sourceConversation } : {}),
     ...(createdActor ? { createdActor } : {}),
     ...(callerScope && creatorSession?.skillLibrarySelections
       ? { skillLibrarySelections: creatorSession.skillLibrarySelections }
       : {}),
   };
+}
+
+/** Only an explicitly selected account changes an existing job’s inference ownership. */
+export async function captureCronUpdatedInferenceBinding(
+  nextJob: CronStoredJob,
+  patch: CronJobPatch,
+  cfg: OpenClawConfig,
+  caller: InferenceCaller,
+) {
+  if (nextJob.runtimeAuthority !== undefined || nextJob.payload.kind !== "agentTurn") {
+    return undefined;
+  }
+  const model = patch.payload && "model" in patch.payload ? patch.payload.model : undefined;
+  const agentId = nextJob.agentId ?? resolveDefaultAgentId(cfg);
+  if (
+    !model ||
+    !resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })?.profileId
+  ) {
+    if (patch.agentId !== undefined && nextJob.inferenceBinding) {
+      // A move may keep the account only when the new agent sees the same credential owner.
+      const authority = await acquireCronInferenceAuthorization({
+        binding: nextJob.inferenceBinding,
+        cfg,
+        agentDir: resolveAgentDir(cfg, agentId),
+      });
+      return {
+        inferenceBinding: undefined,
+        assertInferenceSelectionCurrent: () => authority.assertCurrent(),
+        disposeInferenceAuthorization: () => authority.dispose(),
+      };
+    }
+    return undefined;
+  }
+  const inference = await captureCronInferenceForCaller(
+    {
+      cfg,
+      agentId: nextJob.agentId ?? resolveDefaultAgentId(cfg),
+      model,
+    },
+    caller,
+  );
+  if (!inference.inferenceBinding) {
+    throw new Error("The selected automation account is unavailable.");
+  }
+  return inference;
 }
 
 /** Waiting cannot finish while the caller owns the execution or result conversation lane. */

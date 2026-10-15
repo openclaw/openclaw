@@ -148,7 +148,7 @@ export async function patchSessionEntryInWorker(params: {
             }
             params.assertCurrent();
             params.guard?.assertCurrent?.();
-            // The foreground FIFO stays held; async planners may read through it before commit.
+            // Async planning releases the writer FIFO; commit compares the snapshot with current rows.
             input = await params.prepare(snapshot);
             params.assertCurrent();
             params.guard?.assertCurrent?.();

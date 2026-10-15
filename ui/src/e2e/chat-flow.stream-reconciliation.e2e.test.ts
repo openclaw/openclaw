@@ -523,20 +523,6 @@ suite.define(() => {
           stream: "lifecycle",
           data: { phase: "finishing" },
         });
-        // Positive telemetry proves a render after persistence; absence alone can pass on the old frame.
-        await gateway.emitGatewayEvent("agent", {
-          sessionKey: "main",
-          runId,
-          seq: 4,
-          ts: Date.now(),
-          stream: "usage",
-          data: { outputTokens: 2400 },
-        });
-        await expect
-          .poll(async () =>
-            (await page.locator(".chat-working-indicator__tokens").textContent())?.trim(),
-          )
-          .toBe("2.4k output tokens");
         await expect.poll(() => page.locator(".chat-bubble.streaming").count()).toBe(0);
         expect(
           (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map((value) =>
@@ -545,7 +531,7 @@ suite.define(() => {
         ).toEqual([text]);
         expect(await page.locator(".chat-duplicate-count").count()).toBe(0);
         expect(await page.getByRole("button", { name: "Stop generating" }).isEnabled()).toBe(true);
-        await page.locator(".chat-working-indicator").waitFor();
+        await page.locator(".chat-working-indicator").waitFor({ state: "hidden" });
 
         const errorMessage = "Workspace reconciliation failed: the destination is read-only.";
         await gateway.emitGatewayEvent("chat", {

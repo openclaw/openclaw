@@ -1,4 +1,3 @@
-import { createDeferredCore as createDeferred } from "../../shared/deferred.js";
 import { log as embeddedAgentLog } from "../embedded-agent-runner/logger.js";
 import type { AgentHarnessAttemptParamsV2 } from "./types.js";
 
@@ -25,23 +24,19 @@ export class AgentHarnessProjectionSettlement<
             if (!isActive()) {
               return;
             }
-            // Reserve before invocation so reentrant callbacks retain source order.
-            // Only presentation detaches; the terminal owner joins these promises.
-            const completion = createDeferred();
-            this.pending.set(completion.promise, stage);
-            const settled = () => {
-              this.pending.delete(completion.promise);
-              completion.resolve();
-            };
-            const failed = (error: unknown) => {
-              embeddedAgentLog.warn(`${options.label} ${stage} callback failed: ${String(error)}`);
-              settled();
-            };
-            try {
-              void Promise.resolve(callback(...args)).then(settled, failed);
-            } catch (error) {
-              failed(error);
-            }
+            // Presentation callbacks do not synchronously drain their own invocation.
+            const completion = (async () => {
+              try {
+                await callback(...args);
+              } catch (error) {
+                embeddedAgentLog.warn(
+                  `${options.label} ${stage} callback failed: ${String(error)}`,
+                );
+              }
+            })().finally(() => {
+              this.pending.delete(completion);
+            });
+            this.pending.set(completion, stage);
           }
         : undefined;
     this.params = {

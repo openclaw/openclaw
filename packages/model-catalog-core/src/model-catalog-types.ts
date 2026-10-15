@@ -107,7 +107,7 @@ export type ModelCatalogImageInputConfig = ModelDataImageInputConfig;
 
 export type ModelCatalogMediaInputConfig = ModelDataMediaInputConfig;
 
-export type ModelCatalogInput = "text" | "image" | "document";
+export type ModelCatalogInput = "text" | "image" | "video" | "document";
 export const MODEL_CATALOG_THINKING_LEVELS = [...MODEL_DATA_THINKING_LEVELS] as const;
 export type ModelCatalogThinkingLevel = (typeof MODEL_CATALOG_THINKING_LEVELS)[number];
 export type ModelCatalogThinkingLevelMap = ModelDataThinkingLevelMap;

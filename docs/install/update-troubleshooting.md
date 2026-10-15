@@ -178,7 +178,7 @@ prefix in the shell. An unrelated installation at that shell prefix does not
 block an update to the original installation. pnpm global installations retain
 their pnpm owner and do not use this npm destination check.
 
-The actual destination must be empty, or its canonical package path must match
+The actual destination must be empty, or its resolved package path must match
 the running installation or selected managed service, with any existing launcher
 pointing inside that package. An inaccessible or unreadable destination stops the
 update before staging; an unknown destination is never treated as empty. Restore
@@ -458,6 +458,17 @@ disable/update/enable sequence: a new candidate cannot replace the parser alread
 running in the installed updater. Version 2026.9.6 admits retained `import.meta`
 syntax. Current snapshot inventory also records unparseable entries as named
 plugin warnings instead of aborting the snapshot.
+
+### Snapshot cleanup could not be confirmed
+
+An update can stop with `Update snapshot cleanup could not be confirmed` (reason
+`candidate-snapshot-failed`) when plugin work started for the candidate snapshot
+does not finish in time. The installed updater runs this step, so retrying the
+same update repeats it, and `openclaw update repair` cannot finish a snapshot
+that never completed. Install the target once by hand with the Gateway stopped
+([manual npm, pnpm, or bun](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)),
+then run `openclaw doctor --fix` and start the Gateway. Include `openclaw update
+status --json` (with the nested `cause`) when you report it.
 
 ### Large model-catalog temporary directories
 

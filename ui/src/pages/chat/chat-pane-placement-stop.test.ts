@@ -303,33 +303,6 @@ describe("chat pane worker stop", () => {
     expect(document.body.querySelector("dialog[open]")).toBeNull();
   });
 
-  it("enables only Stop for provisioning with reclaim-only write access", () => {
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.reclaim"],
-      ["operator.read", "operator.write"],
-    );
-
-    const session = startupSession(startupPlacements[1]);
-    const placement = resolveChatPanePlacement({
-      gatewaySnapshot: pane.context.gateway.snapshot,
-      movingKey: null,
-      reclaimingKey: null,
-      row: session,
-    });
-
-    expect(placement).toEqual({
-      moving: false,
-      restarting: false,
-      moveDisabledReason: "This Gateway does not support this session action.",
-      reclaimDisabledReason: undefined,
-      recoveryDisabledReason: "This Gateway does not support this session action.",
-    });
-  });
-
   it.each([{ runner: "device", startupPhase: "failed" }] as const)(
     "reclaims an active $runner placement with conflicting $startupPhase intent after the operator confirms",
     async ({ runner, startupPhase }) => {

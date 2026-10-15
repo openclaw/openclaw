@@ -7,9 +7,9 @@ export const REPLY_TOOL_AUTHORITY_COMPAT_RECORD = {
   introduced: "2026-10-04",
   deprecated: "2026-10-04",
   warningStarts: "2026-10-04",
-  removalGate: "stable-deprecation-period",
+  removeAfter: "2026-12-31",
   replacement:
-    "Await the Async reply-operation, fingerprint, and V2 queue companions. Question dispatchers await authority.assertCurrentAsync after transport preparation and assert current authority immediately before I/O. Released synchronous contracts remain until an announced later stable release and explicit breaking-release approval.",
+    "Await the Async reply-operation, fingerprint, and V2 queue companions. Question dispatchers await authority.assertCurrentAsync after transport preparation and assert current authority immediately before I/O. Released synchronous contracts remain through 2026-12-31; removal ships in the first January 2027 stable release without an SDK major.",
   docsPath: "/plugins/sdk-migration/how-to-migrate#await-reply-tool-authority",
   surfaces: [
     "EmbeddedRunAttemptParams.replyOperation",

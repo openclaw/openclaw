@@ -19,6 +19,7 @@ import {
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -242,6 +243,47 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
           );
         }
       }
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
+
+it("keeps a sidebar page revision across off-page facts and replaces it for selected facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "page-reader");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const keys = ["agent:main:off-page", "agent:main:selected-page"];
+    for (const [index, sessionKey] of keys.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId: sessionKey, updatedAt: index + 1, visibility: "shared" },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (ifRowsRevision?: string) =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: { rowMode: "sidebar", limit: 1, ifRowsRevision },
+      });
+    try {
+      const first = await read();
+      expect(first.sessions.map((row) => row.key)).toEqual([keys[1]]);
+      sessionChanges.emit({ sessionKey: keys[0]!, scope: "runtime" });
+      const unchanged = await read(first.rowsRevision);
+      expect(unchanged.rowsRevision).toBe(first.rowsRevision);
+      expect(unchanged.rowsUnchanged).toBe(true);
+      expect(unchanged.sessions).toEqual([]);
+      sessionChanges.emit({ sessionKey: keys[1]!, scope: "runtime" });
+      const changed = await read(first.rowsRevision);
+      expect(changed.rowsRevision).not.toBe(first.rowsRevision);
+      expect(changed.rowsUnchanged).toBeUndefined();
+      expect(changed.sessions.map((row) => row.key)).toEqual([keys[1]]);
     } finally {
       getSessionRowProjection(context)?.dispose();
       release();

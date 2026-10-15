@@ -115,7 +115,7 @@ export function executeSharedStateCommand(
       return readClawInstallSchemaVersionRows(db);
     }, stateOptions());
   }
-  if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
+  if (command.type === "userPreferences.write") {
     return executeUserPreferenceCommand(command, {
       database: open(),
       ...stateOptions(),

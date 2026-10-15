@@ -129,6 +129,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
       { executionLocation: "gateway", profiles: ["minimal", "coding", "messaging"] },
     ],
     ["sessions", "Session settings: label, pin, archive, groups"],
+    ["sessions_create", "Create an independent session, optionally starting work"],
     ["sessions_list", SESSIONS_LIST_TOOL_DISPLAY_SUMMARY],
     ["sessions_history", SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY],
     ["sessions_search", SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY],

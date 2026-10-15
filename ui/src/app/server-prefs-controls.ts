@@ -114,7 +114,7 @@ export function adoptCommittedBackgroundPreference(options: {
   } else {
     delete lastSeen.background;
   }
-  publishConfirmedPrefs(outbox, effectiveScope, lastSeen, ["background"]);
+  publishConfirmedPrefs(outbox, effectiveScope, lastSeen);
   outbox.preferenceWriteFailures.get(effectiveScope)?.delete("background");
   outbox.updateRetainedLocalKeys(effectiveScope, ["background"], false);
   outbox.lastReconciledConfigObject = null;

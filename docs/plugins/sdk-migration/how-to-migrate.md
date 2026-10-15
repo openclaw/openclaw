@@ -9,12 +9,11 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
-The synchronous SQLite-backed APIs in this guide remain supported during their
-`stable-deprecation-period`. Their future removal belongs to an ordinary stable
-release after the replacement, diagnostics, and migration instructions have
-shipped. The release and final compatibility date are **TBD** until announced by
-the maintainer. This preparation does not remove an API, announce a cutoff, or
-change the supported older-host floor. See the [removal timeline](/plugins/sdk-migration/removal-timeline).
+The synchronous SQLite-backed APIs in this guide remain supported through
+**2026-12-31**, the final compatibility day. Removal ships in the **first January
+2027 stable release**, without a Plugin SDK major version. This preparation
+retains the APIs. Use the [complete member mapping](/plugins/sdk-migration/sqlite-async)
+and [removal timeline](/plugins/sdk-migration/removal-timeline) to track this window.
 
 Await each replacement before reading or publishing its result. An `Async` name
 does not authorize falling back to the synchronous API after failure. Older-host
@@ -436,8 +435,8 @@ depending on refreshed connected views. Recording also awaits the collaboration
 writer's session involvement update before saving Inbox items. Both writes retain
 their existing owners and settle before Gateway worker shutdown.
 
-The shipped synchronous signatures remain deprecated until the next Plugin SDK
-major, but their native persistence adapters have been retired. `list` and
+The shipped synchronous signatures remain deprecated until their separately
+announced ordinary stable removal release, but their native persistence adapters have been retired. `list` and
 `dismiss` return `UNAVAILABLE` with the awaited replacement in the message;
 `invalidate` throws a migration-directed error. Legacy `recordCommittedInput`
 queues the worker operation after any enclosing transaction commits; rollback
@@ -501,7 +500,8 @@ Command names, filtering, stored selections, and update behavior are unchanged.
 
 Await placement reads and mutations before using their result, starting dependent
 work, or releasing request resources. The Gateway's native synchronous adapters
-are retired; the deprecated signatures remain until the next Plugin SDK major.
+are retired; the deprecated signatures remain until their separately announced
+ordinary stable removal release.
 
 | Deprecated `workerSessionPlacementService` method | Awaited replacement                            |
 | ------------------------------------------------- | ---------------------------------------------- |
@@ -551,8 +551,8 @@ fallback after a worker failure.
 
 Device-placement demand also has an awaited
 `workerPlacementDispatchService.getAdmittedDeviceSessionCountsAsync` companion.
-The synchronous method keeps its released signature until the next Plugin SDK
-major. These migrations change no schemas, stored data, or update behavior.
+The synchronous method keeps its released signature until its separately announced
+ordinary stable removal release. These migrations change no schemas, stored data, or update behavior.
 
 ## Await reply tool authority
 
@@ -805,8 +805,8 @@ inside database workers can keep their synchronous reads without a warning.
 
 Use `await statSessionEntry(path, options)` from
 `openclaw/plugin-sdk/memory-core-host-engine-sessions` to read transcript file
-metadata through the worker. `statSessionEntrySync` remains available until the
-an announced later stable release; passing already prepared transcript statistics to it
+metadata through the worker. `statSessionEntrySync` remains available through
+2026-12-31; passing already prepared transcript statistics to it
 only projects those values and does not query SQLite. `buildSessionEntry`
 also reads durable snapshots in the worker when an `onTranscriptMessage`
 observer is supplied, then invokes the observer on the caller with the original
@@ -968,7 +968,7 @@ transaction ordering, with one warning per plugin for this legacy contract.
 Incognito targets, including explicitly actor-bound targets, reject the legacy
 form with an error naming `withSessionTranscriptWrite` and
 `preparation.prepareMessage` / `preparation.source`. Removal is scheduled for the
-an announced later stable release. `prepareMessageAfterIdempotencyCheckAsync` remains a
+first January 2027 stable release. `prepareMessageAfterIdempotencyCheckAsync` remains a
 compatible spelling; migrate it to `preparation.prepareMessage` too.
 
 Incognito targets select the memory actor, including calls without an explicit
@@ -1091,7 +1091,8 @@ their existing immediate return values and emit one `DeprecationWarning` per
 plugin and capability family per process with code `DEP_SESSION_PERSISTENCE`, naming the
 awaited replacement. The
 `session-manager-sync-persistence` compatibility record deprecates them on
-October 1, 2026, under `stable-deprecation-period`. The stable release and final compatibility date are TBD; this record alone does not authorize removal. Bundled callers
+October 1, 2026, under `stable-deprecation-period`. The final compatibility day is
+2026-12-31, with removal in the first January 2027 stable release. Bundled callers
 use the awaited methods. Do not add a sync fallback when adopting the new API.
 
 For a `SessionPendingInputReceipt`, replace `complete(outcome)` with
@@ -1639,14 +1640,16 @@ No stored data migration or update step is required.
 
 ## Await auth-profile and provider-availability operations
 
-`resolveAuthStorePathForDisplay` remains supported. A selected database path is
-not equivalent to `resolveProviderAuthProfileMetadataAsync`: migration tools
-use `<selected-database-path>#<profile-id>` even before that profile exists,
-whereas metadata returns profile/account identity and no path. The bundled
-Hermes importer uses these locators for auth and secret migration targets.
-Keep the display API until an owner-approved public awaited path replacement
-or an explicitly changed locator contract is published. Its core-internal
-Async implementation is not a supported plugin import.
+External plugins should replace physical database-path displays with
+provider/profile identifiers. The public path-display use case retires after
+2026-12-31, with no public async path replacement.
+
+Bundled plugins can await `AuthStorage.resolvePathForDisplayAsync` from the private
+`openclaw/plugin-sdk/agent-sessions` surface for a selected database path. It preserves
+agent-local-versus-shared store selection, including migration locators such as
+`<selected-database-path>#<profile-id>` before a profile exists.
+`resolveProviderAuthProfileMetadataAsync` returns profile/account identity and
+no path, so it is not a substitute for display-path selection.
 
 Use the awaited auth APIs before publishing model choices, registering provider
 availability, or starting work that depends on a stored credential. Their
@@ -1693,10 +1696,11 @@ any other existing read options. The core helper
 `loadAuthProfileStoreForSecretsRuntimeAsync` is not a public SDK export.
 
 `resolveAuthStorePathForDisplay` remains a deprecated SDK compatibility export
-until removal in a later stable release after deprecation ships. Its async replacement,
-`resolveAuthStorePathForDisplayAsync`, is core-internal. New plugins should
-present credential or provider metadata through public APIs such as
-`resolveProviderAuthProfileMetadataAsync` from `provider-auth-runtime`.
+through 2026-12-31. Its private bundled-plugin replacement,
+`AuthStorage.resolvePathForDisplayAsync`, retains the selected-path result contract
+without constructing credential storage; it is not a public SDK import.
+Use `resolveProviderAuthProfileMetadataAsync` from `provider-auth-runtime` when
+the caller needs profile/account metadata instead.
 
 Use `loadAuthProfileStoreWithoutExternalProfilesAsync` when an existing
 `agent-runtime` integration needs persisted credential or usage facts without
@@ -1762,7 +1766,7 @@ to build the registry synchronously without opening their store. Await
 `unregisterProviderAsync(name)` when removing a provider from a disk-backed
 registry. Captured session forks keep their immediate in-memory behavior.
 The synchronous disk-backed methods remain deprecated and warn on native reads
-until removal in a later stable release after deprecation ships.
+through 2026-12-31, with removal in the first January 2027 stable release.
 
 Image, music, video, speech, realtime voice, and realtime transcription provider
 plugins should implement
@@ -1789,11 +1793,14 @@ run in the worker. Existing external speech providers that only implement
 `isConfigured` remain supported.
 
 The synchronous APIs shipped in 2026.10.1 retain their signatures, immediate
-results, and completion timing through an announced later stable release and explicit
-breaking-release approval. They are deprecated; synchronous auth storage
+results, and completion timing through 2026-12-31, the final compatibility day.
+Removal ships in the first January 2027 stable release without an SDK major.
+They are deprecated; synchronous auth storage
 entrypoints warn once per plugin and capability family per process.
-Bundled callers use the awaited APIs. This migration changes no schema,
-stored format, retention, or update behavior.
+Ordinary bundled runtime callers use the awaited APIs. Bundled providers retain
+their original synchronous readiness and configuration callbacks through
+2026-12-31 solely for released synchronous host resolvers. This migration changes
+no schema, stored format, retention, or update behavior.
 
 Native web-search selection no longer repeats a credential-presence lookup
 already owned by the model request. A stale availability hint may therefore

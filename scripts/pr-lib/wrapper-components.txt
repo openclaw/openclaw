@@ -222,6 +222,7 @@ scripts/lib/vitest-unhandled-errors.mts
 scripts/lib/vitest-worker-artifacts.mts
 scripts/lib/vitest-worker-cache-policy.mts
 scripts/lib/vitest-worker-declarations.mts
+scripts/lib/vitest-worker-descriptor.mts
 scripts/lib/vitest-worker-run.mts
 scripts/lib/tooling-dependencies.mjs
 scripts/lib/watch-pr-ci-rollup.mts
@@ -249,6 +250,7 @@ src/agents/agent-run-terminal-reply.ts
 src/agents/agent-runtime-id.ts
 src/agents/agent-scope-config.ts
 src/agents/agent-scope.ts
+src/agents/auth-profiles/authorization-contract.ts
 src/agents/auth-profiles/sqlite-json.ts
 src/agents/auth-profiles/store-unreadable-error.ts
 src/agents/auth-profiles/store-update-commit.ts
@@ -351,12 +353,15 @@ src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
+src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
+src/infra/database-engine/open.ts
 src/infra/database-engine/physical-facts.ts
 src/infra/database-engine/policy.ts
 src/infra/database-engine/postgres-catalog.ts
+src/infra/database-engine/postgres-schema.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
@@ -1141,6 +1146,7 @@ src/infra/sqlite-terminal-open-latch.ts
 src/infra/sqlite-transaction.ts
 src/infra/sqlite-user-version.ts
 src/infra/sqlite-wal-checkpoint.ts
+src/infra/sqlite-wal-checksum.ts
 src/infra/sqlite-wal-filesystem.ts
 src/infra/sqlite-wal-reclamation.ts
 src/infra/sqlite-wal-split-brain.ts
@@ -1321,6 +1327,7 @@ src/plugins/channel-presence-policy.ts
 src/plugins/channel-startup-policy.ts
 src/plugins/clawhub-error-codes.ts
 src/plugins/command-execution-lock.ts
+src/plugins/compat/activation-hint-records.ts
 src/plugins/compat/agent-harness-records.ts
 src/plugins/compat/agent-list-runtime-projection-records.ts
 src/plugins/compat/assistant-text-phase-terminal-hint-record.ts
@@ -1420,6 +1427,7 @@ src/plugins/manifest-command-aliases.ts
 src/plugins/manifest-config-groups.ts
 src/plugins/manifest-contract-eligibility.ts
 src/plugins/manifest-contract-keys.ts
+src/plugins/manifest-control-ui.ts
 src/plugins/manifest-install-owner.ts
 src/plugins/manifest-metadata-scan.ts
 src/plugins/manifest-model-id-normalization.ts
@@ -1534,6 +1542,7 @@ src/plugins/plugin-source-references.ts
 src/plugins/plugin-source-verification.ts
 src/plugins/portable-icon-paths.ts
 src/plugins/prepared-message-tool-catalog.ts
+src/plugins/provider-availability-policy.ts
 src/plugins/provider-config-owner.ts
 src/plugins/provider-model-routes.ts
 src/plugins/provider-owner-index.ts
@@ -1559,7 +1568,9 @@ src/plugins/runtime-state-key.ts
 src/plugins/runtime-state.ts
 src/plugins/runtime-workspace-state.ts
 src/plugins/runtime.ts
+src/plugins/sdk-deprecated-imports.ts
 src/plugins/sdk-deprecation.ts
+src/plugins/sdk-deprecation-usage.ts
 src/plugins/runtime/execution-frame.ts
 src/plugins/runtime/gateway-context-binding-owner.ts
 src/plugins/runtime/gateway-context-binding.ts
@@ -1599,6 +1610,7 @@ src/process/spawn-broker/context.ts
 src/process/spawn-broker/execa-client.ts
 src/process/spawn-broker/execa-message.ts
 src/process/spawn-broker/execa-protocol.ts
+src/process/spawn-broker/file-reads.ts
 src/process/spawn-broker/host.ts
 src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts
@@ -1789,6 +1801,7 @@ src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
 src/state/openclaw-agent-message-tool-outcome-schema.ts
+src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
 src/state/openclaw-agent-pending-inputs-schema.ts
 src/state/openclaw-agent-progress-card-schema.ts
@@ -1832,6 +1845,7 @@ src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-cron-delivery-migration.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
+src/state/openclaw-state-db-engine.ts
 src/state/openclaw-state-db-existing-schema.ts
 src/state/openclaw-state-db-existing-write.ts
 src/state/openclaw-state-db-failure.ts
@@ -1867,6 +1881,7 @@ src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
 src/state/openclaw-state-db-transaction.ts
+src/state/postgres-schema.generated/runtime.ts
 src/state/openclaw-state-db.paths.ts
 src/state/openclaw-state-db.ts
 src/state/openclaw-state-feature-schema-ensure.ts
@@ -2196,10 +2211,12 @@ packages/gateway-protocol/src/schema/wizard.ts
 packages/markdown-core/src/reasoning-tag-parser.ts
 packages/markdown-core/src/reasoning-tags.ts
 packages/media-core/src/base64.ts
+packages/media-core/src/inline-image-data-url.ts
 packages/memory-host-sdk/src/host/session-entry-projection.ts
 packages/memory-host-sdk/src/host/session-reset-recall.ts
 packages/memory-host-sdk/src/host/session-transcript-corpus-policy.ts
 packages/normalization-core/src/markdown-plain-text.ts
+packages/tool-call-repair/src/attempt.ts
 packages/tool-call-repair/src/contracts.ts
 packages/tool-call-repair/src/grammar.ts
 packages/tool-call-repair/src/index.ts
@@ -2397,6 +2414,7 @@ src/config/sessions/session-manual-compact-entry.ts
 src/config/sessions/session-manual-compact-selection.ts
 src/config/sessions/store-maintenance-plan.ts
 src/config/sessions/store-maintenance-preserve-snapshot.ts
+src/agents/auth-profiles/authorization-lifetime.ts
 src/agents/auth-profiles/constants.ts
 src/agents/auth-profiles/credential-schema.ts
 src/agents/auth-profiles/credential-write-custody.ts

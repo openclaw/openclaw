@@ -1,9 +1,11 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
-import { userEvent } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
+import "../../styles.css";
 import { afterModalHidden } from "../../test-helpers/modal-dialog.ts";
 import { ModalDialog, type OpenClawModalDialog } from "../modal-dialog.ts";
+import { LazyViewError } from "./lazy-view-error.tsx";
 
 function modalDialog(host: OpenClawModalDialog): HTMLDialogElement {
   const dialog = host.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog");
@@ -176,4 +178,51 @@ describe("native Solid modal focus and top layer", () => {
       expect(modalDialog(handle).clientHeight).toBeLessThanOrEqual(window.innerHeight);
     },
   );
+});
+
+it("stretches centered error-panel completion actions inside native modals", async () => {
+  const original = { width: window.innerWidth, height: window.innerHeight };
+  let retried = 0;
+  let handle!: OpenClawModalDialog;
+  const view = render(() => (
+    <ModalDialog
+      label="Load settings"
+      ref={(value) => {
+        handle = value;
+      }}
+    >
+      <LazyViewError
+        error={new Error("Fixture module load failed")}
+        subtitle="Settings"
+        onRetry={() => {
+          retried++;
+        }}
+        onClose={() => {}}
+      />
+    </ModalDialog>
+  ));
+  flush();
+  const dialog = modalDialog(handle);
+  await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+  try {
+    for (const width of [1440, 320]) {
+      await page.viewport(width, 1000);
+      const panel = view.container.querySelector<HTMLElement>(".lazy-view-error")!;
+      const actions = panel.querySelector<HTMLElement>(".lazy-view-error__actions")!;
+      const bounds = panel.getBoundingClientRect();
+      const style = getComputedStyle(panel);
+      expect(actions.getBoundingClientRect().left).toBeCloseTo(
+        bounds.left + Number.parseFloat(style.paddingLeft),
+        0,
+      );
+      expect(actions.getBoundingClientRect().right).toBeCloseTo(
+        bounds.right - Number.parseFloat(style.paddingRight),
+        0,
+      );
+    }
+    await userEvent.click(view.getByRole("button", { name: /^Retry$/ }));
+    expect(retried).toBe(1);
+  } finally {
+    await page.viewport(original.width, original.height);
+  }
 });

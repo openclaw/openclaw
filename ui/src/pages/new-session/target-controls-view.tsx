@@ -12,7 +12,6 @@ import { CheckoutChip } from "./checkout-chip.tsx";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import {
   environmentPlacementRuntime,
-  environmentDeviceDisabledReason,
   environmentCloudDisabledReason,
 } from "./hosted-environments.ts";
 import "../../components/agent-select-registration.ts";
@@ -21,7 +20,7 @@ import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
 import type { AgentSelectOptions, NewSessionPlaceControlsOptions } from "./target-controls.ts";
 import { NewSessionTerminalHost } from "./terminal-start-view.tsx";
-import { resolveWhereChip, type WhereChipOptions } from "./where-chip.ts";
+import { draftWhereChipParams, resolveWhereChip, type WhereChipOptions } from "./where-chip.ts";
 import { WhereChip } from "./where-chip.tsx";
 
 registerNewSessionSetupEnglish();
@@ -102,21 +101,7 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
           workspaceRoots: place.knownWorkspaceRoots(),
           isAdmin: place.isAdmin(),
         });
-    const whereState = resolveWhereChip({
-      hostedEnvironment: place.hostedEnvironment
-        ? { ...place.hostedEnvironment, id: place.modelControl.resolveAgentRuntime()!.id }
-        : undefined,
-      environments: place.canWrite() ? gateway.environments : [],
-      cloudProfiles,
-      cloudProfileId: place.cloudProfileId,
-      machineClass,
-      os,
-      deviceId: place.deviceId,
-      autoDevice: place.autoDevice,
-      devicePlacement: environmentPlacementRuntime(place.modelControl)?.devicePlacement,
-      deviceDisabledReason:
-        environmentDeviceDisabledReason(place.modelControl) ?? gateway.deviceCatalogDisabledReason,
-    });
+    const whereState = resolveWhereChip(draftWhereChipParams(place, gateway, cloudProfiles));
     const projectState = resolveProjectChip({
       folder: place.deviceFolder?.path ?? place.folder,
       workspace: place.workspacePath(),
@@ -273,6 +258,7 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
     folderLabel: view().projectState.label,
     worktree: props.params.place.worktree,
     worktreeAvailable: props.params.place.worktreeAvailable(),
+    currentCheckoutUnavailableReason: props.params.place.currentCheckoutUnavailableReason,
     repositoryUnavailable: props.params.place.repository.kind === "unavailable",
     branches: view().branches,
     branchesLoading: props.params.place.repository.kind === "checking",

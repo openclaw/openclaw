@@ -340,9 +340,16 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       input: "support",
       plugin: replacementPlugin,
     });
+    const cachedFirst = await expectOkResolution({
+      cfg,
+      channel: "richchat",
+      input: "support",
+      plugin: firstPlugin,
+    });
 
     expect(first.target.to).toBe("first-id");
     expect(replacement.target.to).toBe("replacement-id");
+    expect(cachedFirst.target.to).toBe("first-id");
     expect(firstListGroups).toHaveBeenCalledOnce();
     expect(replacementListGroups).toHaveBeenCalledOnce();
   });

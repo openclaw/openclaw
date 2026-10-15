@@ -41,7 +41,7 @@ const operationHandler = {
   exportName: "runReefTrustStateOperation",
 };
 
-function openStores(openStore: PluginRuntime["state"]["openKeyedStore"]) {
+function openStores(openStore: PluginRuntime["state"]["openKeyedStoreV2"]) {
   return {
     peers: openStore<ReefPeerStateSnapshot>(REEF_TRUST_STORE_OPTIONS),
     deliveries: openStore<ReefOutboundDelivery>(REEF_DELIVERY_STORE_OPTIONS),
@@ -357,6 +357,6 @@ export function openReefTrustStore(
   config: ReefChannelConfig,
   assertCurrent?: () => void,
 ): ReefTrustStore {
-  const stores = openStores(runtime.state.openKeyedStore);
+  const stores = openStores(runtime.state.openKeyedStoreV2);
   return new ReefTrustStore(stores, config, assertCurrent);
 }

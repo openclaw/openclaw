@@ -11,6 +11,8 @@ import {
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
+  installPlainHttpClipboardCapture,
+  copiedViaExec,
 } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
@@ -20,8 +22,9 @@ suite.define(() => {
   it("docks Details in wide conversations and preserves manual intent, drafts, and independent scrolling", async () => {
     const sessionKey = "agent:main:details-progress";
     await suite.withPage(
-      { colorScheme: "dark", locale: "en-US", viewport: { width: 1728, height: 1000 } },
+      { colorScheme: "light", locale: "en-US", viewport: { width: 1728, height: 1000 } },
       async ({ page }) => {
+        await installPlainHttpClipboardCapture(page);
         const gateway = await installMockGateway(page, {
           sessionKey,
           agentModel: "example/demo-model",
@@ -72,6 +75,13 @@ suite.define(() => {
                 { match: { method: "GET", path: "/tabs" }, response: { running: false, tabs: [] } },
               ],
             },
+            "sessions.files.list": {
+              sessionKey,
+              root: "/workspace/openclaw/session-details",
+              gitCheckout: true,
+              files: [],
+              browser: { path: "", entries: [] },
+            },
             "cron.list": {
               jobs: [
                 {
@@ -117,6 +127,19 @@ suite.define(() => {
                 key: sessionKey,
                 kind: "direct",
                 label: "Session Details and task progress",
+                createdActor: { type: "human", id: "ada", label: "Ada" },
+                spawnedCwd: "/workspace/openclaw/session-details",
+                worktree: {
+                  id: "details-tree",
+                  repoRoot: "/workspace/openclaw",
+                  branch: "feature/session-details",
+                },
+                model: "demo-model",
+                totalTokens: 64000,
+                totalTokensFresh: true,
+                contextTokens: 128000,
+                inputTokens: 1200,
+                outputTokens: 450,
                 updatedAt: 1,
               },
             ]),
@@ -173,6 +196,23 @@ suite.define(() => {
             [details, progress, composer],
             { animations: "disabled", elements: [details] },
           );
+          expect(
+            await details.evaluate((root) => {
+              const card = root.querySelector(".session-progress-card")!;
+              const group = root.querySelector(".chat-details__group")!;
+              return [card, group].every((element) => {
+                const style = getComputedStyle(element);
+                return (
+                  style.borderTopWidth === "1px" &&
+                  style.borderTopStyle === "solid" &&
+                  style.borderInlineStartWidth === "0px" &&
+                  style.borderBottomWidth === "0px" &&
+                  style.borderInlineEndWidth === "0px" &&
+                  style.borderRadius === "0px"
+                );
+              });
+            }),
+          ).toBe(true);
           await writeFile(path.join(suite.artifactDir, name), frame.png);
           await writeFile(path.join(suite.artifactDir, "panel-" + name), frame.elements[0]!.png);
         };
@@ -198,6 +238,24 @@ suite.define(() => {
           expect(await details.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
         };
         await geometry(true);
+        expect(await details.locator(".chat-details__toolbar").count()).toBe(0);
+        const environment = details.locator(".chat-details__environment");
+        expect(await environment.textContent()).toContain("openclaw");
+        expect(await environment.textContent()).not.toContain(
+          "/workspace/openclaw/session-details",
+        );
+        expect(await environment.locator(".chat-details__row").first().getAttribute("title")).toBe(
+          "openclaw",
+        );
+        const context = details.locator(".chat-details__context");
+        expect(await context.locator("summary").textContent()).toContain("50%");
+        await context.locator("summary").click();
+        expect(await context.textContent()).toContain("64k / 128k");
+        await context.locator("summary").click();
+        await environment.getByRole("button", { name: "Copy path", exact: true }).click();
+        await expect
+          .poll(() => copiedViaExec(page))
+          .toEqual(["/workspace/openclaw/session-details"]);
         await capture("after.png");
         // A dock is nonmodal: composing, including Escape, must not close it.
         await composer.click();
@@ -212,12 +270,17 @@ suite.define(() => {
         await expect
           .poll(() =>
             details
-              .getByRole("button", { name: "Close details", exact: true })
+              .locator(".chat-details__participants > summary")
               .evaluate((el) => el === document.activeElement),
           )
           .toBe(true);
         await geometry(false);
         await capture("overlay.png");
+        await page.emulateMedia({ colorScheme: "dark" });
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
+        await capture("dark-overlay.png");
+        await page.emulateMedia({ colorScheme: "light" });
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
         expect(await session.locator(":scope > summary").count()).toBe(0);
         expect(await progress.getAttribute("open")).not.toBeNull();
         await progressToggle.click();
@@ -268,7 +331,7 @@ suite.define(() => {
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
         await menu.locator('[data-value="hide"]').click();
         await expect.poll(() => progress.count()).toBe(0);
-        expect(await session.isVisible()).toBe(true);
+        expect(await details.isVisible()).toBe(false);
         const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
         const showSetting = () =>
           page.evaluate(
@@ -314,7 +377,7 @@ suite.define(() => {
         await settingsPage.close();
         await progressToggle.click();
         await geometry(false);
-        await details.getByRole("button", { name: "Close details", exact: true }).click();
+        await trigger.click();
         await page.setViewportSize({ width: 1728, height: 1000 });
         expect(await trigger.getAttribute("aria-expanded")).toBe("false");
         await trigger.click();
@@ -331,6 +394,7 @@ suite.define(() => {
         await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         expect(await trigger.getAttribute("aria-expanded")).toBe("false");
         await page.setViewportSize({ width: 430, height: 900 });
+        await trigger.waitFor({ state: "hidden" });
         expect(await details.isVisible()).toBe(false);
         await page.getByRole("button", { name: "Panels", exact: true }).waitFor();
         await selectChatLayoutAction(page, "Details");
@@ -405,12 +469,18 @@ suite.define(() => {
         await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
           sessions: { [sessionKey]: { pullRequests: [] } },
         });
-        await expect.poll(() => details.locator("[data-details-group]").count()).toBe(0);
+        await expect
+          .poll(() => details.locator("[data-details-group=automations]").count())
+          .toBe(0);
+        expect(await details.locator(".chat-pr").count()).toBe(0);
         await details.evaluate((element) => {
           element.scrollTop = 0;
         });
         await capture("empty.png");
         expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+        await details.getByRole("button", { name: "Show session files", exact: true }).click();
+        await gateway.waitForRequest("sessions.files.list");
       },
     );
   });

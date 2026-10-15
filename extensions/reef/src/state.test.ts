@@ -7,7 +7,7 @@ import type {
   PluginStateOperationReceipt,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -219,7 +219,7 @@ describe("Reef SQLite state", () => {
     "rechecks a concurrent %s guard before creating keys",
     async (namespace, key, value, error) => {
       const runtime = createRuntime(stateDir);
-      const guard = runtime.state.openKeyedStore({
+      const guard = runtime.state.openKeyedStoreV2({
         namespace,
         maxEntries: namespace === "registration" ? 2 : 1,
         overflowPolicy: "reject-new",
@@ -229,7 +229,7 @@ describe("Reef SQLite state", () => {
       await expectReefStateOperationError(generateAndStoreKeys(runtime), error);
       await expect(
         runtime.state
-          .openKeyedStore({
+          .openKeyedStoreV2({
             namespace: "identity",
             maxEntries: 1,
             overflowPolicy: "reject-new",
@@ -656,7 +656,7 @@ describe("Reef SQLite state", () => {
     const runtime = createRuntime(stateDir);
     const reviews = new ReviewApprovalStore(runtime);
     const review = reviewRequest();
-    const raw = runtime.state.openKeyedStore({
+    const raw = runtime.state.openKeyedStoreV2({
       namespace: REEF_REVIEWS_NAMESPACE,
       maxEntries: 2_000,
       overflowPolicy: "reject-new",
@@ -680,7 +680,7 @@ describe("Reef SQLite state", () => {
     const next = reviewRequest("next", "2".repeat(64));
     await reviews.request(first);
     await reviews.decide(first.approvalDigest, true);
-    const raw = runtime.state.openKeyedStore({
+    const raw = runtime.state.openKeyedStoreV2({
       namespace: REEF_REVIEWS_NAMESPACE,
       maxEntries: 1,
       overflowPolicy: "reject-new",
@@ -778,8 +778,12 @@ describe("Reef SQLite state", () => {
   it("captures review identity and source while an earlier acknowledgement waits", async () => {
     const runtime = createRuntime(stateDir);
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => {
-      const store = createPluginStateKeyedStoreForTests<T>("reef", { ...options, env });
+    runtime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) => {
+      const store = createPluginStateKeyedStoreV2ForTests<T>(
+        "reef",
+        { ...options, env },
+        { assertCurrent() {} },
+      );
       runtime.stateStores.push(store);
       return store;
     };
@@ -831,10 +835,10 @@ describe("Reef SQLite state", () => {
   it("fails when a delivered marker claim does not persist", async () => {
     const keys = reefKeys();
     const runtime = createRuntime(stateDir);
-    const openKeyedStore = runtime.state.openKeyedStore;
-    runtime.state.openKeyedStore = <T>(
+    const openKeyedStore = runtime.state.openKeyedStoreV2;
+    runtime.state.openKeyedStoreV2 = <T>(
       options: OpenAsyncKeyedStoreOptions,
-    ): PluginStateKeyedStore<T> => {
+    ): PluginStateKeyedStore<T, 2> => {
       const store = openKeyedStore<T>(options);
       return options.namespace === REEF_DELIVERED_NAMESPACE
         ? { ...store, registerIfAbsent: async () => false }
