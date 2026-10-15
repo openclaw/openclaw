@@ -104,7 +104,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   assertAdmission();
   const generation = options.pluginGeneration;
   const borrowed = generation && getPreparedModelRuntimeBorrowedSnapshot(generation);
-  if (provenance === "run" && generation && borrowed) {
+  if (provenance === "run" && options.catalogMode !== "live" && generation && borrowed) {
     const deriveSelections = options.deriveRuntimePluginSelections;
     const input = normalizePreparedModelRuntimeInput({
       ...rawInput,
