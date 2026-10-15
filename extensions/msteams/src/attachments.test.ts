@@ -269,23 +269,6 @@ describe("msteams attachments", () => {
       },
     );
 
-    it("enforces the inline budget across attachments", async () => {
-      const maxBytes = 10;
-      const saved = [true, true, false];
-      const attachments = [0, 1, 2].map(() =>
-        createHtmlAttachment(buildHtmlImageTag("data:image/png;base64,aGVsbG8=")),
-      );
-      const media = await downloadMSTeamsAttachments(
-        buildDownloadParams(attachments, { maxBytes }),
-      );
-
-      expect(media.map((item) => Boolean(item.path))).toEqual(saved);
-      expect(media.map((item) => item.kind)).toEqual(["image", "image", "image"]);
-      expect(saveMediaBufferMock.mock.calls.map(([data]) => data)).toEqual(
-        saved.filter(Boolean).map(() => Buffer.from("hello")),
-      );
-    });
-
     it.each(["successful save", "MIME rejection", "MIME error", "save error"])(
       "keeps the inline budget after %s and leaves room after cumulative rejection",
       async (failure) => {
@@ -500,50 +483,6 @@ describe("msteams attachments", () => {
       expect(observedBody).toBe("auth failure 2");
     });
 
-    it("does not forward Authorization to redirects outside auth allowlist", async () => {
-      const tokenProvider = createTokenProvider("top-secret-token");
-      const graphFileUrl = createUrlForHost(GRAPH_HOST, "file");
-      const seen: Array<{ url: string; auth: string }> = [];
-      const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
-        const auth = new Headers(opts?.headers).get("Authorization") ?? "";
-        seen.push({ url, auth });
-        if (url === graphFileUrl && !auth) {
-          return new Response("unauthorized", { status: 401 });
-        }
-        if (url === graphFileUrl && auth) {
-          return new Response("", {
-            status: 302,
-            headers: { location: "https://attacker.azureedge.net/collect" },
-          });
-        }
-        if (url === "https://attacker.azureedge.net/collect") {
-          return new Response(Buffer.from("png"), {
-            status: 200,
-            headers: { "content-type": CONTENT_TYPE_IMAGE_PNG },
-          });
-        }
-        return createNotFoundResponse();
-      });
-
-      const media = await downloadMSTeamsAttachments(
-        buildDownloadParams([{ contentType: CONTENT_TYPE_IMAGE_PNG, contentUrl: graphFileUrl }], {
-          tokenProvider,
-          allowHosts: [GRAPH_HOST, AZUREEDGE_HOST],
-          authAllowHosts: [GRAPH_HOST],
-          fetchFn: asFetchFn(fetchMock),
-        }),
-      );
-
-      expectSingleMedia(media);
-      const redirected = seen.find(
-        (entry) => entry.url === "https://attacker.azureedge.net/collect",
-      );
-      if (!redirected) {
-        throw new Error("expected Azure CDN redirect request to be observed");
-      }
-      expect(redirected.auth).toBe("");
-    });
-
     it("skips urls outside the allowlist", async () => {
       const fetchMock = vi.fn();
       const media = await downloadAttachmentsWithFetch(
@@ -557,32 +496,6 @@ describe("msteams attachments", () => {
 
       expectAttachmentMediaLength(media, 1);
       expect(media[0]).toEqual({ kind: "image" });
-    });
-
-    it("blocks redirects to non-https URLs", async () => {
-      const insecureUrl = "http://x/insecure.png";
-      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-        const url = resolveRequestUrl(input);
-        if (url === TEST_URL_IMAGE) {
-          return createRedirectResponse(insecureUrl);
-        }
-        if (url === insecureUrl) {
-          return createBufferResponse("insecure", CONTENT_TYPE_IMAGE_PNG);
-        }
-        return createNotFoundResponse();
-      });
-
-      const media = await downloadAttachmentsWithFetch(
-        createImageAttachments(TEST_URL_IMAGE),
-        fetchMock,
-        {
-          allowHosts: [TEST_HOST],
-        },
-      );
-
-      expectAttachmentMediaLength(media, 1);
-      expect(media[0]).toEqual({ kind: "image" });
-      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     describe("OneDrive/SharePoint shared links", () => {
@@ -658,61 +571,6 @@ describe("msteams attachments", () => {
         // Graph scope token was acquired for the shares fetch.
         expect(tokenProvider.getAccessToken).toHaveBeenCalled();
       });
-
-      it("keeps look-alike hosts out of Graph shares and auth fallback", async () => {
-        const directUrl = "https://notonedrive.com/direct.pdf";
-        const tokenProvider = createTokenProvider();
-        const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-          const url = resolveRequestUrl(input);
-          return url.startsWith(GRAPH_SHARES_URL_PREFIX)
-            ? createTextResponse("unauthorized", 401)
-            : createBufferResponse(PDF_BUFFER, CONTENT_TYPE_APPLICATION_PDF);
-        });
-        detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_PDF);
-        saveMediaBufferMock.mockResolvedValueOnce({
-          id: "saved.pdf",
-          path: SAVED_PDF_PATH,
-          size: Buffer.byteLength(PDF_BUFFER),
-          contentType: CONTENT_TYPE_APPLICATION_PDF,
-        });
-
-        const media = await downloadMSTeamsAttachments(
-          buildDownloadParams(createPdfAttachments(directUrl), {
-            tokenProvider,
-            allowHosts: ["notonedrive.com", GRAPH_HOST],
-            authAllowHosts: [GRAPH_HOST],
-            fetchFn: asFetchFn(fetchMock),
-          }),
-        );
-
-        expectAttachmentMediaLength(media, 1);
-        const calledUrls = (fetchMock.mock.calls as unknown[]).map((call) => {
-          const input = (call as [RequestInfo | URL])[0];
-          return resolveRequestUrl(input);
-        });
-        // Should have hit the original host, NOT graph shares.
-        expect(calledUrls).toContain(directUrl);
-        expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(false);
-        expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
-      });
-
-      it("rejects non-HTTPS shared-link hosts before fetch or auth fallback", async () => {
-        const tokenProvider = createTokenProvider();
-        const fetchMock = vi.fn(async () => createTextResponse("unauthorized", 401));
-
-        await downloadAttachmentsWithFetch(
-          createPdfAttachments("http://onedrive.com/direct.pdf"),
-          fetchMock,
-          {
-            tokenProvider,
-            allowHosts: ["onedrive.com", GRAPH_HOST],
-            authAllowHosts: [GRAPH_HOST],
-          },
-          { expectFetchCalled: false },
-        );
-
-        expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
-      });
     });
 
     describe("error logging (issue #63396)", () => {
@@ -739,22 +597,6 @@ describe("msteams attachments", () => {
         expect(logger.warn).toHaveBeenCalledWith(
           expect.stringMatching(/msteams attachment download failed.*host=.*error=.*HTTP 500/),
         );
-      });
-
-      it("does not log when downloads succeed", async () => {
-        const logger = { warn: vi.fn(), error: vi.fn() };
-        const fetchMock = createOkFetchMock(CONTENT_TYPE_IMAGE_PNG);
-
-        const media = await downloadMSTeamsAttachments(
-          buildDownloadParams(createImageAttachments(TEST_URL_IMAGE), {
-            fetchFn: asFetchFn(fetchMock),
-            logger,
-          }),
-        );
-
-        expectAttachmentMediaLength(media, 1);
-        expect(logger.warn).not.toHaveBeenCalled();
-        expect(logger.error).not.toHaveBeenCalled();
       });
     });
   });

@@ -269,6 +269,34 @@ The gateway prints WebSocket protocol logs in two modes:
 - **Normal mode (no `--verbose`)**: failed RPC results (`ok=false`), slow calls (`>= 1,000ms`), and parse errors remain visible at the default log level. Successful responses below one second, including large session lists, log at `debug`. Set `logging.level: "debug"` to retain them in file logs or `logging.consoleLevel: "debug"` to print them.
 - **Verbose mode (`--verbose`)**: prints all WS request/response traffic.
 
+The validated `connect` handshake also participates in the existing Gateway RPC
+metrics as `method="connect"`, including handler duration, first-response latency,
+response bytes, and delivery failures. Handler time includes completion work after
+the hello write; first-response time ends at the transport's write callback, not
+at browser receipt. These are server wall times, including awaited work. A validated connect rejected
+by restart or suspension admission reports a rejected dispatch and its response;
+it has no handler sample because authentication was never entered.
+
+Connect response logs follow the same slow-response threshold and include `authMs`
+(credentials through authentication), `attachMs` (device authorization, identity,
+scopes, and session attachment), `helloMs` (hello payload preparation), and
+`sendMs` (serialization and transport write callback). Unreached phases are absent.
+Bootstrap redemption or admission work between payload preparation and writing
+can make total response time exceed the sum of these fields. No payload fields
+or credentials are included.
+
+The attach interval also includes these sub-phase wall times on connect response
+logs: `deviceAuthorizationMs` (pairing policy, lookup, metadata and token issuance),
+`nodePreparationMs` (node admission and pairing capture), `identityMs` (profile
+admission), `scopeGrantMs` (scope/role policy and the identity-elevation audit log),
+`operatorDeviceMs` (accepted device credential lookup), and
+`sessionRegistrationMs` (remaining client preparation, access binding and transport
+handoff). Nested fields `deviceLookupMs`, `deviceMetadataMs`, `deviceTokensMs`,
+`profileEnsureMs` and `profileAuthorityMs` isolate worker-backed pairing and profile
+operations, including queue/lock waits. Nested times overlap their parent interval;
+do not add them to the total. These are elapsed times, so event-loop stalls during
+awaited work also count. Unused or unreached sub-phases are absent.
+
 With `diagnostics.enabled: true` and warning logging enabled, `sessions.list`
 handlers and `sessions.subscribe` snapshot handlers taking at least one second
 also emit `slow session list`. The `operation` field identifies which request

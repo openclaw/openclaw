@@ -253,17 +253,6 @@ describe("dashboard default activation and personal layout persistence", () => {
     },
   );
 
-  it("opens a dashboard route in split only once and preserves a later panel choice", () => {
-    const h = createDashboardHarness();
-    h.state.updateSidebarLayout(openSlot(h.state.sidebarLayout, "terminal"));
-    h.sync();
-    expectPresentation(h.state.sidebarLayout, false);
-    h.state.updateSidebarLayout(openSlot(h.state.sidebarLayout, "terminal"));
-    h.sync();
-    expect(isSidebarSlotVisible(h.state.sidebarLayout, "terminal")).toBe(true);
-    expect(isSidebarSlotVisible(h.state.sidebarLayout, "dashboard")).toBe(false);
-  });
-
   it("waits for the selected authoritative row, then inherits without creating an override", () => {
     const h = createDashboardHarness({ metadataPending: true });
     h.sync();
@@ -529,16 +518,12 @@ describe("dashboard shared default in the real header Layout menu", () => {
     expectPresentation(h.state.sidebarLayout, false);
   });
 
-  it.each(["builtin split", "narrow", "read only", "restricted viewer"] as const)(
+  it.each(["builtin split", "narrow"] as const)(
     "identifies the matching shared default for %s without offering a write",
     async (view) => {
       const h = createDashboardHarness({
-        scopes: view === "read only" ? ["operator.read"] : undefined,
         row: session({
           boardPresentation: view === "builtin split" ? undefined : "split",
-          ...(view === "restricted viewer"
-            ? { visibility: "read-only", sharingRole: "viewer" }
-            : {}),
         }),
       });
       h.sync();

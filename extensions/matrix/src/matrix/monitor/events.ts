@@ -159,9 +159,6 @@ async function resolveMatrixSelfUserId(
   client: MatrixClient,
   logVerboseMessage: (message: string) => void,
 ): Promise<string | null> {
-  if (typeof client.getUserId !== "function") {
-    return null;
-  }
   try {
     return (await client.getUserId()) ?? null;
   } catch (err) {

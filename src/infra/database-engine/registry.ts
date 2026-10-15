@@ -10,7 +10,7 @@ export type DatabaseEngineStore = {
 
 // Store families, including local safety journals, without loading plugin code.
 const stores: readonly DatabaseEngineStore[] = [
-  { id: "state", label: "Shared state" },
+  { id: "state", label: "Shared state", postgres: true },
   { id: "agent", label: "Agent data" },
   { id: "workboard", label: "Workboard", postgres: true },
   { id: "logbook", label: "Logbook", postgres: true },

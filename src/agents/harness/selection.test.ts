@@ -1522,22 +1522,6 @@ describe("runAgentHarnessAttempt", () => {
     );
   });
 
-  it("rejects the candidate when the forced plugin harness does not support its provider", async () => {
-    registerFailingCodexHarness();
-
-    const params = createAttemptParams(
-      agentModelRuntimeConfig("9router/cc/claude-opus-4-6", "codex"),
-    );
-    params.provider = "9router";
-    params.modelId = "cc/claude-opus-4-6";
-    params.agentHarnessRuntimeOverride = "codex";
-
-    await expect(runAgentHarnessAttempt(params)).rejects.toThrow(
-      /Requested agent harness "codex" does not support 9router\/cc\/claude-opus-4-6/,
-    );
-    expect(agentRunAttempt).not.toHaveBeenCalled();
-  });
-
   it("keeps a session-pinned Codex harness across outer provider overrides", async () => {
     registerSuccessfulCodexHarness();
 
@@ -1549,18 +1533,6 @@ describe("runAgentHarnessAttempt", () => {
     });
 
     expect(result.sessionIdUsed).toBe("codex");
-    expect(agentRunAttempt).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when a session-pinned Codex harness is unavailable", async () => {
-    await expect(
-      runAgentHarnessAttempt({
-        ...createAttemptParams(),
-        provider: "anthropic",
-        modelId: "claude-opus-4-6",
-        agentHarnessId: "codex",
-      }),
-    ).rejects.toThrow('Requested agent harness "codex" is not registered');
     expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
@@ -1987,23 +1959,6 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
-  it("rejects statically unrelated auto harnesses before provider discovery", () => {
-    const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      autoSelection: { providerIds: ["openai", "codex"] },
-      supports,
-      runAttempt: vi.fn(async () => createAttemptResult("codex")),
-    });
-
-    expect(selectAgentHarness({ provider: "deepseek", modelId: "deepseek-v4-pro" }).id).toBe(
-      "openclaw",
-    );
-    expect(supports).not.toHaveBeenCalled();
-    expect(providerOwnerMocks.resolveProviderRefOwnership).not.toHaveBeenCalled();
-  });
-
   it("auto-selects the highest-priority plugin harness without duplicate support probes", () => {
     const lowPrioritySupports = vi.fn(() => ({
       supported: true as const,

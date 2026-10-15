@@ -784,7 +784,7 @@ const testGatewayRestartListener = () => {};
 let pluginRegistrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 
 beforeEach((context) => {
-  prepareConfigReloadTest(context);
+  prepareConfigReloadTest(context, { mockWatcher: true });
   setRuntimeConfigSnapshot(hoisted.runtimeConfig.value);
   pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
   stageActivePluginRegistry(createTestRegistry([]), null, "default");

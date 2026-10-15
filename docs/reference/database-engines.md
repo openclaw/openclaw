@@ -52,8 +52,20 @@ that stores without a PostgreSQL schema remain on SQLite.
 | `database.postgres.connection`   | None         | Required for PostgreSQL. A DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                                                |
 | `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema. |
 
+Shared state, Workboard, Logbook, and Team Reports currently support PostgreSQL. The Gateway resolves
+the selected engine before its first shared-state read and retains that immutable
+selection for the lifetime of the process. Reader, writer, and lease workers receive
+the resolved selection explicitly; they never resolve the connection again. A
+different selection in the same process is refused. Restart the process after
+changing the connection or engine.
+
+This is an intermediate state behind the experimental gate: agent databases,
+including session transcripts and agent memory, still use SQLite, as do other
+stores without PostgreSQL support. Incognito storage remains memory-only.
 The supported PostgreSQL families are:
 
+- **Shared state:** runtime storage for fresh state directories. Porting existing
+  shared-state databases is not available yet.
 - **Workboard:** runtime storage, bidirectional database ports, and matched backups.
 - **Logbook:** runtime frames, batches, observations, cards, and standups;
   bidirectional database ports; and matched backups. Frame images remain local
@@ -64,14 +76,20 @@ The supported PostgreSQL families are:
   bidirectional database ports; and matched backups. Collected activity is
   session-local scratch and is not exported or backed up.
 
-Shared state, agent/session storage, and other stores continue using SQLite. Incognito storage
-remains memory-only. A supported store never silently falls back to SQLite when
-its PostgreSQL connection or admission fails.
+A supported store never silently falls back to SQLite when its PostgreSQL
+connection or admission fails.
 
 Use `openclaw database port` to move existing supported data between engines.
 Changing `database.engine` alone does not migrate existing data. Omitting
 `database` preserves the SQLite default, so ordinary updates require no
 configuration or data migration.
+
+Existing SQLite shared state refuses a PostgreSQL selection and names
+`openclaw database port` as the migration path. The port command currently handles
+Workboard, Logbook, and Team Reports; shared-state porting is not available yet. Keep existing
+installations on SQLite until that support lands, or use a fresh state directory
+for experimental PostgreSQL shared state. Do not remove existing data to switch
+engines.
 
 ## Port existing stores
 
@@ -97,10 +115,9 @@ selected installed plugin's schema and admission API. Keep the matching plugin
 installed for port, backup, and restore. Preflight does not require absent
 optional plugins.
 
-The command inventories all existing registered stores, including
-disabled plugin stores. It does not create missing stores. Shared state,
-agent databases, and safety journals remain on SQLite; shared-state and agent
-support await their respective PostgreSQL migrations. A dry run checks read-only
+The command inventories all existing registered Workboard, Logbook, and Team Reports stores,
+including disabled plugin stores. It does not create missing stores or port
+shared state, agent databases, or safety journals. A dry run checks read-only
 prerequisites and reports checks that still require private migration, copying,
 or a PostgreSQL privilege probe. It creates no manifest, migrated copy, or target
 namespace. Add `--json` for machine-readable results without connection strings

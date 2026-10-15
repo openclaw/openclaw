@@ -363,18 +363,18 @@ function resolveSlackDelivery(params: {
     if (!params.eventScope.writeClient) {
       throw new Error("missing_enterprise_slack_write_client");
     }
-    return Object.freeze({
+    return {
       client: params.eventScope.writeClient,
       credential: SLACK_ENTERPRISE_LISTENER_QUEUE_CREDENTIAL,
       identity: normalizeSlackSendIdentity(params.opts.identity),
       recipient: params.recipient,
       teamId: params.eventScope.teamId,
       unfurl: { unfurlMedia: params.account.config.unfurlMedia },
-      upload: Object.freeze({
+      upload: {
         client: params.eventScope.client,
         auditContext: "slack-enterprise-immediate-upload",
-      }),
-    });
+      },
+    };
   }
 
   const credential = resolveToken({
@@ -396,7 +396,7 @@ function resolveSlackDelivery(params: {
         params.opts.assertDirectAdapterHandoff,
       )
     : cachedClient;
-  return Object.freeze({
+  return {
     client,
     ...(client !== cachedClient ? { dmCacheOwner: cachedClient } : {}),
     credential,
@@ -411,7 +411,7 @@ function resolveSlackDelivery(params: {
           unfurlLinks: params.account.config.unfurlLinks,
           unfurlMedia: params.account.config.unfurlMedia,
         },
-  });
+  };
 }
 
 async function resolveChannelId(
@@ -897,7 +897,7 @@ export async function sendMessageSlack(
   if (!normalizedMessage && !opts.mediaUrl && !blocks) {
     throw new Error("Slack send requires text, blocks, or media");
   }
-  const queuedOpts = Object.freeze({ ...opts });
+  const queuedOpts = { ...opts };
   const delivery = resolveSlackDelivery({ account, eventScope, opts: queuedOpts, recipient });
   const workspaceScope = delivery.teamId ? `:${delivery.teamId}` : "";
   const queueKey = `${account.accountId}:${createSlackTokenCacheKey(delivery.credential)}${workspaceScope}:${delivery.recipient.kind}:${delivery.recipient.id}:${opts.threadTs ?? ""}`;

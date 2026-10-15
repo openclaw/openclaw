@@ -7,73 +7,16 @@ import {
   parseControlUiGitHubPreviewTarget,
   type ControlUiGitHubPreviewIdentity,
 } from "./preview.js";
-
-// List endpoints such as /pulls/{n}/commits return arrays, not objects.
-function githubJson(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-function previewTarget(number: number, kind: "issue" | "pull" = "issue", repo = "openclaw") {
-  return { kind, number, owner: "openclaw", repo };
-}
-
-function pngResponse() {
-  return new Response(new Uint8Array([137, 80, 78, 71]), {
-    headers: { "Content-Type": "image/png" },
-  });
-}
-
-function publicRepository() {
-  return githubJson({ private: false, visibility: "public" });
-}
-
-function githubRedirect(location: string) {
-  return new Response(null, { status: 301, headers: { Location: location } });
-}
-
-function requestUrl(input: RequestInfo | URL | undefined): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.href;
-  }
-  return input?.url ?? "";
-}
-
-function previewPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    additions: 101,
-    changed_files: 3,
-    closed_at: "2026-07-04T09:53:52Z",
-    created_at: "2026-07-04T05:03:47Z",
-    deletions: 12,
-    draft: false,
-    merged_at: "2026-07-04T09:53:52Z",
-    state: "closed",
-    title: "fix(agents): derive conversation scope from trusted group facts",
-    updated_at: "2026-07-04T09:53:55Z",
-    base: { repo: { url: "https://api.github.com/repos/openclaw/openclaw" } },
-    repository_url: "https://api.github.com/repos/openclaw/openclaw",
-    user: {
-      avatar_url: "https://avatars.githubusercontent.com/u/58493?v=4",
-      login: "steipete",
-    },
-    ...overrides,
-  };
-}
-
-function managedIdentity(cacheScope: string, assertSelected: () => void = vi.fn()) {
-  return {
-    token: `token-${cacheScope}`,
-    cacheScope,
-    assertSelected,
-    revalidate: vi.fn(async () => assertSelected()),
-  };
-}
+import {
+  githubJson,
+  githubRedirect,
+  managedIdentity,
+  pngResponse,
+  previewPayload,
+  previewTarget,
+  publicRepository,
+  requestUrl,
+} from "./preview.test-support.js";
 
 let fixtureIdentity: ControlUiGitHubPreviewIdentity | undefined;
 function selectFixtureToken(token: string) {
@@ -888,12 +831,17 @@ describe("loadControlUiGitHubPreview", () => {
   it("does not reuse representations across transports, token rotations, or anonymous fallback", async () => {
     const target = previewTarget(940002);
     const validators: (string | null)[] = [];
+    let avatarReads = 0;
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      if (requestUrl(input).includes("avatars.githubusercontent.com")) {
+        avatarReads += 1;
+        return pngResponse();
+      }
       if (requestUrl(input).endsWith("/repos/openclaw/openclaw")) {
         return publicRepository();
       }
       validators.push(new Headers(init?.headers).get("If-None-Match"));
-      const response = githubJson(previewPayload({ user: { login: "octocat" } }));
+      const response = githubJson(previewPayload());
       response.headers.set("etag", '"item"');
       return response;
     });
@@ -906,6 +854,11 @@ describe("loadControlUiGitHubPreview", () => {
     await loadControlUiGitHubPreview(target, rotated, fetchMock);
     const secondTransport: typeof fetch = (input, init) => fetchMock(input, init);
     await loadControlUiGitHubPreview(target, identity, secondTransport);
+    await loadControlUiGitHubPreview(
+      target,
+      { ...identity, cacheScope: "another-reader-scope" },
+      fetchMock,
+    );
     const normal = fetchMock.getMockImplementation()!;
     fetchMock.mockImplementation(async (input, init) =>
       new Headers(init?.headers).has("Authorization") ? githubJson({}, 401) : normal(input, init),
@@ -913,29 +866,51 @@ describe("loadControlUiGitHubPreview", () => {
     await loadControlUiGitHubPreview(target, identity, fetchMock, true);
     fetchMock.mockImplementation(normal);
     await loadControlUiGitHubPreview(target, identity, fetchMock, true);
-    expect(validators).toEqual([null, null, null, null, null]);
+    expect(validators).toEqual([null, null, null, null, null, null]);
+    expect(avatarReads).toBe(6);
   });
 
-  it("rechecks visibility after a conditional item response", async () => {
-    let repositoryReads = 0;
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
-      if (requestUrl(input).endsWith("/repos/openclaw/openclaw")) {
-        return ++repositoryReads === 4 ? githubJson({ private: true }) : publicRepository();
+  it.each(["private", "retired"])(
+    "rejects %s access after a conditional item response",
+    async (cause) => {
+      let repositoryReads = 0;
+      let avatarReads = 0;
+      let retired = false;
+      const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+        if (requestUrl(input).includes("avatars.githubusercontent.com")) {
+          avatarReads += 1;
+          return pngResponse();
+        }
+        if (requestUrl(input).endsWith("/repos/openclaw/openclaw")) {
+          if (++repositoryReads === 4) {
+            retired = cause === "retired";
+            return retired ? publicRepository() : githubJson({ private: true });
+          }
+          return publicRepository();
+        }
+        if (new Headers(init?.headers).has("If-None-Match")) {
+          return new Response(null, { status: 304 });
+        }
+        const response = githubJson(previewPayload());
+        response.headers.set("etag", '"item"');
+        return response;
+      });
+      const target = previewTarget(940003);
+      const identity = managedIdentity("conditional-private", () => {
+        if (retired) {
+          throw new Error("identity retired");
+        }
+      });
+      await loadControlUiGitHubPreview(target, identity, fetchMock);
+      const refreshed = loadControlUiGitHubPreview(target, identity, fetchMock, true);
+      if (cause === "retired") {
+        await expect(refreshed).rejects.toThrow("identity retired");
+      } else {
+        await expect(refreshed).rejects.toMatchObject({ statusCode: 404 });
       }
-      if (new Headers(init?.headers).has("If-None-Match")) {
-        return new Response(null, { status: 304 });
-      }
-      const response = githubJson(previewPayload({ user: { login: "octocat" } }));
-      response.headers.set("etag", '"item"');
-      return response;
-    });
-    const target = previewTarget(940003);
-    const identity = managedIdentity("conditional-private");
-    await loadControlUiGitHubPreview(target, identity, fetchMock);
-    await expect(
-      loadControlUiGitHubPreview(target, identity, fetchMock, true),
-    ).rejects.toMatchObject({ statusCode: 404 });
-  });
+      expect(avatarReads).toBe(1);
+    },
+  );
 
   it("does not let a failed older request replace an explicit refresh", async () => {
     const started = createDeferred<void>();

@@ -197,20 +197,31 @@ describe("cron controller", () => {
     });
   });
 
-  it("submits webhook delivery", async () => {
-    const { call, result } = await createCronSubmitHarness("webhook", {
-      form: {
-        name: "Webhook",
-        payloadText: "run",
-        deliveryMode: "webhook",
-        deliveryTo: "https://example.invalid/cron",
-      },
-    }).submit();
-    expect(result.saved).toBe(true);
-    expect(requestPayload(call)).toMatchObject({
+  it.each([
+    {
       name: "Webhook",
-      delivery: { mode: "webhook", to: "https://example.invalid/cron" },
+      form: { deliveryMode: "webhook", deliveryTo: "https://example.invalid/cron" },
+      delivery: expect.objectContaining({ mode: "webhook", to: "https://example.invalid/cron" }),
+    },
+    {
+      name: "Main event",
+      form: {
+        sessionTarget: "main",
+        payloadKind: "systemEvent",
+        deliveryMode: "announce",
+        deliveryTo: "buddy",
+      },
+      delivery: { mode: "none" },
+    },
+  ] as const)("submits normalized delivery for $name", async ({ name, form, delivery }) => {
+    const { state, submit } = createCronSubmitHarness(name, {
+      form: { name, payloadText: "run", ...form },
     });
+    const { call, result } = await submit();
+    expect(result.saved).toBe(true);
+    expect(requestPayload(call).name).toBe(name);
+    expect(requestPayload(call).delivery).toEqual(delivery);
+    expect(state.cronForm.deliveryMode).toBe("none");
   });
 
   it.each([{ job: { id: "wrapped" } }])("returns the saved id from %j", async (response) => {
@@ -257,21 +268,6 @@ describe("cron controller", () => {
       thinking: null,
       timeoutSeconds: null,
     });
-  });
-
-  it("clears unsupported announce delivery for main-session events", async () => {
-    const { state, submit } = createCronSubmitHarness("main-event", {
-      form: {
-        name: "Main event",
-        sessionTarget: "main",
-        payloadKind: "systemEvent",
-        payloadText: "run",
-        deliveryMode: "announce",
-        deliveryTo: "buddy",
-      },
-    });
-    expect(requestPayload((await submit()).call).delivery).toEqual({ mode: "none" });
-    expect(state.cronForm.deliveryMode).toBe("none");
   });
 
   it("saves exact timing and explicit owner clearing in an event update", async () => {
@@ -620,7 +616,29 @@ describe("cron controller", () => {
     expect(requestPatch(call)).not.toHaveProperty("payload");
   });
 
-  it("clears persisted failure alert routing fields when their edit inputs are blanked", async () => {
+  it.each([
+    {
+      name: "blank routing fields",
+      form: {
+        failureAlertChannel: "last",
+        failureAlertDeliveryMode: "",
+        failureAlertAfter: "",
+        failureAlertTo: "",
+        failureAlertCooldownSeconds: "",
+        failureAlertAccountId: "",
+      },
+      expected: {
+        channel: "last",
+        mode: null,
+        includeSkipped: true,
+        after: null,
+        to: null,
+        cooldownMs: null,
+        accountId: null,
+      },
+    },
+    { name: "inheritance", form: { failureAlertMode: "inherit" }, expected: null },
+  ] as const)("clears persisted failure alert overrides with $name", async ({ form, expected }) => {
     const job = createCronJob({
       id: "job-clear-alert-fields",
       name: "Clear failure alert fields",
@@ -637,36 +655,11 @@ describe("cron controller", () => {
     });
     const { state, submit } = createCronEditHarness(job);
 
-    state.cronForm.failureAlertChannel = "last";
-    state.cronForm.failureAlertDeliveryMode = "";
-    state.cronForm.failureAlertAfter = "";
-    state.cronForm.failureAlertTo = "";
-    state.cronForm.failureAlertCooldownSeconds = "";
-    state.cronForm.failureAlertAccountId = "";
+    Object.assign(state.cronForm, form);
     const call = await submit();
 
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- verify explicit clears on the wire
-    expect(JSON.parse(JSON.stringify(requestPatch(call).failureAlert))).toEqual({
-      channel: "last",
-      mode: null,
-      includeSkipped: true,
-      after: null,
-      to: null,
-      cooldownMs: null,
-      accountId: null,
-    });
-  });
-
-  it("clears an alert override when returning to inheritance", async () => {
-    const { state, submit } = createCronEditHarness(
-      createCronJob({
-        id: "inherit",
-        name: "Inherit",
-        failureAlert: { after: 2, channel: "telegram" },
-      }),
-    );
-    state.cronForm.failureAlertMode = "inherit";
-    expect(requestPatch(await submit()).failureAlert).toBeNull();
+    expect(JSON.parse(JSON.stringify(requestPatch(call).failureAlert))).toEqual(expected);
   });
 
   it.each<[Partial<CronState["cronForm"]>, string, string]>([

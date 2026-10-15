@@ -336,6 +336,9 @@ async function callAgentToolGatewayRequestBound<T>(
     ...(request.replyExpectation ? { replyExpectation: request.replyExpectation } : {}),
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" as const },
+    ...(method === "plugin.approval.request" && runtimeIdentity?.approvalOwnerPluginId
+      ? { allowHostPluginApprovalRequest: true }
+      : {}),
     ...(request.agentRunTracking ? { agentRunTracking: request.agentRunTracking } : {}),
     ...(request.agentToolCaller ? { agentToolCaller: request.agentToolCaller } : {}),
     ...(sessionCreation ? { sessionCreation } : {}),

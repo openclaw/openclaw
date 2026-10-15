@@ -225,7 +225,7 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
         label: card().title,
         description: lifecycle().session?.displayName ?? formatted().detail,
         style:
-          "--openclaw-modal-width: 620px; --openclaw-modal-backdrop-filter: none; --wa-color-overlay-modal: rgba(0, 0, 0, 0.24);",
+          "--openclaw-modal-width: 620px; --openclaw-modal-backdrop-filter: none; --openclaw-modal-backdrop-color: rgba(0, 0, 0, 0.24);",
         onCancel: dismissDetails,
       }}
     >

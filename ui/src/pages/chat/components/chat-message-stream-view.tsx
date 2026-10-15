@@ -32,7 +32,8 @@ import {
 } from "./chat-reply-attribution.ts";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { syncToolDisclosureOverflow } from "./chat-tool-cards.solid.tsx";
+import { BrowserTabPreviews, syncToolDisclosureOverflow } from "./chat-tool-cards.solid.tsx";
+import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 import { ChatToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";
 import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
@@ -302,7 +303,7 @@ type WorkGroupSummaryOptions = {
   expanded: boolean;
   onToggle: () => void;
   presentation?: "standalone" | "continuation";
-  browserTabPreviews?: unknown;
+  browserTabPreviews?: readonly BrowserTabPreview[];
   bubbleMode?: boolean;
 };
 
@@ -418,7 +419,7 @@ function WorkGroupSummaryBody(props: {
       </button>
       <div class="chat-work-group__separator" aria-hidden="true" />
       <Show when={!props.options.expanded && !props.options.bubbleMode}>
-        <LitContent value={props.options.browserTabPreviews} />
+        <BrowserTabPreviews previews={props.options.browserTabPreviews} />
       </Show>
     </div>
   );

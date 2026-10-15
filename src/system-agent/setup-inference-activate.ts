@@ -290,6 +290,7 @@ async function activateCandidate(
     effects: { credentialsSaved: false },
     beforePersistentEffect: async () => {
       throwIfSetupInferenceCancelled(params);
+      params.onActivationStarted?.();
       await params.beforePersistentEffect?.();
       throwIfSetupInferenceCancelled(params);
     },
@@ -506,6 +507,7 @@ async function verifyAndActivateCandidate(
     }
     throwIfSetupInferenceCancelled(params);
   }
+  params.onActivationStarted?.();
   const revalidateOwner = async (candidateRoute: SystemAgentConfiguredRoute) => {
     if ("binding" in verification) {
       let current: SetupHarnessVerification | undefined;
@@ -515,6 +517,7 @@ async function verifyAndActivateCandidate(
             route: candidateRoute,
             deps,
             cache,
+            generation,
             signal: params.signal,
             assertCurrent: () => throwIfSetupInferenceCancelled(params),
           }),
