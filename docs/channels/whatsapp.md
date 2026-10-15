@@ -522,6 +522,8 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
 
 Notes: `messages.ackReactionScope` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain acknowledgment reactions. WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the acknowledgment after the final done/error state.
 
+A message queued behind an active run keeps its acknowledgment until its follow-up reports success or failure. Queue admission alone does not produce an error reaction, including when several messages are collected into one follow-up.
+
 ### Active-turn typing
 
 For admitted automatic turns where typing is allowed, WhatsApp sends a

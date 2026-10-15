@@ -1,3 +1,4 @@
+import { createStatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
@@ -108,6 +109,31 @@ async function fixture(overrides: Partial<Params> & { msg?: Message } = {}) {
     return result;
   };
   return { plan, deliver, preparePayload, deliverReply, replyLogger };
+}
+function statusReactionFixture() {
+  const reactions: string[] = [];
+  const controller = createStatusReactionController({
+    enabled: true,
+    adapter: {
+      setReaction: async (emoji) => {
+        reactions.push(emoji);
+      },
+    },
+    initialEmoji: "👀",
+    timing: { doneHoldMs: 0, errorHoldMs: 0 },
+  });
+  let restored!: () => void;
+  const nextRestoration = () =>
+    new Promise<void>((resolve) => {
+      restored = resolve;
+    });
+  const restoration = nextRestoration();
+  const restoreInitial = controller.restoreInitial;
+  vi.spyOn(controller, "restoreInitial").mockImplementation(async () => {
+    await restoreInitial();
+    restored();
+  });
+  return { controller, reactions, restoration, nextRestoration };
 }
 function nonPortablePaths(value: unknown, path = "inbound", seen = new Set<object>()): string[] {
   if (typeof value === "function") {
@@ -487,36 +513,43 @@ describe("WhatsApp reply delivery", () => {
       });
     },
   );
+  it.each([
+    { outcome: "completed" as const, emoji: "✅" },
+    { outcome: "failed" as const, emoji: "❌" },
+  ])(
+    "finishes a queued source reaction with $emoji when its follow-up is $outcome",
+    async ({ outcome, emoji }) => {
+      const { controller, reactions, restoration, nextRestoration } = statusReactionFixture();
+      const { plan } = await fixture({ statusReactionController: controller });
+      expect(plan.finalize({ deferredToActiveRun: "followup", counts: {} })).toBe(false);
+      await restoration;
+      expect(reactions).toEqual(["👀"]);
+
+      const completed = nextRestoration();
+      plan.replyOptions.onAgentRunTerminalOutcome?.(outcome);
+      await completed;
+      expect(reactions).toEqual(["👀", emoji, "👀"]);
+    },
+  );
+  it("preserves a follow-up outcome received before the original dispatch finalizes", async () => {
+    const { controller, reactions, restoration } = statusReactionFixture();
+    const { plan } = await fixture({ statusReactionController: controller });
+    plan.replyOptions.onAgentRunTerminalOutcome?.("completed");
+    expect(reactions).toEqual([]);
+    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
+    await restoration;
+    expect(reactions).toEqual(["✅", "👀"]);
+  });
   it("keeps visible delivery successful while marking a failed run as an error", async () => {
-    let restored!: () => void;
-    const restoration = new Promise<void>((resolve) => {
-      restored = resolve;
-    });
-    const controller = {
-      setQueued: vi.fn(),
-      setThinking: vi.fn(),
-      setTool: vi.fn(),
-      setCompacting: vi.fn(),
-      cancelPending: vi.fn(),
-      setDone: vi.fn(async () => undefined),
-      setError: vi.fn(async () => undefined),
-      clear: vi.fn(async () => undefined),
-      restoreInitial: vi.fn(async () => {
-        restored();
-      }),
-    };
+    const { controller, reactions, restoration } = statusReactionFixture();
     readAgentRunTerminalOutcome.mockReturnValueOnce("failed");
     const { plan, deliver, deliverReply } = await fixture({ statusReactionController: controller });
     await deliver({ text: "visible failure" });
     expect(plan.finalize({ queuedFinal: false, counts: { final: 1 } })).toBe(true);
     await restoration;
     expect(deliverReply).toHaveBeenCalledOnce();
-    expect(controller.setError).toHaveBeenCalledOnce();
-    expect(controller.setDone).not.toHaveBeenCalled();
+    expect(reactions).toEqual(["❌", "👀"]);
     expect(controller.restoreInitial).toHaveBeenCalledOnce();
-    expect(controller.setError.mock.invocationCallOrder[0]).toBeLessThan(
-      controller.restoreInitial.mock.invocationCallOrder[0]!,
-    );
   });
   it("does not treat unaccepted provider text as sent", async () => {
     const deliverReply = vi.fn<Params["deliverReply"]>(async () => ({

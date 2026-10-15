@@ -567,6 +567,19 @@ export function createWhatsAppReplyPlan(params: {
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.cfg.channels?.whatsapp);
   let didSendReply = false;
   let didLogHeartbeatStrip = false;
+  let reactionDeferred = false;
+  let agentRunOutcome: "completed" | "failed" | undefined;
+  const finalizeStatusReaction = async (outcome: typeof agentRunOutcome) => {
+    if (!statusReactionController) {
+      return;
+    }
+    if (outcome === "failed") {
+      await statusReactionController.setError();
+    } else if (outcome === "completed") {
+      await statusReactionController.setDone();
+    }
+    await statusReactionController.restoreInitial();
+  };
 
   const recordDeliveredPayload = (
     payload: DeliverableWhatsAppOutboundPayload<ReplyPayload>,
@@ -782,6 +795,12 @@ export function createWhatsAppReplyPlan(params: {
     onModelSelected: params.onModelSelected,
     ...(statusReactionController
       ? {
+          onAgentRunTerminalOutcome: (outcome: "completed" | "failed") => {
+            agentRunOutcome = outcome;
+            if (reactionDeferred) {
+              void finalizeStatusReaction(outcome);
+            }
+          },
           onToolStart: async (payload: { name?: string }) => {
             const toolName = payload.name?.trim();
             if (toolName) {
@@ -818,15 +837,15 @@ export function createWhatsAppReplyPlan(params: {
       const didQueueVisibleReply = hasVisibleInboundReplyDispatch(dispatchResult);
       const didDeliverVisibleReply = didSendReply || dispatchResult.observedReplyDelivery === true;
 
-      if (statusReactionController) {
-        void finalizeWhatsAppStatusReaction({
-          controller: statusReactionController,
-          outcome:
-            readAgentRunTerminalOutcome(dispatchResult) === "failed" || !didDeliverVisibleReply
-              ? "error"
-              : "done",
-        });
-      }
+      // Queued follow-ups retain this source's observer; admission itself is not a failure.
+      reactionDeferred = dispatchResult.deferredToActiveRun !== undefined;
+      void finalizeStatusReaction(
+        reactionDeferred
+          ? agentRunOutcome
+          : readAgentRunTerminalOutcome(dispatchResult) === "failed" || !didDeliverVisibleReply
+            ? "failed"
+            : "completed",
+      );
       if (!didQueueVisibleReply && !didDeliverVisibleReply) {
         logVerbose("Skipping auto-reply: silent token or no text/media returned from resolver");
       }
@@ -835,15 +854,4 @@ export function createWhatsAppReplyPlan(params: {
   };
 }
 
-async function finalizeWhatsAppStatusReaction(params: {
-  controller: StatusReactionController;
-  outcome: "done" | "error";
-}): Promise<void> {
-  if (params.outcome === "done") {
-    await params.controller.setDone();
-  } else {
-    await params.controller.setError();
-  }
-  await params.controller.restoreInitial();
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
