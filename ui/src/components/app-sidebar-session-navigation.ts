@@ -331,7 +331,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   ): SidebarRecentSession[] {
     const result = personalSidebarOwnerProjection(this, projected, ownerFacet);
     const agentId = this.sidebarAgentsMode === "roster" ? "*" : this.expandedAgentId();
-    this.sessionOwnerFilter.observeOwnerFacet(agentId, ownerFacet && result.ownershipVisibility);
+    this.sessionOwnerFilter.observeOwnerFacet(agentId, ownerFacet);
     this.ownerOptions = result.ownerOptions;
     this.sessionOwnershipVisibility = result.ownershipVisibility;
     this.activeSessionOwnerId = result.activeOwnerId;

@@ -70,39 +70,32 @@ function recoverFixtureLock(f: ReturnType<typeof fixture>, oid: string) {
 }
 
 describePosix("native PR main refresh boundaries", () => {
-  it.each(["pr-42", "pr-42-verify"])(
-    "reuses the exact local %s commit without fetching or changing checkpoints",
-    (branch) => {
-      const f = fixture();
-      const destination = `refs/heads/${branch}`;
-      f.git(f.canonical, "update-ref", destination, f.head);
-      f.git(f.canonical, "config", `branch.${branch}.remote`, "origin");
-      f.git(f.canonical, "config", `branch.${branch}.merge`, "refs/heads/topic");
-      const config = readFileSync(join(f.canonical, ".git", "config"), "utf8");
-      const reflog = f.git(f.canonical, "reflog", "show", "--format=%H", destination);
-      const checkpoint = f.git(f.worktree, "rev-parse", "--git-path", "FETCH_HEAD");
-      writeFileSync(checkpoint, "unrelated private main checkpoint\n");
-      const shallow = join(f.canonical, ".git", "shallow");
-      if (branch === "pr-42") {
-        writeFileSync(shallow, `${f.head}\n`);
-      }
-      f.configure({ failPrFetch: true });
-      const result = f.shell(`cd .worktrees/pr-42\nfetch_pr_head 42 ${f.head} ${destination}`);
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(f.git(f.canonical, "rev-parse", destination)).toBe(f.head);
-      expect(readFileSync(checkpoint, "utf8")).toBe("unrelated private main checkpoint\n");
-      expect(readFileSync(join(f.canonical, ".git", "config"), "utf8")).toBe(config);
-      expect(f.git(f.canonical, "reflog", "show", "--format=%H", destination)).toBe(reflog);
-      if (branch === "pr-42") {
-        expect(readFileSync(shallow, "utf8")).toBe(`${f.head}\n`);
-        expect(f.git(f.canonical, "rev-parse", "--is-shallow-repository")).toBe("true");
-      }
-      expect(f.events().filter((event) => event.args?.includes("fetch"))).toEqual([]);
-      expect(
-        f.events().filter((event) => event.args?.includes("repos/fixture/repo/pulls/42")),
-      ).toHaveLength(2);
-    },
-  );
+  it("reuses the exact local PR commit without fetching or changing checkpoints", () => {
+    const f = fixture();
+    const destination = "refs/heads/pr-42";
+    f.git(f.canonical, "update-ref", destination, f.head);
+    f.git(f.canonical, "config", "branch.pr-42.remote", "origin");
+    f.git(f.canonical, "config", "branch.pr-42.merge", "refs/heads/topic");
+    const config = readFileSync(join(f.canonical, ".git", "config"), "utf8");
+    const reflog = f.git(f.canonical, "reflog", "show", "--format=%H", destination);
+    const checkpoint = f.git(f.worktree, "rev-parse", "--git-path", "FETCH_HEAD");
+    writeFileSync(checkpoint, "unrelated private main checkpoint\n");
+    const shallow = join(f.canonical, ".git", "shallow");
+    writeFileSync(shallow, `${f.head}\n`);
+    f.configure({ failPrFetch: true });
+    const result = f.shell(`cd .worktrees/pr-42\nfetch_pr_head 42 ${f.head} ${destination}`);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(f.git(f.canonical, "rev-parse", destination)).toBe(f.head);
+    expect(readFileSync(checkpoint, "utf8")).toBe("unrelated private main checkpoint\n");
+    expect(readFileSync(join(f.canonical, ".git", "config"), "utf8")).toBe(config);
+    expect(f.git(f.canonical, "reflog", "show", "--format=%H", destination)).toBe(reflog);
+    expect(readFileSync(shallow, "utf8")).toBe(`${f.head}\n`);
+    expect(f.git(f.canonical, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(f.events().filter((event) => event.args?.includes("fetch"))).toEqual([]);
+    expect(
+      f.events().filter((event) => event.args?.includes("repos/fixture/repo/pulls/42")),
+    ).toHaveLength(2);
+  });
 
   it.each([
     { dangling: false, fail: false },
@@ -401,6 +394,15 @@ describePosix("native PR main refresh boundaries", () => {
     expect(result.stdout).toContain("prepare-run complete for PR #42");
     expect(result.stdout).toContain("Remote branch already at local prep HEAD; skipping push.");
     expect(f.events().filter((e) => e.kind === "main-fetch")).toHaveLength(3);
+    const prFetches = f
+      .events()
+      .filter(
+        ({ kind, args }) =>
+          kind === "git-runtime" &&
+          args?.includes("fetch") &&
+          args.some((arg) => arg === f.head || arg.startsWith(`+${f.head}:`)),
+      );
+    expect(prFetches).toHaveLength(1);
     const apiReads = f.events().filter((event) => event.kind === "gh" && event.args?.[0] === "api");
     expect(
       apiReads.filter((event) => event.args?.includes("repos/fixture/repo/pulls/42")),

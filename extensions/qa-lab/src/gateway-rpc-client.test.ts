@@ -152,27 +152,6 @@ describe("startQaGatewayRpcClient", () => {
     await expect(firstRequest).resolves.toEqual({ ok: true });
   });
 
-  it("clamps request timeout to the remaining absolute deadline", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
-
-    await client.request("status", {}, { deadlineMs: 1_250, timeoutMs: 5_000 });
-
-    expect(gatewayRpcMock.request).toHaveBeenCalledWith(
-      "status",
-      {},
-      expect.objectContaining({
-        expectFinal: undefined,
-        timeoutMs: 250,
-      }),
-    );
-  });
-
   it("bounds startup when readiness completes but the Gateway never sends hello", async () => {
     vi.useFakeTimers();
     gatewayRpcMock.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({

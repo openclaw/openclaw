@@ -87,7 +87,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     let changed = false;
     for (const key of keys) {
       const previous = record.writeScopes.get(key);
-      if (!previous || Atomics.load(new Int32Array(previous.state), 1) !== 0) {
+      if (!previous || Atomics.load(previous.state, 1) !== 0) {
         record.writeScopes.set(key, createScopeRevision());
         if (threadId === 0) {
           advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
@@ -105,7 +105,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   function createScopeRevision(): ScopedWriteRevision {
     return {
       identity: randomUUID(),
-      state: new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT),
+      state: new Int32Array(new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT)),
     };
   }
 
@@ -130,7 +130,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       let changed = false;
       for (const key of keys) {
         const revision = record.writeScopes.get(key);
-        if (revision && Atomics.exchange(new Int32Array(revision.state), 1, 1) === 0) {
+        if (revision && Atomics.exchange(revision.state, 1, 1) === 0) {
           changed = true;
         }
       }
@@ -166,9 +166,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       keys.map((key) => [
         key,
         record.writeScopes.get(key)!.identity,
-        (Atomics.load(new Int32Array(record.writeScopes.get(key)!.state), 0) +
-          (pending?.has(key) ? 1 : 0)) |
-          0,
+        (Atomics.load(record.writeScopes.get(key)!.state, 0) + (pending?.has(key) ? 1 : 0)) | 0,
       ]),
     ]);
   }
@@ -184,7 +182,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       keys.map((key) => [
         key,
         state.localScopeRevisions.get(database)!.get(key)!.identity,
-        (Atomics.load(new Int32Array(state.localScopeRevisions.get(database)!.get(key)!.state), 0) +
+        (Atomics.load(state.localScopeRevisions.get(database)!.get(key)!.state, 0) +
           (pending?.has(key) ? 1 : 0)) |
           0,
       ]),
@@ -329,11 +327,11 @@ export function createSqliteDatabaseWriteReceipts(owner: {
         for (const key of keys) {
           const localRevision = local?.get(key);
           if (localRevision) {
-            Atomics.add(new Int32Array(localRevision.state), 0, 1);
+            Atomics.add(localRevision.state, 0, 1);
           }
           const revision = record?.writeScopes.get(key);
-          if (revision && Atomics.load(new Int32Array(revision.state), 1) === 0) {
-            Atomics.add(new Int32Array(revision.state), 0, 1);
+          if (revision && Atomics.load(revision.state, 1) === 0) {
+            Atomics.add(revision.state, 0, 1);
           } else if (
             record &&
             (revision ||

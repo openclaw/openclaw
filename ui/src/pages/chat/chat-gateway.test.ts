@@ -476,29 +476,33 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunStartup).toBeNull();
   });
 
-  it("shows startup status until the first chat delta and ignores late status", () => {
+  it("keeps preparation, model wait, and answer status monotonic through an empty replacement", () => {
     const state = createState({ chatRunId: "run-1", chatStream: "" });
-    const status: ChatEventPayload = chatEvent("status", { phase: "preparing_context" });
-
-    handleChatGatewayEvent(state, status);
+    const label = () =>
+      chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
+    receive(state, "status", { phase: "preparing_context", seq: 1 });
+    expect(label()).toBe("Preparing this turn…");
+    receive(state, "delta", {
+      runId: "run-other",
+      message: { role: "assistant", content: "Other" },
+    });
+    expect(label()).toBe("Preparing this turn…");
+    receive(state, "status", { phase: "starting_model", seq: 2 });
+    expect(label()).toBe("Waiting for a response");
+    receive(state, "status", { phase: "preparing_context", seq: 3 });
+    expect(label()).toBe("Waiting for a response");
+    receive(state, "delta", { message: { role: "assistant", content: "Hello" } });
     expect(state.chatRunStartup).toEqual({
       state: "status",
+      phase: "answer",
       runId: "run-1",
-      phase: "preparing_context",
+      seq: 2,
     });
-
-    receive(state, "delta", { runId: "run-other", deltaText: "Other reply" });
-    expect(state.chatRunStartup).toEqual({
-      state: "status",
-      runId: "run-1",
-      phase: "preparing_context",
-    });
-
-    receive(state, "delta", { deltaText: "Hello" });
-    expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
-
-    handleChatGatewayEvent(state, status);
-    expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
+    receive(state, "delta", { replace: true, message: { role: "assistant", content: "" } });
+    receive(state, "status", { phase: "preparing_context", seq: 4 });
+    expect(state.chatRunStartup).toMatchObject({ phase: "answer" });
+    expect(label()).toBeUndefined();
+    expect(state.chatRunId).toBe("run-1");
   });
 
   it.each([true])(

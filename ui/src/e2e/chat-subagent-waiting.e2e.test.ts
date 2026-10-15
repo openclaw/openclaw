@@ -537,22 +537,6 @@ suite.define(() => {
         await expect.poll(requestClock).toBe(history[0]!.timestamp);
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         expect(await workingTokens()).toBe("4.1k output tokens");
-        const answerText = "The backend is complete. I am reviewing the result.";
-        await gateway.emitGatewayEvent("chat", {
-          sessionKey: parent.key,
-          runId: "parent-resumed-run",
-          state: "delta",
-          deltaText: answerText,
-          message: { role: "assistant", content: answerText, timestamp: now + 65_000 },
-        });
-        await waitLine.waitFor({ state: "hidden" });
-        await page
-          .locator(
-            ".chat-pane-cache__pane--active .chat-working-indicator:not(.chat-working-indicator--subagents)",
-          )
-          .waitFor();
-        expect(await indicator.textContent()).not.toContain("Waiting on");
-        expect(await activePane.locator(".chat-notice").count()).toBe(0);
         if (artifactDir) {
           const frame = await takeControlUiScreenshotFrame(
             page,
@@ -562,13 +546,23 @@ suite.define(() => {
           );
           await writeFile(path.join(artifactDir, "resumed-dark-1280.png"), frame.png);
         }
-        // Still one assistant row once it answers, on the same clock, and both
-        // runs' tokens count on its line.
+        const answerText = "The backend is complete. I am reviewing the result.";
+        await gateway.emitGatewayEvent("chat", {
+          sessionKey: parent.key,
+          runId: "parent-resumed-run",
+          state: "delta",
+          deltaText: answerText,
+          message: { role: "assistant", content: answerText, timestamp: now + 65_000 },
+        });
+        await waitLine.waitFor({ state: "hidden" });
+        // The answer phase ends visual activity while the run remains unsettled.
+        await indicator.waitFor({ state: "hidden" });
+        expect(await activePane.locator(".chat-notice").count()).toBe(0);
+        // The answer keeps one assistant row; its final recap retains the request
+        // clock and both runs' token totals.
         await block.getByText(answerText, { exact: true }).waitFor();
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
-        expect(await requestClock()).toBe(history[0]!.timestamp);
         await reportUsage("parent-resumed-run", 256);
-        await expect.poll(workingTokens).toBe("4.4k output tokens");
 
         const answer = {
           role: "assistant",
@@ -621,9 +615,9 @@ suite.define(() => {
         // resumed run's own 2s, with both runs' tokens.
         const recap = activePane.locator(".chat-turn-recap");
         await recap.waitFor();
-        expect((await recap.textContent())?.replace(/\s+/g, " ").trim()).toMatch(
-          /^Done in 1 minute,? 17 seconds · 4\.4k output tokens$/,
-        );
+        expect(
+          (await recap.locator(":scope > span").allTextContents()).map((text) => text.trim()),
+        ).toEqual(["4.4k output tokens", "·", "Done in 1 minute, 17 seconds"]);
         expect(await block.locator(".chat-turn-recap").count()).toBe(1);
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         // The finished subagent's row shows how long it took, and its name shows it in the panel.

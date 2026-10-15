@@ -321,6 +321,9 @@ export class ShellGatewayOwner {
         {
           detail: {
             open: command.open,
+            ...(command.panel === "portal" && commandParams.requestId
+              ? { requestId: commandParams.requestId }
+              : {}),
             ...(command.panel === "plugin"
               ? {
                   pluginId: command.pluginId,

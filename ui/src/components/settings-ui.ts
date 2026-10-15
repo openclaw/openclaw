@@ -1,23 +1,13 @@
-// Settings design-language primitives. Every settings surface builds its
-// layout through these helpers so pages cannot drift back into bespoke
-// card/pill markup. Styles live in ui/src/styles/settings.css and the shared
-// ui/src/styles/settings-controls.css; rules in ui/docs/design-system/settings-design.md.
+// Remaining Lit settings adapters; Solid primitives live in ./solid/settings-ui.tsx.
 import { html, nothing, type TemplateResult } from "lit";
 import { Directive, directive } from "lit/directive.js";
 import { live } from "lit/directives/live.js";
-import { shellLayoutTraits } from "../app/shell-layout-traits.ts";
-import { icons } from "./icons.ts";
 import {
   nextSettingsRadioName,
   settingsRadioChange,
   settingsRadioClick,
   settingsRadioKeyDown,
-  settingsSwitchChange,
-  settingsSwitchClick,
-  settingsSwitchKeyDown,
-  settingsToggleRowClick,
   type SettingsSegmentedProps,
-  type SettingsToggleControl,
 } from "./settings-controls.ts";
 
 type SettingsRowControl = TemplateResult | typeof nothing;
@@ -31,106 +21,6 @@ type SettingsRowProps = {
   /** Full-width control below the text through the narrow-layout breakpoint. */
   stackedOnNarrow?: boolean;
 };
-
-type SettingsSectionProps = {
-  title?: unknown;
-  description?: unknown;
-  /** Right-aligned inline actions next to the heading (e.g. an Add button). */
-  actions?: TemplateResult;
-  /** Section notice above the group, keeping bordered callouts outside the card. */
-  notice?: TemplateResult | typeof nothing;
-  count?: number;
-  danger?: boolean;
-};
-
-type SettingsPageHeaderProps = {
-  title: unknown;
-  subtitle?: unknown;
-  actions?: TemplateResult | typeof nothing;
-};
-
-export function renderSettingsPage(
-  children: unknown,
-  options: { wide?: boolean } = {},
-): TemplateResult {
-  const className = options.wide ? "settings-page settings-page--wide" : "settings-page";
-  return html`<div
-    class=${className}
-    ${shellLayoutTraits({ settingsPage: true, settingsWide: options.wide })}
-  >
-    ${children}
-  </div>`;
-}
-
-export function renderSettingsPageHeader(props: SettingsPageHeaderProps): TemplateResult {
-  return html`
-    <section
-      class="content-header content-header--settings"
-      ${shellLayoutTraits({ toolbarHeader: true })}
-    >
-      <div>
-        <h1 class="page-title">${props.title}</h1>
-        ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}
-      </div>
-      ${
-        props.actions && props.actions !== nothing
-          ? html`<div class="page-header-actions">${props.actions}</div>`
-          : nothing
-      }
-    </section>
-  `;
-}
-
-export function renderSettingsSection(props: SettingsSectionProps, rows: unknown): TemplateResult {
-  const description = props.description
-    ? html`<p class="settings-section__desc">${props.description}</p>`
-    : nothing;
-  const copy =
-    props.title || props.description
-      ? html`
-          <div class="settings-section__copy">
-            ${
-              props.title
-                ? html`
-                    <h2 class="settings-section__heading">
-                      ${props.title}${
-                        props.count !== undefined
-                          ? html` <span class="settings-count">${props.count}</span>`
-                          : nothing
-                      }
-                    </h2>
-                  `
-                : nothing
-            }
-            ${description}
-          </div>
-        `
-      : nothing;
-  const header =
-    copy || props.actions
-      ? html`
-          <div class="settings-section__header">
-            ${copy}
-            ${
-              props.actions
-                ? html`<div class="settings-section__actions">${props.actions}</div>`
-                : nothing
-            }
-          </div>
-        `
-      : nothing;
-  return html`
-    <section class="settings-section">
-      ${header} ${props.notice ?? nothing} ${renderSettingsGroup(rows, props)}
-    </section>
-  `;
-}
-
-/** A bare group surface without a section heading (rare; prefer sections). */
-function renderSettingsGroup(rows: unknown, options: { danger?: boolean } = {}) {
-  const groupClass = options.danger ? "settings-group settings-group--danger" : "settings-group";
-  return html`<div class=${groupClass}>${rows}</div>`;
-}
 
 function renderSettingsRowText(title: unknown, description: unknown) {
   return html`
@@ -159,68 +49,6 @@ export function renderSettingsRow(
           ? html`<div class="settings-row__control">${props.control}</div>`
           : nothing
       }
-    </div>
-  `;
-}
-
-export function renderSettingsNavRow(
-  props: Omit<SettingsRowProps, "stacked" | "stackedOnNarrow"> & { onClick: () => void },
-): TemplateResult {
-  return html`
-    <button type="button" class="settings-row settings-row--nav" @click=${props.onClick}>
-      ${renderSettingsRowText(props.title, props.description)}
-      <div class="settings-row__control">
-        ${props.control ?? nothing}
-        <span class="settings-row__chevron">${icons.chevronRight}</span>
-      </div>
-    </button>
-  `;
-}
-
-function renderToggleControl(props: SettingsToggleControl, label: unknown) {
-  const labelId = nextSettingsRadioName();
-  return html`<span class="settings-toggle">
-    <input
-      class="settings-toggle__input"
-      type="checkbox"
-      role="switch"
-      .checked=${live(props.checked)}
-      ?disabled=${props.disabled ?? false}
-      aria-labelledby=${labelId}
-      @click=${(event: MouseEvent) => settingsSwitchClick(event, props)}
-      @keydown=${(event: KeyboardEvent) => settingsSwitchKeyDown(event, props)}
-      @change=${(event: Event) => settingsSwitchChange(event, props)}
-    />
-    <span class="settings-toggle__control" aria-hidden="true"></span>
-    <span id=${labelId} class="settings-control__sr-label">${label}</span>
-  </span>`;
-}
-
-/** Toggle for a custom control slot; the row title is not an input label. */
-export function renderSettingsToggle(
-  props: SettingsToggleControl & { ariaLabel: string },
-): TemplateResult {
-  return renderToggleControl(props, props.ariaLabel);
-}
-
-/** The whole row activates the switch, whose accessible name follows the title. */
-export function renderSettingsToggleRow(
-  props: SettingsToggleControl & {
-    icon?: unknown;
-    title: unknown;
-    ariaLabel?: unknown;
-    description?: unknown;
-  },
-): TemplateResult {
-  return html`
-    <div
-      class="settings-row settings-row--toggle"
-      @click=${(event: MouseEvent) => settingsToggleRowClick(event, props)}
-    >
-      ${props.icon ?? nothing} ${renderSettingsRowText(props.title, props.description)}
-      <div class="settings-row__control">
-        ${renderToggleControl(props, props.ariaLabel ?? props.title)}
-      </div>
     </div>
   `;
 }
@@ -310,15 +138,4 @@ export function renderSettingsSegmented<T extends string>(
     </div>`;
   }
   return html`${settingsRadioGroup((name) => renderSettingsRadioGroup(props, name))}`;
-}
-
-export function renderSettingsValue(value: unknown, options: { mono?: boolean } = {}) {
-  const className = options.mono
-    ? "settings-row__value settings-row__value--mono"
-    : "settings-row__value";
-  return html`<span class=${className}>${value}</span>`;
-}
-
-export function renderSettingsEmpty(message: unknown): TemplateResult {
-  return html`<div class="settings-empty">${message}</div>`;
 }

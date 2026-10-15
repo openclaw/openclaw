@@ -17,7 +17,6 @@ import type { MenuItemBindings } from "./solid/menu.tsx";
 export type SidebarBuildChipProps = {
   basePath: string;
   gatewayVersion: string | null;
-  updateAttentionDismissed: boolean;
   onNavigate?: (routeId: "about") => void;
   variant: "identity" | "settings";
   menuAttributes?: MenuItemBindings;
@@ -27,10 +26,10 @@ function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement
   host.style.display = "contents";
   function renderContent() {
     const text =
-      props.variant === "settings" || props.updateAttentionDismissed
+      props.variant === "settings"
         ? formatSettingsBuildLabel(CONTROL_UI_BUILD_INFO, props.gatewayVersion)
         : formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO);
-    if (!text && !props.updateAttentionDismissed) {
+    if (!text) {
       return null;
     }
     return (
@@ -40,11 +39,7 @@ function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement
           class="sidebar-footer-build"
           href={pathForRoute("about", props.basePath)}
           role={props.variant === "identity" ? "menuitem" : undefined}
-          aria-label={
-            props.updateAttentionDismissed
-              ? `${t("aboutPage.artifactDetails")}. ${t("updates.sidebar.availableTitle")}`
-              : t("aboutPage.artifactDetails")
-          }
+          aria-label={t("aboutPage.artifactDetails")}
           onClick={(event) => {
             const onClick = props.menuAttributes?.onClick;
             if (onClick) {
@@ -59,11 +54,6 @@ function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement
           }}
         >
           {text ? <span class="sidebar-footer-build__text">{text}</span> : null}
-          {props.updateAttentionDismissed ? (
-            <span class="agent-select__badge sidebar-footer-build__update">
-              {t("updates.sidebar.availableTitle")}
-            </span>
-          ) : null}
         </a>
         <div slot="content" class="sidebar-hover-card sidebar-build-hover-card">
           {renderSidebarServerDetails(CONTROL_UI_BUILD_INFO, props.gatewayVersion)}
@@ -81,7 +71,6 @@ export const SidebarBuildChip = defineSolidBridge<SidebarBuildChipProps>(
     properties: {
       basePath: { default: "", attribute: false },
       gatewayVersion: { default: null, attribute: false },
-      updateAttentionDismissed: { default: false, attribute: false },
       onNavigate: { default: undefined, attribute: false },
       variant: { default: "identity", attribute: false },
       menuAttributes: { default: undefined, attribute: false },

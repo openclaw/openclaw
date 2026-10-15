@@ -13,6 +13,7 @@ import { createVitestWorkerRun } from "../scripts/lib/vitest-worker-run.mts";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
 import { agentReaderFixtureFiles } from "./non-isolated-runner.agent-reader-fixtures.ts";
+import { domResourceFixtureFiles } from "./non-isolated-runner.dom-fixtures.ts";
 import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway-lifecycle-fixtures.ts";
 import { mcpManagerFixtureFiles } from "./non-isolated-runner.mcp-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
@@ -471,6 +472,7 @@ it("reloads the redirected mock after a real import", () => {
     ...mcpManagerFixtureFiles(repoRoot),
     ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
+    ...domResourceFixtureFiles,
     ...agentReaderFixtureFiles(repoRoot, fixtureRoot),
     ...solidFixtureFiles(repoRoot),
   };
@@ -529,8 +531,8 @@ async function assertCompletion(
 
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 68,
-    numPassedTests: 67,
+    numTotalTests: 70,
+    numPassedTests: 69,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,

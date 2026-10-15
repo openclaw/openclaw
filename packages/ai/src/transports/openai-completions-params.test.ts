@@ -183,6 +183,108 @@ describe("OpenAI completions output budgets", () => {
 
 describe("OpenAI completions reasoning", () => {
   it.each(["direct", "managed"] as const)(
+    "honors declared off efforts for inferred custom Z.AI (%s)",
+    (mode) => {
+      const cases: [NonNullable<CompletionsModel["compat"]>, string][] = [
+        [{ supportedReasoningEfforts: ["none", "low"] }, "none"],
+        [{ supportedReasoningEfforts: ["off", "low"] }, "off"],
+        [{ supportedReasoningEfforts: [" none ", "low"] }, "none"],
+        [{ reasoningEffortMap: { off: "none" } }, "none"],
+        [{ reasoningEffortMap: { OFF: "low" } }, "low"],
+      ];
+      for (const [compat, expected] of cases) {
+        const model = makeCompletionsModel({
+          provider: "custom",
+          id: "declared-off",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          compat: { ...compat, supportsReasoningEffort: true },
+        });
+        const params = buildOpenAICompletionsRequest(
+          model,
+          emptyContext(),
+          { reasoningEffort: "off" },
+          mode === "direct"
+            ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
+            : { mode },
+        );
+        if (mode === "direct") {
+          expect(params.thinking).toEqual(
+            expected === "low" ? { type: "enabled", clear_thinking: false } : { type: "disabled" },
+          );
+          expect(params).not.toHaveProperty("reasoning_effort");
+        } else {
+          expect(params.reasoning_effort).toBe(expected);
+          expect(params).not.toHaveProperty("thinking");
+        }
+      }
+    },
+  );
+
+  it.each(["direct", "managed"] as const)(
+    "omits inferred Z.AI off controls but preserves other custom contracts (%s)",
+    (mode) => {
+      for (const [baseUrl, thinkingFormat] of [
+        ["https://api.z.ai/api/paas/v4", "zai"],
+        ["https://api.deepseek.com", "deepseek"],
+        ["https://api.together.ai/v1", "together"],
+      ] as const) {
+        for (const explicit of [false, true]) {
+          const model = makeCompletionsModel({
+            provider: "custom",
+            id: "always-thinking",
+            baseUrl,
+            ...(explicit ? { compat: { thinkingFormat, supportsReasoningEffort: true } } : {}),
+          });
+          const params = buildOpenAICompletionsRequest(
+            model,
+            emptyContext(),
+            { reasoningEffort: "off" },
+            mode === "direct"
+              ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
+              : { mode },
+          );
+          const hasOffContract = explicit || thinkingFormat !== "zai";
+          if (hasOffContract && (mode === "direct" || thinkingFormat === "together")) {
+            expect(params).toMatchObject(
+              thinkingFormat === "together"
+                ? { reasoning: { enabled: false } }
+                : { thinking: { type: "disabled" } },
+            );
+          } else {
+            expect(params).not.toHaveProperty("thinking");
+            expect(params).not.toHaveProperty("reasoning");
+          }
+          if (
+            mode === "managed" &&
+            (thinkingFormat === "deepseek" || (explicit && thinkingFormat === "zai"))
+          ) {
+            expect(params.reasoning_effort).toBe("none");
+          } else {
+            expect(params).not.toHaveProperty("reasoning_effort");
+          }
+        }
+      }
+    },
+  );
+
+  it("preserves explicit Z.AI binary off when scalar effort is unavailable", () => {
+    const model = makeCompletionsModel({
+      provider: "custom",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      compat: { thinkingFormat: "zai" },
+      thinkingLevelMap: { off: null },
+    });
+    const params = buildOpenAICompletionsRequest(
+      model,
+      emptyContext(),
+      { reasoningEffort: "off" },
+      { mode: "direct", compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" },
+    );
+    expect(params.thinking).toEqual({ type: "disabled" });
+    expect(params).not.toHaveProperty("reasoning_effort");
+  });
+
+  it.each(["direct", "managed"] as const)(
     "sends custom reasoning controls with conservative off defaults (%s)",
     (mode) => {
       const cases: [
@@ -609,6 +711,99 @@ function requestTools(
 }
 
 describe("OpenAI completions compatibility and tools", () => {
+  it.each(["direct", "managed"] as const)(
+    "types Moonshot union branches in outgoing tools without changing other providers (%s)",
+    (mode) => {
+      const parameters = {
+        type: "object",
+        properties: { v: { anyOf: [{ enum: ["x", "y"] }, { minimum: 1 }] } },
+      };
+      for (const [provider, baseUrl, moonshot] of [
+        ["moonshot", "https://api.moonshot.ai/v1", true],
+        ["custom", "https://api.moonshot.cn/v1", true],
+        ["moonshotai", "", true],
+        ["openai", "https://api.openai.com/v1", false],
+        ["openrouter", "https://openrouter.ai/api/v1", false],
+      ] as const) {
+        const model = makeCompletionsModel({ id: "kimi-k2.6", provider, baseUrl });
+        const payload = buildOpenAICompletionsRequest(
+          model,
+          toolContext(parameters),
+          undefined,
+          mode === "direct"
+            ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
+            : { mode },
+        );
+        expect(payload.tools?.[0]?.function.parameters, provider).toHaveProperty("properties.v", {
+          anyOf: moonshot
+            ? [
+                { type: "string", enum: ["x", "y"] },
+                { type: "number", minimum: 1 },
+              ]
+            : parameters.properties.v.anyOf,
+        });
+      }
+      expect(parameters.properties.v.anyOf).toEqual([{ enum: ["x", "y"] }, { minimum: 1 }]);
+    },
+  );
+
+  it("infers only unambiguous branch types and leaves literal data and explicit types intact", () => {
+    const cases = [
+      [{ const: null }, { const: null, type: "null" }],
+      [{ const: false }, { const: false, type: "boolean" }],
+      [{ enum: [1, 2.5] }, { enum: [1, 2.5], type: "number" }],
+      [{ const: [] }, { const: [], type: "array", items: {} }],
+      [{ const: {} }, { const: {}, type: "object" }],
+      [
+        { maximum: 9, multipleOf: 0.5 },
+        { maximum: 9, multipleOf: 0.5, type: "number" },
+      ],
+      [
+        { minLength: 1, pattern: "x" },
+        { minLength: 1, pattern: "x", type: "string" },
+      ],
+      [
+        { properties: { anyOf: { enum: ["x"] } } },
+        { properties: { anyOf: { enum: ["x"] } }, type: "object" },
+      ],
+      [{ required: ["a"] }, { required: ["a"], type: "object" }],
+      [
+        { items: { anyOf: [{ const: "x" }] } },
+        { items: { anyOf: [{ const: "x", type: "string" }] }, type: "array" },
+      ],
+      [
+        { type: "integer", minimum: 1 },
+        { type: "integer", minimum: 1 },
+      ],
+      [{ description: "Unknown type" }, { description: "Unknown type" }],
+      [{ enum: ["x", 1] }, { enum: ["x", 1] }],
+      [
+        { properties: {}, items: {} },
+        { properties: {}, items: {} },
+      ],
+    ] as const;
+    const literal = { anyOf: [{ enum: ["literal"] }] };
+    for (const union of ["anyOf", "oneOf"] as const) {
+      const payload = request(
+        { provider: "moonshot", baseUrl: "https://api.moonshot.ai/v1", id: "kimi-k2.6" },
+        undefined,
+        toolContext({
+          type: "object",
+          properties: { v: { [union]: cases.map(([branch]) => branch), default: literal } },
+        }),
+      );
+      expect(payload.tools?.[0]?.function.parameters).toEqual({
+        type: "object",
+        properties: {
+          v: {
+            [union]: cases.map(([, expected]) => expected),
+            default: literal,
+          },
+        },
+      });
+    }
+  });
+
   it("reuses published wire descriptors while applying current strict compatibility", () => {
     const { schema: parameters } = publishRuntimeToolInputSchema({
       type: "object",

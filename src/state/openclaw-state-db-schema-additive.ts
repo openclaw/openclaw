@@ -276,8 +276,9 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
   ) {
     backfillCronRunLogEntryJson(db);
   }
-  if (ensureColumns(db, columns.acpReplay).length > 0 || repairHistoricalRows) {
-    backfillAcpReplayEstimatedBytes(db);
+  const addedAcpReplayColumns = ensureColumns(db, columns.acpReplay).length > 0;
+  if (addedAcpReplayColumns || repairHistoricalRows) {
+    backfillAcpReplayEstimatedBytes(db, addedAcpReplayColumns);
   }
   const addedCronJobColumns = ensureColumns(db, columns.cronJobs);
   if (

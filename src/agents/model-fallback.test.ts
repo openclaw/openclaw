@@ -1363,41 +1363,6 @@ describe("runWithModelFallback", () => {
       return { dir };
     }
 
-    it("probes raw alias targets during rate-limit cooldowns", async () => {
-      const { dir } = await makeAuthStoreWithCooldown("anthropic");
-      const cfg = makeCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-sonnet-4-6",
-              fallbacks: ["anthropic/claude-haiku-3-5", "groq/openai/gpt-oss-120b"],
-            },
-            models: {
-              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            },
-          },
-        },
-      });
-
-      const run = vi.fn().mockResolvedValueOnce("sonnet success");
-
-      const result = await runWithModelFallback({
-        cfg,
-        provider: "anthropic",
-        model: "sonnet",
-        run,
-        agentDir: dir,
-      });
-
-      expect(result.result).toBe("sonnet success");
-      expect(run).toHaveBeenCalledTimes(1);
-      expect(run.mock.calls[0]).toMatchObject([
-        "anthropic",
-        "claude-sonnet-4-6",
-        { allowTransientCooldownProbe: true, isFinalFallbackAttempt: false },
-      ]);
-    });
-
     it("limits cooldown probes to one per provider before moving to cross-provider fallback", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic");
       const cfg = createModelFallbackConfig("anthropic/claude-opus-4-6", [

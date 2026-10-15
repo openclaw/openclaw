@@ -10,6 +10,7 @@ export type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/
 
 export type ChatRunStartupState =
   | { state: "status"; runId: string; phase: ChatRunStartupPhase; seq?: number }
+  | { state: "status"; runId: string; phase: "answer" | "finishing"; seq?: number }
   | {
       state: "status";
       runId: string;
@@ -36,16 +37,44 @@ export function reconcileChatRunStartup(
   }
   const current = host.chatRunStartup;
   if (current?.runId === next.runId) {
+    // Finishing settles one attempt, not the run. Only newer agent activity can resume it.
     if (
-      (next.state === "status" && !isChatRunRecoveryStatus(next) && current.state === "activity") ||
+      current.state === "status" &&
+      current.phase === "finishing" &&
+      (next.seq === undefined || (current.seq !== undefined && next.seq <= current.seq))
+    ) {
+      return;
+    }
+    if (
+      current.state === "status" &&
+      current.phase === "answer" &&
+      next.seq === undefined &&
+      !(next.state === "status" && next.phase === "finishing")
+    ) {
+      return;
+    }
+    if (
+      (next.state === "status" &&
+        next.phase !== "finishing" &&
+        next.phase !== "answer" &&
+        !isChatRunRecoveryStatus(next) &&
+        (current.state === "activity" ||
+          (current.state === "status" && current.phase === "answer"))) ||
+      (current.state === "status" &&
+        current.phase === "starting_model" &&
+        next.state === "status" &&
+        isChatRunStartupPhase(next.phase) &&
+        next.phase !== "starting_model") ||
       (current.seq !== undefined &&
-        (next.seq === undefined ? next.state === "status" : next.seq <= current.seq))
+        (next.seq === undefined
+          ? next.state === "status" && next.phase !== "answer" && next.phase !== "finishing"
+          : next.seq <= current.seq))
     ) {
       return;
     }
     // Chat deltas use a different sequence; retain the agent sequence so an
     // older reconnect snapshot cannot resurrect an already-cleared retry.
-    if (next.state === "activity" && next.seq === undefined && current.seq !== undefined) {
+    if (next.seq === undefined && current.seq !== undefined) {
       host.chatRunStartup = { ...next, seq: current.seq };
       return;
     }
@@ -73,6 +102,7 @@ export function chatStartupStatusLabel(
   run: ChatRunStartupStatus | null | undefined,
   placement: ApplicationPlacementStartupStatus | null | undefined,
   environmentStartStatus: WorkerEnvironmentStartStatus | undefined = placement?.startStatus,
+  awaitingActivity = false,
 ): string | undefined {
   const startStatus = environmentStartStatus;
   if (
@@ -91,6 +121,9 @@ export function chatStartupStatusLabel(
     }
   }
   if (run) {
+    if (run.phase === "finishing" || run.phase === "answer") {
+      return undefined;
+    }
     if (run.phase === "retrying") {
       return t("chat.recovery.retrying");
     }
@@ -114,7 +147,7 @@ export function chatStartupStatusLabel(
     case "sending":
       return t("chat.composer.sendingMessage");
     default:
-      return undefined;
+      return awaitingActivity ? t("chat.startupStatus.preparingContext") : undefined;
   }
 }
 

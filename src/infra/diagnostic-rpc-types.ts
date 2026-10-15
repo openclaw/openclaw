@@ -1,10 +1,22 @@
+import type { GatewayClientId } from "../../packages/gateway-protocol/src/client-info.js";
+
 /** Payload-free facts from authenticated Gateway WebSocket request owners. */
 export type DiagnosticGatewayRpcFields = {
   type: "gateway.rpc";
   /** Registered method name, or a fixed other/unknown bucket. */
   method: string;
 } & (
-  | { phase: "received" }
+  | {
+      phase: "received";
+      modelsList?: {
+        clientKind: GatewayClientId;
+        source: "wire" | "internal";
+        view: "default" | "configured" | "provider-config" | "all" | "other";
+        scope: "global" | "agent" | "session" | "auth-profile";
+        refresh: boolean;
+        preparedOnly: boolean;
+      };
+    }
   | {
       phase: "response";
       outcome: "ok" | "error" | "unavailable" | "suppressed";

@@ -393,6 +393,33 @@ it("does not restore a private mirror before profile hydration, including unchan
   expect(revokeObjectUrl).toHaveBeenCalledWith("blob:background-a");
 });
 
+it("paints pre-dimmed plugin artwork at upload strength in both presentations", async () => {
+  const { context, settings, notify } = fixture();
+  document.documentElement.dataset.themeBackground = "plugin";
+  try {
+    settings.background = {
+      ...selectBackgroundSource({ kind: "theme" }),
+      presentation: "full-bleed",
+      visibility: 0.5,
+    };
+    const background = document.createElement("openclaw-session-background") as SessionBackground;
+    background.context = context;
+    background.surface = "preview";
+    document.body.append(background);
+    await background.updateComplete;
+    const opacity = () =>
+      background.querySelector<HTMLElement>(".session-background__image--theme")?.style.opacity;
+    // The token already carries upload dimming; the bundled 0.7 cap would dim it twice.
+    expect(opacity()).toBe("1");
+    settings.background = { ...settings.background, visibility: 0.25 };
+    notify();
+    await background.updateComplete;
+    expect(opacity()).toBe("0.5");
+  } finally {
+    delete document.documentElement.dataset.themeBackground;
+  }
+});
+
 it("also keeps bundled Full bleed artwork beneath the permanent overlay", async () => {
   const { context, settings, notify } = fixture();
   settings.background = {

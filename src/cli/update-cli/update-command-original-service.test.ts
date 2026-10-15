@@ -59,7 +59,8 @@ const mocks = vi.hoisted(() => ({
   suspend: vi.fn(),
   resume: vi.fn(),
 }));
-vi.mock("../../daemon/service-process-membership.js", () => ({
+vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
 }));
 vi.mock("../../daemon/schtasks.js", async (original) => ({
