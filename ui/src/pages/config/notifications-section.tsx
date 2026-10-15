@@ -17,6 +17,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
+import { NativeDeviceNotificationSection } from "./native-device-notifications.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
@@ -30,6 +31,11 @@ export type NotificationsSectionProps = Pick<
   | "nativeNotifications"
   | "onNativeNotificationsRequestPermission"
   | "onNativeNotificationsSendTest"
+  | "nativeDeviceSettings"
+  | "deviceSettingsHref"
+  | "devicePermissionsHref"
+  | "onOpenDeviceSettings"
+  | "onOpenDevicePermissions"
   | "webPush"
   | "onWebPushSubscribe"
   | "onWebPushUnsubscribe"
@@ -611,25 +617,41 @@ export function NotificationsSection(props: NotificationsSectionProps) {
         when={props.nativeNotifications}
         fallback={
           <Show
-            when={props.webPush}
+            when={
+              props.nativeDeviceSettings === null ||
+              props.nativeDeviceSettings?.device.platform === "ios"
+            }
             fallback={
-              <NotificationSection
-                title={t("configView.notifications.title")}
-                status={
-                  <SettingsStatus kind="muted" label={t("configView.notifications.unavailable")} />
+              <Show
+                when={props.webPush}
+                fallback={
+                  <NotificationSection
+                    title={t("configView.notifications.title")}
+                    status={
+                      <SettingsStatus
+                        kind="muted"
+                        label={t("configView.notifications.unavailable")}
+                      />
+                    }
+                  >
+                    <div class="settings-row">
+                      <div class="settings-row__text">
+                        <span class="settings-row__desc">
+                          {t("configView.notifications.unavailableHint")}
+                        </span>
+                      </div>
+                    </div>
+                  </NotificationSection>
                 }
               >
-                <div class="settings-row">
-                  <div class="settings-row__text">
-                    <span class="settings-row__desc">
-                      {t("configView.notifications.unavailableHint")}
-                    </span>
-                  </div>
-                </div>
-              </NotificationSection>
+                {(push) => <WebPushSection push={push()} actions={props} />}
+              </Show>
             }
           >
-            {(push) => <WebPushSection push={push()} actions={props} />}
+            <NativeDeviceNotificationSection
+              device={props.nativeDeviceSettings ?? null}
+              actions={props}
+            />
           </Show>
         }
       >

@@ -6,6 +6,7 @@ import type {
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
+import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
 import type { NativeNotificationsCapability } from "../../app/native-notifications.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import type { ChatSendShortcut, UiSettings } from "../../app/settings.ts";
@@ -208,6 +209,11 @@ export interface ConfigProps extends TabIconViewProps, AppearancePreferences {
   nativeNotifications?: NativeNotificationsCapability["snapshot"];
   onNativeNotificationsRequestPermission?: () => void;
   onNativeNotificationsSendTest?: () => void;
+  nativeDeviceSettings?: NativeDeviceSettingsSnapshot | null;
+  deviceSettingsHref?: string;
+  devicePermissionsHref?: string;
+  onOpenDeviceSettings?: () => void;
+  onOpenDevicePermissions?: () => void;
   webPush?: WebPushSnapshot;
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;

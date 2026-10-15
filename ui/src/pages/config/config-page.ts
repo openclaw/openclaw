@@ -67,6 +67,7 @@ import {
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
 import { localPresentationProps } from "./local-presentation-props.ts";
+import { notificationProps } from "./notification-props.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import type { SecurityOverview } from "./security.tsx";
 import {
@@ -1062,18 +1063,7 @@ export class ConfigPageController {
       excludeSections,
       includeVirtualSections: this.pageId === "appearance" || this.pageId === "notifications",
       settingsLayout: this.pageId === "advanced" ? "accordion" : undefined,
-      nativeNotifications: this.context.nativeNotifications?.snapshot,
-      onNativeNotificationsRequestPermission: () =>
-        this.context.nativeNotifications?.requestPermission(),
-      onNativeNotificationsSendTest: () => this.context.nativeNotifications?.sendTest(),
-      webPush: this.context.webPush.snapshot,
-      onWebPushSubscribe: () => void this.context.webPush.run({ kind: "enable" }),
-      onWebPushUnsubscribe: () => void this.context.webPush.run({ kind: "disable" }),
-      onWebPushTest: () => void this.context.webPush.run({ kind: "test" }),
-      onWebPushSetUserPreferences: (preferences) =>
-        void this.context.webPush.run({ kind: "set", scope: "user", preferences }),
-      onWebPushSetDevicePreferences: (preferences) =>
-        void this.context.webPush.run({ kind: "set", scope: "device", preferences }),
+      ...notificationProps(this.context),
     } satisfies ConfigProps;
   }
 }

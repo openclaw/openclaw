@@ -298,7 +298,14 @@ function ConfigPageContent(props: ConfigPageProps & { host: HTMLElement }) {
       <Show when={(props.pageId ?? "advanced") !== "memory"}>
         <SettingsPageHeader
           title={titleForRoute(props.pageId ?? "advanced")}
-          subtitle={renderConfigPageSubtitle(props.pageId ?? "advanced")}
+          subtitle={
+            props.pageId === "notifications" &&
+            !configProps().nativeNotifications &&
+            (configProps().nativeDeviceSettings === null ||
+              configProps().nativeDeviceSettings?.device.platform === "ios")
+              ? t("configView.notifications.iosNativeHint")
+              : renderConfigPageSubtitle(props.pageId ?? "advanced")
+          }
         />
       </Show>
       <SettingsWorkspace>
