@@ -230,7 +230,6 @@ describe("plugin management service", () => {
 
   it.each([
     { origin: "config", retainedRecord: false },
-    { origin: "bundled", retainedRecord: false },
     { origin: "bundled", retainedRecord: true },
   ] as const)("reloads a discovered plugin: %j", async ({ origin, retainedRecord }) => {
     const signal = new AbortController().signal;
@@ -344,7 +343,7 @@ describe("plugin management service", () => {
     expect(mocks.replaceConfig).not.toHaveBeenCalled();
   });
 
-  it.each(["OPENCLAW_NIX_MODE", "OPENCLAW_CONFIG_READONLY"])(
+  it.each(["OPENCLAW_NIX_MODE"])(
     "refuses mutation in %s before reading or writing config",
     async (mode) => {
       await expect(

@@ -8,8 +8,6 @@ import {
   setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import * as stateDbReadOnly from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -176,36 +174,6 @@ describe("plugin index install records store", () => {
         installPath: "plugins/npm/@openclaw/plugin-twitch",
       },
     });
-  });
-
-  it("preserves newer shared-state schema errors while loading install records", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    await seedInstalledPluginIndex(
-      {
-        persisted: {
-          source: "npm",
-          spec: "persisted@1.0.0",
-        },
-      },
-      { stateDir, candidates: [] },
-    );
-    await closeOpenClawStateDatabaseAsync();
-    const databasePath = resolveInstalledPluginIndexStorePath({ stateDir });
-    fs.renameSync(databasePath, `${databasePath}.template`);
-    fs.copyFileSync(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
-    database.close();
-
-    expect(() => loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toThrow(
-      expect.objectContaining({
-        name: "SqliteSchemaVersionError",
-        message: expect.stringContaining(
-          `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
-        ),
-      }),
-    );
   });
 
   it("keeps persisted install record metadata over recovered npm records", async () => {

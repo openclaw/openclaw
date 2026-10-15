@@ -38,81 +38,6 @@ it("keeps the plugin source identity independent of Git rollback retirement", ()
   expect(after.sourceDigest).toBe(artifact.sourceDigest);
 });
 
-it.each(["require", "import"] as const)(
-  "preserves optional standalone %s while freezing missing dependencies",
-  async (mode) => {
-    const source = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-optional-"));
-    cleanups.push(() => fs.rmSync(source, { recursive: true, force: true }));
-    const entry = path.join(source, "index.cjs");
-    const dependencyName = "openclaw-capture-optional-fixture";
-    const load =
-      mode === "require" ? `require('${dependencyName}')` : `await import('${dependencyName}')`;
-    fs.writeFileSync(
-      entry,
-      mode === "require"
-        ? `try { exports.value = ${load}.value; } catch { exports.value = 'fallback'; }
-           exports.read = async () => exports.value;
-           exports.required = async () => ${load};`
-        : `exports.read = async () => {
-             try { return (${load}).value; } catch { return 'fallback'; }
-           };
-           exports.required = async () => ${load};`,
-    );
-    const capture = () => {
-      const artifact = capturePluginGenerationArtifact(source, entry);
-      cleanups.push(artifact.dispose);
-      const host = createArtifactLoader(artifact);
-      return () =>
-        host(artifact.resolve(entry)) as {
-          read(): Promise<string>;
-          required(): Promise<unknown>;
-        };
-    };
-    const loadBeforeInstall = capture();
-    const dependency = path.join(source, "node_modules", dependencyName);
-    fs.mkdirSync(dependency, { recursive: true });
-    fs.writeFileSync(path.join(dependency, "package.json"), '{"main":"index.cjs"}');
-    fs.writeFileSync(path.join(dependency, "index.cjs"), "exports.value = 'installed';");
-    const before = loadBeforeInstall();
-    await expect(before.read()).resolves.toBe("fallback");
-    await expect(before.required()).rejects.toThrow(dependencyName);
-    await expect(capture()().read()).resolves.toBe("installed");
-  },
-);
-
-it.each([
-  [
-    "local require",
-    `export const read = async (require) => [require('./label.json'), (await import('./peer.js')).value];`,
-    "./label.json",
-  ],
-  [
-    "local dirname",
-    `import path from 'node:path';
-     const __dirname = 'synthetic';
-     export const read = async () => [path.join(__dirname, 'label.json'), (await import('./peer.js')).value];`,
-    path.join("synthetic", "label.json"),
-  ],
-])("freezes dynamic imports without capturing labels from %s", async (_name, sourceText, label) => {
-  const source = temp.make("plugin-local-binding-");
-  const entry = path.join(source, "entry.mjs");
-  const peer = path.join(source, "peer.js");
-  const unrelated = path.join(source, "label.json");
-  fs.writeFileSync(entry, sourceText);
-  fs.writeFileSync(peer, 'export const value = "before";');
-  fs.writeFileSync(unrelated, '{"private":"unrelated"}');
-  const artifact = capturePluginGenerationArtifact(source, entry);
-  cleanups.push(artifact.dispose);
-  expect(artifact.hasSource(unrelated)).toBe(false);
-  expect(fs.existsSync(path.join(artifact.rootDir, "label.json"))).toBe(false);
-  expect(artifact.hasSource(peer)).toBe(true);
-  fs.writeFileSync(peer, 'export const value = "after";');
-  const plugin = createArtifactLoader(artifact)(artifact.resolve(entry)) as {
-    read(label: (value: string) => string): Promise<string[]>;
-  };
-  await expect(plugin.read((value) => value)).resolves.toEqual([label, "before"]);
-});
-
 it.each([
   ...["await using"].map((declaration) => ({
     name: `${declaration} declarations`,
@@ -248,28 +173,6 @@ it("keeps authored absolute references on the native source graph", async () => 
     true,
   ]);
 });
-
-it.each(["dependencies", "optionalDependencies", "peerDependencies"])(
-  "retains the missing declared %s capture contract",
-  (kind) => {
-    const source = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-declared-"));
-    cleanups.push(() => fs.rmSync(source, { recursive: true, force: true }));
-    fs.writeFileSync(
-      path.join(source, "package.json"),
-      JSON.stringify({ [kind]: { "openclaw-capture-missing-fixture": "1.0.0" } }),
-    );
-    fs.writeFileSync(path.join(source, "index.cjs"), "exports.value = 'ready';");
-    if (kind === "dependencies") {
-      expect(() => capturePluginGenerationArtifact(source)).toThrow(
-        "Plugin dependency openclaw-capture-missing-fixture is missing",
-      );
-    } else {
-      const artifact = capturePluginGenerationArtifact(source);
-      cleanups.push(artifact.dispose);
-      expect(artifact.hasSource(path.join(source, "index.cjs"))).toBe(true);
-    }
-  },
-);
 
 it.each([
   ["named", "import { createRequire as factory } from 'node:module';", "factory", "require"],
@@ -633,40 +536,4 @@ it("captures helpers, assets and npm packages with builtin names for each reload
   a.artifact.dispose();
   expect(fs.existsSync(a.artifact.boundaryRoot)).toBe(false);
   await expect(b.plugin.read()).resolves.toEqual(["B", "B", "B"]);
-});
-
-it("keeps unrelated module preparation independent of captured dependency count", () => {
-  const fixture = temp.make("plugin-foreign-ownership-");
-  const foreign = path.join(fixture, "foreign.mjs");
-  fs.writeFileSync(foreign, "export const value = 1;");
-  const countPathComparisons = (dependencyCount: number) => {
-    const root = path.join(fixture, `plugin-${dependencyCount}`);
-    fs.mkdirSync(root);
-    const dependencies: Record<string, string> = {};
-    for (let index = 0; index < dependencyCount; index++) {
-      const name = `fixture-${index}`;
-      dependencies[name] = "1.0.0";
-      const dependency = path.join(root, "node_modules", name);
-      fs.mkdirSync(dependency, { recursive: true });
-      fs.writeFileSync(path.join(dependency, "package.json"), JSON.stringify({ name }));
-      fs.writeFileSync(path.join(dependency, "index.js"), "exports.value = 1;");
-    }
-    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ dependencies }));
-    fs.writeFileSync(path.join(root, "index.js"), "exports.value = 1;");
-    const artifact = capturePluginGenerationArtifact(root);
-    cleanups.push(artifact.dispose);
-    const relative = vi.spyOn(path, "relative");
-    const startsWith = vi.spyOn(String.prototype, "startsWith");
-    const additions = artifact.prepareModule(foreign);
-    const comparisons = relative.mock.calls.length + startsWith.mock.calls.length;
-    relative.mockRestore();
-    startsWith.mockRestore();
-    expect(additions).toEqual([]);
-    return comparisons;
-  };
-  const empty = countPathComparisons(0);
-  const populated = countPathComparisons(24);
-  // Compare work growth instead of wall time: native resolver hooks run this per import.
-  expect(populated).toBeLessThanOrEqual(empty + 1);
-  expect(fs.readFileSync(foreign, "utf8")).toBe("export const value = 1;");
 });

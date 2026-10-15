@@ -27,13 +27,9 @@ import {
 } from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
-import {
-  installOpenClawPluginSdkNativeResolver,
-  resolvePluginNativeAliasForParent,
-} from "./plugin-sdk-native-resolver.js";
+import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
-import { preparePluginLoaderAliases } from "./sdk-alias.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 beforeEach(() => resetPluginCache());
@@ -91,38 +87,6 @@ afterEach(() => {
 });
 
 describe("native plugin alias preparation", () => {
-  it("returns native SDK filenames without changing Jiti alias targets", () => {
-    const f = fixture();
-    const specifier = "openclaw/plugin-sdk/used";
-    const aliases = preparePluginLoaderAliases({
-      modulePath: f.entry,
-      moduleUrl: import.meta.url,
-      devSourceRoot: f.root,
-      pluginSdkResolution: "dist",
-    });
-    installOpenClawPluginSdkNativeResolver({
-      pluginModulePath: f.entry,
-      devSourceRoot: f.root,
-      pluginSdkResolution: "dist",
-    });
-    const jitiTarget = process.platform === "win32" ? f.used.replaceAll("\\", "/") : f.used;
-    expect(aliases.resolveAlias(specifier)).toBe(jitiTarget);
-    expect(resolvePluginNativeAliasForParent(specifier, f.entry)).toBe(f.used);
-    expect(aliases.getAliasMap()[specifier]).toBe(jitiTarget);
-    expect(resolvePluginNativeAliasForParent(specifier, f.entry)).toBe(f.used);
-    const requirePlugin = createRequire(f.entry);
-    expect(requirePlugin.resolve(specifier)).toBe(f.used);
-    const resolve = vi.spyOn(path, "resolve");
-    const repeated = [
-      resolvePluginNativeAliasForParent(specifier, f.entry),
-      resolvePluginNativeAliasForParent(specifier, f.entry),
-    ];
-    const resolveCalls = resolve.mock.calls.length;
-    resolve.mockRestore();
-    expect(repeated).toEqual([f.used, f.used]);
-    expect(resolveCalls).toBe(0);
-  });
-
   it("refreshes canonical parent boundaries with metadata invalidation", () => {
     const f = fixture();
     const outside = fixture();

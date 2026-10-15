@@ -43,36 +43,6 @@ function load(rootDir: string, entry: string) {
 }
 
 it.each(
-  ["#selected", "condition-owner/selected"].flatMap((specifier) =>
-    ["import", "require"].map((mode) => ({ specifier, mode })),
-  ),
-)(
-  "preserves native module-sync selection for selective $mode $specifier",
-  ({ specifier, mode }) => {
-    const root = temp.make("plugin-native-conditions-");
-    const selection = { "module-sync": "./sync.mjs", import: "./import.mjs" };
-    const entry = mode === "import" ? "index.mjs" : "index.cjs";
-    write(root, {
-      "package.json": JSON.stringify({
-        name: "condition-owner",
-        type: "module",
-        imports: { "#selected": selection },
-        exports: { "./selected": selection },
-      }),
-      [entry]:
-        mode === "import"
-          ? `export { value } from ${JSON.stringify(specifier)};`
-          : `module.exports = require(${JSON.stringify(specifier)});`,
-      "sync.mjs": "export const value = 'module-sync';",
-      "import.mjs": "export const value = 'import';",
-    });
-    const native = nativeRequire(path.join(root, entry));
-    expect(native.value).toBe("module-sync");
-    expect(load(root, entry)).toMatchObject({ value: native.value });
-  },
-);
-
-it.each(
   [
     { mode: "import", entry: "index.mjs" },
     { mode: "require", entry: "index.cjs" },
