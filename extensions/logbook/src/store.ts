@@ -242,8 +242,6 @@ export class LogbookStore {
   }
 
   pruneFrames(olderThanMs: number) {
-    return this.frameIo.run(() =>
-      this.worker.execute({ type: "pruneFrames", input: { olderThanMs } }),
-    );
+    return this.frameIo.run(() => this.executeWorker("pruneFrames", { olderThanMs }));
   }
 }
