@@ -7,14 +7,12 @@ import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/con
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
-import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import type {
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
@@ -23,7 +21,7 @@ import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.typ
 import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
-import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
+import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
 
 function checksSummary(pullRequest: ControlUiSessionPullRequest): string | null {
   const checks = pullRequest.checks;
@@ -242,15 +240,13 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
                         {(waiting) => (
                           // Same working indicator the main transcript shows while a run has no output yet.
                           <div class="chat-group assistant chat-session-rail__message">
-                            <LitContent
-                              value={renderChatWorkingIndicator(
-                                {
-                                  kind: "reading-indicator",
-                                  key: `side-chat:${waiting().startedAt}`,
-                                  startedAt: waiting().startedAt,
-                                },
-                                { workingPhrases: currentThemeBranding().workingPhrases },
-                              )}
+                            <ChatWorkingIndicator
+                              part={{
+                                kind: "reading-indicator",
+                                key: `side-chat:${waiting().startedAt}`,
+                                startedAt: waiting().startedAt,
+                              }}
+                              options={{}}
                             />
                           </div>
                         )}

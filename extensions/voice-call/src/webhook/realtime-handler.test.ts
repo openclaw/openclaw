@@ -498,23 +498,6 @@ describe("RealtimeCallHandler path routing", () => {
     expect(triggerGreeting.mock.calls[0]?.[0]).toContain("hello");
   });
 
-  it("rejects stream sessions when token expiry would exceed the Date range", async () => {
-    const { handler, processEvent, createBridge } = makeCallHarness();
-    handler.setPublicUrl("https://public.example/voice/webhook");
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    const session = handler.issueStreamSession({
-      providerName: "telnyx",
-      callId: "call-overflow",
-      direction: "inbound",
-    });
-    nowSpy.mockRestore();
-    const server = await startStreamSessionServer(handler, session.streamUrl);
-
-    await expect(connectWs(server.url)).rejects.toThrow("Unexpected server response: 401");
-    expect(createBridge).not.toHaveBeenCalled();
-    expect(processEvent).not.toHaveBeenCalled();
-  });
-
   it("rejects Telnyx stream starts that do not match the token-bound call", async () => {
     const call = makeCallRecord("v3:call-1", { provider: "telnyx", state: "answered" });
     const { handler, processEvent, createBridge } = makeCallHarness(

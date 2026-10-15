@@ -48,7 +48,7 @@ describe("chat composer pointer activation", () => {
     const container = renderComposer({ draft: "Keep this draft" });
     const input = textarea(container);
     const focus = vi.spyOn(input, "focus");
-    const menu = container.querySelector("wa-dropdown.agent-chat__capability-menu")!;
+    const menu = container.querySelector(".agent-chat__capability-menu .oc-menu")!;
     const label = document.createElement("span");
     menu.append(label);
     label.addEventListener("click", () => label.remove());

@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { onAgentEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
@@ -151,16 +152,22 @@ describe("Muse native MSP harness", () => {
 
   it("streams reasoning and text, journals native tool pairs, and resumes after restart", async () => {
     const first = setup();
+    const globalEvents: Array<{ stream: string; data: Record<string, unknown> }> = [];
+    const unsubscribe = onAgentEvent((event) => void globalEvents.push(event));
     try {
       const result = await first.harness.runAttempt({ ...first.params, prompt: "tool" });
       expect(terminal(result).kind).toBe("ok");
       expect(result.assistantTexts).toEqual(["started: hello"]);
-      expect(
-        first.events
-          .filter((event) => event.stream === "assistant")
-          .map((event) => event.data.delta)
-          .join(""),
-      ).toBe("started: hello");
+      for (const events of [first.events, globalEvents]) {
+        expect(
+          events
+            .filter((event) => event.stream === "assistant")
+            .map((event) => event.data.delta)
+            .join(""),
+        ).toBe("started: hello");
+      }
+      expect(globalEvents.at(0)?.data.phase).toBe("start");
+      expect(globalEvents.at(-1)?.data.phase).toBe("end");
       expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
         "assistant",
         "assistant",
@@ -178,6 +185,7 @@ describe("Muse native MSP harness", () => {
         }),
       );
     } finally {
+      unsubscribe();
       await first.harness.dispose?.();
     }
     const resumed = createMuseAgentHarness({
