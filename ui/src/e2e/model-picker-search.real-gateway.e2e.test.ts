@@ -40,7 +40,7 @@ const suite = createControlUiE2eSuite({
   async startServer() {
     owner = await createOpenClawTestInstance({
       name: "model-picker-search",
-      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
+      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined, NODE_ENV: undefined },
       config: {
         gateway: { controlUi: { enabled: true } },
         plugins: { enabled: false },
