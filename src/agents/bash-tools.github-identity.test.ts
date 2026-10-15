@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
@@ -21,6 +21,10 @@ const snapshot = captureEnv([
   "GITHUB_TOKEN",
   "PREVIEW_SERVICE_TOKEN",
   "GIT_CONFIG_PARAMETERS",
+  "GIT_AUTHOR_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "GIT_COMMITTER_NAME",
+  "GIT_COMMITTER_EMAIL",
 ]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const execFileAsync = promisify(execFile);
@@ -70,6 +74,15 @@ function prepare(
 
 describe("exec GitHub identity", () => {
   it("fetches missing partial-clone blobs without launching automatic maintenance", async () => {
+    // This fixture tests repository author inheritance, not the invoking session's override.
+    for (const key of [
+      "GIT_AUTHOR_NAME",
+      "GIT_AUTHOR_EMAIL",
+      "GIT_COMMITTER_NAME",
+      "GIT_COMMITTER_EMAIL",
+    ]) {
+      deleteTestEnvValue(key);
+    }
     const root = tempDirs.make("agent-git-maintenance-");
     const origin = path.join(root, "origin");
     const clone = path.join(root, "partial");

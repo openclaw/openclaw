@@ -44,10 +44,31 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 20      | Cron receipt delivery-attempt fence prevents replay of ambiguous one-shot completions                                                                                                                                                                                                                                                          | `v2026.10.1-beta.1` |
 | 21      | Derived meeting-transcript selectors, summary overview, and bounded delivery-retention columns                                                                                                                                                                                                                                                 | Unreleased          |
 | 22      | Portable ACP resume columns and explicit approval, cron, execution-decision, and Skill Workshop cursor identities                                                                                                                                                                                                                              | Unreleased          |
+| 23      | Persisted normalized meeting-transcript start timestamps and chronological index                                                                                                                                                                                                                                                               | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 23
+
+Schema 23 adds nullable `started_at_ms` to `meeting_transcript_sessions` and
+indexes it with the existing session ID and original start-string tiebreakers.
+Meeting listings, date filters, and cursor pages use the persisted instant on
+SQLite and PostgreSQL. Unparsable dates remain last and do not match date filters.
+Original `started_at` strings and transcript identities are unchanged.
+
+The `meeting-transcript-start-time` migration parses existing dates once inside
+the state migration transaction using `parseDateStringTimestampMs`. Timezone-free
+strings use the migrating process's timezone, freezing their interpretation at
+migration time. New sessions normalize their start date when written; later
+metadata updates preserve that instant. Reads in a different timezone do not
+reinterpret stored dates. Date-filter inputs still use the requesting process's
+timezone.
+
+Only `meeting_transcript_sessions` changes. A failed migration rolls back with
+the state transaction. Older builds refuse the new schema; restore the verified
+pre-upgrade backup and matching build to roll back instead of lowering markers.
 
 ### State schema 22
 

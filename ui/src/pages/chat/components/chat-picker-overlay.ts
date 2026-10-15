@@ -6,6 +6,7 @@ import {
   findOverlayParent,
   type Overlay,
 } from "../../../components/overlay-lifecycle.ts";
+import { registryFor } from "../../../components/overlay-registry.ts";
 import "../../../components/solid/overlay.css";
 import { consumeTooltipEscape } from "../../../components/tooltip.ts";
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
@@ -193,7 +194,7 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
     ) {
       return;
     }
-    if (ownerDocument.querySelector(".agent-chat__input details[data-chat-native-picker][open]")) {
+    if (registryFor(ownerDocument).stack.at(-1)?.open) {
       return;
     }
     if (clearChatModelSearchOnEscape(event)) {
