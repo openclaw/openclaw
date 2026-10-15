@@ -1,6 +1,7 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
 import {
   applySessionEntryReplacements,
   persistSessionTranscriptTurn,
@@ -199,6 +200,56 @@ function canReconcileTerminalDeliveryAtSourceTurnTail(params: {
   return true;
 }
 
+type RecoveryCheckpointReason =
+  | "delivered-terminal"
+  | "delivered-terminal-receipt"
+  | "handled-silent";
+
+function checkpointDeliveryEvidence(
+  entry: SessionEntry,
+  reason: RecoveryCheckpointReason,
+  toolCallId: string | undefined,
+): RestartRecoveryTerminalDeliveryEvidenceResult {
+  if (reason === "handled-silent") {
+    return { captured: true, meta: { terminalReply: { disposition: "silent" } } };
+  }
+  const deliveries = !toolCallId ? entry.pendingFinalDelivery?.deliveries : undefined;
+  if (deliveries?.length) {
+    const resultCount = deliveries.filter((delivery) => delivery.state === "delivered").length;
+    return {
+      captured: true,
+      deliveryStatus: {
+        status: resultCount > 0 ? "sent" : "suppressed",
+        resultCount,
+        ...(resultCount === 0 ? { reason: "recovery_checkpoint_suppressed" } : {}),
+        payloadOutcomes: deliveries.map((delivery, index) => ({
+          index,
+          status: delivery.state === "delivered" ? "sent" : "suppressed",
+        })),
+      },
+    };
+  }
+  const route = entry.restartRecoveryDeliveryContext;
+  return {
+    captured: true,
+    payloads: [{ visible: true }],
+    ...(route?.channel && route.to
+      ? {
+          messagingToolSentTargets: [
+            {
+              provider: route.channel,
+              to: route.to,
+              ...(route.accountId ? { accountId: route.accountId } : {}),
+              ...(route.threadId !== undefined ? { threadId: String(route.threadId) } : {}),
+              visible: true,
+              sourceReplyFinal: true,
+            },
+          ],
+        }
+      : {}),
+  };
+}
+
 type RecoveryCheckpointCompletion =
   | { outcome: "completed" }
   | { outcome: "changed" }
@@ -213,7 +264,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   entry: SessionEntry;
   messages: readonly unknown[];
   pendingFinalDeliveryIntentId?: string;
-  reason: "delivered-terminal" | "delivered-terminal-receipt" | "handled-silent";
+  reason: RecoveryCheckpointReason;
   storePath: string;
   sessionKey: string;
   sourceTurnId?: string;
@@ -231,6 +282,12 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
       entry: params.entry,
       recordTerminalSource: expectedRecoverySourceRunId !== undefined,
       terminalSourceRunId: expectedRecoverySourceRunId,
+      // A confirmed checkpoint must retain the receipt used by completion settlement.
+      terminalDeliveryEvidence: checkpointDeliveryEvidence(
+        params.entry,
+        params.reason,
+        params.toolCallId,
+      ),
     }),
     lifecycleRunId: undefined,
     lastRunId: settled

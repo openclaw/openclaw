@@ -8,15 +8,20 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("enforces Solid 2 rules through the UI oxlint configuration", () => {
   // Materialize intentional violations in the real UI scope without ignoring lintable source.
-  const directory = tempDirs.make("solid-lint-test-", path.resolve("ui"));
-  const fixtures = ["invalid", "valid"].map((name) => {
-    const file = path.join(directory, `${name}.tsx`);
-    fs.copyFileSync(`ui/fixtures/solid-lint/${name}.tsx.txt`, file);
-    return path.relative(process.cwd(), file);
-  });
+  const directory = tempDirs.make("solid-lint-test-", path.resolve("ui/src/lib/reactive"));
+  const fixtures = ["tsx", "ts"].flatMap((extension) =>
+    ["invalid", "valid"].map((name) => {
+      const file = path.join(directory, `${name}.${extension}`);
+      fs.copyFileSync(`ui/fixtures/solid-lint/${name}.${extension}.txt`, file);
+      return path.relative(process.cwd(), file);
+    }),
+  );
   const outsideDirectory = tempDirs.make("solid-lint-test-", path.resolve("test"));
-  const outsideFixture = path.join(outsideDirectory, "invalid.tsx");
-  fs.copyFileSync("ui/fixtures/solid-lint/invalid.tsx.txt", outsideFixture);
+  const outsideFixtures = ["tsx", "ts"].map((extension) => {
+    const file = path.join(outsideDirectory, `invalid.${extension}`);
+    fs.copyFileSync(`ui/fixtures/solid-lint/invalid.${extension}.txt`, file);
+    return file;
+  });
   const result = spawnSync(
     process.execPath,
     [
@@ -25,7 +30,7 @@ it("enforces Solid 2 rules through the UI oxlint configuration", () => {
       "--format",
       "json",
       ...fixtures,
-      outsideFixture,
+      ...outsideFixtures,
     ],
     { encoding: "utf8" },
   );
@@ -35,7 +40,7 @@ it("enforces Solid 2 rules through the UI oxlint configuration", () => {
     number_of_files: number;
     diagnostics: Array<{ filename: string; code: string; severity: string }>;
   };
-  expect(report.number_of_files).toBe(3);
+  expect(report.number_of_files).toBe(6);
   const invalidDiagnostics = report.diagnostics.filter(
     ({ filename }) => filename.replaceAll("\\", "/") === fixtures[0]?.replaceAll("\\", "/"),
   );
@@ -55,7 +60,18 @@ it("enforces Solid 2 rules through the UI oxlint configuration", () => {
       "solid(no-single-arg-create-effect):error",
     ].toSorted((a, b) => a.localeCompare(b)),
   );
+  const invalidHelperDiagnostics = report.diagnostics.filter(
+    ({ filename }) => filename.replaceAll("\\", "/") === fixtures[2]?.replaceAll("\\", "/"),
+  );
   expect(
-    report.diagnostics.filter((diagnostic) => !invalidDiagnostics.includes(diagnostic)),
+    invalidHelperDiagnostics
+      .map(({ code, severity }) => `${code}:${severity}`)
+      .toSorted((a, b) => a.localeCompare(b)),
+  ).toEqual(["solid(no-single-arg-create-effect):error", "solid(removed-api):error"]);
+  expect(
+    report.diagnostics.filter(
+      (diagnostic) =>
+        !invalidDiagnostics.includes(diagnostic) && !invalidHelperDiagnostics.includes(diagnostic),
+    ),
   ).toEqual([]);
 });

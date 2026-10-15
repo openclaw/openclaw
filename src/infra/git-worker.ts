@@ -141,7 +141,6 @@ function poolFor(
     workerOptions:
       owner === "workspace" ? { resourceLimits: { maxOldGenerationSizeMb: 1024 } } : undefined,
     sharedCompute: owner === "workspace",
-    idleTimeoutMs: 30_000,
   }));
 }
 

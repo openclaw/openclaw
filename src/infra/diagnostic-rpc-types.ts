@@ -1,4 +1,5 @@
 import type { GatewayClientId } from "../../packages/gateway-protocol/src/client-info.js";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 
 /** Payload-free facts from authenticated Gateway WebSocket request owners. */
 export type DiagnosticGatewayRpcFields = {
@@ -8,6 +9,13 @@ export type DiagnosticGatewayRpcFields = {
 } & (
   | {
       phase: "received";
+      sessionsList?: {
+        clientKind: GatewayClientId;
+        source: "wire" | "internal";
+        callerSource: NonNullable<SessionsListParams["source"]> | "unspecified";
+        rowMode: NonNullable<SessionsListParams["rowMode"]> | "full" | "other";
+        filter: "search" | "children" | "owner" | "involving" | "active" | "general";
+      };
       modelsList?: {
         clientKind: GatewayClientId;
         source: "wire" | "internal";

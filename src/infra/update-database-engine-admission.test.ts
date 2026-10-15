@@ -72,3 +72,26 @@ it("protects a retained PostgreSQL anchor when Workboard is disabled", async () 
   ).rejects.toThrow(/target does not support the PostgreSQL store/);
   expect(await fs.readFile(file)).toEqual(before);
 });
+
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "admits known stores without traversing another user's private historical backup",
+  async () => {
+    const { file, context } = await store("postgres", false);
+    const historical = path.join(context.env.OPENCLAW_STATE_DIR, "backups", "old-repair");
+    const marker = path.join(historical, ".openclaw-private-update-capture");
+    await fs.mkdir(historical, { recursive: true });
+    await fs.writeFile(marker, "openclaw-private-update-capture-v1\n");
+    await fs.chmod(historical, 0o000);
+    try {
+      await expect(fs.lstat(marker)).rejects.toMatchObject({ code: "EACCES" });
+      await expect(
+        assertUpdateDatabaseEngineContexts([context], async () => ["sqlite", "postgres"]),
+      ).resolves.toBeUndefined();
+      await expect(
+        assertUpdateDatabaseEngineContexts([context], async () => ["sqlite"]),
+      ).rejects.toThrow(`target does not support the PostgreSQL store at ${file}`);
+    } finally {
+      await fs.chmod(historical, 0o700);
+    }
+  },
+);
