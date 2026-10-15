@@ -1,8 +1,7 @@
 // Verifies Slack config TypeScript contracts match the SecretRef-capable schema.
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "./types.js";
+import type { OpenClawConfig } from "../../src/config/types.js";
 
-const slackSecretRefConfig = {
+void ({
   channels: {
     slack: {
       mode: "relay",
@@ -28,9 +27,9 @@ const slackSecretRefConfig = {
       },
     },
   },
-} satisfies OpenClawConfig;
+} satisfies OpenClawConfig);
 
-const slackStreamingConfig = {
+void ({
   channels: {
     slack: {
       streaming: {
@@ -40,17 +39,4 @@ const slackStreamingConfig = {
       },
     },
   },
-} satisfies OpenClawConfig;
-
-describe("Slack config types", () => {
-  it("accepts SecretRef-backed token fields", () => {
-    expect(slackSecretRefConfig.channels.slack.relay.authToken).toMatchObject({
-      id: "SLACK_RELAY_AUTH_TOKEN",
-    });
-  });
-
-  it("extends generic streaming config with Slack progress presentation", () => {
-    expect(slackStreamingConfig.channels.slack.streaming.progress.style).toBe("compact");
-    expect(slackStreamingConfig.channels.slack.streaming.progress.nativeTaskCards).toBe(true);
-  });
-});
+} satisfies OpenClawConfig);
