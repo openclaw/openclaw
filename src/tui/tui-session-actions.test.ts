@@ -1858,6 +1858,34 @@ describe("tui session actions", () => {
     },
   );
 
+  it("remembers the selected session after history loads", async () => {
+    const describeSession = vi.fn().mockResolvedValue({
+      defaults: {},
+      session: { key: "agent:main:main", sessionId: "session-main" },
+    });
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [],
+    });
+    const rememberSessionKey = vi.fn();
+    const state = createBaseState({ currentSessionKey: "main" });
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: makeTuiBackend({
+        describeSession,
+        loadHistory,
+      }),
+      state,
+      rememberSessionKey,
+    });
+
+    await runLoadHistory();
+
+    expect(state.currentSessionId).toBe("session-main");
+    expect(state.currentSessionKey).toBe("agent:main:main");
+    expect(rememberSessionKey).toHaveBeenCalledWith("agent:main:main");
+  });
+
   it("preserves optimistic user messages across stale history rebuilds", async () => {
     const describeSession = vi.fn().mockResolvedValue({
       defaults: {},
@@ -1877,9 +1905,8 @@ describe("tui session actions", () => {
       finalizeAssistant: vi.fn(),
       clearAll: vi.fn(),
     });
-    const state = createBaseState({ currentSessionId: "session-main", currentSessionKey: "main" });
+    const state = createBaseState({ currentSessionId: "session-main" });
     const requestRender = vi.fn();
-    const rememberSessionKey = vi.fn();
     sendPendingUser(state, "optimistic-run", "optimistic prompt");
 
     const { loadHistory: runLoadHistory } = createTestSessionActions({
@@ -1890,14 +1917,10 @@ describe("tui session actions", () => {
       chatLog,
       state,
       tui: makeTui({ requestRender }),
-      rememberSessionKey,
     });
 
     const result = await runLoadHistory();
 
-    expect(state.currentSessionId).toBe("session-main");
-    expect(state.currentSessionKey).toBe("agent:main:main");
-    expect(rememberSessionKey).toHaveBeenCalledWith("agent:main:main");
     expect(chatLog.clearAll).toHaveBeenCalledWith();
     expect(chatLog.addUser).toHaveBeenCalledWith("persisted", { images: [] });
     expect(chatLog.addPendingUser).toHaveBeenCalledWith("optimistic-run", "optimistic prompt");

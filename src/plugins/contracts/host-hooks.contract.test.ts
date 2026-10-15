@@ -204,6 +204,35 @@ describe("host-hook fixture plugin contract", () => {
     }
   });
 
+  it("registers generic SDK seams without Plan Mode business logic", () => {
+    const { config, registry } = createHostHookFixtureRegistry();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "host-hook-fixture",
+        name: "Host Hook Fixture",
+        origin: "workspace",
+        contracts: { tools: ["approval_fixture_tool"] },
+      }),
+      register: registerHostHookFixture,
+    });
+
+    expect(registry.registry.sessionExtensions).toHaveLength(1);
+    expect(registry.registry.toolMetadata).toHaveLength(1);
+    expect(registry.registry.controlUiDescriptors).toHaveLength(1);
+    expect(registry.registry.runtimeLifecycles).toHaveLength(1);
+    expect(registry.registry.agentEventSubscriptions).toHaveLength(1);
+    expect(registry.registry.sessionSchedulerJobs).toHaveLength(1);
+    expect(registry.registry.commands.map((entry) => entry.command.name)).toEqual([
+      "host-hook-fixture",
+    ]);
+    expect(registry.registry.typedHooks.map((entry) => entry.hookName).toSorted()).toEqual([
+      "agent_turn_prepare",
+      "heartbeat_prompt_contribution",
+    ]);
+  });
+
   it("rejects external plugins from trusted policy and reserved command ownership", () => {
     const { registry } = registerFixture(
       {

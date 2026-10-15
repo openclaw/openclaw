@@ -563,7 +563,13 @@ describe("Codex app-server elicitation bridge", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    request: Parameters<typeof handleCodexAppServerElicitationRequest>[0];
+    title: string | undefined;
+    contains: string[];
+    excludes: string[];
+  }>([
     {
       name: "falls back to a Computer Use approval title and sanitizes server names",
       request: {
