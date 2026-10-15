@@ -272,6 +272,8 @@ export type ReplyPayloadMetadata = {
   assistantMediaFailures?: ReplyMediaFailure[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** The local source observer confirmed this model reply in committed chat history. */
+  localTranscriptDeliveryConfirmed?: true;
   /** Exact decoration added by normalization, not model-authored text. */
   responsePrefix?: string;
   /** Exact usage footer appended by the host. */

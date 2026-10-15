@@ -707,7 +707,6 @@ export async function prepareReplyAgentPayloads(state: {
     kind: "continue" as const,
     activeSessionEntry,
     completedSourceReplyDelivery,
-    terminalReplyDelivery,
     reminderNoteAppended: guardedReplyPayloads !== replyPayloads,
     guardedReplyPayloads,
     responseUsageLine,

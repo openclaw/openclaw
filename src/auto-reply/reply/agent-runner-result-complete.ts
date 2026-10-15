@@ -210,19 +210,16 @@ export async function completeReplyAgentRun(input: {
     }
     // The local source observer confirms the committed answer in chat history.
     // Its live notification needs no second durable delivery state machine.
-    const localTranscriptDelivered =
-      isInternalSourceReplyChannel(sessionCtx) &&
-      runResult.sourceReplyDeliveryState === "missing" &&
-      prepared.terminalReplyDelivery === "delivered" &&
-      !prepared.reminderNoteAppended;
+    const canUseLocalTranscript =
+      isInternalSourceReplyChannel(sessionCtx) && !prepared.reminderNoteAppended;
     const sendableFinalPayloads = sourceReplyPolicy.suppressDelivery
       ? []
       : finalPayloads.filter((payload) => {
           const metadata = getReplyPayloadMetadata(payload);
           const committedLocalText =
-            localTranscriptDelivered &&
-            (metadata?.assistantTranscriptOwned === true ||
-              metadata?.assistantMessageIndex !== undefined) &&
+            canUseLocalTranscript &&
+            metadata?.localTranscriptDeliveryConfirmed === true &&
+            !metadata.assistantMediaFailures?.length &&
             !payload.mediaUrl &&
             !payload.mediaUrls?.length &&
             !payload.attachments?.length &&
