@@ -231,6 +231,31 @@ describe("runDiscordGatewayLifecycle", () => {
     await lifecycle;
   });
 
+  it("escalates repeated startup readiness failures to provider restart", async () => {
+    vi.useFakeTimers();
+    const h = createHarness({ ready: false });
+    const lifecycle = runDiscordGatewayLifecycle(h.params);
+    const outcome = expect(lifecycle).rejects.toThrow(
+      "gateway READY recovery exhausted after 10 consecutive timeouts",
+    );
+    await vi.advanceTimersByTimeAsync(170_000);
+    await outcome;
+    expect(h.gateway.disconnect).toHaveBeenCalledTimes(9);
+    expect(h.gateway.connect).toHaveBeenCalledTimes(9);
+    expect(waitForStop).not.toHaveBeenCalled();
+    expect(h.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("gateway READY recovery exhausted after 10 consecutive timeouts"),
+    );
+    expect(h.statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: "startup-recovery-exhausted",
+      }),
+    );
+    expectCleanup(h, 0);
+  });
+
   it("keeps retrying startup readiness and publishes recovery once READY", async () => {
     vi.useFakeTimers();
     const h = createHarness({ ready: false });
