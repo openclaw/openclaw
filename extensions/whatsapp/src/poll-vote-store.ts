@@ -33,6 +33,8 @@ export type WhatsAppPollRecord = {
   origin: WhatsAppPollOrigin;
   chatJids: string[];
   creatorJids: string[];
+  /** Resolved when the poll was recorded; a LID-only creator still matches number allowlists. */
+  creatorE164?: string;
   creatorName?: string;
   question: string;
   /** Base64 of the 32-byte poll message secret. */
@@ -48,6 +50,7 @@ export type WhatsAppPollRecordInput = {
   origin: WhatsAppPollOrigin;
   chatJids: readonly (string | null | undefined)[];
   creatorJids: readonly (string | null | undefined)[];
+  creatorE164?: string | null;
   creatorName?: string;
   question: string;
   secret: Uint8Array;
@@ -75,6 +78,7 @@ export const WHATSAPP_POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MIN_TTL_MS = 60_000;
 const POLL_MESSAGE_ID_MAX_BYTES = 128;
 const POLL_MESSAGE_ID_RE = /^[A-Za-z0-9_-]+$/;
+const E164_RE = /^\+\d{1,20}$/;
 const STORE_KEY_MAX_BYTES = 512;
 const QUESTION_MAX_BYTES = 1024;
 const NAME_MAX_BYTES = 128;
@@ -337,6 +341,7 @@ function isPollRecord(value: unknown): value is WhatsAppPollRecord {
     (record.origin === "sent" || record.origin === "received") &&
     Array.isArray(record.chatJids) &&
     Array.isArray(record.creatorJids) &&
+    (record.creatorE164 === undefined || typeof record.creatorE164 === "string") &&
     typeof record.question === "string" &&
     typeof record.secret === "string" &&
     Array.isArray(record.options) &&
@@ -363,6 +368,9 @@ export async function recordWhatsAppPoll(
     origin: input.origin,
     chatJids,
     creatorJids: normalizeWhatsAppPollJids(input.creatorJids),
+    ...(input.creatorE164 && E164_RE.test(input.creatorE164)
+      ? { creatorE164: input.creatorE164 }
+      : {}),
     ...(input.creatorName?.trim()
       ? { creatorName: truncateUtf8(input.creatorName.trim(), NAME_MAX_BYTES) }
       : {}),

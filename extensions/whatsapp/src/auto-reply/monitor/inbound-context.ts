@@ -144,7 +144,11 @@ export function resolveVisibleWhatsAppPollVoters(
  * alike, a blocked creator's question, options and name stay out of the context.
  */
 export function isWhatsAppPollCreatorVisible(
-  params: ContextVisibilityOptions & { isGroup: boolean; creatorJids: readonly string[] },
+  params: ContextVisibilityOptions & {
+    isGroup: boolean;
+    creatorJids: readonly string[];
+    creatorE164?: string;
+  },
 ): boolean {
   const jids = params.creatorJids;
   return (
@@ -156,7 +160,7 @@ export function isWhatsAppPollCreatorVisible(
         isWhatsAppContextSenderAllowed(params, params.isGroup, {
           jid: findJid(jids, "@s.whatsapp.net"),
           lid: findJid(jids, "@lid"),
-          e164: null,
+          e164: params.creatorE164 ?? null,
         }),
     }).items.length > 0
   );

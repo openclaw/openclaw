@@ -114,6 +114,8 @@ export async function recordWhatsAppInboundPoll(params: {
   accountId: string;
   /** The linked phone; the record belongs to it. */
   self: WhatsAppSelfIdentity | null | undefined;
+  /** The sender's number as access control resolved it; lets allowlists match a LID-only creator. */
+  senderE164?: string | null;
   msg: Pick<WAMessage, "key" | "message" | "pushName">;
   group: boolean;
   remoteJid: string;
@@ -143,6 +145,7 @@ export async function recordWhatsAppInboundPoll(params: {
         pollMessageId: params.msg.key?.id ?? "",
         origin: "received",
         ...extracted,
+        creatorE164: params.msg.key?.fromMe ? params.self?.e164 : params.senderE164,
         ...(params.recordedAt !== undefined ? { recordedAt: params.recordedAt } : {}),
       },
       { mode: "ifAbsent" },

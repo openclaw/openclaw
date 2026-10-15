@@ -460,6 +460,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       cfg: options.loadConfig?.() ?? options.cfg,
       accountId: options.accountId,
       self,
+      senderE164: inbound.senderE164,
       msg,
       group: inbound.group,
       remoteJid: inbound.remoteJid,

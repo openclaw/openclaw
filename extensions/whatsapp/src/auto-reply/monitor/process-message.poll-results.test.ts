@@ -446,7 +446,11 @@ describe("processMessage poll results context", () => {
       },
     );
 
-    async function addReceivedPoll(creatorJids: string[], creatorName: string) {
+    async function addReceivedPoll(
+      creatorJids: string[],
+      creatorName: string,
+      creatorE164?: string,
+    ) {
       await recordWhatsAppPoll(
         {
           account: ACCOUNT,
@@ -454,6 +458,7 @@ describe("processMessage poll results context", () => {
           origin: "received",
           chatJids: [GROUP_JID],
           creatorJids,
+          creatorE164,
           creatorName,
           question: "Who is in?",
           secret: new Uint8Array(32).fill(4),
@@ -482,6 +487,13 @@ describe("processMessage poll results context", () => {
         poll_id: "POLL2",
         created_by: "Alice",
       });
+    });
+
+    it("keeps a LID-only creator whose number was recorded with the poll and is allowlisted", async () => {
+      await addReceivedPoll([PEER_LID], "Alice", PEER_E164);
+      resolvePolicyMock.mockReturnValue(allowlistPolicy);
+      await callProcessMessage(makeMsg({ kind: "group" }), "main", visibility("allowlist"));
+      expect(preparedPollPayload()?.polls[0]).toMatchObject({ poll_id: "POLL2" });
     });
 
     it("keeps the assistant's own poll and drops a blocked creator's poll in the same chat", async () => {

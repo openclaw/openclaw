@@ -59,7 +59,12 @@ function describeCreator(record: WhatsAppPollRecord): string {
   if (record.origin === "sent") {
     return "assistant";
   }
-  return record.creatorName || record.creatorJids.map(pnJidToE164).find(Boolean) || "unknown";
+  return (
+    record.creatorName ||
+    record.creatorE164 ||
+    record.creatorJids.map(pnJidToE164).find(Boolean) ||
+    "unknown"
+  );
 }
 
 /** Drops voters the chat's context visibility policy hides; they are neither named nor counted. */

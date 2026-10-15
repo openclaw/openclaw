@@ -407,7 +407,11 @@ export async function processMessage(params: {
       self,
       filterVoters: (voters) => resolveVisibleWhatsAppPollVoters({ ...pollVisibility, voters }),
       isCreatorVisible: (record) =>
-        isWhatsAppPollCreatorVisible({ ...pollVisibility, creatorJids: record.creatorJids }),
+        isWhatsAppPollCreatorVisible({
+          ...pollVisibility,
+          creatorJids: record.creatorJids,
+          creatorE164: record.creatorE164,
+        }),
     }),
     rawBody: commandBody,
     route: params.route,

@@ -480,6 +480,18 @@ describe("web monitor inbox incoming poll records", () => {
     await listener.close();
   });
 
+  it("(s) records a group poll creator's number as access control resolved it", async () => {
+    const onMessage = vi.fn();
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    await emit(sock, pollMessage({ id: "GRNUM", remoteJid: GROUP, participant: MEMBER }));
+    await waitForMessageCalls(onMessage, 1);
+    expect(await readWhatsAppPollRecord(ACCOUNT, "GRNUM")).toMatchObject({
+      creatorJids: [MEMBER],
+      creatorE164: "+15550003333",
+    });
+    await listener.close();
+  });
+
   it("(r) delivers an incoming pollCreationMessageV3 with the same body as before", async () => {
     const onMessage = vi.fn();
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
