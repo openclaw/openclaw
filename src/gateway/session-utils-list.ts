@@ -425,6 +425,11 @@ export async function listProjectedSessions(params: {
   onResult?: (result: SessionsListResult) => void;
 }): Promise<SessionsListResult> {
   const { projection, opts, key: exactKey, context, client, diagnostics } = params;
+  // Search and Board filters inspect full row facts; ordinary paging selects from metadata.
+  const selectionPreparation = {
+    metadataOnly: !opts.search?.trim() && opts.hasBoard === undefined,
+    includeCatalog: true,
+  };
   return projection.withSelectionPreparation(async () => {
     const dirtyRowCount = projection.dirtyRowCount;
     const materializedBefore = projection.materializedCount;
@@ -434,12 +439,12 @@ export async function listProjectedSessions(params: {
     let searchIdentities: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>> | undefined;
     do {
       yieldCount++;
-      await projection.prepareSelection({ yieldForCatalog: true });
+      await projection.prepareSelection({ ...selectionPreparation, yieldForCatalog: true });
       if (opts.search?.trim()) {
         searchIdentities = await prepareSessionSearchIdentityNames(projection, opts, true);
       }
     } while (
-      projection.needsSelectionPreparation() ||
+      projection.needsSelectionPreparation(selectionPreparation) ||
       (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
     );
     let prepareSyncMs = 0;
@@ -592,7 +597,7 @@ export async function listProjectedSessions(params: {
           diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);
         }
       },
-      { selection: true },
+      { selection: selectionPreparation },
     );
   });
 }

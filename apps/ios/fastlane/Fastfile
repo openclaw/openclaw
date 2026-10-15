@@ -243,9 +243,17 @@ def require_idle_screenshot_simulators!
 end
 
 def require_exclusive_screenshot_simulator!(udid, diagnostics)
-  active = available_simulator_devices.select { |device| device.fetch("state") != "Shutdown" }
+  devices = available_simulator_devices
+  active = devices.select { |device| device.fetch("state") != "Shutdown" }
   diagnostics.events.last["activeSimulatorCount"] = active.length if diagnostics
-  UI.user_error!("Screenshot capture requires its task-owned simulator to be the only active simulator.") unless active.map { |device| device.fetch("udid") } == [udid]
+  others = active.reject { |device| device.fetch("udid") == udid }
+  unless others.empty?
+    listed = others.map { |device| "#{device.fetch("name")} (#{device.fetch("udid")}, #{device.fetch("state")})" }.join(", ")
+    UI.user_error!("Screenshot capture requires its task-owned simulator to be the only active simulator; also active: #{listed}.")
+  end
+  # `simctl bootstatus -b` can exit 0 after CoreSimulator ends a boot.
+  state = devices.find { |device| device.fetch("udid") == udid }&.fetch("state") || "missing"
+  UI.user_error!("Task-owned screenshot simulator #{udid} is #{state}, not Booted; CoreSimulator ended its session.") unless state == "Booted"
 end
 
 def with_screenshot_simulator(template, diagnostics: nil)
