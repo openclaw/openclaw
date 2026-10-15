@@ -297,6 +297,23 @@ describe("Codex app-server runtime artifact", () => {
     });
   });
 
+  it("ignores the retired code-mode host override and binds the native adjacent host", async () => {
+    await withNativeArtifact(async (command, root) => {
+      const codeModeHost = path.join(root, "codex-code-mode-host");
+      const retiredOverride = path.join(root, "custom-code-mode-host");
+      await fs.writeFile(codeModeHost, "host-v1");
+      const options = startOptions(command, {
+        env: { CODEX_CODE_MODE_HOST_PATH: retiredOverride },
+      });
+
+      const { binding } = await captureBinding({ options });
+      await fs.writeFile(retiredOverride, "unused-host");
+      expect((await captureBinding({ options })).binding).toEqual(binding);
+      await fs.writeFile(codeModeHost, "host-v2");
+      await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+    });
+  });
+
   it("keeps raw argv out of the server-minted artifact id", async () => {
     await withNativeArtifact(async (command) => {
       const secret = "provider.api_key=super-secret-value";
