@@ -1,10 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { immutableSubagentRunSessionList, subagentRuns } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { buildSubagentSessionListReadIndex } from "./subagent-registry-read.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentSessionListReadView } from "./subagent-registry-state.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 /** A resident list index consumes keyed publications until its source is replaced. */
 export function createSubagentSessionListReadIndex(
@@ -13,7 +13,12 @@ export function createSubagentSessionListReadIndex(
 ) {
   let identity = source.snapshotIdentity();
   let index = buildSubagentSessionListReadIndex(now, undefined, source.runs());
-  let memory = new Map(subagentRuns);
+  let memory = new Map(
+    Array.from(subagentRuns, ([id, entry]) => [
+      id,
+      copySubagentRunRuntimeOwner(entry, immutableSubagentRunSessionList(entry)),
+    ]),
+  );
   let revision = 0;
   let replaced = false;
   const changedChildren = new Set<string>();
@@ -44,15 +49,23 @@ export function createSubagentSessionListReadIndex(
         for (const key of index.runsByChildSessionKey.keys()) {
           changedChildren.add(key);
         }
-        memory = new Map(subagentRuns);
+        memory = new Map(
+          Array.from(subagentRuns, ([id, entry]) => [
+            id,
+            copySubagentRunRuntimeOwner(entry, immutableSubagentRunSessionList(entry)),
+          ]),
+        );
         revision++;
       } else if (pending.size) {
         const rows = source.runs(pending);
         const changes = new Map<string, SubagentRunReadRecord | undefined>();
-        const owners = new Map<string, SubagentRunRecord | undefined>();
+        const owners = new Map<string, SubagentRunReadRecord | undefined>();
         for (const id of pending) {
           const row = rows.get(id);
-          const owner = subagentRuns.get(id);
+          const resident = subagentRuns.get(id);
+          const owner =
+            resident &&
+            copySubagentRunRuntimeOwner(resident, immutableSubagentRunSessionList(resident));
           if (memory.get(id) !== owner || !isDeepStrictEqual(index.inputs.runs.get(id), row)) {
             for (const entry of [index.inputs.runs.get(id), row]) {
               if (entry) {
