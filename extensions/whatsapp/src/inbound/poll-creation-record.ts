@@ -116,6 +116,8 @@ export async function recordWhatsAppInboundPoll(params: {
   self: WhatsAppSelfIdentity | null | undefined;
   /** The sender's number as access control resolved it; lets allowlists match a LID-only creator. */
   senderE164?: string | null;
+  /** PN/LID equivalents of a direct chat, so later turns under either JID find the poll. */
+  resolveDirectChatJids?: (jid: string) => Promise<string[]>;
   msg: Pick<WAMessage, "key" | "message" | "pushName">;
   group: boolean;
   remoteJid: string;
@@ -139,12 +141,17 @@ export async function recordWhatsAppInboundPoll(params: {
         return;
       }
     }
+    // A failed lookup only costs the alias; the store keeps at most four chat JIDs.
+    const equivalents = params.group
+      ? []
+      : ((await params.resolveDirectChatJids?.(params.remoteJid).catch(() => [])) ?? []);
     await recordWhatsAppPoll(
       {
         account: { accountId: params.accountId, self: params.self },
         pollMessageId: params.msg.key?.id ?? "",
         origin: "received",
         ...extracted,
+        chatJids: [...extracted.chatJids, ...equivalents],
         // The owner's own poll, posted from the linked phone; a direct chat has no participant.
         ...(params.msg.key?.fromMe
           ? {

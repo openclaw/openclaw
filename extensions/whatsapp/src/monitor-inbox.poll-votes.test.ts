@@ -505,6 +505,23 @@ describe("web monitor inbox incoming poll records", () => {
     await listener.close();
   });
 
+  it("(u) indexes a direct-chat poll received under a LID under the phone JID as well", async () => {
+    const lid = "88880002222@lid";
+    const onMessage = vi.fn();
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValue(DM);
+    await emit(sock, pollMessage({ id: "LIDPOLL", remoteJid: lid }));
+    await waitForMessageCalls(onMessage, 1);
+    expect(await readWhatsAppPollRecord(ACCOUNT, "LIDPOLL")).toMatchObject({
+      chatJids: [lid, DM],
+    });
+    // A later turn in the same chat may arrive under the phone JID.
+    expect(
+      (await readWhatsAppPollResultsContext({ account: ACCOUNT, chatJids: [DM] }))?.payload.polls,
+    ).toMatchObject([{ poll_id: "LIDPOLL" }]);
+    await listener.close();
+  });
+
   it("(r) delivers an incoming pollCreationMessageV3 with the same body as before", async () => {
     const onMessage = vi.fn();
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);

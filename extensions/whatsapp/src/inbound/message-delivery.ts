@@ -461,6 +461,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       accountId: options.accountId,
       self,
       senderE164: inbound.senderE164,
+      resolveDirectChatJids: resolveReactionTargetJids,
       msg,
       group: inbound.group,
       remoteJid: inbound.remoteJid,
