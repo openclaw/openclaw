@@ -217,6 +217,7 @@ async function releasePool(owner: NodePool): Promise<void> {
     await closePool(owner);
     return;
   }
+  const idleExpiresAt = lifetime.scheduler.now() + 5 * 60_000;
   idlePools.set(
     owner,
     // Warm-worker retirement belongs to the host, never the completed turn's transcript context.
@@ -225,7 +226,10 @@ async function releasePool(owner: NodePool): Promise<void> {
         id: `code-mode-worker-idle:${++nextPoolId}`,
         delayMs: 30_000,
         run: async () => {
-          if (idlePools.keys().next().value !== owner) {
+          if (
+            idlePools.keys().next().value !== owner ||
+            lifetime.scheduler.now() >= idleExpiresAt
+          ) {
             await closePool(owner);
             return;
           }
@@ -234,7 +238,7 @@ async function releasePool(owner: NodePool): Promise<void> {
             owner,
             lifetime.scheduler.schedule({
               id: `code-mode-worker-idle:${++nextPoolId}`,
-              delayMs: 5 * 60_000 - 30_000,
+              atMs: idleExpiresAt,
               run: () => closePool(owner),
             }),
           );

@@ -263,6 +263,27 @@ describe("Node Code Mode worker custody", () => {
     }
   });
 
+  it.each([90_000, 360_000])(
+    "keeps the completion deadline when the first idle wake is delayed to %i ms",
+    async (wakeMs) => {
+      vi.useFakeTimers();
+      try {
+        await run();
+        const completedAt = Date.now();
+        const pool = fixture.pools.at(-1)!;
+        vi.setSystemTime(completedAt + wakeMs - 30_000);
+        await vi.advanceTimersByTimeAsync(30_000);
+        if (wakeMs < 5 * 60_000) {
+          expect(pool.isClosed).toBe(false);
+          await vi.advanceTimersByTimeAsync(5 * 60_000 - wakeMs);
+        }
+        expect(pool.isClosed).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("bounds the warm set and retires every idle pool on memory pressure", async () => {
     const results = await Promise.all(Array.from({ length: 6 }, run));
     expect(results.every((result) => result.status === "completed")).toBe(true);
