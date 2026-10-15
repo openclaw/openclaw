@@ -448,17 +448,14 @@ export function assertNativeConversationApprovalPolicySupported(
   }
 }
 
-export async function prepareCodexConversationBinding(
-  params: {
-    bindingStore: CodexAppServerBindingStore;
-    data: CodexAppServerConversationBindingData;
-    pluginConfig?: unknown;
-    config?: CodexConversationConfig;
-    sessionKey?: string;
-    incognito: boolean;
-  },
-  options: { forceNew?: boolean } = {},
-): Promise<void> {
+export async function prepareCodexConversationBinding(params: {
+  bindingStore: CodexAppServerBindingStore;
+  data: CodexAppServerConversationBindingData;
+  pluginConfig?: unknown;
+  config?: CodexConversationConfig;
+  sessionKey?: string;
+  incognito: boolean;
+}): Promise<void> {
   const identity = { kind: "conversation" as const, bindingId: params.data.bindingId };
   const snapshot = params.bindingStore.read(identity);
   const run = () =>
@@ -471,7 +468,7 @@ export async function prepareCodexConversationBinding(
         params.data.start && current?.conversationStartId !== params.data.start.id
           ? params.data.start
           : undefined;
-      if (current && !requested && !options.forceNew) {
+      if (current && !requested) {
         return;
       }
       const sourceIdentity = params.data.source
@@ -514,7 +511,7 @@ export async function prepareCodexConversationBinding(
       // Harness threads retain immutable tools, developer instructions, and app
       // policy. Transfer bounded visible history into a fresh bound-only thread.
       const threadId = requested?.threadId;
-      await bindThread(bindingParams, options.forceNew ? undefined : threadId);
+      await bindThread(bindingParams, threadId);
       const stored = params.bindingStore.read(identity);
       if (!stored) {
         throw new Error("Codex conversation binding disappeared while initializing its thread.");
