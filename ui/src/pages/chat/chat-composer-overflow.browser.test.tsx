@@ -7,7 +7,7 @@ import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
-import { renderAttachmentPreview } from "./components/chat-attachments.ts";
+import { renderAttachmentPreview } from "./components/chat-attachments.test-support.ts";
 import { ChatGoal } from "./components/chat-composer-goal.tsx";
 import { ComposerMenu } from "./components/chat-composer-menu.tsx";
 import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";

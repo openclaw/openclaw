@@ -67,6 +67,8 @@ type MarkdownContent =
       parts: readonly [string, string];
     };
 
+// The remaining Lit message-text renderer and streaming boundary tests own these parts.
+// Remove this directive with their cutover; Solid message text owns its DOM through createMarkdownRef.
 class MarkdownMediaDirective extends AsyncDirective {
   private readonly container = document.createDocumentFragment();
   private readonly owner = new MarkdownDomReconciler(this.container);

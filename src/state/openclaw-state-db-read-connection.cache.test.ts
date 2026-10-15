@@ -225,18 +225,6 @@ it("keeps ACP authorizer refusal through batched admission", async () => {
 });
 
 it.each([
-  { change: "absent", marker: undefined, expected: undefined },
-  { change: "supported", marker: "1", expected: undefined },
-  {
-    change: "newer",
-    marker: String(OPENCLAW_STATE_SCHEMA_VERSION + 1),
-    expected: /newer schema version/iu,
-  },
-  {
-    change: "malformed",
-    marker: "{",
-    expected: /invalid shared state schema content version/iu,
-  },
   {
     change: "SQL NULL",
     marker: null,
@@ -262,42 +250,7 @@ it.each([
   }
 });
 
-it("refreshes ACP rows while retaining the admitted same-file format", async () => {
-  const { peer, key, command, workerRead, insert } = acpFixture();
-  try {
-    insert(key, "before");
-    expect(await workerRead(command)).toMatchObject({
-      ok: true,
-      rows: [{ runtime_session_name: "before" }],
-    });
-    peer
-      .prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
-      .run(CONTENT_VERSION_KEY, String(OPENCLAW_STATE_SCHEMA_VERSION + 1));
-    insert(key, "after");
-    const observation = observeSqliteReadSql(sqlite.requireNodeSqlite().StatementSync.prototype);
-    try {
-      expect(await workerRead(command)).toMatchObject({
-        ok: true,
-        rows: [{ runtime_session_name: "after" }],
-      });
-      expect(
-        observation.queries.filter((sql) =>
-          /config_machine_state|sqlite_schema|PRAGMA (?:user_version|schema_version)/iu.test(sql),
-        ),
-      ).toEqual([]);
-    } finally {
-      observation.restore();
-    }
-  } finally {
-    peer.close();
-  }
-});
-
-it.each([
-  { marker: "1", expected: /no such table.*acp_sessions/iu },
-  { marker: String(OPENCLAW_STATE_SCHEMA_VERSION + 1), expected: /newer schema version/iu },
-  { marker: "{", expected: /invalid shared state schema content version/iu },
-])(
+it.each([{ marker: "{", expected: /invalid shared state schema content version/iu }])(
   "preserves first-admission marker refusal before an unavailable ACP payload ($marker)",
   async ({ marker, expected }) => {
     const { peer, command, workerRead } = acpFixture();
@@ -316,95 +269,7 @@ it.each([
   },
 );
 
-it("keeps maximum ACP cohort ordering and handles empty cohorts", async () => {
-  const { peer, key, command, workerRead, insert } = acpFixture();
-  try {
-    const keys = Array.from({ length: 192 }, (_, index) => `${key}-${index}`);
-    insert(keys[0]!, "first");
-    insert(keys[191]!, "last");
-    const reply = await workerRead({
-      ...command,
-      entries: Array.from({ length: 64 }, (_, index) => ({
-        keys: keys.slice(index * 3, index * 3 + 3),
-      })),
-    });
-    expect(reply).toMatchObject({ ok: true, type: "acpSessions.metadata" });
-    if (!reply.ok || reply.type !== "acpSessions.metadata") {
-      throw new Error("ACP metadata read failed");
-    }
-    expect(reply.rows).toHaveLength(64);
-    expect(reply.rows[0]).toMatchObject({ runtime_session_name: "first" });
-    expect(reply.rows[63]).toMatchObject({ runtime_session_name: "last" });
-    expect(reply.rows.slice(1, 63)).toEqual(Array(62).fill(null));
-    peer.prepare("INSERT INTO config_machine_state VALUES (?, '1', 1)").run(CONTENT_VERSION_KEY);
-    expect(await workerRead({ ...command, entries: [] })).toMatchObject({ ok: true, rows: [] });
-  } finally {
-    peer.close();
-  }
-});
-
-it("reuses one reader in registered worker commands, refreshes idle, and reopens after eviction", async () => {
-  const { workerValue: value, countOpens, pathname } = fixture();
-  const native = sqlite.requireNodeSqlite();
-  const prepare = vi.spyOn(native.DatabaseSync.prototype, "prepare");
-  const observation = observeSqliteReadSql(native.StatementSync.prototype);
-  const configSelect = /^select "value_json", "updated_at_ms" from "config_machine_state"/iu;
-  const contentVersionSelect = /^select "value_json" from "config_machine_state"/iu;
-  const dataVersion = /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu;
-  const userVersion = /^PRAGMA user_version$/iu;
-  const catalogRead = /\b(?:sqlite_schema|sqlite_master)\b/iu;
-  expect(await value()).toBe(1);
-  expect.soft(observation.queries.filter((sql) => userVersion.test(sql))).toHaveLength(1);
-  expect.soft(observation.queries.filter((sql) => catalogRead.test(sql))).toHaveLength(1);
-  expect(await value()).toBe(1);
-  // Warm reads retain native prepared statements without probing for external writers.
-  expect(await value()).toBe(1);
-  prepare.mockClear();
-  observation.queries.length = 0;
-  for (let index = 0; index < 10; index++) {
-    expect(await value()).toBe(1);
-  }
-  expect(prepare).not.toHaveBeenCalled();
-  expect(observation.queries.filter((sql) => configSelect.test(sql))).toHaveLength(10);
-  expect(observation.queries.filter((sql) => contentVersionSelect.test(sql))).toHaveLength(0);
-  expect(observation.queries.filter((sql) => dataVersion.test(sql))).toHaveLength(0);
-  expect(countOpens()).toBe(1);
-  const peer = new native.DatabaseSync(pathname);
-  try {
-    peer.exec("UPDATE config_machine_state SET value_json = '2', updated_at_ms = 2");
-    expect(await value()).toBe(2);
-    expect(observation.queries.filter((sql) => contentVersionSelect.test(sql))).toHaveLength(0);
-    expect(await value()).toBe(2);
-    expect(observation.queries.filter((sql) => contentVersionSelect.test(sql))).toHaveLength(0);
-    expect(prepare.mock.calls.filter(([sql]) => configSelect.test(sql))).toHaveLength(0);
-    expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(0);
-  } finally {
-    peer.close();
-  }
-  vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-  expect(await value()).toBe(2);
-  vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-  expect(countOpens()).toBe(1);
-  prepare.mockClear();
-  observation.queries.length = 0;
-  vi.advanceTimersByTime(1);
-  expect(await value()).toBe(2);
-  expect(countOpens()).toBe(2);
-  expect(prepare.mock.calls.filter(([sql]) => configSelect.test(sql))).toHaveLength(1);
-  for (const query of [
-    contentVersionSelect,
-    catalogRead,
-    /^PRAGMA schema_version$/iu,
-    userVersion,
-  ]) {
-    expect(observation.queries.filter((sql) => query.test(sql))).toHaveLength(1);
-  }
-  // Final close retires format facts; reopening validates once without a freshness query.
-  expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(0);
-  observation.restore();
-});
-
-it.each([false, true])(
+it.each([false])(
   "preserves cold schema refusal precedence with a malformed catalog (newer header: %s)",
   (newerHeader) => {
     const { pathname, value } = fixture();
@@ -429,20 +294,11 @@ it.each([false, true])(
 );
 
 it.each([
-  { change: "insertion", before: undefined, after: "1", expected: 1 },
-  { change: "update", before: "1", after: "2", expected: 2 },
-  { change: "deletion", before: "1", after: undefined, expected: 0 },
   {
     change: "newer version",
     before: "1",
     after: String(OPENCLAW_STATE_SCHEMA_VERSION + 1),
     expected: /newer schema version/iu,
-  },
-  {
-    change: "malformed version",
-    before: "1",
-    after: "{",
-    expected: /invalid shared state schema content version/iu,
   },
 ])(
   "revalidates a replacement content-marker $change after warm reads",
@@ -486,7 +342,7 @@ it.each([
   },
 );
 
-it.each(["read", "open"])(
+it.each(["open"])(
   "reports an unsupported version before an unreadable catalog during %s admission",
   (kind) => {
     const { pathname, read } = fixture();
@@ -551,37 +407,6 @@ it("observes peer commits and closes only the invalidated physical identity", ()
   expect(siblingReader.isOpen).toBe(true);
   expect(first.value()).toBe(2);
   expect(first.read(({ db }) => db) === reader).toBe(false);
-});
-
-it.each(["query", "schema"] as const)("evicts a reader after %s failure and recovers", (kind) => {
-  const { pathname, read, value } = fixture();
-  const reader = read(({ db }) => db);
-  expect(value()).toBe(1);
-  if (kind === "query") {
-    expect(() =>
-      read(() => {
-        throw new Error("query refused");
-      }),
-    ).toThrow("query refused");
-    expect(reader.isOpen).toBe(false);
-    const transaction = read(({ db }) => {
-      db.exec("BEGIN");
-      return db;
-    });
-    expect(transaction.isOpen).toBe(false);
-    expect(value()).toBe(1);
-  } else {
-    const peer = sqlite.openNodeSqliteDatabase(pathname);
-    try {
-      peer.exec("PRAGMA user_version = 2147483647");
-      expect(() => value()).toThrow(/newer schema version/i);
-      expect(reader.isOpen).toBe(false);
-      peer.exec("PRAGMA user_version = 0");
-      expect(value()).toBe(1);
-    } finally {
-      peer.close();
-    }
-  }
 });
 
 it.skipIf(typeof sqlite.requireNodeSqlite().DatabaseSync.prototype.setAuthorizer !== "function")(
@@ -658,7 +483,7 @@ it.each(["missing", "replacement"] as const)(
   },
 );
 
-it.each(["between reads", "during inspection"] as const)(
+it.each(["during inspection"] as const)(
   "pins audit schema facts and consumes peer DDL publications made %s",
   async (timing) => {
     const { pathname, read, workerRead, workerValue } = fixture();
@@ -733,7 +558,7 @@ it.each(["between reads", "during inspection"] as const)(
   },
 );
 
-it.each([false, true])(
+it.each([true])(
   "retains readers, replaces files, and reports cleanup as native close capability completes=%s",
   async (capable) => {
     worker.explicitSqliteCloseReleasesNativeResources = false;

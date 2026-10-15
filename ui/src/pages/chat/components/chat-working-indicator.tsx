@@ -21,7 +21,7 @@ import "./chat-retry-status.tsx";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
 type ReadingIndicator = Extract<ChatItem, { kind: "reading-indicator" }>;
-export type ChatWorkingIndicatorOptions = {
+type ChatWorkingIndicatorOptions = {
   bubbleMode?: boolean;
   mascot?: ThemeMascot;
   workingIndicator?: ThemeWorkingIndicator;

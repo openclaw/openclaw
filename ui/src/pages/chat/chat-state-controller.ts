@@ -558,8 +558,15 @@ export class ChatStateController<TState extends ChatPageHost> implements SolidCo
   }
 
   hostUpdate() {
-    // An immediate input/property update also renders the latest background facts.
+    // A host commit consumes both deferred producers before their next frame.
     this.cancelBackgroundRender();
+    const state = this.stateValue;
+    if (state?.chatStreamRenderFrame != null) {
+      cancelChatStreamRenderFrame(state);
+      this.composerPersistence.persistChangedState();
+      this.captureRenderLifecycleChanges();
+      this.onStateChange?.();
+    }
   }
 
   private stopChatEffects() {

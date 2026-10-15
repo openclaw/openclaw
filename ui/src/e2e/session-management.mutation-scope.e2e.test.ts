@@ -146,6 +146,9 @@ suite.define(() => {
           await rowFor(original.key).waitFor({ state: "visible" });
         }
         if (filter === "All") {
+          if (operation === "rename") {
+            await gateway.deferNext("sessions.list", { agentId: "main", archived: "all" });
+          }
           await chooseSidebarMenuOption(page, "Status", filter);
           await closeSidebarMenu(page);
           await gateway.waitForRequest("sessions.list", {
@@ -178,6 +181,9 @@ suite.define(() => {
             key: original.key,
             expectedSessionId: original.sessionId,
           });
+          if (filter === "All") {
+            await gateway.resolveDeferred("sessions.list");
+          }
         } else {
           for (const row of batch) {
             await rowFor(row.key).click({ modifiers: ["Alt"] });

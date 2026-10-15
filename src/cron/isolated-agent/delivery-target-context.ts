@@ -8,6 +8,7 @@ import { foldedSessionKeyAliasCandidates } from "../../config/sessions/store-ent
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
 export type CronDeliveryContextRequest = { agentId: string; sessionKey?: string };
@@ -61,28 +62,29 @@ export async function readCronDeliveryTargetContexts(
       targets.push({ index, plan: item.value });
     }
   }
-  const rows = await Promise.all(
-    targets.map(
-      async ({
-        plan: { agentId, storePath, threadSessionKey, mainSessionKey },
-      }): Promise<Result<SessionEntrySummary[], unknown>> => {
-        try {
-          const result = await readSessionEntriesFromStoreInWorker({
-            agentId,
-            storePath,
-            projection: "list",
-            snapshotFields: [],
-            sessionKeys: [threadSessionKey, mainSessionKey].flatMap((key) =>
-              key ? [key].concat(foldedSessionKeyAliasCandidates(key)) : [],
-            ),
-          });
-          return ok(result.entries);
-        } catch (error) {
-          return err(error);
-        }
-      },
+  // Leave worker admission headroom for other session reads while listing large inventories.
+  const { results: rows } = await runTasksWithConcurrency({
+    limit: 8,
+    tasks: targets.map(
+      ({ plan: { agentId, storePath, threadSessionKey, mainSessionKey } }) =>
+        async (): Promise<Result<SessionEntrySummary[], unknown>> => {
+          try {
+            const result = await readSessionEntriesFromStoreInWorker({
+              agentId,
+              storePath,
+              projection: "list",
+              snapshotFields: [],
+              sessionKeys: [threadSessionKey, mainSessionKey].flatMap((key) =>
+                key ? [key].concat(foldedSessionKeyAliasCandidates(key)) : [],
+              ),
+            });
+            return ok(result.entries);
+          } catch (error) {
+            return err(error);
+          }
+        },
     ),
-  );
+  });
   const entries = new Map(targets.map(({ index }, offset) => [index, rows[offset]!]));
   return planned.map((item, index) => {
     if (!item.ok) {

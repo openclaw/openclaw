@@ -665,6 +665,7 @@ export function createGatewayBroadcaster(params: {
       try {
         // Publish the baseline before send can reenter; failures retire this transport.
         delivered?.();
+        state.socket.batchWrites?.();
         if (typeof frame === "string") {
           state.socket.send(frame, sent);
         } else {

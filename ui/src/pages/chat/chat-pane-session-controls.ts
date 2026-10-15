@@ -137,7 +137,7 @@ export function renderChatPaneComposerControls(params: {
   onProviderSettings?: (provider: string) => void;
   onModelAccounts?: () => void;
 }): {
-  composerControls: NonNullable<ChatProps["composerControls"]>;
+  composerControls: ReturnType<typeof solidContent>;
   permissionPicker: ChatPermissionPickerProps;
 } {
   const {

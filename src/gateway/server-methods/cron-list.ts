@@ -132,11 +132,6 @@ export const cronListHandler = createPreparedReadHandler((options) => {
         } finally {
           finishPage?.();
         }
-        if (matchesJob) {
-          for (const job of page.jobs) {
-            selectedJobIds.add(job.id);
-          }
-        }
         diagnostics?.setReturnedCount(page.jobs.length);
         diagnostics?.mark("projection");
         const jobs = projectCronListJobs(context.cron, page, p.compact === true);

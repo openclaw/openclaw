@@ -57,6 +57,8 @@ ChatGPT SSE errors preserve HTTP status and `Retry-After` together, so a transie
 
 For SDK calls that retain internal retries, Stainless-based SDKs such as Anthropic and OpenAI can receive `retry-after-ms` or `retry-after` on retryable responses (`408`, `409`, `429`, and `5xx`). When that wait is longer than 60 seconds, OpenClaw injects `x-should-retry: false` so the SDK returns control promptly. Override this SDK-only cap with `OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS=<seconds>`. Set it to `0`, `false`, `off`, `none`, or `disabled` to let those SDK calls honor long `Retry-After` sleeps internally.
 
+Chinese exhausted-quota messages follow the same policy, including MiniMax Token Plan's `已达到 Token Plan 用量上限` and `额度已用尽` / `配额已用尽`. Temporary `请求过于频繁` throttles keep the same-model retry budget.
+
 ### Managed Git operations
 
 The shared Git runner retries transient `fetch` and `ls-remote` failures once,

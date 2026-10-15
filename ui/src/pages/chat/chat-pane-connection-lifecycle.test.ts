@@ -1,6 +1,6 @@
 // Keep the registered pane class on this file's module graph.
-import { html } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { html, render } from "lit";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-connection-lifecycle.test/"} */
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
@@ -12,6 +12,7 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { emptyLegacyContent } from "../../lit/solid-content.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
@@ -24,10 +25,19 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { applySelectedChatAgent } from "./chat-state-refresh.ts";
+import { renderMessageGroup } from "./components/chat-message-group.test-support.ts";
+import { createMessageGroup } from "./components/chat-message.test-support.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
+import {
+  getChatSessionProjection,
+  reduceChatSessionProjection,
+  setChatRunOwner,
+  getChatRunOwner,
+} from "./history-merge.ts";
 import type { AfterCommitEffect } from "./render-lifecycle.ts";
 import { handleAbortChat, replayPendingChatAbort } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
+import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -69,6 +79,130 @@ function disconnect(pane: TestChatPane) {
 }
 
 describe("chat pane connection lifecycle", () => {
+  it.each(["reconnect", "auth change", "authenticated owner", "pane disposal"])(
+    "retires pairing QR credentials on %s without losing canonical history",
+    async (transition) => {
+      const text = { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" };
+      const canonical = {
+        role: "assistant",
+        content: [text],
+        __openclaw: { id: "pairing-reply", seq: 1, runId: "pairing-run" },
+      };
+      const live = {
+        ...canonical,
+        content: [
+          text,
+          {
+            type: "openclaw_pairing_qr",
+            image_url: "data:image/png;base64,cGFpcmluZy1maXh0dXJl",
+            expiresAtMs: Date.now() + 60_000,
+            sensitive: true,
+          },
+        ],
+      };
+      const client = createTestGatewayClient(
+        createReconnectRequest({ messages: [canonical], sessionId: "pairing-session" }),
+      );
+      const { pane, state } = createTestChatPane({ client });
+      state.loadAssistantIdentity = vi.fn(async () => undefined);
+      const hello = sessionMutationGatewayHello();
+      pane.context.gateway.snapshot.selfUser = { id: "fixture-user-before" };
+      const connected = {
+        ...pane.context.gateway.snapshot,
+        client,
+        phase: "connected" as const,
+        hello: { ...hello, auth: { ...hello.auth, deviceToken: "fixture-token-before" } },
+      };
+      pane.applyGatewaySnapshot(connected);
+      state.currentSessionId = "pairing-session";
+      state.chatMessagesBySession = new Map();
+      reduceChatSessionProjection(state, { type: "messagePersisted", message: live });
+      reduceChatSessionProjection(state, {
+        type: "runTerminal",
+        runId: "pairing-run",
+        status: "completed",
+        message: live,
+      });
+      setChatRunOwner(state, "pairing-run");
+      const runBefore = getChatSessionProjection(state).runs["pairing-run"];
+      const view = document.createElement("div");
+      onTestFinished(() => {
+        render(null, view);
+      });
+      const renderReply = () => {
+        render(
+          renderMessageGroup(
+            createMessageGroup(state.chatMessages[0], "assistant", { key: "pairing-reply" }),
+            {
+              showReasoning: false,
+              showToolCalls: false,
+              assistantName: "OpenClaw",
+              assistantAvatar: null,
+            },
+          ),
+          view,
+        );
+        flush();
+      };
+      renderReply();
+      expect(view.querySelector(".chat-message-image")?.getAttribute("src")).toBe(
+        "data:image/png;base64,cGFpcmluZy1maXh0dXJl",
+      );
+      const cached = {
+        messages: [live],
+        sessionId: "pairing-session",
+        pagination: { hasMore: false as const },
+      };
+      const target = { sessionKey: state.sessionKey };
+      const otherTarget = { sessionKey: "agent:main:other" };
+      cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, cached);
+      cacheChatSessionSnapshot(state.chatMessagesBySession, state, otherTarget, {
+        ...cached,
+        messages: [canonical],
+      });
+
+      if (transition === "reconnect") {
+        pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting", hello: null });
+      } else if (transition === "pane disposal") {
+        pane.disconnectedCallback();
+      } else if (transition === "authenticated owner") {
+        pane.context.gateway.snapshot.selfUser = { id: "fixture-user-after" };
+        pane.applyGatewaySnapshot({
+          ...connected,
+          selfUser: pane.context.gateway.snapshot.selfUser,
+        });
+      } else {
+        pane.applyGatewaySnapshot({
+          ...connected,
+          hello: { ...hello, auth: { ...hello.auth, deviceToken: "fixture-token-after" } },
+        });
+      }
+
+      expect(state.chatMessages).toEqual([canonical]);
+      renderReply();
+      expect(view.querySelector(".chat-message-image")).toBeNull();
+      expect(view.textContent).toContain(text.text);
+      expect(getChatSessionProjection(state).runs["pairing-run"]).toEqual({
+        ...runBefore,
+        message: canonical,
+      });
+      expect(getChatRunOwner(state)).toBe("pairing-run");
+      expect(readChatMessagesFromCache(state.chatMessagesBySession, state, target)).toEqual([]);
+      expect(readChatMessagesFromCache(state.chatMessagesBySession, state, otherTarget)).toEqual([
+        canonical,
+      ]);
+      if (transition === "reconnect") {
+        pane.applyGatewaySnapshot(connected);
+      }
+      if (transition !== "pane disposal") {
+        await loadChatHistory(state, { startup: true });
+        expect(state.chatMessages).toEqual([canonical]);
+        renderReply();
+        expect(view.querySelector(".chat-message-image")).toBeNull();
+      }
+    },
+  );
+
   it("keeps the initial transcript pending while the first client connects", async () => {
     const client = createTestGatewayClient(createReconnectRequest({ messages: [] }));
     const { pane, state } = createTestChatPane({ client });

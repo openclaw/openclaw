@@ -39,13 +39,6 @@ const cases = [
     compatibility: OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
     indexes: [
       {
-        name: "idx_task_runs_requester_session_key",
-        table: "task_runs",
-        primaryKey: "task_id",
-        query:
-          "SELECT task_id AS id FROM task_runs WHERE requester_session_key = 'requester' ORDER BY task_id",
-      },
-      {
         name: "idx_worker_session_placements_environment",
         table: "worker_session_placements",
         primaryKey: "session_id",
@@ -55,16 +48,6 @@ const cases = [
     ],
     seed(db: EngineConnection) {
       db.exec(`
-        INSERT INTO task_runs
-          (task_id, runtime, owner_key, scope_kind, task, status, delivery_status, notify_policy,
-           created_at, run_id, child_session_key, requester_session_key)
-        VALUES
-          ('a', 'subagent', 'owner', 'session', 'task a', 'running', 'pending', 'always', 1,
-           ' run ', ' child ', 'requester'),
-          ('b', 'subagent', 'owner', 'session', 'task b', 'running', 'pending', 'always', 2,
-           'run', 'child', 'requester'),
-          ('c', 'subagent', 'owner', 'session', 'task c', 'running', 'pending', 'always', 3,
-           NULL, NULL, NULL);
         INSERT INTO worker_session_placements
           (session_id, agent_id, session_key, state, environment_id,
            created_at_ms, updated_at_ms, state_changed_at_ms)
