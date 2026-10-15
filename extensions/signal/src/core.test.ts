@@ -310,7 +310,13 @@ describe("signalPlugin pairing.notifyApproval", () => {
 });
 
 describe("signal outbound", () => {
-  it.each([
+  it.each<{
+    input: string;
+    normalized: string;
+    aliases: Record<string, string>;
+    kind: "group" | "user";
+    expected: { to: string; kind: "group"; display: string; source: "directory" } | null;
+  }>([
     {
       input: "signal:ops",
       normalized: "ops",
@@ -330,7 +336,7 @@ describe("signal outbound", () => {
       kind: "user",
       expected: null,
     },
-  ] as const)(
+  ])(
     "resolves $input through the message target resolver",
     async ({ input, normalized, aliases, kind, expected }) => {
       const resolved = await signalPlugin.messaging?.targetResolver?.resolveTarget?.({
