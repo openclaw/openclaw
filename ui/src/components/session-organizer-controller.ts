@@ -5,6 +5,7 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { t } from "../i18n/index.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import {
   readSessionDragData,
   readSidebarSectionDragData,
@@ -35,7 +36,6 @@ import {
 } from "./app-sidebar-session-types.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 export type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
 
@@ -545,7 +545,7 @@ export class SessionOrganizerController {
     if (!scope) {
       return;
     }
-    const dialog = await this.loadDialog(import("./session-group-defaults-dialog.ts"));
+    const dialog = await this.loadDialog(import("./session-group-defaults-dialog.tsx"));
     if (!dialog || !this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }

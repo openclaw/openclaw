@@ -136,7 +136,7 @@ export function parseCronCommandEnv(values: unknown): Record<string, string> | u
   if (rawValues.length === 0) {
     return undefined;
   }
-  const env: Record<string, string> = {};
+  const env: Record<string, string> = Object.create(null);
   for (const raw of rawValues) {
     if (typeof raw !== "string") {
       throw new CronCliError("--command-env must be KEY=VALUE");
@@ -566,6 +566,9 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
   if (schedule?.kind === "stream") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
     return `stream ${schedule.command.join(" ")}${cwd}${suffix}`;
+  }
+  if (schedule?.kind === "event") {
+    return `event ${schedule.source}`;
   }
   if (schedule?.kind !== "cron") {
     return "-";

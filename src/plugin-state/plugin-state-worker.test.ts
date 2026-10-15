@@ -365,12 +365,12 @@ describe("worker plugin state", () => {
           .spyOn(worker, "postMessage")
           .mockImplementation((message, transferList) => {
             const request = asOptionalRecord(message);
+            const command =
+              request?.type === "execute" && request.input instanceof Uint8Array
+                ? asOptionalRecord(deserialize(request.input))?.type
+                : undefined;
             nativePost(message, transferList);
-            if (
-              request?.type === "execute" &&
-              request.input instanceof Uint8Array &&
-              asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
-            ) {
+            if (command === "pluginState." + operation) {
               posted.resolve();
             }
           });

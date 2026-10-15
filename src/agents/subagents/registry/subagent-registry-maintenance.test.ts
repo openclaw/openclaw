@@ -84,6 +84,12 @@ describe("subagent maintenance protection", () => {
     saveSubagentRegistryToSqlite(
       new Map([publicRun, privateRun].map((entry) => [entry.runId, entry])),
     );
+    subagentRuns.set("duplicate", {
+      ...publicRun,
+      runId: "duplicate",
+      childSessionKey: `  ${publicRun.childSessionKey}  `,
+    });
+    subagentRuns.set("blank", { ...publicRun, runId: "blank", childSessionKey: "  " });
     const parse = vi.spyOn(JSON, "parse");
     try {
       expect(await protectedKeys()).toEqual([

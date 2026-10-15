@@ -116,9 +116,15 @@ const markers = preparation ? ${JSON.stringify(preparationEnteredPaths)} : ${JSO
 const release = preparation ? ${JSON.stringify(preparationReleasePath)} : ${JSON.stringify(releasePath)};
 const releases = preparation ? ${JSON.stringify(preparationReleasePaths)} : ${JSON.stringify(releasePaths)};
 let startupInspection = false;
-process.on('message', (request) => {
-  startupInspection = request?.type === 'inspect' && request.input?.requireStartupMigrationReadiness === true;
-});
+// A preload listener starts IPC delivery before the worker registers its handler.
+const emit = process.emit;
+process.emit = function(event, ...args) {
+  if (event === 'message') {
+    const request = args[0];
+    startupInspection = request?.type === 'inspect' && request.input?.requireStartupMigrationReadiness === true;
+  }
+  return emit.call(this, event, ...args);
+};
 const prepare = DatabaseSync.prototype.prepare;
 DatabaseSync.prototype.prepare = function(sql) {
   const location = this.location();
@@ -463,11 +469,7 @@ it.for([
         },
         () => {},
       );
-      if (holdSubagentRestoration) {
-        await withinTest(restorationEntered.promise, signal);
-      } else {
-        await server.startupSettled;
-      }
+      await server.startupSettled;
       if (brokerExpected) {
         expect(brokerPid).toBeTypeOf("number");
       }
@@ -694,6 +696,8 @@ it.for([
           expect(hostJournalReads).toBe(0);
         }
         if (holdSubagentRestoration) {
+          // Restored work starts after reader preparation, independently of readiness.
+          await withinTest(restorationEntered.promise, signal);
           expect(startupSettled).toBe(true);
           restorationRelease.resolve();
           await server.startupSettled;

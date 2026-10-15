@@ -752,7 +752,7 @@ function retainSqliteDatabaseRemovalExclusion(
 }
 
 /** Reconfirm an advisory worker failure on the live owner connection. */
-export async function confirmOpenClawStateDatabaseIntegrity(
+export async function confirmCachedOpenClawStateDatabaseIntegrity(
   pathname: string,
 ): Promise<SqliteIntegrityConfirmation> {
   const resolvedPath = resolveDatabasePath({ path: pathname });

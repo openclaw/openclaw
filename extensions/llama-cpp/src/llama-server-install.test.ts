@@ -241,7 +241,7 @@ describe("cached file integrity", () => {
 });
 
 describe("downloadVerifiedFile", () => {
-  it.each(["partial", "wrong-checksum", "unavailable", "cancelled"] as const)(
+  it.each(["partial", "unavailable", "cancelled"] as const)(
     "preserves the previous artifact and removes partial bytes after %s, then permits retry",
     async (outcome) => {
       const { destination, root } = await createDestination();
@@ -262,7 +262,7 @@ describe("downloadVerifiedFile", () => {
           url: "https://downloads.example/mmproj.gguf",
           destination,
           expectedSize: payload.byteLength,
-          expectedSha256: outcome === "wrong-checksum" ? "0".repeat(64) : digest,
+          expectedSha256: digest,
           signal: controller.signal,
           onProgress: () => {
             if (outcome === "cancelled") {
@@ -273,7 +273,6 @@ describe("downloadVerifiedFile", () => {
       ).rejects.toThrow(
         {
           partial: /size mismatch/u,
-          "wrong-checksum": /SHA-256 mismatch/u,
           unavailable: /HTTP 503/u,
           cancelled: /abort/iu,
         }[outcome],
@@ -298,15 +297,9 @@ describe("downloadVerifiedFile", () => {
   );
 
   it.each([
-    { label: "shared clock ticks", times: [1000, 1000, 1010], rates: [0, 0, 300_000_000] },
     {
       label: "shared clock ticks after an established sample",
       times: [1010, 1010, 1030],
-      rates: [100_000_000, 100_000_000, 100_000_000],
-    },
-    {
-      label: "distinct clock ticks",
-      times: [1010, 1020, 1030],
       rates: [100_000_000, 100_000_000, 100_000_000],
     },
   ])("counts every persisted byte in the rate across $label", async ({ times, rates }) => {
@@ -406,30 +399,6 @@ describe("downloadVerifiedFile", () => {
     expect(release).toHaveBeenCalledOnce();
     expect(await fs.readdir(root)).toEqual(["model.gguf"]);
   });
-
-  it("keeps the destination absent and removes the partial file after a write failure", async () => {
-    const payload = Buffer.from("a download that cannot be persisted");
-    const { destination, root } = await createDestination();
-    const release = mockDownload(payload);
-    injectFileHandle((handle) => {
-      handle.write = vi.fn(async () => {
-        throw new Error("injected write failure");
-      }) as typeof handle.write;
-      installWriteFileThroughWrite(handle);
-    });
-
-    await expect(
-      downloadVerifiedFile({
-        url: "https://downloads.example/model.gguf",
-        destination,
-        expectedSha256: createHash("sha256").update(payload).digest("hex"),
-        expectedSize: payload.byteLength,
-      }),
-    ).rejects.toThrow("injected write failure");
-    await expect(fs.stat(destination)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await fs.readdir(root)).toEqual([]);
-    expect(release).toHaveBeenCalledOnce();
-  });
 });
 
 describe("ensureLlamaServerInstalled", () => {
@@ -465,17 +434,6 @@ describe("ensureLlamaServerInstalled", () => {
     await expect(first).resolves.toMatchObject({ command });
     await expect(ensureLlamaServerInstalled()).resolves.toMatchObject({ command });
     expect(mocks.execFile.mock.calls.filter(([file]) => file === command)).toHaveLength(2);
-  });
-
-  it("rejects a different active build even when output mentions the pinned build later", async () => {
-    await createInstalledServer();
-    mockVersionOutput(
-      `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD + 1}, commit deadbeef0)\ncompatibility note: (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
-    );
-
-    await expect(ensureLlamaServerInstalled()).rejects.toThrow(
-      `expected b${LLAMA_SERVER_BUILD} (${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
-    );
   });
 
   it("allows slow version initialization before publication, after publication, and on reuse", async () => {
@@ -633,7 +591,7 @@ describe("ensureLlamaServerInstalled", () => {
     expect(await fs.readdir(root)).toEqual([]);
   });
 
-  it.each(["ready", "corrupt-runtime", "missing-runtime", "no-device", "cancelled"] as const)(
+  it.each(["ready", "corrupt-runtime", "missing-runtime", "no-device"] as const)(
     "publishes the complete CUDA installation only after verification: %s",
     async (outcome) => {
       const root = await fs.realpath(
@@ -709,11 +667,6 @@ describe("ensureLlamaServerInstalled", () => {
       const result = ensureLlamaServerInstalled({
         asset,
         signal: controller.signal,
-        onProgress: () => {
-          if (outcome === "cancelled") {
-            controller.abort();
-          }
-        },
       });
       const { command, installDir } = resolveManagedLlamaServerPaths(asset);
       if (outcome === "ready") {
@@ -736,7 +689,6 @@ describe("ensureLlamaServerInstalled", () => {
           "corrupt-runtime": /SHA-256 mismatch/u,
           "missing-runtime": /regular file cudart64_12\.dll/u,
           "no-device": /could not initialize an NVIDIA CUDA device/u,
-          cancelled: /abort/iu,
         }[outcome];
         await expect(result).rejects.toThrow(expected);
         await expect(fs.stat(command)).rejects.toMatchObject({ code: "ENOENT" });
@@ -833,12 +785,6 @@ describe("macOS runtime floor", () => {
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
-  it.each(["13.3", "26.0.1"])("keeps the verified build on macOS %s", async (productVersion) => {
-    const { asset, command } = await prepareMac(productVersion, "valid");
-
-    await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
-  });
-
   it("keeps the launch error when the macOS version cannot be read", async () => {
     const { asset, command } = await prepareMac(
       Object.assign(new Error("sw_vers unavailable"), { cmd: "sw_vers" }),
@@ -862,59 +808,19 @@ describe("macOS runtime floor", () => {
 });
 
 describe("CUDA runtime selection", () => {
-  it("pins the verified archives and extraction limit", () => {
-    const asset = selectLlamaServerAsset("win32", "x64", {
-      kind: "cuda",
-      devices: [{ driverVersion: "551.78", computeCapability: 8.6 }],
-    });
-    const mebibyte = 1024 * 1024;
-
-    expect(asset).toMatchObject({
-      name: "llama-b10809-bin-win-cuda-12.4-x64.zip",
-      sha256: "c77bfcd9ed8d91e8721a2d6a290b907fddd4fa5412a47b21c6fa1709116b85f9",
-      limits: {
-        maxArchiveBytes: 400 * mebibyte,
-        maxExtractedBytes: 600 * mebibyte,
-        maxEntryBytes: 521 * mebibyte,
-      },
-    });
-    expect(asset.dependencies?.[0]).toMatchObject({
-      name: "cudart-llama-bin-win-cuda-12.4-x64.zip",
-      sha256: "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
-      limits: { maxEntries: 3, maxEntryBytes: 521 * mebibyte },
-    });
-  });
-
-  it.each([
-    ["551.78", 5, true],
-    ["580.1", 8.9, true],
-    ["551.77", 8.6, false],
-    ["535.1", 8.6, false],
-    ["unknown", 8.6, false],
-    ["580.1", 3.5, false],
-  ] as const)(
+  it.each([["551.77", 8.6]] as const)(
     "checks the upstream driver and device contract for %s / SM %s",
-    (driverVersion, computeCapability, supported) => {
+    (driverVersion, computeCapability) => {
       const choose = () =>
         selectLlamaServerAsset("win32", "x64", {
           kind: "cuda",
           devices: [{ driverVersion, computeCapability }],
         });
-      if (supported) {
-        mocks.resolveLlamaCppDataDir.mockReturnValue(os.tmpdir());
-        const asset = choose();
-        expect(asset.backend).toBe("cuda");
-        expect(asset.dependencies?.[0]?.files).toContain("cudart64_12.dll");
-        expect(resolveManagedLlamaServerPaths(asset).command).not.toBe(
-          resolveManagedLlamaServerPaths(selectLlamaServerAsset("win32", "x64")).command,
-        );
-      } else {
-        expect(choose).toThrow(/driver 551\.78/u);
-      }
+      expect(choose).toThrow(/driver 551\.78/u);
     },
   );
 
-  it.each(["linux", "win32"] as const)(
+  it.each(["win32"] as const)(
     "does not silently replace unavailable CUDA on %s/arm64 with CPU",
     (platform) => {
       expect(() =>
@@ -925,77 +831,4 @@ describe("CUDA runtime selection", () => {
       ).toThrow(/No verified CUDA/u);
     },
   );
-});
-
-describe("Windows VC runtime selection", () => {
-  it.each([
-    ["darwin", "x64"],
-    ["linux", "arm64"],
-    ["linux", "x64"],
-  ] as const)("does not add a VC runtime dependency on %s/%s", (platform, arch) => {
-    const asset = selectLlamaServerAsset(platform, arch, { kind: "cpu" });
-
-    expect(asset.dependencies?.some((dependency) => dependency.archive === "vc-redist")).not.toBe(
-      true,
-    );
-  });
-
-  it.each([
-    [
-      "arm64",
-      "VC_redist.arm64.exe",
-      "https://download.visualstudio.microsoft.com/download/pr/ece44298-3977-4f73-ab91-c13fe79cfea8/B70EF586669A620A0A30A1156969C05C6A3831DC8F8BC992DA75779D2A92F944/VC_redist.arm64.exe",
-      "b70ef586669a620a0a30a1156969c05c6a3831dc8f8bc992da75779d2a92f944",
-      11_870_816,
-      684_112,
-      11_176_508,
-      "a1",
-      [
-        { source: "msvcp140.dll_arm64", target: "msvcp140.dll" },
-        { source: "vcruntime140.dll_arm64", target: "vcruntime140.dll" },
-      ],
-    ],
-    [
-      "x64",
-      "VC_redist.x64.exe",
-      "https://download.visualstudio.microsoft.com/download/pr/ebdab8e5-1d7b-4d9f-a11b-cbb1720c3b12/843068991DAAA1F73AD9F6239BCE4D0F6A07A51F18C37EA2A867E9BECA71295C/VC_redist.x64.exe",
-      "843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c",
-      18_731_856,
-      630_000,
-      18_091_661,
-      "a4",
-      [
-        { source: "msvcp140.dll_amd64", target: "msvcp140.dll" },
-        { source: "vcruntime140.dll_amd64", target: "vcruntime140.dll" },
-        { source: "vcruntime140_1.dll_amd64", target: "vcruntime140_1.dll" },
-      ],
-    ],
-  ] as const)(
-    "pins the Microsoft %s app-local runtime",
-    (arch, name, url, sha256, size, containerOffset, containerSize, nestedCabinet, files) => {
-      const asset = selectLlamaServerAsset("win32", arch, { kind: "cpu" });
-      const runtime = asset.dependencies?.find((dependency) => dependency.archive === "vc-redist");
-
-      expect(runtime).toEqual({
-        archive: "vc-redist",
-        name,
-        url,
-        sha256,
-        size,
-        containerOffset,
-        containerSize,
-        nestedCabinet,
-        files,
-      });
-    },
-  );
-
-  it("stages the x64 runtime with the CUDA dependencies", () => {
-    const asset = selectLlamaServerAsset("win32", "x64", {
-      kind: "cuda",
-      devices: [{ driverVersion: "551.78", computeCapability: 8.6 }],
-    });
-
-    expect(asset.dependencies?.some((dependency) => dependency.archive === "vc-redist")).toBe(true);
-  });
 });

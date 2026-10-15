@@ -52,7 +52,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
-import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
+import { createReplyAgentRestartRecoveryController } from "./agent-runner-restart-recovery.js";
 import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
 import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
 import { registerReplyCompactionCases } from "./agent-runner.runreplyagent.compaction.cases.js";

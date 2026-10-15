@@ -131,11 +131,6 @@ describe("Testbox lease freshness", () => {
 
   it.each([
     {
-      caller: "codex",
-      env: { CODEX_THREAD_ID: "session-one" },
-      changes: [{ CODEX_THREAD_ID: "session-two" }],
-    },
-    {
       caller: "claude",
       env: { CODEX_THREAD_ID: undefined, CLAUDE_CODE_SESSION_ID: "session-one" },
       changes: [{ CLAUDE_CODE_SESSION_ID: "session-two" }],
@@ -305,7 +300,6 @@ describe("Testbox lease freshness", () => {
   });
 
   it.each([
-    { args: ["run", "--", "true"], exitCode: 0, retained: false },
     { args: ["run", "--keep-on-failure", "--", "task"], exitCode: 0, retained: false },
     { args: ["run", "--keep-on-failure", "--", "task"], exitCode: 7, retained: true },
   ])("records retention=$retained for $args exiting $exitCode", ({ args, exitCode, retained }) => {

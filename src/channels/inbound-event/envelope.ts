@@ -23,7 +23,7 @@ type ChannelInboundEnvelopeBuilderParams = {
   route: Pick<ResolvedAgentRoute, "agentId" | "sessionKey">;
 };
 
-/** @deprecated Await createChannelInboundEnvelopeBuilderAsync. Retained during stable deprecation. */
+/** @deprecated Await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. */
 export function createChannelInboundEnvelopeBuilder(params: ChannelInboundEnvelopeBuilderParams) {
   warnPluginSdkDeprecation({
     family: "channel-inbound-envelope",
@@ -70,7 +70,7 @@ function createEnvelopeFormatter(
   };
 }
 
-/** @deprecated Use resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync. Retained during stable deprecation. */
+/** @deprecated Use resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. */
 export function resolveChannelInboundRouteEnvelope(params: ResolveAgentRouteInput) {
   warnPluginSdkDeprecation({
     family: "channel-inbound-envelope",
@@ -117,7 +117,7 @@ type InboundEnvelopeBuilderParams<TConfig, TEnvelope> = {
   formatAgentEnvelope: (params: InboundEnvelopeFormatParams<TEnvelope>) => string;
 };
 
-/** @deprecated Await createChannelInboundEnvelopeBuilderAsync. Retained during stable deprecation. */
+/** @deprecated Await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. */
 export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(
   params: InboundEnvelopeBuilderParams<TConfig, TEnvelope>,
 ) {
@@ -147,7 +147,7 @@ export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(
   };
 }
 
-/** @deprecated Use resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync. Retained during stable deprecation. */
+/** @deprecated Use resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. */
 export function resolveInboundRouteEnvelopeBuilder<
   TConfig,
   TEnvelope,
@@ -195,7 +195,7 @@ type InboundRouteEnvelopeRuntime<
   >;
 };
 
-/** @deprecated Use resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync. Retained during stable deprecation. */
+/** @deprecated Use resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. */
 export function resolveInboundRouteEnvelopeBuilderWithRuntime<
   TConfig,
   TEnvelope,

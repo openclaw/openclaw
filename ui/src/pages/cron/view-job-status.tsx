@@ -9,8 +9,22 @@ import {
 } from "../../lib/cron-status.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { runStatusLabel } from "./view-runs.tsx";
+export function describeJobSchedule(job: CronJob): string {
+  if (job.schedule.kind !== "event") {
+    return formatCronSchedule(job);
+  }
+  const { source, options } = job.schedule;
+  return source === "mcp-events"
+    ? t("cron.events.summary", {
+        server: typeof options.server === "string" ? options.server : "",
+        name: typeof options.name === "string" ? options.name : "",
+      })
+    : `${t("cron.events.label")}: ${source}`;
+}
+
 export function JobStateIndicator(props: { job: CronJob }) {
   const presentation = createMemo((): [string, IconName | null, string] => {
     const autoDisabled = props.job.state?.autoDisabled;

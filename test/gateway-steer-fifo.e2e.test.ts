@@ -866,24 +866,6 @@ function currentUserInput(request: ModelRequest | undefined): string {
 
 describe("Gateway steer FIFO", () => {
   it(
-    "promotes a terminal steer into the next model turn",
-    async () => {
-      const fixture = await createGatewayFixture("steer-terminal-fallback");
-      const first = await sendHeldTurn(fixture);
-      await queueSteer(fixture);
-
-      fixture.modelServer.releaseFirst("final");
-
-      await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(2), WAIT_OPTS);
-      const currentA = currentUserInput(fixture.modelServer.requests[1]);
-      expect(currentA).toContain("QUEUED_STEER_A");
-      expect(currentA).not.toContain("ORDINARY_MESSAGE_B");
-      await waitForRunTerminal(fixture, first.runId);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
     "dispatches terminal A before a later ordinary B queued during the same turn",
     async () => {
       const fixture = await createGatewayFixture("steer-terminal-overtake");

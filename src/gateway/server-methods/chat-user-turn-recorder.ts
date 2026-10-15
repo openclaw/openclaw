@@ -203,18 +203,18 @@ export function createGatewayChatUserTurnController(params: {
       admission.operatorAuthority?.assertCurrent,
     ]),
     beforeMessageWrite: (event) => {
+      const originalInput = event.message.idempotencyKey === sourceId;
       const next = runAgentHarnessBeforeMessageWriteHook(event);
-      if (
-        event.message.idempotencyKey === sourceId &&
-        next?.role === "user" &&
-        contextFreeCommand
-      ) {
+      if (originalInput && next?.role === "user") {
+        const metadata = { ...asOptionalRecord(Reflect.get(next, "__openclaw")) };
+        delete metadata.chatRequestIdentity;
         return {
           ...next,
-          excludeFromContext: true,
+          ...(contextFreeCommand ? { excludeFromContext: true } : {}),
           __openclaw: {
-            ...asOptionalRecord(Reflect.get(next, "__openclaw")),
-            contextFreeCommand: true,
+            ...metadata,
+            ...(request.requestIdentity ? { chatRequestIdentity: request.requestIdentity } : {}),
+            ...(contextFreeCommand ? { contextFreeCommand: true } : {}),
           },
         };
       }

@@ -462,6 +462,10 @@ after the update. Required migration, configuration, plugin, and Gateway readine
 checks still run. Standalone Doctor lint and explicitly selected `--only` checks
 keep their normal scope. The candidate recognizes the private-copy markers already
 set by the published 2026.9.4 updater, so this reduces work on that first hop too.
+When the updater is 2026.10.1 or later, each check has its own time budget, so
+the candidate measures its optional-inspection window from that check's start; a
+slow state snapshot or repair Doctor does not cause lint to defer inspections.
+With older updaters, the window still starts when validation begins.
 
 The rehearsal repair Doctor also defers pure advisory inspections, including
 security, provider catalog, and runtime tool-schema diagnostics, and records their
@@ -661,9 +665,13 @@ inspection, followed by service start
 in `restarting`. Update verification does not use model inference. In `verifying`,
 the updater checks that the managed service is running and owns its port, requires
 the normal 12-check health settle and a Gateway hello handshake matching the
-expected version and Git build identity, checks channel readiness, and requires
-HTTP 200 from `/readyz`. Plugin activation or load failures remain named warnings
+expected version and Git build identity, and requires HTTP 200 from `/readyz`.
+Plugin activation or load failures remain named warnings
 when these core checks pass; they do not turn a successful core update into an error.
+Channel probe errors, timeouts, and stopped or suppressed channels become named
+warnings after core verification succeeds. Run `openclaw channels status --probe`
+or `openclaw health --json` to diagnose them; they do not prevent verified package
+backup retirement.
 
 Managed updates from 2026.9.3 can finish migration through the new runtime
 while the original updater retains installation ownership. The new runtime checks
@@ -698,7 +706,7 @@ before retiring those backups. A timeout alone does not authorize a recovery
 restart or rollback; a refused rollback also leaves the candidate untouched.
 A running status alone, a failed check on an established listener, or an HTTP
 `/readyz` failure does not establish startup progress. Those unhealthy-service
-observations and concrete version, build, channel, or stopped-service failures
+observations and concrete version, build, or stopped-service failures
 remain failures with their own diagnostics. Doctor reports a qualifying startup
 timeout explicitly as `gateway-readiness-unverified`, including after migrated
 finalization, and tells the operator that readiness remains unconfirmed.

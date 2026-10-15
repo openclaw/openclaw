@@ -138,6 +138,8 @@ vi.mock(
       >();
     return {
       ...actual,
+      // Keep background recovery out of this shared-store chat fixture.
+      scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease: vi.fn(),
       retryRestartAbortedMainSessionRecovery:
         restartRecoveryMocks.retryRestartAbortedMainSessionRecovery,
     };
@@ -3568,6 +3570,7 @@ describe("gateway server chat", () => {
         status: "interrupted",
       });
     } finally {
+      await getDirectChatSessionWorkRelease();
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
       await resetDirectChatSession();
     }

@@ -445,7 +445,6 @@ const captures = [
         ? {
             type,
             input: {
-              kind: "repository" as const,
               session: {
                 agentId: selector,
                 sessionKey: selector,

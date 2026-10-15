@@ -8,7 +8,11 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const XAI_BASE_URL = manifest.modelCatalog.providers.xai.baseUrl;
 export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image";
-export const XAI_IMAGE_MODELS = ["grok-imagine-image", "grok-imagine-image-quality"] as const;
+export const XAI_IMAGE_MODELS = [
+  "grok-imagine-image",
+  "grok-imagine-image-2.0",
+  "grok-imagine-image-quality",
+] as const;
 export const XAI_DEFAULT_CONTEXT_WINDOW = 1_000_000;
 export const XAI_DEFAULT_MAX_TOKENS = 64_000;
 export const XAI_DEFAULT_MODEL_ID = "grok-4.7";

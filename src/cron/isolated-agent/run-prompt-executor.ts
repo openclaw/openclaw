@@ -408,6 +408,7 @@ export function createCronPromptExecutor(
             finalizePromptForResolvedTools,
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
+            thinkingExplicit: candidateConfiguredThinkLevel !== undefined,
             timeoutMs: params.timeoutMs,
             runId,
             lane: resolveCronAgentLane(params.lane),

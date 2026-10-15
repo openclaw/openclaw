@@ -23,8 +23,13 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { ensureSessionGroupCatalog, readSessionGroupCatalog } from "./session-group-catalog.js";
+import {
+  ensureSessionGroupCatalog,
+  mutateSessionGroupCatalog,
+  readSessionGroupCatalog,
+} from "./session-group-catalog.js";
 import { readSessionGroupCatalogSnapshot } from "./session-group-catalog.kernel.js";
 import { registerSessionGroupInDatabase } from "./session-group-registration.kernel.js";
 import {
@@ -408,21 +413,29 @@ describe("session groups catalog", () => {
     ]);
   });
 
-  it("does not admit a write transaction for an existing category", async () => {
+  it("settles an existing category from the committed catalog without worker I/O", async () => {
     await putSessionGroups({ cfg, names: ["Work"], env });
-    const transaction = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
+    const operation = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
 
-    expect(registerSessionGroupInDatabase(openOpenClawStateDatabase({ env }), "Work", env)).toBe(
-      false,
-    );
+    expect(await ensureSessionGroupRegistered("Work", env)).toBe(false);
 
-    expect(transaction).not.toHaveBeenCalled();
+    expect(operation).not.toHaveBeenCalled();
+    expect(readSessionGroupCatalog(env).groups).toEqual([{ name: "Work", position: 0 }]);
+  });
+
+  it("registers after a queued removal instead of using the preceding catalog", async () => {
+    await putSessionGroups({ cfg, names: ["Work"], env });
+    const removal = mutateSessionGroupCatalog({ kind: "put", cfg, names: [] }, env);
+    const registration = ensureSessionGroupRegistered("Work", env);
+
+    expect((await removal).snapshot.groups).toEqual([]);
+    expect(await registration).toBe(true);
     expect(readSessionGroupCatalog(env).groups).toEqual([{ name: "Work", position: 0 }]);
   });
 
   it("rechecks a missing category after another writer registers it", async () => {
     await putSessionGroups({ cfg, names: ["Work"], env });
-    // This native kernel fixture interleaves the optimistic read and BEGIN.
+    // This native kernel fixture interleaves catalog preparation and BEGIN.
     // The real worker grants/refusals are covered in session-groups.registration.test.ts.
     const stages: string[] = [];
     vi.spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission").mockImplementation(
