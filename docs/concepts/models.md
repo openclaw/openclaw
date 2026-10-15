@@ -147,8 +147,9 @@ to 30 minutes while it keeps failing. A selected native model can load its own
 metadata while that acquisition is still running.
 
 In chat apps, `/models` and model picker buttons reuse the newest completed provider
-list. First use of an idle native agent can take a few seconds to start its harness
-and discover models. Pending providers show `checking models…`.
+list. Gateway model pickers return prepared rows immediately while an idle native
+agent starts its harness and discovers models in the background. Pending providers
+show `checking models…`.
 Open the menu again to see newly discovered models; completing discovery does not
 edit a list that was already sent. If optional native discovery fails, ordinary
 catalog requests keep the published rows and report `refreshFailed`; selecting a
