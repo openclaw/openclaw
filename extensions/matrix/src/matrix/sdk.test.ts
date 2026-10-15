@@ -1814,6 +1814,60 @@ describe("MatrixClient event bridge", () => {
     expect(failed).toEqual(["missing room key"]);
   });
 
+  it.each(["capacity", "expiry"] as const)(
+    "retires failed-decryption notifications with exhausted retries on %s",
+    async (retirement) => {
+      vi.useFakeTimers();
+      const client = createSdkClient();
+      const failed = vi.fn();
+      client.on("room.failed_decryption", failed);
+      matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
+        throw new Error("still missing key");
+      });
+      const oldest = makeMatrixEvent({ eventId: "$oldest", decryptionFailure: true });
+      let retained = oldest;
+      const events = [
+        oldest,
+        ...Array.from({ length: retirement === "capacity" ? 512 : 0 }, (_unused, index) =>
+          makeMatrixEvent({ eventId: `$retained-${index}`, decryptionFailure: true }),
+        ),
+      ];
+      const emitFailure = (event: FakeMatrixEvent) => {
+        matrixJsClient.emit("event", event);
+        event.emit("decrypted", event, new Error("missing room key"));
+      };
+
+      await client.start();
+      for (const event of events) {
+        emitFailure(event);
+        retained = event;
+      }
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(events.length * 8);
+
+      if (retirement === "expiry") {
+        await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
+        retained = makeMatrixEvent({ eventId: "$retained", decryptionFailure: true });
+        emitFailure(retained);
+        await vi.advanceTimersByTimeAsync(200_000);
+        expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(16);
+      }
+
+      const initialNotifications = retirement === "capacity" ? 513 : 2;
+      expect(failed).toHaveBeenCalledTimes(initialNotifications);
+      retained.emit("decrypted", retained, new Error("retained failure"));
+      expect(failed).toHaveBeenCalledTimes(initialNotifications);
+
+      oldest.emit("decrypted", oldest, new Error("retired failure"));
+      expect(failed).toHaveBeenCalledTimes(initialNotifications + 1);
+      expect(failed).toHaveBeenLastCalledWith(
+        "!room:example.org",
+        expect.objectContaining({ event_id: "$oldest" }),
+        expect.objectContaining({ message: "retired failure" }),
+      );
+    },
+  );
+
   it("retries an exhausted missing-key decryption when a crypto key signal arrives", async () => {
     vi.useFakeTimers();
     const cryptoStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-exhausted-retry-"));
