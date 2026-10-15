@@ -21,7 +21,6 @@ import {
 } from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
 import { settleRoster, toggleRoster } from "./roster.test-support.ts";
-import "../../components/app-sidebar.tsx";
 import "../../plugins/control-ui-view.solid.tsx";
 import "../../plugins/control-ui-contributions.solid.tsx";
 

@@ -13,7 +13,6 @@ import {
 import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 import { settleRoster } from "./roster.test-support.ts";
-import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session catalog ownership", () => {
   it("ignores excluded catalog activity while admitting visible rows, errors, and pagination", async () => {
