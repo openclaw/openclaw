@@ -42,19 +42,21 @@ describe("ModelPicker", () => {
     flush();
     await Promise.resolve();
     flush();
-    const icon = group.querySelector(".provider-brand-icon");
-    expect(icon).not.toBeNull();
     expect(trigger.disabled).toBe(true);
+    expect(picker.querySelector(".picker-select__group-toggle")).toBeNull();
     container.append(document.createElement("span"));
     // Deliver the registry's document-mutation observation, then settle its consumers.
     await Promise.resolve();
     flush();
-    expect(group.querySelector(".provider-brand-icon")).toBe(icon);
+    expect(picker.querySelector(".picker-select__group-toggle")).toBeNull();
 
     setDisabled(false);
     flush();
+    await openPicker(picker);
+    expect(
+      picker.querySelector(".picker-select__group-toggle")?.getAttribute("aria-expanded"),
+    ).toBe("true");
     await choosePickerValue(picker, "fixture/beta");
-    expect(group.getAttribute("aria-expanded")).toBe("true");
     expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/beta");
   });
 
