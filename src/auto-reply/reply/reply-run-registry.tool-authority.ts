@@ -4,6 +4,7 @@ import {
   bindReplyToolAuthorityCallerRead,
   prepareReplyToolAuthorityCallerRead,
 } from "../../agents/harness/host-private-capabilities.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type {
   ReplyOperation,
   ReplyToolAuthoritySnapshot,
@@ -164,11 +165,14 @@ export function createReplyOperationToolAuthority(lifecycle: {
   let automaticFallbackRoute: ReplyOperation["automaticFallbackRoute"];
   let participants: ReplyTurnParticipants | undefined;
 
-  function installSnapshot(value: ReplyToolAuthoritySnapshot, prepared: string) {
+  const canInstallSnapshot = (value: ReplyToolAuthoritySnapshot) => {
     if (!lifecycle.isOpen() || (snapshot && snapshot !== value)) {
       throw new Error("Reply operation cannot change tool authority after admission");
     }
-    if (snapshot) {
+    return !snapshot;
+  };
+  function installSnapshot(value: ReplyToolAuthoritySnapshot, prepared: string) {
+    if (!canInstallSnapshot(value)) {
       return;
     }
     const initialFingerprint = normalizeOptionalString(prepared);
@@ -185,6 +189,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
       return participants;
     },
     close() {
+      snapshot?.close?.();
       participants?.close();
     },
     get toolAuthorityFingerprint() {
@@ -211,13 +216,14 @@ export function createReplyOperationToolAuthority(lifecycle: {
       }
     },
     bindToolAuthoritySnapshot(value) {
-      if (!lifecycle.isOpen() || (snapshot && snapshot !== value)) {
-        throw new Error("Reply operation cannot change tool authority after admission");
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "replyOperation.bindToolAuthoritySnapshot",
+        replacement: "await bindToolAuthoritySnapshotAsync()",
+      });
+      if (canInstallSnapshot(value)) {
+        installSnapshot(value, value.fingerprint());
       }
-      if (snapshot) {
-        return;
-      }
-      installSnapshot(value, value.fingerprint());
     },
     async bindToolAuthoritySnapshotAsync(value) {
       const assertCurrent = lifecycle.captureCurrent();
@@ -227,12 +233,29 @@ export function createReplyOperationToolAuthority(lifecycle: {
       if (snapshot) {
         throw new Error("Reply operation cannot change tool authority after admission");
       }
-      // Released plugins may still supply the original two-method snapshot.
-      const prepared = await (value.fingerprintAsync?.() ?? value.fingerprint());
-      assertCurrent();
-      installSnapshot(value, prepared);
+      try {
+        // Released plugins may still supply the original two-method snapshot.
+        if (!value.fingerprintAsync) {
+          warnPluginSdkDeprecation({
+            family: "reply-tool-authority-sync-preparation",
+            method: "ReplyToolAuthoritySnapshot.fingerprint",
+            replacement: "implement fingerprintAsync() and projectAsync()",
+          });
+        }
+        const prepared = await (value.fingerprintAsync?.() ?? value.fingerprint());
+        assertCurrent();
+        installSnapshot(value, prepared);
+      } catch (error) {
+        value.close?.();
+        throw error;
+      }
     },
     projectToolAuthorityFingerprint(overlay) {
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "replyOperation.projectToolAuthorityFingerprint",
+        replacement: "await projectToolAuthorityFingerprintAsync()",
+      });
       if (!lifecycle.isOpen() || !snapshot || !route) {
         return undefined;
       }
@@ -273,6 +296,13 @@ export function createReplyOperationToolAuthority(lifecycle: {
           assertCurrent();
           return admittedFingerprint;
         }
+        if (!selected.fingerprintAsync || !selected.projectAsync) {
+          warnPluginSdkDeprecation({
+            family: "reply-tool-authority-sync-preparation",
+            method: "ReplyToolAuthoritySnapshot.fingerprint/project",
+            replacement: "implement fingerprintAsync() and projectAsync()",
+          });
+        }
         const current = await (selected.fingerprintAsync?.(selectedRoute) ??
           selected.fingerprint(selectedRoute));
         assertCurrent();
@@ -285,6 +315,11 @@ export function createReplyOperationToolAuthority(lifecycle: {
       }
     },
     bindToolAuthorityRoute(value) {
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "replyOperation.bindToolAuthorityRoute",
+        replacement: "await bindToolAuthorityRouteAsync()",
+      });
       if (!lifecycle.isOpen() || !snapshot || !lifecycle.ownsRunSlot()) {
         throw new Error("Reply operation has no active tool authority snapshot");
       }
@@ -302,6 +337,13 @@ export function createReplyOperationToolAuthority(lifecycle: {
         throw new Error("Reply operation has no active tool authority snapshot");
       }
       const preparedRoute = normalizeToolAuthorityRoute(value);
+      if (!selected.fingerprintAsync) {
+        warnPluginSdkDeprecation({
+          family: "reply-tool-authority-sync-preparation",
+          method: "ReplyToolAuthoritySnapshot.fingerprint",
+          replacement: "implement fingerprintAsync() and projectAsync()",
+        });
+      }
       const prepared = await (selected.fingerprintAsync?.(preparedRoute) ??
         selected.fingerprint(preparedRoute));
       assertCurrent();

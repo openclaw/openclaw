@@ -1,19 +1,19 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SkillStatusReport } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { clawhubVerdictKey } from "../../lib/skills/index.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
+import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
 import {
   createDialogMethodInstaller,
   createProps,
   createSkill,
   normalizeText,
 } from "./view.test-support.ts";
-import { renderSkills } from "./view.ts";
+afterEach(cleanupSkillsViews);
 
 const dialogRestores: Array<() => void> = [];
 const installDialogMethod = createDialogMethodInstaller(dialogRestores);
@@ -47,7 +47,7 @@ function createCodingAgentSkill(overrides: Parameters<typeof createSkill>[0] = {
 }
 
 function renderView(container: HTMLElement, overrides: Parameters<typeof createProps>[0] = {}) {
-  render(renderSkills(createProps(overrides)), container);
+  renderSkills(createProps(overrides), container);
 }
 
 function createLinkedSkill(ownerHandle?: string) {
@@ -111,6 +111,10 @@ describe("renderSkills", () => {
         "API key (OPENAI_API_KEY)",
       );
       expect(save?.disabled).toBe(disabled);
+      const actions = container.querySelector(".skill-reader-dialog__actions");
+      expect(save?.closest("openclaw-modal-actions")).toBe(actions);
+      expect(actions?.parentElement?.lastElementChild).toBe(actions);
+      expect(container.querySelector(".skill-reader-dialog__body")?.contains(save!)).toBe(false);
 
       save?.click();
 
@@ -190,6 +194,9 @@ describe("renderSkills", () => {
       ),
     ).toContain("bin:any of (claude, codex, opencode)");
     expect(install).toBeInstanceOf(HTMLButtonElement);
+    expect(install?.closest("openclaw-modal-actions")?.parentElement?.lastElementChild).toBe(
+      install?.closest("openclaw-modal-actions"),
+    );
     install!.click();
     expect(onInstall).toHaveBeenCalledWith("coding-agent", "Coding Agent", "node-codex");
   });
@@ -213,7 +220,9 @@ describe("renderSkills", () => {
     await Promise.resolve();
 
     expect(
-      container.querySelector<HTMLElement>("wa-switch.settings-toggle")?.hasAttribute("disabled"),
+      container
+        .querySelector<HTMLInputElement>("input.settings-toggle__input")
+        ?.hasAttribute("disabled"),
     ).toBe(true);
     const install = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => normalizeText(button) === "Install skill-cli",
@@ -261,7 +270,7 @@ describe("renderSkills", () => {
       onInstall,
       onClawHubInstall,
     });
-    render(renderSkills(props), container);
+    renderSkills(props, container);
     await Promise.resolve();
 
     const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -270,12 +279,12 @@ describe("renderSkills", () => {
     expect(refresh?.disabled).toBe(true);
     expect(
       Array.from(
-        container.querySelectorAll<HTMLElement & { disabled: boolean }>(
-          "wa-switch.settings-toggle",
-        ),
+        container.querySelectorAll<HTMLInputElement>("input.settings-toggle__input"),
       ).every((toggle) => toggle.hasAttribute("disabled")),
     ).toBe(true);
-    expect(container.querySelectorAll(".plugins-item wa-switch")).toHaveLength(0);
+    expect(container.querySelectorAll(".plugins-item input.settings-toggle__input")).toHaveLength(
+      0,
+    );
     expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.disabled).toBe(
       true,
     );
@@ -286,7 +295,9 @@ describe("renderSkills", () => {
     expect(mutationButtons.every((button) => button.disabled)).toBe(true);
 
     refresh?.click();
-    for (const toggle of container.querySelectorAll<HTMLElement>("wa-switch.settings-toggle")) {
+    for (const toggle of container.querySelectorAll<HTMLInputElement>(
+      "input.settings-toggle__input",
+    )) {
       toggle.click();
     }
     for (const button of mutationButtons) {
@@ -297,7 +308,7 @@ describe("renderSkills", () => {
     expect(onSaveKey).not.toHaveBeenCalled();
     expect(onInstall).not.toHaveBeenCalled();
 
-    render(renderSkills({ ...props, surface: "discovery" }), container);
+    renderSkills({ ...props, surface: "discovery" }, container);
     const remoteInstall = container.querySelector<HTMLButtonElement>(
       ".plugin-catalog-card__install",
     );
@@ -489,7 +500,7 @@ describe("renderSkills", () => {
       Array.from(container.querySelectorAll(".callout")).map((node) => normalizeText(node)),
     ).toEqual(["rate limited Retry", "Installed github"]);
     expect(normalizeText(container.querySelector(".skill-reader-dialog__body")!)).toBe(
-      "GitHub integration for OpenClaw By OpenClaw (@openclaw) · Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
+      "GitHub integration for OpenClaw By OpenClaw (@openclaw) · Latest: v1.2.3 Added search support Platforms: macos, linux",
     );
     expect(container.querySelector<HTMLImageElement>(".clawhub-skill-icon--detail")?.src).toBe(
       "blob:clawhub-detail-icon",
@@ -497,13 +508,32 @@ describe("renderSkills", () => {
     expect(container.querySelector(".clawhub-skill-icon--profile")).toBeNull();
 
     const detailInstallButton = container.querySelector<HTMLButtonElement>(
-      ".skill-reader-dialog__body .btn.primary",
+      ".skill-reader-dialog__actions .btn.primary",
     );
     expect(detailInstallButton).toBeInstanceOf(HTMLButtonElement);
+    expect(detailInstallButton?.textContent?.trim()).toBe("Install GitHub");
+    expect(
+      detailInstallButton?.closest("openclaw-modal-actions")?.parentElement?.lastElementChild,
+    ).toBe(detailInstallButton?.closest("openclaw-modal-actions"));
     detailInstallButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
+  });
+
+  it.each([
+    { clawhubDetailLoading: true, clawhubDetailError: null },
+    { clawhubDetailLoading: false, clawhubDetailError: "Unable to read skill" },
+    { clawhubDetailLoading: false, clawhubDetailError: null },
+  ])("keeps unavailable ClawHub details footer-free: %j", async (state) => {
+    const container = createContainer();
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+    renderView(container, { clawhubDetailRef: "guide", ...state });
+    await Promise.resolve();
+    expect(container.querySelector(".skill-reader-dialog__body")).not.toBeNull();
+    expect(container.querySelector(".skill-reader-dialog openclaw-modal-actions")).toBeNull();
   });
 
   it("offers install without a detail card for an install-only search result", async () => {
@@ -695,10 +725,7 @@ describe("renderSkills", () => {
     expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
   });
 
-  it.each([
-    { loading: true, label: "Refreshing…", warning: false },
-    { loading: false, label: "Unavailable", warning: true },
-  ])(
+  it.each([{ loading: true, label: "Refreshing…", warning: false }])(
     "shows $label consistently for a missing ClawHub verdict while loading=$loading",
     async ({ loading, label, warning }) => {
       const container = createContainer();

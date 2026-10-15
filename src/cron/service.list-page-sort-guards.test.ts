@@ -71,11 +71,19 @@ describe("cron listPage sort guards", () => {
       createBaseJob({ id: "job-scoped", sessionKey: "agent:ops:main" }),
     ];
     const state = createMockCronStateForJobs({ jobs });
-    state.deps.defaultAgentId = " Ops ";
+    let defaultAgentId = " Ops ";
+    const resolveDefaultAgentId = vi.fn(() => defaultAgentId);
+    state.deps.resolveDefaultAgentId = resolveDefaultAgentId;
 
     const page = await listPage(state, { agentId: " OPS " });
 
     expect(page.jobs.map((job) => job.id)).toEqual(["job-ops", "job-scoped", "job-unset"]);
+    expect(resolveDefaultAgentId).toHaveBeenCalledOnce();
+
+    defaultAgentId = "main";
+    const changed = await listPage(state, { agentId: "ops" });
+    expect(changed.jobs.map((job) => job.id)).toEqual(["job-ops", "job-scoped"]);
+    expect(resolveDefaultAgentId).toHaveBeenCalledTimes(2);
   });
 
   it("shares immutable requested rows until a list revision changes", async () => {

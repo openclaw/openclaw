@@ -57,6 +57,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "device-pair-setup": () =>
     import("./device-pair-setup.js").then((module) => module.devicePairSetupHandlers),
   diagnostics: () => import("./diagnostics.js").then((module) => module.diagnosticsHandlers),
+  "debug-proxy": () => import("./debug-proxy.js").then((module) => module.debugProxyHandlers),
   doctor: () => import("./doctor.js").then((module) => module.createDoctorHandlers()),
   environments: () => import("./environments.js").then((module) => module.environmentsHandlers),
   worktrees: () => import("./worktrees.js").then((module) => module.worktreesHandlers),
@@ -75,6 +76,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./models-auth-status.js").then((module) => module.modelsAuthStatusHandlers),
   "models-auth-login": () =>
     import("./models-auth-login.js").then((module) => module.modelsAuthLoginHandlers),
+  "mcp-events": () => import("./mcp-events.js").then((module) => module.mcpEventsHandlers),
   "mcp-auth-login": () =>
     import("./mcp-auth-login.js").then((module) => module.mcpAuthLoginHandlers),
   "models-auth-order": () =>

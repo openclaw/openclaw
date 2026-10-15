@@ -80,11 +80,7 @@ export async function dispatchDiscordComponentEvent(params: {
   const sessionKey = params.routeOverrides?.sessionKey ?? route.sessionKey;
   const agentId = params.routeOverrides?.agentId ?? route.agentId;
   const accountId = params.routeOverrides?.accountId ?? route.accountId;
-  const fromLabel = buildDiscordComponentConversationLabel({
-    interactionCtx,
-    interaction,
-    channelCtx,
-  });
+  const fromLabel = buildDiscordComponentConversationLabel(params);
   const chatType = interactionCtx.isDirectMessage
     ? "direct"
     : interactionCtx.isGroupDm
@@ -108,10 +104,15 @@ export async function dispatchDiscordComponentEvent(params: {
     scope: channelCtx.isThread ? "thread" : "channel",
   });
   const allowNameMatching = isDangerousNameMatchingEnabled(ctx.discordConfig);
-  const { ownerAllowFrom, groupSystemPrompt } = buildDiscordInboundAccessContext({
+  const { ownerAllowFrom, groupSystemPrompt, toolPolicy } = buildDiscordInboundAccessContext({
+    cfg: ctx.cfg,
+    accountId,
+    parentId: channelCtx.parentId,
     channelConfig,
     guildInfo,
     sender: { id: interactionCtx.user.id, name: interactionCtx.user.username, tag: senderTag },
+    senderName,
+    senderUsername,
     allowNameMatching,
     isGuild: !interactionCtx.isDirectMessage,
   });
@@ -194,6 +195,7 @@ export async function dispatchDiscordComponentEvent(params: {
     GroupChannel: groupChannel,
     MemberRoleIds: interactionCtx.memberRoleIds,
     GroupSystemPrompt: interactionCtx.isDirectMessage ? undefined : groupSystemPrompt,
+    ConversationToolPolicy: toolPolicy,
     GroupSpace: guildInfo?.id ?? guildInfo?.slug ?? interactionCtx.rawGuildId ?? undefined,
     OwnerAllowFrom: ownerAllowFrom,
     Provider: "discord" as const,

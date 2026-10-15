@@ -34,15 +34,16 @@ export function renderChatSelectionAnnotations(props: ChatAttachmentControlsProp
               attachment.selectionAnnotation!,
               html`<span class="chat-comment-preview__actions">
                 ${(["edit", "delete"] as const).map(
-                  (action) => html`<button
-                    type="button"
-                    data-comment-delete=${action === "delete" ? attachment.id : nothing}
-                    aria-label=${action === "edit" ? t("chat.messages.editAnnotation", { number: String(index + 1) }) : t("chat.messages.deleteAnnotation")}
-                    ?disabled=${props.disabled || props.readSignal?.aborted}
-                    @click=${(event: Event) => dispatchChatCommentAction(event, attachment.id, action)}
-                  >
-                    ${action === "edit" ? icons.pencil : icons.trash}
-                  </button>`,
+                  (action) =>
+                    html`<button
+                      type="button"
+                      data-comment-delete=${action === "delete" ? attachment.id : nothing}
+                      aria-label=${action === "edit" ? t("chat.messages.editAnnotation", { number: String(index + 1) }) : t("chat.messages.deleteAnnotation")}
+                      ?disabled=${props.disabled || props.readSignal?.aborted}
+                      @click=${(event: Event) => dispatchChatCommentAction(event, attachment.id, action)}
+                    >
+                      ${action === "edit" ? icons.pencil : icons.trash}
+                    </button>`,
                 )}
               </span>`,
             ),

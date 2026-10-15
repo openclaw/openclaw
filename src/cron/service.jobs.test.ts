@@ -1,6 +1,6 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { normalizeCronJobPatch } from "./normalize.js";
 import { DEFAULT_CRON_SCRIPT_TIMEOUT_SECONDS } from "./script-payload.js";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
@@ -8,12 +8,11 @@ import {
   computeJobNextRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
   nextWakeAtMs,
-  recomputeNextRunsForMaintenance,
+  recomputeSingleJobForMaintenance,
 } from "./service/jobs-scheduling.js";
+import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.test-support.js";
 import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "./service/jobs.js";
-import { reserveQueuedCronRun } from "./service/run-admission.js";
 import type { CronServiceState } from "./service/state.js";
-import type { CronRunReceiptHandle } from "./store/run-receipt.types.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
 const NOW = Date.parse("2026-07-21T12:00:00.000Z");
@@ -75,17 +74,6 @@ describe("applyJobPatch", () => {
       }
     },
   );
-
-  it("retargets announce delivery to main", () => {
-    const current = agentJob({ mode: "announce", channel: "telegram", to: "123" });
-    applyJobPatch(current, {
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "ping" },
-    });
-    expect(current.sessionTarget).toBe("main");
-    expect(current.payload.kind).toBe("systemEvent");
-    expect(current.delivery).toBeUndefined();
-  });
 
   it("clears chat and completion routes when switching to a trimmed webhook", () => {
     const current = agentJob({
@@ -421,12 +409,6 @@ describe("script payload validation", () => {
     ).toThrow("cron script payload has a syntax error");
   });
 
-  it("rejects the current session target", () => {
-    expect(() => createJob(fixtureState(), scriptInput("return 1", "current"))).toThrow(
-      'sessionTarget="main" or "isolated"',
-    );
-  });
-
   it("rejects condition triggers because both script kinds own trigger.state", () => {
     const serviceState = fixtureState();
     expect(() =>
@@ -468,23 +450,6 @@ describe("session targets", () => {
     expect(() =>
       createJob(fixtureState(), agentInput({ sessionTarget: "session:bad\0id" })),
     ).toThrow("invalid cron sessionTarget session id");
-  });
-
-  it("rejects failure destinations on created main jobs without webhook delivery", () => {
-    expect(() =>
-      createJob(
-        fixtureState("main"),
-        input({
-          agentId: "main",
-          delivery: {
-            mode: "announce",
-            channel: "telegram",
-            to: "123",
-            failureDestination: { mode: "announce", channel: "signal", to: "+15550001111" },
-          },
-        }),
-      ),
-    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
   });
 
   it("rejects patching a main-session job to a non-default agent", () => {
@@ -565,21 +530,8 @@ function createCronSystemEventJob(now: number, overrides: Partial<CronJob> = {})
   };
 }
 
-function testReceipt(jobId: string, startedAtMs: number): CronRunReceiptHandle {
-  return {
-    receiptId: `test:${jobId}`,
-    storeKey: "test",
-    jobId,
-    configRevision: "test",
-    agentId: "main",
-    ownerPid: process.pid,
-    ownerStartTime: 1,
-    startedAtMs,
-  };
-}
-
 describe("cron maintenance ownership", () => {
-  it("clears an orphaned queued marker from before a clock rollback", () => {
+  it("leaves a queued marker from before a clock rollback for startup recovery", () => {
     const now = Date.now();
     const futureQueuedAt = now + 3 * 60 * 60_000;
 
@@ -591,12 +543,18 @@ describe("cron maintenance ownership", () => {
     });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
+    recomputeSingleJobForMaintenance(
+      state,
+      job,
+      { deferredNotifications: [] },
+      { reservations: new Map(), isJobActive: () => false },
+    );
 
-    expect(job.state.queuedAtMs).toBeUndefined();
+    expect(job.state.queuedAtMs).toBe(futureQueuedAt);
+    expect(job.state.nextRunAtMs).toBe(now + 60_000);
   });
 
-  it("preserves a future running marker owned by a live reservation", () => {
+  it("preserves a future running marker owned by a live execution", () => {
     const now = Date.now();
     const futureMarker = now + 3 * 60 * 60_000;
     const job = createCronSystemEventJob(now, {
@@ -606,43 +564,16 @@ describe("cron maintenance ownership", () => {
       },
     });
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    reserveQueuedCronRun(state, job.id, futureMarker, {
-      runReceipt: testReceipt(job.id, futureMarker),
-      runReceiptContext: captureOpenClawStateWorkerContext(),
-    });
-
-    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
-
-    expect(job.state.runningAtMs).toBe(futureMarker);
+    const marker = markCronJobActive(job.id);
+    try {
+      recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
+      expect(job.state.runningAtMs).toBe(futureMarker);
+    } finally {
+      clearCronJobActive(job.id, marker);
+    }
   });
 
-  it("isolates schedule errors while filling missing nextRunAtMs", () => {
-    const now = Date.now();
-    const pastDue = now - 1_000;
-
-    const dueJob = createCronSystemEventJob(now, {
-      id: "due-job",
-      state: {
-        nextRunAtMs: pastDue,
-      },
-    });
-
-    const malformedJob = createCronSystemEventJob(now, {
-      id: "bad-job",
-      schedule: { kind: "cron", expr: "not a valid cron", tz: "UTC" },
-      state: {},
-    });
-
-    const state = createMockCronStateForJobs({ jobs: [dueJob, malformedJob], nowMs: now });
-
-    expect(recomputeNextRunsForMaintenance(state, { deferredNotifications: [] })).toBe(true);
-    expect(dueJob.state.nextRunAtMs).toBe(pastDue);
-    expect(malformedJob.state.nextRunAtMs).toBeUndefined();
-    expect(malformedJob.state.scheduleErrorCount).toBe(1);
-    expect(malformedJob.state.lastError).toMatch(/^schedule error:/);
-  });
-
-  it("advances overdue already-executed jobs when stale running marker is cleared", () => {
+  it("leaves an overdue running marker and its deadline for startup recovery", () => {
     const now = Date.now();
     const pastDue = now - 60_000;
     const staleRunningAt = now - 3 * 60 * 60_000;
@@ -656,13 +587,14 @@ describe("cron maintenance ownership", () => {
     });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, {
-      deferredNotifications: [],
-      recomputeExpired: true,
-      nowMs: now,
-    });
+    recomputeSingleJobForMaintenance(
+      state,
+      job,
+      { deferredNotifications: [], recomputeExpired: true, nowMs: now },
+      { reservations: new Map(), isJobActive: () => false },
+    );
 
-    expect(job.state.runningAtMs).toBeUndefined();
-    expect((job.state.nextRunAtMs ?? 0) > now).toBe(true);
+    expect(job.state.runningAtMs).toBe(staleRunningAt);
+    expect(job.state.nextRunAtMs).toBe(pastDue);
   });
 });

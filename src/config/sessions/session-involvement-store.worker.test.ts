@@ -138,34 +138,7 @@ it.each(["transaction", "commit"] as const)(
   },
 );
 
-it("rejects a profile alias merge between involvement preparation and commit", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = createFixture();
-    const before = f.read();
-    let merged = false;
-    const observe = probe.admission(admission, (request, grant, callback) => {
-      if (request.stage === "commit" && !merged) {
-        merged = true;
-        linkEmail(f.previousEmail, f.profile.id);
-      }
-      callback(request, grant);
-    });
-    try {
-      await expect(
-        updateSessionProfileInvolvementAsync(f.scope, {
-          ...f.params,
-          change: { kind: "visibility", hidden: true },
-        }),
-      ).rejects.toThrow("Session involvement profile aliases changed before commit");
-      expect(merged).toBe(true);
-      expect(f.read()).toEqual(before);
-    } finally {
-      observe.mockRestore();
-    }
-  });
-});
-
-it("invalidates an unknown involvement commit without replay or acknowledged lifecycle publication", async () => {
+it("publishes a committed involvement receipt when the ordinary reply is lost without replay", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = createFixture();
     expect(f.read()).not.toHaveProperty(f.profile.id);
@@ -217,12 +190,17 @@ it("invalidates an unknown involvement commit without replay or acknowledged lif
           ...f.params,
           change: { kind: "mention", source: f.source },
         }),
-      ).rejects.toBe(failure);
+      ).resolves.toBe(true);
       expect(dispatches).toBe(1);
       expect(changes).toEqual([
-        expect.objectContaining({ sessionKey: f.scope.sessionKey, factsInvalidated: true }),
+        expect.objectContaining({
+          sessionKey: f.scope.sessionKey,
+          facts: { kind: "unchanged" },
+        }),
       ]);
-      expect(lifecycle).not.toHaveBeenCalled();
+      expect(lifecycle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionKey: f.scope.sessionKey, reason: "involvement" }),
+      );
       expect(f.read()?.[f.profile.id]).toMatchObject({ hidden: false, lastMention: f.source });
       expect(dispatches).toBe(1);
     } finally {

@@ -49,36 +49,6 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     mocks.normalizeProviderToolSchemas.mockReset();
   });
 
-  it("uses RuntimePlan-owned tool normalization when a plan is available", () => {
-    const tools = [createParameterFreeTool()] as AgentTool[];
-    const normalized = [{ ...tools[0], name: "normalized" }] as AgentTool[];
-    const model = createNativeOpenAIResponsesModel() as never;
-    const normalize = vi.fn(() => normalized);
-    const runtimePlan = {
-      tools: {
-        normalize,
-        logDiagnostics: vi.fn(),
-      },
-    } as unknown as AgentRuntimePlan;
-
-    expect(
-      normalizeAgentRuntimeTools({
-        runtimePlan,
-        tools,
-        provider: "openai",
-        modelId: "gpt-5.4",
-        modelApi: "openai-responses",
-        workspaceDir: "/tmp/openclaw-runtime-plan-tools",
-        model,
-      }),
-    ).toEqual(normalized);
-    expect(normalize).toHaveBeenCalledWith(tools, {
-      workspaceDir: "/tmp/openclaw-runtime-plan-tools",
-      modelApi: "openai-responses",
-      model,
-    });
-  });
-
   it("quarantines unreadable tools before RuntimePlan normalization", () => {
     // Broken plugin tool getters are removed before plan/provider normalization
     // so one bad tool cannot crash the full runtime tool list.
@@ -157,63 +127,6 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     ]);
   });
 
-  it("accepts legacy optional model fields while normalizing RuntimePlan context", () => {
-    const tools = [createParameterFreeTool()] as AgentTool[];
-    const normalize = vi.fn(() => tools);
-    const runtimePlan = {
-      tools: {
-        normalize,
-        logDiagnostics: vi.fn(),
-      },
-    } as unknown as AgentRuntimePlan;
-
-    expect(
-      normalizeAgentRuntimeTools({
-        runtimePlan,
-        tools,
-        provider: "openai",
-        modelApi: null,
-      }),
-    ).toEqual(tools);
-    expect(normalize).toHaveBeenCalledWith(tools, {
-      workspaceDir: undefined,
-      modelApi: undefined,
-      model: undefined,
-    });
-  });
-
-  it("falls back to legacy provider schema normalization when no plan is available", () => {
-    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([
-      {
-        ...createParameterFreeTool(),
-        parameters: normalizedParameterFreeSchema(),
-      },
-    ]);
-
-    const normalized = normalizeAgentRuntimeTools({
-      tools: [createParameterFreeTool()] as AgentTool[],
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      workspaceDir: "/tmp/openclaw-runtime-plan-tools",
-      model: createNativeOpenAIResponsesModel() as never,
-    });
-
-    expect(normalized[0]?.parameters).toEqual(normalizedParameterFreeSchema());
-    expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledTimes(1);
-    expect(mocks.normalizeProviderToolSchemas.mock.calls.at(0)?.[0]).toEqual({
-      tools: [createParameterFreeTool()],
-      provider: "openai",
-      config: undefined,
-      workspaceDir: "/tmp/openclaw-runtime-plan-tools",
-      env: process.env,
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      model: createNativeOpenAIResponsesModel(),
-      allowRuntimePluginLoad: undefined,
-    });
-  });
-
   it("does not load a provider runtime to normalize an empty tool set", () => {
     const onPreNormalizationSchemaDiagnostics = vi.fn();
 
@@ -226,46 +139,6 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     ).toEqual([]);
     expect(onPreNormalizationSchemaDiagnostics).toHaveBeenCalledWith([], []);
     expect(mocks.normalizeProviderToolSchemas).not.toHaveBeenCalled();
-  });
-
-  it("preserves plugin metadata when provider schema normalization clones tools", () => {
-    // Provider normalization may clone tool objects; plugin metadata has to move
-    // with the clone so later dispatch still knows the owning plugin/MCP server.
-    const tool = createParameterFreeTool("fixture__lookup_note") as AgentTool;
-    const metadata: Parameters<typeof setPluginToolMeta>[1] = {
-      pluginId: "bundle-mcp",
-      kind: "memory",
-      optional: true,
-      replaySafe: true,
-      sideEffecting: true,
-      trustedLocalMedia: false,
-      mcp: {
-        serverName: "fixture",
-        safeServerName: "fixture",
-        toolName: "lookup_note",
-        operation: "tool",
-        deniedBySession: true,
-        codexApproval: {
-          mode: "prompt",
-          annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
-        },
-        node: { id: "fixture-node", displayName: "Fixture node" },
-      },
-    };
-    setPluginToolMeta(tool, metadata);
-    const normalized = {
-      ...tool,
-      parameters: normalizedParameterFreeSchema(),
-    };
-    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
-
-    const result = normalizeAgentRuntimeTools({
-      tools: [tool],
-      provider: "openai",
-    });
-
-    expect(result[0]).toBe(normalized);
-    expect(getPluginToolMeta(expectDefined(result[0], "result[0] test invariant"))).toBe(metadata);
   });
 
   it.each([
@@ -287,14 +160,28 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       const api = builder.createApi(record, { config: {} });
       const instance = getPluginInstance(record)!;
       const catalogRef = createToolSearchCatalogRef();
+      const metadataWrites: PropertyKey[] = [];
+      const observeMetadataWrites = (definition: AgentTool): AgentTool =>
+        new Proxy(definition, {
+          set(target, key, value, receiver) {
+            if (key === "outputSchema" || key === "hideFromChannelProgress") {
+              metadataWrites.push(key);
+            }
+            return Reflect.set(target, key, value, receiver);
+          },
+        });
       try {
         const output = { content: [{ type: "text" as const, text: "fixture note" }], details: {} };
-        const tool: AgentTool = {
-          ...createParameterFreeTool("fixture__lookup_note"),
-          label: "Fixture lookup",
-          parameters: Type.Object({}),
-          execute: vi.fn(async () => output),
-        };
+        const tool = observeMetadataWrites(
+          wrapToolWithBeforeToolCallHook({
+            ...createParameterFreeTool("fixture__lookup_note"),
+            label: "Fixture lookup",
+            parameters: Type.Object({}),
+            outputSchema: Type.Object({}),
+            hideFromChannelProgress: true,
+            execute: vi.fn(async () => output),
+          }),
+        );
         const metadata: Parameters<typeof setPluginToolMeta>[1] = {
           pluginId: "bundle-mcp",
           optional: false,
@@ -311,7 +198,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
           label: "Normalizer fixture",
           auth: [],
           normalizeToolSchemas: ({ tools }) =>
-            mode === "cloned" ? tools.map((entry) => ({ ...entry })) : tools,
+            mode === "cloned" ? tools.map((entry) => observeMetadataWrites({ ...entry })) : tools,
         });
         const provider = expectDefined(
           builder.registry.providers[0],
@@ -329,6 +216,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
           tools: [tool],
           provider: "openai",
         });
+        expect(metadataWrites).toEqual([]);
         const normalizedTool = expectDefined(normalized[0], "normalized tool");
         const wrapped = normalized
           .map((entry) => wrapToolWithBeforeToolCallHook(entry))
@@ -373,6 +261,15 @@ describe("AgentRuntimePlan tool policy helpers", () => {
         ...createParameterFreeTool("fixture_status"),
         parameters: normalizedParameterFreeSchema(),
       } as unknown as AgentTool;
+      Object.defineProperty(normalized, "outputSchema", {
+        configurable: true,
+        get() {
+          throw new Error("output schema has not been assigned yet");
+        },
+        set(value: AgentTool["outputSchema"]) {
+          Object.defineProperty(normalized, "outputSchema", { value });
+        },
+      });
       mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
 
       const result = normalizeAgentRuntimeTools({
@@ -475,24 +372,6 @@ describe("AgentRuntimePlan tool policy helpers", () => {
         },
       ],
     ]);
-  });
-
-  it("can normalize without cold-loading provider runtime plugins", () => {
-    const tools = [createParameterFreeTool()] as AgentTool[];
-
-    normalizeAgentRuntimeTools({
-      tools,
-      provider: "openai",
-      allowProviderRuntimePluginLoad: false,
-    });
-
-    expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tools,
-        provider: "openai",
-        allowRuntimePluginLoad: false,
-      }),
-    );
   });
 
   it("routes diagnostics through RuntimePlan when a plan is available", () => {

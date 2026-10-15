@@ -43,7 +43,7 @@ import { handleGatewayRequest } from "./server-methods.js";
 import { createControlUiHandlers } from "./server-methods/control-ui.js";
 import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 
 const EVENT = "controlUi.sessionPullRequests.changed";
 
@@ -209,9 +209,11 @@ describe("registered session PR subscriptions", () => {
               });
             } else {
               if (change === "namespace") {
-                const source = loadGatewaySessionEntryReadOnly(key, {
-                  agentId: "main",
-                }).readSource!;
+                const source = (
+                  await loadGatewaySessionEntryReadOnlyAsync(key, {
+                    agentId: "main",
+                  })
+                ).readSource!;
                 await closeOpenClawAgentDatabaseByPathAsync(source.path);
               }
               await f.seed(key, f.profile.id, {
@@ -522,7 +524,9 @@ describe("registered session PR subscriptions", () => {
           new Set([sessionKey]),
         );
         f.socket.send.mockClear();
-        const original = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" });
+        const original = await loadGatewaySessionEntryReadOnlyAsync(sessionKey, {
+          agentId: "main",
+        });
         await expect(
           deleteSessionEntryLifecycle({
             agentId: "main",
@@ -641,7 +645,8 @@ describe("registered session PR check details", () => {
             }),
           ]);
           if (mutation === "store closure") {
-            const source = loadGatewaySessionEntryReadOnly(key, { agentId: "main" }).readSource;
+            const source = (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" }))
+              .readSource;
             expect(source).toBeDefined();
             await closeOpenClawAgentDatabaseByPathAsync(source!.path);
           } else if (mutation === "selection") {
@@ -702,25 +707,28 @@ it.each(["local", "repository"] as const)(
         await f.seed(sessionKey, f.profile.id, { repositoryWorkspaceId: repository.workspaceId });
       }
       await f.subscribe();
-      for (let index = 1; index < 20; index++) {
-        await f.subscribe([sessionKey], f.addReader(`warm-reader-${index}`).client);
-      }
-      await f.subscriptions.pollNow();
       const statements = observeSqliteReadSql(StatementSync.prototype);
-      f.load.mockClear();
       try {
+        for (let index = 1; index < 20; index++) {
+          await f.subscribe([sessionKey], f.addReader(`warm-reader-${index}`).client);
+        }
+        await f.subscriptions.pollNow();
+        expect(statements.queries.filter((sql) => /\buser_profiles\b/i.test(sql))).toEqual([]);
+        statements.queries.length = 0;
+        f.load.mockClear();
         for (let index = 0; index < 3; index++) {
           await f.subscriptions.pollNow();
         }
         const queries = statements.queries.map((sql) => sql.toLowerCase());
         expect({
           sessionReads: queries.filter((sql) => sql.includes("session_nodes")).length,
+          profileReads: queries.filter((sql) => sql.includes("user_profiles")).length,
           repositoryReads: queries.filter((sql) => sql.includes("session_repository_workspaces"))
             .length,
           freshnessReads: queries.filter(
             (sql) => sql.includes("pragma") || sql.includes("cache_generation"),
           ).length,
-        }).toEqual({ sessionReads: 0, repositoryReads: 0, freshnessReads: 0 });
+        }).toEqual({ sessionReads: 0, profileReads: 0, repositoryReads: 0, freshnessReads: 0 });
         expect(f.load).toHaveBeenCalledTimes(3);
         expect(frames(f.socket)).toEqual([expectedFrame(sessionKey)]);
       } finally {
@@ -852,7 +860,8 @@ it("drops cached subscription hydration after physical database replacement", as
           { payload: { sessions: { [sessionKey]: { pullRequests: [{ number: 300 }] } } } },
         ]);
         const requestsBeforeReplacement = provider.mock.calls.length;
-        const source = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" }).readSource;
+        const source = (await loadGatewaySessionEntryReadOnlyAsync(sessionKey, { agentId: "main" }))
+          .readSource;
         if (!source) {
           throw new Error("Missing session PR source after initial delivery");
         }
@@ -944,7 +953,8 @@ it.each(["concurrency limit", "earlier refresh", "refresh timer", "publication"]
             waitingOn === "earlier refresh" || waitingOn === "refresh timer"
               ? f.subscriptions.replace(f.client.connId!, keys, new Set(keys))
               : Promise.resolve();
-          const source = loadGatewaySessionEntryReadOnly(keys[0]!, { agentId: "main" }).readSource;
+          const source = (await loadGatewaySessionEntryReadOnlyAsync(keys[0]!, { agentId: "main" }))
+            .readSource;
           expect(source).toBeDefined();
           let retirement: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
           const peer = waitingOn === "publication" ? f.addReader("publication-peer") : undefined;

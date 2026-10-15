@@ -55,11 +55,9 @@ describe("cli program (smoke)", () => {
     const options = firstMockArg(tuiRunMock) as {
       timeoutMs?: number;
       historyLimit?: number;
-      forceProcessExitOnReturn?: boolean;
     };
     expect(options?.timeoutMs).toBe(45000);
     expect(options?.historyLimit).toBe(200);
-    expect(options?.forceProcessExitOnReturn).toBe(true);
     expect(options).not.toHaveProperty("agentId");
   });
 
@@ -103,7 +101,7 @@ describe("cli program (smoke)", () => {
     });
   });
 
-  it.each(["agent:ops:main", "https://gateway.example/chat/stale/movies-a1166b81"])(
+  it.each(["agent:ops:main"])(
     "preserves the resolved global owner when launching tui from %s",
     async (target) => {
       programGatewayCallMock.mockResolvedValue({ ok: true, key: "global", agentId: "ops" });
@@ -154,21 +152,15 @@ describe("cli program (smoke)", () => {
     expect(tuiRunMock).not.toHaveBeenCalled();
   });
 
-  it("accepts the maximum Gateway tui history limit", async () => {
-    await runProgram(["tui", "--history-limit", "1000"]);
+  it.each([{ entryPoint: "chat", args: ["chat"] }])(
+    "preserves oversized history limits for local $entryPoint",
+    async ({ args }) => {
+      await runProgram([...args, "--history-limit", "1001"]);
 
-    expect(firstMockArg(tuiRunMock)).toMatchObject({ local: false, historyLimit: 1000 });
-  });
-
-  it.each([
-    { entryPoint: "tui --local", args: ["tui", "--local"] },
-    { entryPoint: "chat", args: ["chat"] },
-  ])("preserves oversized history limits for local $entryPoint", async ({ args }) => {
-    await runProgram([...args, "--history-limit", "1001"]);
-
-    expect(firstMockArg(tuiRunMock)).toMatchObject({ local: true, historyLimit: 1001 });
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
+      expect(firstMockArg(tuiRunMock)).toMatchObject({ local: true, historyLimit: 1001 });
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects tui history limits above the Gateway maximum", async () => {
     await expect(runProgram(["tui", "--history-limit", "1001"])).rejects.toThrow("exit");

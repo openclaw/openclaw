@@ -2,7 +2,7 @@
 // root discovery from workspace, cwd, and explicit config.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildActiveNodeContextText, setActiveNodeContexts } from "../infra/active-node-context.js";
@@ -29,22 +29,6 @@ function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; c
 describe("buildSystemPromptParams", () => {
   afterEach(() => {
     setActiveNodeContexts([]);
-    vi.useRealTimers();
-  });
-
-  it("formats the current date in the configured user timezone", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-05T23:30:00.000Z"));
-
-    const utc = buildParams({
-      config: { agents: { defaults: { userTimezone: "UTC" } } },
-    });
-    const tokyo = buildParams({
-      config: { agents: { defaults: { userTimezone: "Asia/Tokyo" } } },
-    });
-
-    expect(utc.userDate).toBe("2026-01-05");
-    expect(tokyo.userDate).toBe("2026-01-06");
   });
 
   it("projects the requester-scoped stable active-node identity", () => {

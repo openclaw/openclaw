@@ -1,11 +1,12 @@
 // Claw doctor diagnostics project the lifecycle ownership ledger into health findings.
-import type { DatabaseSync } from "node:sqlite";
+
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultCronStaggerMs } from "../cron/stagger.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
@@ -141,7 +142,7 @@ function collectInstallFindings(
           message: `Claw extension ${JSON.stringify(pkg.extension?.id ?? pkg.ref)} has ${pkg.extensionCompatibility.state} host compatibility state${pkg.extensionCompatibility.message ? `: ${pkg.extensionCompatibility.message}` : "."}`,
           path: `claws.${agentId}.extensions.${pkg.extension?.id ?? pkg.ref}`,
           target: `${pkg.source}:${pkg.ref}@${pkg.version}`,
-          requirement: "Claw extensions should retain their consented canonical capability mapping",
+          requirement: "Claw extensions should retain their approved capability mapping",
           fixHint: "Preview a Claw update before accepting the host's current extension mapping.",
         }),
       );
@@ -154,7 +155,7 @@ function collectInstallFindings(
         message: `Claw ${pkg.kind} ${JSON.stringify(`${pkg.ref}@${pkg.version}`)} has ${pkg.state} lifecycle state.`,
         path: `claws.${agentId}.packages.${pkg.kind}.${pkg.ref}`,
         target: `${pkg.source}:${pkg.ref}@${pkg.version}`,
-        requirement: "Claw package references should match canonical installed package state",
+        requirement: "Claw package references should match current installed package state",
         fixHint:
           "Inspect package state with `openclaw claws status` before updating or removing the Claw.",
       }),
@@ -169,7 +170,7 @@ function collectInstallFindings(
         message: `Claw MCP server ${JSON.stringify(server.name)} has ${server.state} ownership state${server.error ? `: ${server.error}` : "."}`,
         path: `mcp.servers.${server.name}`,
         target: server.name,
-        requirement: "Claw MCP ownership should be complete and match live canonical config",
+        requirement: "Claw MCP ownership should be complete and match current live config",
         fixHint:
           server.state === "failed"
             ? "Remove the partial Claw to release its non-owning reference."
@@ -278,7 +279,7 @@ function orphanedAgentIds(options: OpenClawStateDatabaseOptions): string[] {
   return [...referenced].filter((agentId) => !installed.has(agentId)).toSorted();
 }
 
-function hasClawMcpServerRefs(db: DatabaseSync): boolean {
+function hasClawMcpServerRefs(db: EngineConnection): boolean {
   return (
     tableExists(db, "claw_mcp_server_refs") &&
     Boolean(

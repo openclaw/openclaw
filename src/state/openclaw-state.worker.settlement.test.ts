@@ -1,11 +1,12 @@
 import { copyFileSync, existsSync, linkSync, readFileSync, unlinkSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -29,38 +30,32 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-it.each(["idle inspection", "placement write"] as const)(
-  "rechecks a foreign commit before %s",
-  async (operation) => {
-    const context = captureOpenClawStateWorkerContext();
-    const backend = runWithSqliteWorkerStateContext(context, () =>
-      createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
+it("observes a managed schema publication before a placement write", async () => {
+  const context = captureOpenClawStateWorkerContext();
+  const backend = runWithSqliteWorkerStateContext(context, () =>
+    createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
+  );
+  const peer = openNodeSqliteDatabase(context.admission.databasePath);
+  try {
+    const command = {
+      type: "workerPlacements.retire" as const,
+      input: {
+        sessionId: "schema-fenced-placement",
+        expectedState: "local" as const,
+        expectedGeneration: 1,
+      },
+    };
+    await backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type);
+    peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    expect(() => runWithSqliteWorkerStateContext(context, () => backend.execute(command))).toThrow(
+      "newer schema version",
     );
-    const peer = new (requireNodeSqlite().DatabaseSync)(context.admission.databasePath);
-    try {
-      const command =
-        operation === "idle inspection"
-          ? { type: "database.inspectIdle" as const, input: undefined }
-          : {
-              type: "workerPlacements.retire" as const,
-              input: {
-                sessionId: "schema-fenced-placement",
-                expectedState: "local" as const,
-                expectedGeneration: 1,
-              },
-            };
-      await backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type);
-      peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
-      expect(() =>
-        runWithSqliteWorkerStateContext(context, () => backend.execute(command)),
-      ).toThrow("newer schema version");
-    } finally {
-      peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-      peer.close();
-      await backend.close();
-    }
-  },
-);
+  } finally {
+    peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+    peer.close();
+    await backend.close();
+  }
+});
 
 it("retires an existing-only idle actor without opening its missing database", async () => {
   const databasePath = openOpenClawStateDatabase().path;
@@ -203,7 +198,7 @@ it("does not checkpoint a retained existing-schema actor during idle inspection"
     const { db } = openOpenClawStateDatabase();
     const { constants } = requireNodeSqlite();
     const checkpoints: string[] = [];
-    db.setAuthorizer((action, name) => {
+    requireNativeSqliteDatabase(db).setAuthorizer((action, name) => {
       if (action === constants.SQLITE_PRAGMA && name === "wal_checkpoint") {
         checkpoints.push(name);
       }
@@ -213,7 +208,7 @@ it("does not checkpoint a retained existing-schema actor during idle inspection"
       expect(backend.execute({ type: "database.inspectIdle", input: undefined })).toBe("retire");
       expect(checkpoints).toEqual([]);
     } finally {
-      db.setAuthorizer(null);
+      requireNativeSqliteDatabase(db).setAuthorizer(null);
       await backend.close();
     }
   });

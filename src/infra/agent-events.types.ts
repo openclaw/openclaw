@@ -1,4 +1,6 @@
+import type { AgentEvent } from "../../packages/gateway-protocol/src/schema/agent.js";
 import type { AgentRunContext } from "./agent-run-registry.types.js";
+import type { captureAgentRunTerminalPersistence } from "./agent-run-terminal-writes.js";
 
 /** Payload for approval requests and their later resolution events. */
 export type AgentApprovalEventData = {
@@ -40,6 +42,7 @@ export type AgentEventPayload = {
   stream: AgentEventStream;
   ts: number;
   data: Record<string, unknown>;
+  preamble?: AgentEvent["preamble"];
   /** Internal, non-enumerable gateway lifecycle generation that owns this run. */
   lifecycleGeneration?: string;
   sessionKey?: string;
@@ -67,6 +70,7 @@ export type AgentAssistantProjection = {
 
 /** Gateway-only routing metadata stamped onto events after public input validation. */
 export type AgentEventRuntimePayload = AgentEventPayload & {
+  readonly terminalPersistence?: ReturnType<typeof captureAgentRunTerminalPersistence>;
   readonly admitLifecyclePublication?: () => boolean;
   readonly assistantSource?: AgentAssistantSourceReceipt;
   readonly assistantProjection?: AgentAssistantProjection;

@@ -39,7 +39,8 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         super();
         workers.push(this);
       }
-      postMessage = vi.fn<(message: PostedTask) => void>();
+      posted = vi.fn<(message: PostedTask) => void>();
+      postMessage = this.posted;
       ref() {}
       unref() {}
       terminate = vi.fn(async () => {
@@ -68,7 +69,7 @@ function createPool(options: Partial<PoolOptions> = {}) {
 
 function workerFor(input: string): FakeWorker {
   return expectDefined(
-    workers.find((worker) => worker.postMessage.mock.calls.some(([task]) => task.input === input)),
+    workers.find((worker) => worker.posted.mock.calls.some(([task]) => task.input === input)),
     `worker for ${input}`,
   );
 }
@@ -175,7 +176,7 @@ it("retires only idle slots on critical pressure, after result and resource cust
   pressure.publish(undefined);
   expect(worker.terminate).not.toHaveBeenCalled();
   const receipt = expectDefined(
-    worker.postMessage.mock.calls.at(-1)?.[0].resourcePort,
+    worker.posted.mock.calls.at(-1)?.[0].resourcePort,
     "cleanup receipt",
   );
   receipt.postMessage({ ok: true }, []);
@@ -221,7 +222,7 @@ it("reaches a cooperative exchange when earlier shared pressure has not released
   });
   const running = Promise.allSettled([blockedTask, cooperativeTask]);
   const cooperativeWorker = workerFor("cooperative");
-  cooperativeWorker.postMessage.mockImplementation((message) => {
+  cooperativeWorker.posted.mockImplementation((message) => {
     if (message.responseId !== undefined) {
       queueMicrotask(() => {
         cooperativeWorker.emit("message", {
@@ -295,7 +296,7 @@ it.each([false, true])(
       },
     );
     const receipt = expectDefined(
-      worker.postMessage.mock.calls.at(-1)?.[0].resourcePort,
+      worker.posted.mock.calls.at(-1)?.[0].resourcePort,
       "cleanup receipt",
     );
     const receiver = expectDefined(messageChannelReceivers.get(receipt), "cleanup receiver");
@@ -353,7 +354,7 @@ it.each(["receipts", "exit"] as const)(
       pool.closeResources(`source-${index}`),
     );
     const results = Promise.allSettled(cleanups);
-    const receipts = worker.postMessage.mock.calls
+    const receipts = worker.posted.mock.calls
       .slice(-cleanups.length)
       .map(([message]) => expectDefined(message.resourcePort, "cleanup receipt"));
     expect(worker.listenerCount("exit")).toBe(listeners + 1);
@@ -409,7 +410,7 @@ describe("owned worker tasks", () => {
     await expect(first.result).resolves.toBe("accepted reply");
     expect(executionSettled).not.toHaveBeenCalled();
     expect(prepareNext).not.toHaveBeenCalled();
-    expect(worker.postMessage).toHaveBeenCalledOnce();
+    expect(worker.posted).toHaveBeenCalledOnce();
     expect(pool.getSnapshot().pendingTasks).toBe(2);
 
     await first.close();
@@ -453,7 +454,7 @@ describe("owned worker tasks", () => {
     expect(consumed).toHaveBeenCalledOnce();
     expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: false });
     expect(worker.terminate).not.toHaveBeenCalled();
-    expect(worker.postMessage).toHaveBeenCalledOnce();
+    expect(worker.posted).toHaveBeenCalledOnce();
     reply(worker, "active");
     await expect(active.result).resolves.toBe("active");
     await active.close();
@@ -640,7 +641,7 @@ describe("owned worker tasks", () => {
 
       const resources = closeWorkerTaskPoolResources("retained-after-failed-close");
       const receipt = expectDefined(
-        worker.postMessage.mock.calls.at(-1)?.[0].resourcePort,
+        worker.posted.mock.calls.at(-1)?.[0].resourcePort,
         "failed-close resource receipt",
       );
       receipt.postMessage({ ok: true }, []);

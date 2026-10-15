@@ -262,6 +262,18 @@ it("returns the profile that actually handled tab open", async () => {
   });
 });
 
+it("rejects an invalid open timeoutMs before opening a tab", async () => {
+  const profileCtx = createProfileContext({ openTab: vi.fn() });
+  const response = await callTabsRoute({
+    method: "post",
+    path: "/tabs/open",
+    body: { url: "https://example.com", timeoutMs: -5 },
+    profileCtx,
+  });
+  expect(response.statusCode).toBe(400);
+  expect(profileCtx.openTab).not.toHaveBeenCalled();
+});
+
 async function callTabsAction(params: {
   body: Record<string, unknown>;
   profileCtx: ProfileContext;
@@ -323,6 +335,27 @@ describe("browser tab routes", () => {
       ssrfPolicy ? { ssrfPolicy } : {},
     );
   });
+
+  it.each([
+    { label: "managed", overrides: {}, expected: true },
+    {
+      label: "existing-session",
+      overrides: { driver: "existing-session" as const },
+      expected: false,
+    },
+    { label: "attach-only", overrides: { attachOnly: true }, expected: false },
+    { label: "remote CDP", overrides: { cdpIsLoopback: false }, expected: false },
+    { label: "attach-only engine", overrides: { engine: "lightpanda" as const }, expected: false },
+  ])(
+    "advertises automatic preview resizing only for $label ownership",
+    async ({ overrides, expected }) => {
+      const response = await callTabsList({
+        profileCtx: createProfileContext({ profile: makeBrowserProfile(overrides) }),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toMatchObject({ running: true, canAutoResizeViewport: expected });
+    },
+  );
 
   it("validates tab-open input before resolving or leasing a profile", async () => {
     const profileCtx = createProfileContext();
@@ -556,7 +589,7 @@ describe("browser tab routes", () => {
 
       expect(response.statusCode).toBe(200);
       expect(response.body).toEqual({
-        ...(method === "get" ? { running: true } : { ok: true }),
+        ...(method === "get" ? { running: true, canAutoResizeViewport: false } : { ok: true }),
         tabs: [
           publicTab(),
           { ...internalTab(), url: "", urlUnavailableReason: "navigation_blocked" },
@@ -570,7 +603,7 @@ describe("browser tab routes", () => {
       navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
       const recovered = await callTabsRoute(request);
       expect(recovered.body).toEqual({
-        ...(method === "get" ? { running: true } : { ok: true }),
+        ...(method === "get" ? { running: true, canAutoResizeViewport: false } : { ok: true }),
         tabs,
       });
     },

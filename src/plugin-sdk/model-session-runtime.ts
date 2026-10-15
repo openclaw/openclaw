@@ -7,6 +7,7 @@ import {
   type ApplySessionModelSelectionResult,
 } from "../model-picker/apply-session-model-selection.js";
 
+export { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 export { resolveChannelModelOverride } from "../channels/model-overrides.js";
 export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 export { resolvePersistedSessionRuntimeId } from "../agents/session-runtime-compat.js";

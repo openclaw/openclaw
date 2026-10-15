@@ -13,7 +13,6 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -83,13 +82,13 @@ test("retains one archive Worker across refused and interleaved reclamation oper
         databaseOptions,
       ),
     );
-    let refusalPoint: "admission-request" | "commit-request" | undefined;
+    let refusalPoint: "admission-request" | undefined;
     let superseded = false;
     const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
     const spawn = vi
       .spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker")
-      .mockImplementation((data) => {
-        const worker = create(data);
+      .mockImplementation((data, nativeLocations) => {
+        const worker = create(data, nativeLocations);
         worker.prependListener("message", (message: { type: string }) => {
           if (message.type === refusalPoint) {
             superseded = true;
@@ -127,16 +126,11 @@ test("retains one archive Worker across refused and interleaved reclamation oper
         ];
         for (const operation of plans) {
           const refusals =
-            operation.kind === "maintenance-statistics"
-              ? []
-              : operation.kind === "entry"
-                ? (["admission-request", "commit-request"] as const)
-                : (["admission-request"] as const);
+            operation.kind === "maintenance-statistics" ? [] : (["admission-request"] as const);
           for (const point of refusals) {
             refusalPoint = point;
             await expect(
               runSqliteSessionReclamation({
-                forceInProcess: false,
                 plan: operation,
                 assertCommitAllowed: () => {
                   if (superseded) {
@@ -150,9 +144,9 @@ test("retains one archive Worker across refused and interleaved reclamation oper
             refusalPoint = undefined;
             superseded = false;
           }
-          await expect(
-            runSqliteSessionReclamation({ forceInProcess: false, plan: operation }),
-          ).resolves.toMatchObject({ kind: operation.kind });
+          await expect(runSqliteSessionReclamation({ plan: operation })).resolves.toMatchObject({
+            kind: operation.kind,
+          });
           expect(spawn).toHaveBeenCalledTimes(1);
         }
         expect(loadSessionEntry(scope)).toBeUndefined();
@@ -164,9 +158,9 @@ test("retains one archive Worker across refused and interleaved reclamation oper
   });
 });
 
-test.each(["path", "root"] as const)(
+test.each(["root"] as const)(
   "retires a retained Worker by the symlinked %s its requester used",
-  async (retirement) => {
+  async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const link = path.join(state.root, "state-link");
       const stateDir = expectDefined(state.env.OPENCLAW_STATE_DIR, "test state directory");
@@ -178,20 +172,19 @@ test.each(["path", "root"] as const)(
       const { plan } = createEntryFixture(scope, databaseOptions);
       const spawned: Worker[] = [];
       const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
-      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-        const worker = create(data);
-        spawned.push(worker);
-        return worker;
-      });
+      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
+        (data, nativeLocations) => {
+          const worker = create(data, nativeLocations);
+          spawned.push(worker);
+          return worker;
+        },
+      );
       try {
         await runSqliteSessionReclamation({
-          forceInProcess: false,
           plan,
         });
         expect(spawned).toHaveLength(1);
-        await (retirement === "path"
-          ? closeOpenClawAgentDatabaseByPathAsync(databaseOptions.path)
-          : closeOpenClawAgentDatabasesAsync(link));
+        await closeOpenClawAgentDatabasesAsync(link);
         expect(spawned[0]?.threadId).toBe(-1);
       } finally {
         vi.restoreAllMocks();
@@ -236,17 +229,18 @@ test("binds first shared-state creation without host SQL and reuses reclamation 
     );
     const workers: Worker[] = [];
     const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
-    vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-      const worker = spawn(data);
-      workers.push(worker);
-      return worker;
-    });
+    vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
+      (data, nativeLocations) => {
+        const worker = spawn(data, nativeLocations);
+        workers.push(worker);
+        return worker;
+      },
+    );
     const reclaim = async (index: number) => {
       const diagnostics: SqliteSessionReclamationDiagnostics = {};
       const fixture = entries[index];
       assert.ok(fixture);
       await runSqliteSessionReclamation({
-        forceInProcess: false,
         plan: fixture.plan,
         diagnostics,
       });
@@ -302,33 +296,34 @@ test.each(["established", "first-created"] as const)(
       const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
       let child: Worker | undefined;
       let revoked = false;
-      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-        const worker = spawn(data);
-        child = worker;
-        worker.prependListener("message", (message: SqliteReclamationWorkerMessage) => {
-          if (message.type === "lease") {
-            // Native acquisition already committed, but its notification has not reached the owner.
-            const physical = readDatabasePathIdentitySync(sharedPath);
-            const receipt = message.receipt;
-            expect(receipt.sharedStateIdentity).toBe(physical.key);
-            expect(receipt.sharedStatePath).toBe(sharedPath);
-            expect(receipt.agentId).toBe(databaseOptions.agentId);
-            expect(receipt.path).toBe(databaseOptions.path);
-            expect(receipt.ownerPid).toBe(process.pid);
-            expect(admission.identity.key.startsWith("path:")).toBe(
-              sharedState === "first-created",
-            );
-            stateCache.clearOpenClawStateDatabaseOpenFailure(sharedPath);
-            revoked = true;
-            expect(() => admission.assertCurrent()).toThrow("read admission changed");
-          }
-        });
-        return worker;
-      });
+      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
+        (data, nativeLocations) => {
+          const worker = spawn(data, nativeLocations);
+          child = worker;
+          worker.prependListener("message", (message: SqliteReclamationWorkerMessage) => {
+            if (message.type === "lease") {
+              // Native acquisition already committed, but its notification has not reached the owner.
+              const physical = readDatabasePathIdentitySync(sharedPath);
+              const receipt = message.receipt;
+              expect(receipt.sharedStateIdentity).toBe(physical.key);
+              expect(receipt.sharedStatePath).toBe(sharedPath);
+              expect(receipt.agentId).toBe(databaseOptions.agentId);
+              expect(receipt.path).toBe(databaseOptions.path);
+              expect(receipt.ownerPid).toBe(process.pid);
+              expect(admission.identity.key.startsWith("path:")).toBe(
+                sharedState === "first-created",
+              );
+              stateCache.clearOpenClawStateDatabaseOpenFailure(sharedPath);
+              revoked = true;
+              expect(() => admission.assertCurrent()).toThrow("read admission changed");
+            }
+          });
+          return worker;
+        },
+      );
       try {
         await expect(
           runSqliteSessionReclamation({
-            forceInProcess: false,
             plan,
           }),
         ).rejects.toThrow("OpenClaw state database read admission changed");
@@ -386,7 +381,6 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
       try {
         await expect(
           runSqliteSessionReclamation({
-            forceInProcess: false,
             plan,
           }),
         ).rejects.toThrow("synthetic reclamation crash");
@@ -628,7 +622,6 @@ test("retains a selected maintenance row protected after native preparation", as
     try {
       await expect(
         runSqliteSessionReclamation({
-          forceInProcess: false,
           plan,
           refreshMaintenanceProtection: refreshed,
         }),

@@ -329,15 +329,10 @@ export class OpenClawChannelBridge {
       max: EVENTS_WAIT_TIMEOUT_LIMIT_MS,
     });
     return await new Promise<EventWaitResult>((resolve) => {
-      let settled = false;
       const onAbort = () => waiter.settle(null);
       const waiter: PendingWaiter = {
         filter,
         settle: (event) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
           this.pendingWaiters.delete(waiter);
           clearTimeout(timeout);
           signal?.removeEventListener("abort", onAbort);
@@ -350,9 +345,6 @@ export class OpenClawChannelBridge {
       }, waitTimeoutMs);
       signal?.addEventListener("abort", onAbort, { once: true });
       this.pendingWaiters.add(waiter);
-      if (signal?.aborted) {
-        waiter.settle(null);
-      }
     });
   }
 

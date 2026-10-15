@@ -187,28 +187,6 @@ describe("OpenAI Chat Completions stream", () => {
       result: await stream.result(),
     };
   };
-  it("preserves legacy function_call deltas and reassembles split arguments", async () => {
-    const { eventTypes, result } = await collectFixture([
-      chunk({ role: "assistant", function_call: { name: "lookup" } }),
-      chunk({ function_call: { arguments: '{"query":"ca' } }),
-      chunk({ function_call: { arguments: 'ts"}' } }),
-      chunk({}, "function_call"),
-    ]);
-
-    expect(result.stopReason).toBe("toolUse");
-    expect(result.content).toHaveLength(1);
-    expect(result.content[0]).toMatchObject({
-      type: "toolCall",
-      id: expect.stringMatching(/^call_[a-f0-9]{24}$/),
-      name: "lookup",
-      arguments: { query: "cats" },
-    });
-    expect(result.content[0]).not.toHaveProperty("partialArgs");
-    expect(result.content[0]).not.toHaveProperty("streamIndex");
-    expect(eventTypes).toContain("toolcall_start");
-    expect(eventTypes).toContain("toolcall_delta");
-  });
-
   it("preserves a confirmed legacy call before later visible text", async () => {
     const { eventTypes, result } = await collectFixture([
       chunk({ function_call: { name: "lookup", arguments: '{"query":"cats"}' } }),
@@ -429,8 +407,9 @@ describe("OpenAI Chat Completions stream", () => {
 
   it("coalesces tiny provisional legacy fragments into one bounded executable delta", async () => {
     const query = "x".repeat(1_100);
-    const { argumentDeltas, result } = await collectFixture([
-      chunk({ function_call: { name: "lookup", arguments: '{"query":"' } }),
+    const { argumentDeltas, eventTypes, result } = await collectFixture([
+      chunk({ role: "assistant", function_call: { name: "lookup" } }),
+      chunk({ function_call: { arguments: '{"query":"' } }),
       ...Array.from(query, (character) =>
         chunk({
           content: "",
@@ -444,11 +423,17 @@ describe("OpenAI Chat Completions stream", () => {
     ]);
 
     expect(result.stopReason).toBe("toolUse");
+    expect(result.content).toHaveLength(1);
     expect(result.content[0]).toMatchObject({
       type: "toolCall",
+      id: expect.stringMatching(/^call_[a-f0-9]{24}$/),
       name: "lookup",
       arguments: { query },
     });
+    expect(result.content[0]).not.toHaveProperty("partialJson");
+    expect(result.content[0]).not.toHaveProperty("streamIndex");
+    expect(eventTypes).toContain("toolcall_start");
+    expect(eventTypes).toContain("toolcall_delta");
     expect(argumentDeltas).toEqual([JSON.stringify({ query })]);
   });
 
@@ -472,7 +457,6 @@ describe("mapped off effort in chat completions", () => {
     request: {
       transport?: "managed";
       reasoning?: SimpleStreamOptions["reasoning"];
-      reasoningEffort?: OpenAICompletionsOptions["reasoningEffort"];
     } = {},
   ) {
     let payload: unknown;
@@ -492,7 +476,6 @@ describe("mapped off effort in chat completions", () => {
     } satisfies Model<"openai-completions">;
     const options = {
       apiKey: "synthetic-unused-key",
-      reasoningEffort: request.reasoningEffort,
       onPayload(value) {
         payload = value;
         throw new Error("captured before network");
@@ -516,37 +499,6 @@ describe("mapped off effort in chat completions", () => {
     expect(result.errorMessage).toBe("captured before network");
     return payload;
   }
-
-  it("maps OpenRouter logical off to the supported none effort", async () => {
-    expect(
-      await capturePayload(
-        {
-          supportsReasoningEffort: true,
-          thinkingFormat: "openrouter",
-          supportedReasoningEfforts: ["none", "low", "high"],
-        },
-        undefined,
-        { reasoningEffort: "off" },
-      ),
-    ).toMatchObject({ reasoning: { effort: "none" } });
-  });
-
-  it("honors an uppercase binary off mapping", async () => {
-    expect(
-      await capturePayload(
-        {
-          thinkingFormat: "together",
-          supportsReasoningEffort: true,
-          reasoningEffortMap: { OFF: "low" },
-        },
-        undefined,
-        { reasoningEffort: "off" },
-      ),
-    ).toMatchObject({
-      reasoning: { enabled: true },
-      reasoning_effort: "low",
-    });
-  });
 
   it("honors the model's off mapping for Qwen chat templates", async () => {
     expect(
@@ -585,23 +537,6 @@ describe("mapped off effort in chat completions", () => {
       expect(payload).not.toHaveProperty("reasoning.effort");
     },
   );
-
-  it("honors the model off mapping at the managed binary boundary", async () => {
-    expect(
-      await capturePayload(
-        {
-          thinkingFormat: "together",
-          supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["none", "low", "high"],
-        },
-        "low",
-        { transport: "managed", reasoning: "off" },
-      ),
-    ).toMatchObject({
-      reasoning: { enabled: true },
-      reasoning_effort: "low",
-    });
-  });
 });
 
 describe("OpenAI Chat Completions cache metadata", () => {

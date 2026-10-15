@@ -1,10 +1,14 @@
-import { nothing, render } from "lit";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
-import { presenceUserLabel, projectOnlinePresenceViewers } from "../lib/presence-users.ts";
+import {
+  presenceUserLabel,
+  projectOnlinePresenceViewers,
+  profilePresenceViewer,
+} from "../lib/presence-users.ts";
+import { profileDirectory } from "../lib/profile-directory.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
 import {
   resolveSessionPreferredFace,
@@ -20,7 +24,7 @@ import {
   hovercardBootstrapIntentActive,
   remainingHovercardOpenDelay,
 } from "./lazy-hovercard-registration.ts";
-import { renderPersonActivityCard } from "./person-activity-card.ts";
+import { updatePersonActivityCard } from "./person-activity-card.tsx";
 import { observePersonActivityData } from "./person-activity-data.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
@@ -152,7 +156,7 @@ export class SidebarPeopleRuntime {
       client: gateway.snapshot.client,
     };
     this.portal.markTrigger(trigger);
-    this.observer.observe(this.host, { childList: true, subtree: true });
+    this.observer.observe(this.host.hostElement, { childList: true, subtree: true });
     document.addEventListener("pointerdown", this.outsideInteraction, true);
     document.addEventListener("focusin", this.outsideInteraction, true);
     document.addEventListener("keydown", this.outsideKey, true);
@@ -174,9 +178,7 @@ export class SidebarPeopleRuntime {
       active.gateway === gateway &&
       active.client === gateway.snapshot.client &&
       active.scope === this.scope() &&
-      this.host.contains(active.row) &&
-      (active.row.dataset.personCardSection === undefined ||
-        !this.host.collapsedSessionSections.has(active.row.dataset.personCardSection)),
+      this.host.contains(active.row),
     );
   }
 
@@ -201,6 +203,10 @@ export class SidebarPeopleRuntime {
     );
     if (!user && active.id.startsWith("profile:")) {
       const profileId = active.id.slice("profile:".length);
+      const profile = profileDirectory(context.gateway).get(profileId);
+      if (profile) {
+        user = profilePresenceViewer(profile);
+      }
       const actor = [data.sessionsResult, ...Object.values(data.sessionResultsByAgent)]
         .flatMap((result) => result?.sessions ?? [])
         .flatMap((row) => [row.owner?.actor, row.createdActor])
@@ -208,7 +214,7 @@ export class SidebarPeopleRuntime {
           (candidate) =>
             candidate?.identity?.type === "profile" && candidate.identity.id === profileId,
         );
-      if (actor) {
+      if (!user && actor) {
         user = {
           id: profileId,
           identity: { type: "profile", id: profileId },
@@ -238,71 +244,64 @@ export class SidebarPeopleRuntime {
     const label = presenceUserLabel(user, t("presence.card.person"));
     card.setAttribute("aria-label", t("presence.card.ariaLabel", { name: label.name }));
     this.portal.renderContents(card, () =>
-      render(
-        renderPersonActivityCard({
-          user,
-          sessionData: activity.data,
-          watchAgentId: resolveUiDefaultAgentId(defaults),
-          mainKey: resolveUiConfiguredMainKey(defaults),
-          globalScope: isUiGlobalScopeConfigured(defaults),
-          routing: personActivityRouting(
-            {
-              basePath: this.host.basePath,
-              navigate: (route, options) => this.host.onNavigate?.(route, options),
-            },
-            () => this.close(),
-          ),
-          openSession: (row, agentId) => {
-            const face = resolveSessionPreferredFace(row);
-            const target = sessionNavigationTarget({
-              face,
-              sessionKey: row.key,
-              row,
-              fallbackAgentId: agentId,
-              basePath: this.host.basePath,
-              mainKey: resolveUiConfiguredMainKey(defaults),
-            });
-            this.close();
-            runSessionNavigationIntent(this.host, {
-              agentId,
-              face,
-              sessionKey: row.key,
-              commit: () => {
-                if (
-                  this.host.sessionDataContext?.gateway !== active.gateway ||
-                  context.gateway.snapshot.client !== active.client ||
-                  context.gateway.snapshot.phase !== "connected" ||
-                  active.scope !== this.scope()
-                ) {
-                  return false;
-                }
-                this.host.prepareSessionNavigation(row.key, target.options.pathname);
-                this.host.onNavigate?.(face, target.options);
-                selectApplicationSession({
-                  selection: context.agentSelection,
-                  gateway: context.gateway,
-                  sessionKey: row.key,
-                  agentId,
-                });
-                return true;
-              },
-            });
+      updatePersonActivityCard(card, {
+        user,
+        sessionData: activity.data,
+        watchAgentId: resolveUiDefaultAgentId(defaults),
+        mainKey: resolveUiConfiguredMainKey(defaults),
+        globalScope: isUiGlobalScopeConfigured(defaults),
+        routing: personActivityRouting(
+          {
+            basePath: this.host.basePath,
+            navigate: (route, options) => this.host.onNavigate?.(route, options),
           },
-        }),
-        card,
-      ),
+          () => this.close(),
+        ),
+        openSession: (row, agentId) => {
+          const face = resolveSessionPreferredFace(row);
+          const target = sessionNavigationTarget({
+            face,
+            sessionKey: row.key,
+            row,
+            fallbackAgentId: agentId,
+            basePath: this.host.basePath,
+            mainKey: resolveUiConfiguredMainKey(defaults),
+          });
+          this.close();
+          runSessionNavigationIntent(this.host, {
+            agentId,
+            face,
+            sessionKey: row.key,
+            commit: () => {
+              if (
+                this.host.sessionDataContext?.gateway !== active.gateway ||
+                context.gateway.snapshot.client !== active.client ||
+                context.gateway.snapshot.phase !== "connected" ||
+                active.scope !== this.scope()
+              ) {
+                return false;
+              }
+              this.host.prepareSessionNavigation(row.key, target.options.pathname);
+              this.host.onNavigate?.(face, target.options);
+              selectApplicationSession({
+                selection: context.agentSelection,
+                gateway: context.gateway,
+                sessionKey: row.key,
+                agentId,
+              });
+              return true;
+            },
+          });
+        },
+      }),
     );
     if (existing) {
       this.portal.position();
       return;
     }
     this.lastOpenAt = performance.now();
-    card.addEventListener("pointerleave", () => {
-      this.portal.pointerOverCard = false;
-      this.portal.scheduleClose();
-    });
-    card.addEventListener("keydown", this.portal.handleCardKeyDown);
-    this.portal.mount(active.row, card, "horizontal", true, () => render(nothing, card));
+    card.addEventListener("pointerleave", this.portal.handleCardPointerLeave);
+    this.portal.mount(active.row, card, "horizontal", true, () => updatePersonActivityCard(card));
   }
 
   private readonly outsideInteraction = (event: Event) => {

@@ -29,9 +29,9 @@ import {
 } from "../agents/auth-profiles/oauth-shared.js";
 import { isInheritedMainOAuthCredentialFromStores } from "../agents/auth-profiles/ownership.js";
 import {
-  resolveSharedAuthStoreOwnership,
-  resolveSharedAuthStorePath,
-} from "../agents/auth-profiles/path-resolve.js";
+  prepareSharedAuthStoreOwnershipForNative as resolveSharedAuthStoreOwnership,
+  resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.native.js";
 import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
@@ -69,6 +69,7 @@ import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-a
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { OPENAI_PROVIDER_ID } from "../agents/openai-routing.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
@@ -636,13 +637,13 @@ function loadAuthProfileMigrationTargetStore(
     return store;
   }
   if (inspection.status !== "missing") {
-    throw new Error("canonical auth profile store is unreadable; legacy source left in place");
+    throw new Error("current auth profile store is unreadable; legacy source left in place");
   }
   const stateInspection = explicitSharedRead
     ? inspectPersistedSharedAuthProfileStateRaw(env)
     : inspectPersistedAuthProfileStateRaw(agentDir, database);
   if (stateInspection.status === "unreadable") {
-    throw new Error("canonical auth profile state is unreadable; legacy source left in place");
+    throw new Error("current auth profile state is unreadable; legacy source left in place");
   }
   return {
     version: AUTH_STORE_VERSION,
@@ -901,15 +902,13 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         unresolvedSidecarProfileIds.size > 0
           ? `Migrated ${unresolvedSidecarProfileIds.size} legacy OAuth sidecar profile${unresolvedSidecarProfileIds.size === 1 ? "" : "s"} from ${shortenHomePath(candidate.authPath)} into SQLite as configured-unavailable without credentials; re-authenticate ${unresolvedSidecarProfileIds.size === 1 ? "this profile" : "these profiles"} to restore access.`
           : undefined;
-      const awsSdkMarkers =
-        isRecord(rawStore) && isRecord(rawStore.profiles)
-          ? readAwsSdkAuthProfileMarkers(candidate)
-          : null;
-      if (awsSdkMarkers && isRecord(rawStore)) {
-        removeAwsSdkProfileMarkers(
-          rawStore,
-          awsSdkMarkers.map((profile) => profile.profileId),
-        );
+      const rawProfiles =
+        isRecord(rawStore) && isRecord(rawStore.profiles) ? rawStore.profiles : undefined;
+      const awsSdkMarkers = rawProfiles ? readAwsSdkAuthProfileMarkers(candidate) : null;
+      if (rawProfiles && awsSdkMarkers) {
+        for (const { profileId } of awsSdkMarkers) {
+          delete rawProfiles[profileId];
+        }
       }
       const canonicalizedSecretRefs = normalizeLegacyAuthProfileFields(rawStore);
       const maybeCanonicalStore =
@@ -1019,7 +1018,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
                 // This store includes the separately persisted auth_profile_state row,
                 // so state-only concurrent changes abort before either table is written.
                 if (!isDeepStrictEqual(authoritative, existing)) {
-                  throw new Error("canonical auth profile store changed during legacy migration");
+                  throw new Error("current auth profile store changed during legacy migration");
                 }
                 saveAuthProfileStoreWithPreparedOwner(
                   next,
@@ -1231,15 +1230,6 @@ function readAwsSdkAuthProfileMarkers(
   return markers.length > 0 ? markers : null;
 }
 
-function removeAwsSdkProfileMarkers(raw: Record<string, unknown>, profileIds: string[]): void {
-  if (!isRecord(raw.profiles)) {
-    return;
-  }
-  for (const profileId of profileIds) {
-    delete raw.profiles[profileId];
-  }
-}
-
 function rewriteMappedAuthProfileRefs(
   config: OpenClawConfig,
   profileIdMap: ReadonlyMap<string, string>,
@@ -1301,8 +1291,7 @@ export function maybeRepairOpenAICodexAuthConfig(
   warnings: string[];
 } {
   let config = structuredClone(cfg);
-  const root = config as Record<string, unknown>;
-  const auth = isRecord(root.auth) ? root.auth : undefined;
+  const auth = isRecord(config.auth) ? config.auth : undefined;
   const profileIdMap = new Map<string, string>(options?.profileIdMap);
   let changed = false;
   if (isRecord(auth?.profiles)) {
@@ -1310,9 +1299,7 @@ export function maybeRepairOpenAICodexAuthConfig(
       profileIdMap,
       preserveUnmappedLegacyIds: options?.profileIdMap !== undefined,
     });
-    for (const [from, to] of rewrite.profileIdMap) {
-      profileIdMap.set(from, to);
-    }
+    rewrite.profileIdMap.forEach((to, from) => profileIdMap.set(from, to));
     changed ||= rewrite.changed;
   }
   if (auth) {
@@ -1330,12 +1317,14 @@ export function maybeRepairOpenAICodexAuthConfig(
     );
     config = models.config;
     changed ||= models.changes.length > 0;
-    const pluginsChanged = rewritePluginAuthProfileRefs(config, profileIdMap);
-    changed ||= pluginsChanged;
+    changed = rewritePluginAuthProfileRefs(config, profileIdMap) || changed;
+  }
+  if (changed) {
+    copyConfigResolutionFactsThroughRewrite(cfg, config);
   }
   return {
-    config,
-    changes: changed ? ["Migrated legacy auth profile config to canonical providers."] : [],
+    config: changed ? config : cfg,
+    changes: changed ? ["Migrated legacy auth profile config to current providers."] : [],
     warnings: [],
   };
 }
@@ -1568,7 +1557,7 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
       const native =
         "agentId" in database ? readOpenClawAgentDatabaseIdentity(database) : undefined;
       const identity = native
-        ? { key: `file:${String(native.identity)}`, birthtime: native.birthtime }
+        ? { key: `file:${native.identity}`, birthtime: native.birthtime }
         : requireOpenClawStateDatabaseIdentity(database);
       if (identity.key !== target.identity.key) {
         throw new Error("Auth profile database generation changed after backup; retry Doctor.");

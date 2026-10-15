@@ -4,7 +4,11 @@ import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { applySelectedSessionProjection, SessionParticipationTracker } from "./chat-pane-state.ts";
+import {
+  applySelectedSessionProjection,
+  SessionParticipationTracker,
+  createChatPaneRunRecoveryActions,
+} from "./chat-pane-state.ts";
 
 function projectionState(): Parameters<typeof applySelectedSessionProjection>[0] {
   return {
@@ -169,7 +173,21 @@ describe("resolveArtifactDownloadSource", () => {
   );
 
   it.each([
-    { failure: "network", mimeType: "image/png", type: "image", reject: false },
+    { failure: "network", mimeType: "image/png", type: "image", reject: false, variant: undefined },
+    {
+      failure: "network",
+      mimeType: "image/png",
+      type: "image",
+      reject: true,
+      variant: "thumbnail" as const,
+    },
+    {
+      failure: "missing route",
+      mimeType: "image/png",
+      type: "image",
+      reject: true,
+      variant: "thumbnail" as const,
+    },
     { failure: "missing route", mimeType: "image/png", type: "image", reject: false },
     { failure: "SPA fallback", mimeType: "image/png", type: "image", reject: false },
     { failure: "wrong content type", mimeType: "image/png", type: "image", reject: false },
@@ -178,7 +196,7 @@ describe("resolveArtifactDownloadSource", () => {
     { failure: "non-image artifact", mimeType: "image/png", type: "file", reject: true },
   ])(
     "reauthorizes failed transfers but rejects unsafe blobs: $failure",
-    async ({ failure, mimeType, type, reject }) => {
+    async ({ failure, mimeType, type, reject, variant }) => {
       vi.stubGlobal("location", new URL("https://control.test"));
       vi.stubGlobal(
         "fetch",
@@ -205,7 +223,7 @@ describe("resolveArtifactDownloadSource", () => {
         .mockResolvedValue(reject ? download : inline);
       const result = await resolveArtifactDownloadSource(
         { connected: true, client: { gatewayUrl: "wss://control.test", request } as never },
-        { sessionKey: "agent:main:main", artifactId: artifact.id },
+        { sessionKey: "agent:main:main", artifactId: artifact.id, variant },
       );
       if (reject) {
         expect(result).toBeNull();
@@ -332,5 +350,52 @@ describe("SessionParticipationTracker", () => {
       expect(resolve(tracker, { sessionKey: "work\0global", listLoading: true })).toBe(false);
       expect(resolve(tracker, { sessionKey, listLoading: true })).toBe(true);
     }
+  });
+});
+
+describe("failed run recovery actions", () => {
+  it("continues once from the current failed run without replaying the original prompt", () => {
+    const state = {
+      sessionKey: "session-a",
+      connected: true,
+      chatRunId: null as string | null,
+      chatSending: false,
+      handleSendChat: vi.fn(async () => {
+        state.chatSending = true;
+      }),
+    };
+    let current = true;
+    const actions = createChatPaneRunRecoveryActions(state, {
+      canSend: true,
+      isCurrent: () => current,
+      latestFailedRunId: () => "run-a",
+    });
+    actions.onRetryRun?.("old-run");
+    expect(state.handleSendChat).not.toHaveBeenCalled();
+    actions.onRetryRun?.("run-a");
+    actions.onRetryRun?.("run-a");
+    expect(state.handleSendChat).toHaveBeenCalledExactlyOnceWith(
+      "Continue from where you stopped. Check which actions already completed before retrying anything.",
+    );
+    state.chatSending = false;
+    current = false;
+    actions.onRetryRun?.("run-a");
+    expect(state.handleSendChat).toHaveBeenCalledOnce();
+  });
+  it("does not expose actions without their capabilities", () => {
+    const state = {
+      sessionKey: "session-a",
+      connected: true,
+      chatRunId: null,
+      chatSending: false,
+      handleSendChat: vi.fn(async () => {}),
+    };
+    expect(
+      createChatPaneRunRecoveryActions(state, {
+        canSend: false,
+        isCurrent: () => true,
+        latestFailedRunId: () => "run-a",
+      }),
+    ).toEqual({ onRetryRun: undefined });
   });
 });

@@ -3,9 +3,7 @@
  * Owns hook execution, client-tool delegation, result coercion, and safe
  * logging for failed tool calls.
  */
-import { createHash } from "node:crypto";
 import { logDebug, logError } from "../logger.js";
-import { redactToolDetail } from "../logging/redact.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { isPlainObject } from "../utils.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
@@ -16,7 +14,6 @@ import {
   recordStructuredReplayTrustForToolCall,
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { consumeFinalClientVoiceToolConfirmation } from "./agent-tools.before-tool-call.policy.js";
 import {
   finalizeBeforeToolCallExecutionParams,
   prepareBeforeToolCallExecutionParams,
@@ -30,12 +27,13 @@ import {
   getCodeModeExecBeforeHookMetadata,
   normalizeCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
-import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import { readNodePermissionError } from "./node-permission-error.js";
 import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import {
   attachInternalToolExecutionPreparer,
+  copyInternalToolResultState,
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
@@ -44,10 +42,6 @@ import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
 
 type ToolExecuteArgs = Parameters<ToolDefinition["execute"]>;
-const TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS = 600;
-const TOOL_ERROR_EXEC_COMMAND_HASH_CHARS = 16;
-const SENSITIVE_EXEC_ENV_VALUE = "[omitted exec env value]";
-const EXEC_COMMAND_PARAM_KEYS = new Set(["command", "cmd"]);
 
 type ClientToolCallRecorder =
   | ((toolName: string, params: Record<string, unknown>) => void)
@@ -68,133 +62,6 @@ function describeToolExecutionError(err: unknown): {
     return { message, stack: err.stack, ...(operatorHint ? { operatorHint } : {}) };
   }
   return { message: String(err) };
-}
-
-function serializeToolParams(value: unknown): string {
-  if (value === undefined) {
-    return "<undefined>";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (
-    value === null ||
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint"
-  ) {
-    return String(value);
-  }
-  try {
-    const serialized = JSON.stringify(value);
-    if (typeof serialized === "string") {
-      return serialized;
-    }
-  } catch {}
-  if (typeof value === "function") {
-    return value.name ? `[Function ${value.name}]` : "[Function anonymous]";
-  }
-  if (typeof value === "symbol") {
-    return value.description ? `Symbol(${value.description})` : "Symbol()";
-  }
-  return Object.prototype.toString.call(value);
-}
-
-function formatToolParamPreview(label: string, serialized: string): string {
-  const redacted = redactToolDetail(serialized);
-  const preview = sanitizeForConsole(redacted, TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS) ?? "<empty>";
-  return `${label}=${preview}`;
-}
-
-function kindForLog(value: unknown): string {
-  if (Array.isArray(value)) {
-    return "array";
-  }
-  if (value === null) {
-    return "null";
-  }
-  return typeof value;
-}
-
-function summarizeSensitiveValueForLog(params: {
-  value: unknown;
-  reason: string;
-}): Record<string, unknown> {
-  const serialized = serializeToolParams(params.value);
-  return {
-    omitted: true,
-    reason: params.reason,
-    type: kindForLog(params.value),
-    chars: serialized.length,
-    sha256: createHash("sha256")
-      .update(serialized)
-      .digest("hex")
-      .slice(0, TOOL_ERROR_EXEC_COMMAND_HASH_CHARS),
-  };
-}
-
-function sanitizeExecEnvForLog(value: unknown): unknown {
-  if (!isPlainObject(value)) {
-    return value === undefined ? undefined : "[omitted exec env]";
-  }
-  return Object.fromEntries(
-    Object.keys(value)
-      .toSorted()
-      .map((key) => [key, SENSITIVE_EXEC_ENV_VALUE]),
-  );
-}
-
-function sanitizeExecFailureParamsForLog(value: unknown): unknown {
-  if (typeof value === "string") {
-    try {
-      const parsed: unknown = JSON.parse(value);
-      if (isPlainObject(parsed)) {
-        return sanitizeExecFailureParamsForLog(parsed);
-      }
-    } catch {
-      // Non-JSON exec params can still be a raw model-supplied command payload.
-    }
-  }
-  if (!isPlainObject(value)) {
-    return summarizeSensitiveValueForLog({
-      value,
-      reason: "exec params may contain command credentials",
-    });
-  }
-  const sanitized: Record<string, unknown> = {};
-  for (const [key, field] of Object.entries(value)) {
-    if (EXEC_COMMAND_PARAM_KEYS.has(key)) {
-      sanitized[key] = summarizeSensitiveValueForLog({
-        value: field,
-        reason: "exec command may contain credentials",
-      });
-      continue;
-    }
-    if (key === "env") {
-      sanitized[key] = sanitizeExecEnvForLog(field);
-      continue;
-    }
-    sanitized[key] = field;
-  }
-  return sanitized;
-}
-
-function describeToolFailureInputs(params: {
-  toolName: string;
-  rawParams: unknown;
-  effectiveParams: unknown;
-}): string {
-  const sanitize = (value: unknown) =>
-    params.toolName === "exec" ? sanitizeExecFailureParamsForLog(value) : value;
-  const rawParams = sanitize(params.rawParams);
-  const effectiveParams = sanitize(params.effectiveParams);
-  const rawSerialized = serializeToolParams(rawParams);
-  const parts = [formatToolParamPreview("raw_params", rawSerialized)];
-  const effectiveSerialized = serializeToolParams(effectiveParams);
-  if (effectiveSerialized !== rawSerialized) {
-    parts.push(formatToolParamPreview("effective_params", effectiveSerialized));
-  }
-  return parts.join(" ");
 }
 
 function normalizeToolExecutionResult(params: {
@@ -218,18 +85,19 @@ function normalizeToolExecutionResult(params: {
 function buildToolExecutionErrorResult(params: {
   toolName: string;
   message: string;
+  cause?: unknown;
 }): AgentToolResult<unknown> {
+  const permissionMissing = readNodePermissionError(params.cause);
   return jsonResult({
     status: "error",
     tool: params.toolName,
     error: params.message,
+    ...(permissionMissing ? { permissionMissing } : {}),
   });
 }
 
 async function executeAdaptedToolOperation(params: {
   normalizedToolName: string;
-  rawParams: unknown;
-  getEffectiveParams: () => unknown;
   signal: AbortSignal | undefined;
   run: () => Promise<unknown>;
 }): Promise<AgentToolResult<unknown>> {
@@ -246,21 +114,19 @@ async function executeAdaptedToolOperation(params: {
     if (described.stack && described.stack !== described.message) {
       logDebug(`tools: ${params.normalizedToolName} failed stack:\n${described.stack}`);
     }
-    const inputPreview = describeToolFailureInputs({
-      toolName: params.normalizedToolName,
-      rawParams: params.rawParams,
-      effectiveParams: params.getEffectiveParams(),
-    });
     const operatorHint = described.operatorHint ? ` ${described.operatorHint}` : "";
     // Operator-only: the hint names containment configuration and stays out of the
     // model-visible result below.
-    logError(
-      `[tools] ${params.normalizedToolName} failed: ${described.message}${operatorHint} ${inputPreview}`,
-    );
-    return buildToolExecutionErrorResult({
+    logError(`[tools] ${params.normalizedToolName} failed: ${described.message}${operatorHint}`);
+    const result = buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,
+      cause: err,
     });
+    // Error presentation must preserve private execution and content provenance.
+    return typeof err === "object" && err !== null
+      ? copyInternalToolResultState(err, result)
+      : result;
   }
 }
 
@@ -351,8 +217,6 @@ export function toToolDefinitions(
         let executeParams = params;
         return await executeAdaptedToolOperation({
           normalizedToolName: normalizedName,
-          rawParams: params,
-          getEffectiveParams: () => executeParams,
           signal,
           run: async () => {
             if (!beforeHookWrapped) {
@@ -405,23 +269,6 @@ export function toToolDefinitions(
               if (decision && !decision.launch) {
                 return { content: [], details: { status: "skipped" } };
               }
-              // A voice grant binds the post-finalizer execution shape. Consuming it
-              // earlier would let later alias or tool-owned rewrites escape the grant.
-              const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
-                toolCallId,
-                toolName: name,
-                toolKind: hookMetadata?.toolKind,
-                params: executeParams,
-                ctx: hookContext,
-              });
-              if (!voiceConfirmation.allowed) {
-                return buildBlockedToolResult({
-                  reason: voiceConfirmation.reason,
-                  deniedReason: "client-voice-confirmation",
-                  toolCallId,
-                  runId: hookContext?.runId,
-                });
-              }
               decision?.start?.();
               recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
             }
@@ -441,8 +288,6 @@ export function toToolDefinitions(
       const settle = (run: () => Promise<unknown>) =>
         executeAdaptedToolOperation({
           normalizedToolName: normalizedName,
-          rawParams: params.args,
-          getEffectiveParams: () => params.args,
           signal,
           run,
         });
@@ -451,6 +296,7 @@ export function toToolDefinitions(
         { kind: "immediate" }
       >["outcome"];
       const settleImmediate = async (outcome: ImmediateOutcome, dispose: () => void) => {
+        let settled: ImmediateOutcome;
         try {
           const result = await settle(async () => {
             if (outcome.kind === "error") {
@@ -458,22 +304,15 @@ export function toToolDefinitions(
             }
             return outcome.result;
           });
-          return {
-            kind: "immediate" as const,
-            outcome: {
-              kind: "result" as const,
-              result,
-              isError: outcome.kind === "result" && outcome.isError,
-            },
-            dispose,
+          settled = {
+            kind: "result",
+            result,
+            isError: outcome.kind === "result" && outcome.isError,
           };
         } catch (error) {
-          return {
-            kind: "immediate" as const,
-            outcome: { kind: "error" as const, error },
-            dispose,
-          };
+          settled = { kind: "error", error };
         }
+        return { kind: "immediate" as const, outcome: settled, dispose };
       };
       let prepared: Awaited<ReturnType<typeof sourcePreparer>>;
       try {
@@ -578,21 +417,6 @@ export function toClientToolDefinitions(
           if (decision && !decision.launch) {
             recorder?.discard?.(toolCallId, func.name);
             return { content: [], details: { status: "skipped" } };
-          }
-          const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
-            toolCallId,
-            toolName: func.name,
-            params: paramsRecord,
-            ctx: hookContext,
-          });
-          if (!voiceConfirmation.allowed) {
-            recorder?.discard?.(toolCallId, func.name);
-            return buildBlockedToolResult({
-              reason: voiceConfirmation.reason,
-              deniedReason: "client-voice-confirmation",
-              toolCallId,
-              runId: hookContext?.runId,
-            });
           }
           signal?.throwIfAborted();
           decision?.start?.();

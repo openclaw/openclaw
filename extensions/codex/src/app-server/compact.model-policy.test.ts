@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +34,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 beforeEach(() => {
   transport.fetch.mockReset();
+  setRuntimeConfigSnapshot({});
   for (const key of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
     vi.stubEnv(key, undefined);
   }
@@ -43,7 +48,10 @@ beforeEach(() => {
   vi.stubEnv("no_proxy", "127.0.0.1,localhost,::1");
 });
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  vi.unstubAllEnvs();
+});
 
 describe("native compaction model policy", () => {
   it.each([

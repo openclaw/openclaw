@@ -2,6 +2,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
@@ -234,13 +235,10 @@ export async function installManagedPluginSource(
   input: ManagedPluginSourceInstallParams,
 ): Promise<ManagedPluginSourceInstallResult> {
   return await withPluginLifecycleLease({ env: input.env }, async (lease) => {
-    const assertOwned = lease.assertOwned.bind(lease);
+    const assertOwned = lease.assertOwned;
     const params = {
       ...input,
-      beforePersistentApply: () => {
-        input.beforePersistentApply?.();
-        assertOwned();
-      },
+      beforePersistentApply: composeConfigWriteAssertions(input.beforePersistentApply, assertOwned),
     };
     const { request } = params;
     if (request.source === "official") {

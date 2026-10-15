@@ -1,5 +1,9 @@
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 import {
   createCtx,
@@ -12,6 +16,14 @@ vi.mock("./audit.js", () => ({ appendFileTransferAudit: vi.fn() }));
 const binding = { kind: "write", anchorPath: "/workspace", anchorDevice: "1", anchorInode: "2" };
 const sizeBytes = 50 * 1024 * 1024;
 const expectedSha256 = "a".repeat(64);
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 function fixture(overrides: { maxBytes?: number } = {}) {
   const { ctx, invokeNode } = createCtx({
@@ -39,17 +51,22 @@ function fixture(overrides: { maxBytes?: number } = {}) {
       },
     },
   });
-  invokeNode.mockImplementation(async ({ params } = {}) => ({
-    ok: true,
-    payload: {
+  invokeNode.mockImplementation(async (options = {}) => {
+    const { params } = options;
+    return {
       ok: true,
-      path: "/workspace/input",
-      binding,
-      ...((params as Record<string, unknown>).preflightOnly === true ? {} : { status: "created" }),
-      size: sizeBytes,
-      sha256: expectedSha256,
-    },
-  }));
+      payload: {
+        ok: true,
+        path: "/workspace/input",
+        binding,
+        ...((params as Record<string, unknown>).preflightOnly === true
+          ? {}
+          : { status: "created" }),
+        size: sizeBytes,
+        sha256: expectedSha256,
+      },
+    };
+  });
   return { ctx, invokeNode };
 }
 
@@ -190,7 +207,8 @@ describe("file-transfer dir.list policy", () => {
       }),
     };
     const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(
-      async ({ params } = {}) => {
+      async (options = {}) => {
+        const { params } = options;
         const record = requireRecord(params, "invoke params");
         events.push(record.preflightOnly === true ? "preflight" : "list");
         if (record.preflightOnly === true && record.expectedCanonicalPath === "/tmp/old-project") {

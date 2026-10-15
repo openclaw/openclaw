@@ -135,9 +135,18 @@ export function updateChatRunProgressSnapshot(
       "starting_model",
     ].includes(phase);
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
+  const isFallbackStatus = event.stream === "lifecycle" && phase === "fallback_step";
+  const isFinishing = event.stream === "lifecycle" && phase === "finishing";
   const isAssistant =
     event.stream === "assistant" &&
-    Boolean(snapshot?.events.some((candidate) => candidate.stream === "run_status"));
+    Boolean(
+      snapshot?.events.some(
+        (candidate) =>
+          candidate.stream === "run_status" ||
+          (candidate.stream === "lifecycle" &&
+            (candidate.data.phase === "fallback_step" || candidate.data.phase === "finishing")),
+      ),
+    );
   const preambleItemId =
     typeof data.itemId === "string" && data.itemId.trim()
       ? data.itemId.trim()
@@ -179,19 +188,18 @@ export function updateChatRunProgressSnapshot(
         candidate.data.phase === "strict_review_required" &&
         candidate.data.reviewId === data.reviewId,
     );
-  if (mode === "summary" && !isTool && !isItem && !isUsage && !isRetryStatus && !isAssistant) {
-    return snapshot;
-  }
+  const isSummaryProgress =
+    isTool ||
+    isItem ||
+    isUsage ||
+    isRetryStatus ||
+    isFallbackStatus ||
+    isFinishing ||
+    isAssistant ||
+    isNotice;
   if (
-    !isTool &&
-    !isItem &&
-    !isUsage &&
-    !isStartupStatus &&
-    !isRetryStatus &&
-    !isAssistant &&
-    !isStandaloneGuardian &&
-    !isNotice &&
-    !resolvesStrictReview
+    !isSummaryProgress &&
+    (mode === "summary" || (!isStartupStatus && !isStandaloneGuardian && !resolvesStrictReview))
   ) {
     return snapshot;
   }
@@ -248,10 +256,23 @@ export function updateChatRunProgressSnapshot(
   if (isUsage) {
     // Context-only updates must retain the run total already reported by completed responses.
     removeWhere((candidate) => candidate.stream === "usage");
-  } else if (isStartupStatus || isRetryStatus || isAssistant || isTool || isItem) {
+  } else if (
+    isStartupStatus ||
+    isRetryStatus ||
+    isFallbackStatus ||
+    isFinishing ||
+    isAssistant ||
+    isTool ||
+    isItem
+  ) {
     // Progress clears transient statuses; retry waits may begin after tools completed.
     removeWhere((candidate) => {
-      if (candidate.stream === "run_status" || candidate.stream === "assistant") {
+      if (
+        candidate.stream === "run_status" ||
+        candidate.stream === "assistant" ||
+        (candidate.stream === "lifecycle" &&
+          (candidate.data.phase === "fallback_step" || candidate.data.phase === "finishing"))
+      ) {
         return true;
       }
       if (isPreamble) {

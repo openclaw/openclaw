@@ -10,7 +10,9 @@ import {
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import * as sessionInputActors from "../config/sessions/session-input-actor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
+import { recordSessionParticipantInWorker } from "../config/sessions/session-sharing-store.async.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -18,6 +20,7 @@ import { readLoggingConfig } from "../logging/config.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { runOutsideStoreWriterContext } from "../shared/store-writer-queue.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import type { StartChatDispatchParams } from "./server-methods/chat-send-agent-dispatch.types.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -54,15 +57,21 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
             (worker) =>
               operation({
                 execute: async (command, commandOptions) => {
-                  const committing = command.type === "session.turn.commit";
+                  const committing =
+                    (command.type === "session.actor.acceptInput" ||
+                      command.type === "session.actor.adoptRun") &&
+                    typeof command.input === "object" &&
+                    command.input !== null &&
+                    "turn" in command.input &&
+                    command.input.turn !== undefined;
                   if (committing) {
                     turnBoundary.committing = true;
                   }
                   try {
-                    const result = await worker.execute(command, commandOptions);
-                    if (command.type === "session.turn.prepare") {
+                    if (committing) {
                       turnBoundary.afterPrepare?.();
                     }
+                    const result = await worker.execute(command, commandOptions);
                     if (committing) {
                       turnBoundary.afterCommit?.();
                     }
@@ -94,6 +103,89 @@ afterEach(() => {
   turnBoundary.afterPrepare = undefined;
   turnBoundary.afterCommit = undefined;
   vi.restoreAllMocks();
+});
+
+test("persists and dispatches concurrent Gateway inputs while participant writes queue", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const { ws } = await openClient();
+  const inputs = Array.from({ length: 2 }, (_, index) => ({
+    agentId: "main",
+    key: `agent:main:dashboard:concurrent-initial-${index}`,
+    message: `Persist concurrent Gateway initial input ${index}.`,
+  }));
+  const competingWrites: Promise<unknown>[] = [];
+  const intervenedInputs = new Set<string>();
+  const acquire = sessionInputActors.acquireSessionInputActor;
+  vi.spyOn(sessionInputActors, "acquireSessionInputActor").mockImplementation(async (...args) => {
+    const input = await acquire(...args);
+    if (input) {
+      const accept = input.actor.acceptInput;
+      vi.spyOn(input.actor, "acceptInput").mockImplementationOnce(async (...command) => {
+        const recordParticipant = (promptedAt: number) =>
+          recordSessionParticipantInWorker(
+            { agentId: "main", storePath, sessionKey: input.actor.target.sessionKey },
+            {
+              identity: {
+                type: "observation",
+                pluginId: null,
+                accountId: null,
+                senderKind: "unknown",
+                id: "gateway-client",
+              },
+              promptedAt,
+              sessionAgentId: "main",
+            },
+          );
+        await recordParticipant(1);
+        intervenedInputs.add(input.actor.target.sessionKey);
+        const pending = accept(...command);
+        // This independent writer must wait behind the complete input admission.
+        competingWrites.push(runOutsideStoreWriterContext(() => recordParticipant(2)));
+        return pending;
+      });
+    }
+    return input;
+  });
+  dispatch.start.mockClear();
+  dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
+  try {
+    const created = await Promise.all(
+      inputs.map((params) =>
+        rpcReq<{ sessionId: string; runStarted: boolean }>(ws, "sessions.create", params),
+      ),
+    );
+    for (const [index, response] of created.entries()) {
+      expect(response.ok, JSON.stringify(response)).toBe(true);
+      expect(response.payload?.runStarted, JSON.stringify(response)).toBe(true);
+      const input = inputs[index]!;
+      const scope = {
+        agentId: input.agentId,
+        sessionKey: input.key,
+        sessionId: expectDefined(response.payload?.sessionId, "created session ID"),
+        storePath,
+      };
+      expect(
+        (await loadTranscriptEvents(scope)).filter((event) =>
+          JSON.stringify(event).includes(input.message),
+        ),
+      ).toHaveLength(1);
+    }
+    expect(intervenedInputs).toEqual(new Set(inputs.map((input) => input.key)));
+    expect(dispatch.start).toHaveBeenCalledTimes(inputs.length);
+  } finally {
+    await Promise.all(competingWrites);
+    const released = getSessionWorkAdmissionRelease({
+      scope: storePath,
+      identities: inputs.map((input) => input.key),
+    });
+    for (const [turn] of dispatch.start.mock.calls) {
+      turn.replyAdmissionTicket?.release();
+      turn.admission.cleanupAdmittedRun();
+      clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
+    }
+    await released;
+    ws.close();
+  }
 });
 
 test.for([
@@ -419,12 +511,12 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
   },
 );
 
-test("retains idle chat input custody when its separate transcript commit is refused", async () => {
+test("retries idle chat input after its atomic commit is refused", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
-  const key = "agent:main:dashboard:idle-staging-preserved";
-  const message = "Idle input keeps its separately accepted bytes.";
-  const runId = "idle-staging-preserved";
+  const key = "agent:main:dashboard:idle-commit-retry";
+  const message = "Idle input retries its original bytes.";
+  const runId = "idle-commit-retry";
   const target = { agentId: "main", sessionKey: key, storePath };
   dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
@@ -449,22 +541,49 @@ test("retains idle chat input custody when its separate transcript commit is ref
     expect(dispatch.start).not.toHaveBeenCalled();
     const entry = expectDefined(loadSessionEntry(target), "idle session");
     expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(entry.restartRecoveryDeliverySourceRunId).toBeUndefined();
     const scope = { ...target, sessionId: entry.sessionId };
-    const pending = await listSessionPendingInputs(scope);
-    expect(pending).toMatchObject({ total: 1, items: [{ state: "interrupted" }] });
-    expect(JSON.stringify(pending.items)).toContain(message);
+    expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
+    expect(await loadTranscriptEvents(scope)).toEqual([
+      expect.objectContaining({ type: "session", id: entry.sessionId }),
+    ]);
+
+    refuse.mockRestore();
+    const retried = await rpcReq<{ status: string }>(ws, "chat.send", {
+      sessionKey: key,
+      message,
+      idempotencyKey: runId,
+    });
+    expect(retried.ok, JSON.stringify(retried)).toBe(true);
+    expect(retried.payload?.status).toBe("started");
+    expect(loadSessionEntry(target)).toMatchObject({
+      sessionId: entry.sessionId,
+      restartRecoveryDeliveryRunId: runId,
+      restartRecoveryDeliverySourceRunId: runId,
+    });
+    expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
     expect(
       (await loadTranscriptEvents(scope)).filter((event) =>
         JSON.stringify(event).includes(message),
       ),
-    ).toHaveLength(0);
+    ).toMatchObject([
+      { message: { role: "user", content: message, idempotencyKey: `${runId}:user` } },
+    ]);
+    expect(dispatch.start).toHaveBeenCalledOnce();
   } finally {
     refuse.mockRestore();
+    const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
+    for (const [turn] of dispatch.start.mock.calls) {
+      turn.replyAdmissionTicket?.release();
+      turn.admission.cleanupAdmittedRun();
+      clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
+    }
+    await released;
     ws.close();
   }
 });
 
-test("dispatches the canonical redacted bytes of a committed initial input", async () => {
+test("dispatches the original bytes of a committed initial input", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
   const key = "agent:main:dashboard:initial-redaction";
@@ -490,9 +609,7 @@ test("dispatches the canonical redacted bytes of a committed initial input", asy
       turn.userTurn.recorder.getPersistedMessage?.(),
       "canonical input",
     );
-    expect(persisted.content).not.toContain("initial-secret");
-    expect(persisted.content).toContain("Check ");
-    expect(persisted.content).toContain(" before execution.");
+    expect(persisted.content).toBe(message);
     expect(turn.turn.ctx).toMatchObject({
       Body: persisted.content,
       BodyForAgent: persisted.content,
@@ -501,7 +618,7 @@ test("dispatches the canonical redacted bytes of a committed initial input", asy
     });
     const history = await rpcReq<{ messages: unknown[] }>(ws, "chat.history", { sessionKey: key });
     expect(history.ok, JSON.stringify(history)).toBe(true);
-    expect(JSON.stringify(history.payload?.messages)).not.toContain("initial-secret");
+    expect(JSON.stringify(history.payload?.messages)).toContain("initial-secret");
     expect(JSON.stringify(history.payload?.messages)).toContain(JSON.stringify(persisted.content));
   } finally {
     const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });

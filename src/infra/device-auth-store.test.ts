@@ -19,10 +19,8 @@ import {
   clearDeviceAuthToken,
   clearOriginDeviceToken,
   loadDeviceAuthToken,
-  loadDeviceAuthTokenReadOnly,
   loadDeviceAuthTokens,
   loadOriginDeviceToken,
-  loadOriginDeviceTokenReadOnly,
   storeDeviceAuthToken,
   storeOriginDeviceToken,
 } from "./device-auth-store.js";
@@ -32,6 +30,7 @@ import { observeDeviceAuthHostSql } from "./device-auth-store.sql.test-support.j
 import { holdDeviceAuthWriterForTest } from "./device-auth-store.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import * as mutationAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const deviceTarget = { deviceId: "device-1", role: "operator" };
 
@@ -48,41 +47,6 @@ afterEach(async () => {
 });
 
 describe("infra/device-auth-store", () => {
-  it("reads existing device auth without opening writable shared state", async () => {
-    await withTempDir("openclaw-device-auth-readonly-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      await storeDeviceAuthToken({
-        ...deviceTarget,
-        token: "local-token",
-        env,
-      });
-      await storeOriginDeviceToken({
-        gatewayScope: "wss://one.example",
-        ...deviceTarget,
-        token: "origin-token",
-        env,
-      });
-      await closeOpenClawStateDatabaseAsync();
-      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-      const bytesBeforeRead = fs.readFileSync(databasePath);
-
-      expect(
-        (await loadDeviceAuthTokenReadOnly({ deviceId: "device-1", role: "operator", env }))?.token,
-      ).toBe("local-token");
-      expect(
-        (
-          await loadOriginDeviceTokenReadOnly({
-            gatewayScope: "wss://one.example",
-            ...deviceTarget,
-            env,
-          })
-        )?.token,
-      ).toBe("origin-token");
-      expect(fs.readFileSync(databasePath)).toEqual(bytesBeforeRead);
-      expect(fs.statSync(`${databasePath}-wal`, { throwIfNoEntry: false })?.size ?? 0).toBe(0);
-    });
-  });
-
   it("upserts and clears only the exact origin, device, and normalized role", async () => {
     await withTempDir("openclaw-device-auth-origin-", async (stateDir) => {
       const env = createEnv(stateDir);
@@ -497,27 +461,23 @@ describe("infra/device-auth-store", () => {
     await withOpenClawTestState({ label: "device-token-native-writer" }, async (state) => {
       const lookup = { deviceId: "synthetic-device", role: "operator", env: state.env };
       await tokens.storeDeviceAuthToken({ ...lookup, token: "synthetic-before" });
-      const originalAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
       let nativeWriteStarted = false;
-      vi.spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          originalAdmission((request, grant) => {
-            admit(request, grant);
-            if (request.stage === "transaction" && !nativeWriteStarted) {
-              nativeWriteStarted = true;
-              runOpenClawStateWriteTransaction(
-                ({ db }) => {
-                  storeDeviceAuthTokenInDatabase(db, {
-                    deviceId: "synthetic-native-device",
-                    role: "operator",
-                    token: "synthetic-native-token",
-                  });
-                },
-                { env: state.env },
-              );
-            }
-          }, attachment),
-      );
+      probe.admission(mutationAdmission, (request, grant, admit) => {
+        admit(request, grant);
+        if (request.stage === "transaction" && !nativeWriteStarted) {
+          nativeWriteStarted = true;
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              storeDeviceAuthTokenInDatabase(db, {
+                deviceId: "synthetic-native-device",
+                role: "operator",
+                token: "synthetic-native-token",
+              });
+            },
+            { env: state.env },
+          );
+        }
+      });
       await expect(
         tokens.storeDeviceAuthToken({
           ...lookup,

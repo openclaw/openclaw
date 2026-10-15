@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
+import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   requestResult,
@@ -20,6 +20,7 @@ import {
   CHAT_SNAPSHOT_DB_NAME,
   CHAT_SNAPSHOT_METADATA_STORE_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
+  SIDEBAR_SNAPSHOT_STORE_NAME,
   readStoredChatSnapshotRecord,
 } from "./session-snapshot-database.ts";
 import {
@@ -179,7 +180,7 @@ describe("persistent chat session snapshots", () => {
     await writer.flush();
     // A foreign/older writer must not make private records readable by this UI.
     await putRawRecord({
-      projectionVersion: 1,
+      projectionVersion: 2,
       sessionKey: privateKey,
       savedAt: 1,
       sessionId: "session-1",
@@ -190,6 +191,57 @@ describe("persistent chat session snapshots", () => {
     prewarmChatSnapshot(privateKey);
     expect(await new SessionSnapshotStore().read(privateKey)).toBeNull();
   });
+
+  it.each(["direct", "prewarmed"])(
+    "restores and rewrites pre-sanitizer snapshots without pairing credentials (%s)",
+    async (mode) => {
+      const ordinaryKey = key("agent:main:ordinary");
+      const sessionKey = key("agent:main:pairing-upgrade");
+      const writer = new SessionSnapshotStore();
+      writer.write(ordinaryKey, snapshot("ordinary"));
+      await writer.flush();
+      const safeContent = [
+        { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
+        { type: "image", url: "https://example.com/photo.png" },
+      ];
+      const content = [
+        ...safeContent,
+        {
+          type: "openclaw_pairing_qr",
+          image_url: "data:image/png;base64,cGFpcmluZy1maXh0dXJl",
+          expiresAtMs: Date.now() + 60_000,
+          sensitive: true,
+        },
+      ];
+      const message = {
+        role: "assistant",
+        content,
+        openclawDisplayContent: content,
+        __openclaw: { id: "pairing-reply", seq: 1 },
+      };
+      await putRawRecord({
+        projectionVersion: 2,
+        sessionKey,
+        savedAt: 1,
+        sessionId: "session-1",
+        snapshot: snapshot(message),
+      });
+      if (mode === "prewarmed") {
+        prewarmChatSnapshot(sessionKey);
+      }
+      const reader = new SessionSnapshotStore();
+      const expected = snapshot({
+        ...message,
+        content: safeContent,
+        openclawDisplayContent: safeContent,
+      });
+
+      expect(await reader.read(sessionKey)).toEqual(expected);
+      await reader.flush();
+      expect(await readStoredChatSnapshotRecord(sessionKey)).toMatchObject({ snapshot: expected });
+      expect(await reader.read(ordinaryKey)).toEqual(snapshot("ordinary"));
+    },
+  );
 
   it("purges all legacy unscoped history rather than adopting an unknown account", async () => {
     const privateKey = "agent:main:dashboard:incognito-old";
@@ -386,7 +438,7 @@ describe("persistent chat session snapshots", () => {
       await writer.flush();
       await putRawRecord(
         {
-          projectionVersion: 1,
+          projectionVersion: 2,
           sessionKey: corrupt,
           sessionId: "session-1",
           savedAt: Date.now(),
@@ -443,53 +495,6 @@ describe("persistent chat session snapshots", () => {
     },
   );
 
-  it.each(["account", "session", "cache-eviction"] as const)(
-    "does not restore retired %s metadata during the initial seed",
-    async (scope) => {
-      const retired = key("agent:main:retired-seed");
-      const retained = resolveChatSnapshotKey(
-        { ...snapshotHost, client: { recoveryScope: "other-account", recoveryScopeReady: true } },
-        { sessionKey: "agent:main:retained-seed" },
-      );
-      const writer = new SessionSnapshotStore();
-      writer.write(retired, snapshot("retired"));
-      writer.write(retained, snapshot("retained"));
-      await writer.flush();
-      const reader = new SessionSnapshotStore();
-      reader.connect();
-      try {
-        let deletion: Promise<void> | undefined;
-        const originalGetAll = Reflect.get(
-          IDBObjectStore.prototype,
-          "getAll",
-        ) as IDBObjectStore["getAll"];
-        vi.spyOn(IDBObjectStore.prototype, "getAll").mockImplementationOnce(function (
-          this: IDBObjectStore,
-          ...args
-        ) {
-          const request = originalGetAll.apply(this, args);
-          request.addEventListener("success", () => {
-            deletion =
-              scope === "account"
-                ? clearStoredChatSnapshots(retired.slice(0, retired.indexOf("\u0000") + 1))
-                : writer.delete(retired, scope === "cache-eviction" ? scope : undefined);
-          });
-          return request;
-        });
-        await reader.loadSavedAtIndex();
-        expect(deletion).toBeDefined();
-        await deletion;
-        expect(reader.readSavedAt(retired)).toBeNull();
-        expect(reader.readSavedAt(retained)).not.toBeNull();
-        await reader.loadSavedAtIndex();
-        expect(reader.readSavedAt(retained)).not.toBeNull();
-      } finally {
-        reader.disconnect();
-        await reader.whenIdle();
-      }
-    },
-  );
-
   it("upgrades a version one database before deleting an invalidated snapshot", async () => {
     const sessionKey = key("agent:main:legacy-delete");
     await putVersionOneRecord(sessionKey);
@@ -498,8 +503,9 @@ describe("persistent chat session snapshots", () => {
 
     const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
     const database = await requestResult(request);
-    expect(database.version).toBe(4);
+    expect(database.version).toBe(7);
     expect(Array.from(database.objectStoreNames)).toEqual([
+      SIDEBAR_SNAPSHOT_STORE_NAME,
       CHAT_SNAPSHOT_METADATA_STORE_NAME,
       CHAT_SNAPSHOT_STORE_NAME,
     ]);

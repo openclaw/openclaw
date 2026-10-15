@@ -1,4 +1,5 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { normalizeSessionKeyForComparison } from "@openclaw/normalization-core/session-key-comparison";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -81,8 +82,15 @@ export function isPinnableUiSessionRow(row: {
   key: string;
   parentSessionKey?: string | null;
   spawnedBy?: string | null;
+  sidebarRoot?: boolean;
 }): boolean {
-  if (isSubagentSessionKey(row.key) || normalizeOptionalString(row.spawnedBy)) {
+  if (isSubagentSessionKey(row.key)) {
+    return false;
+  }
+  if (row.sidebarRoot) {
+    return true;
+  }
+  if (normalizeOptionalString(row.spawnedBy)) {
     return false;
   }
   const parentSessionKey = normalizeOptionalString(row.parentSessionKey);
@@ -104,61 +112,12 @@ export function normalizeSessionKeyForUiComparison(sessionKey: string | undefine
   if (cached !== undefined) {
     return cached;
   }
-  const normalized = normalizeComparisonKey(sessionKey);
+  const normalized = normalizeSessionKeyForComparison(sessionKey);
   if (comparisonKeys.size >= COMPARISON_KEY_CACHE_LIMIT) {
     comparisonKeys.clear();
   }
   comparisonKeys.set(sessionKey, normalized);
   return normalized;
-}
-
-function normalizeComparisonKey(sessionKey: string): string {
-  const raw = normalizeOptionalString(sessionKey);
-  if (!raw) {
-    return "";
-  }
-  // Only opaque channel IDs need structural parsing to preserve tail casing.
-  if (!/(?:^|:)(?:catalog|matrix|signal)(?=:|$)/i.test(raw)) {
-    return raw.toLowerCase();
-  }
-  const parts = raw.split(":");
-  let bodyStart = 0;
-  while (parts.length - bodyStart >= 3 && parts[bodyStart]?.toLowerCase() === "agent") {
-    parts[bodyStart] = "agent";
-    parts[bodyStart + 1] = parts[bodyStart + 1]?.toLowerCase() ?? "";
-    bodyStart += 2;
-  }
-  while (bodyStart < parts.length && !parts[bodyStart]?.trim()) {
-    bodyStart += 1;
-  }
-  const channel = parts[bodyStart]?.toLowerCase();
-  // Catalog source identifiers are opaque; only the agent prefix is normalized.
-  if (channel === "catalog") {
-    return parts.join(":");
-  }
-  const peerKind = parts[bodyStart + 1]?.toLowerCase();
-  const preservesMatrixTail =
-    channel === "matrix" && (peerKind === "channel" || peerKind === "group");
-  const preservesSignalGroup = channel === "signal" && peerKind === "group";
-  if (!preservesMatrixTail && !preservesSignalGroup) {
-    return raw.toLowerCase();
-  }
-  parts[bodyStart] = channel;
-  parts[bodyStart + 1] = peerKind;
-  if (preservesMatrixTail) {
-    for (let index = parts.length - 2; index >= bodyStart + 2; index -= 1) {
-      if (parts[index]?.toLowerCase() === "thread") {
-        parts[index] = "thread";
-        break;
-      }
-    }
-  } else {
-    parts[bodyStart + 2] = parts[bodyStart + 2]?.trim() ?? "";
-    for (let index = bodyStart + 3; index < parts.length; index += 1) {
-      parts[index] = parts[index]?.toLowerCase() ?? "";
-    }
-  }
-  return parts.join(":");
 }
 
 export function readSessionDefaults(
@@ -437,6 +396,16 @@ export function canDeleteSessionRows(
     rows.every(
       (row) => row.hasActiveRun !== true && !isProtectedSessionLifecycleKey(row, configuredMainKey),
     )
+  );
+}
+
+/** Native catalog adoptions retain their provider transcript outside OpenClaw's delete lifecycle. */
+export function isNativeCatalogAdoptionSessionKey(key: string): boolean {
+  const rest = parseAgentSessionKey(key)?.rest ?? key;
+  return (
+    rest.startsWith("plugin:anthropic:catalog-adopt:claude:") ||
+    rest.startsWith("harness:codex:supervision:") ||
+    rest.startsWith("harness:codex:node-session:")
   );
 }
 

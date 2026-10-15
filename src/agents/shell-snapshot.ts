@@ -9,6 +9,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import { spawnProcess } from "../process/spawn-utils.js";
 
 const SNAPSHOT_VERSION = 1;
@@ -19,7 +20,6 @@ const SNAPSHOT_CACHE_MAX_ENTRIES = 128;
 const CAPTURE_MARKER = "__OPENCLAW_SHELL_SNAPSHOT_CAPTURE__";
 const ENV_MARKER = "__OPENCLAW_SHELL_SNAPSHOT_ENV__";
 const EXEC_SHELL_SNAPSHOT_ENV = "OPENCLAW_EXEC_SHELL_SNAPSHOT";
-const VALID_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SNAPSHOT_SHELLS = new Set(["bash", "zsh"]);
 const SNAPSHOT_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 const SAFE_ENV_NAMES = new Set([
@@ -200,11 +200,8 @@ async function createShellSnapshot(
   void cleanupPromise;
 
   const snapshotPath = path.join(snapshotDir, `${key}.sh`);
-  if (
-    !forceRefresh &&
-    (await isFreshSnapshot(snapshotPath)) &&
-    (await validateSnapshot(opts, snapshotPath))
-  ) {
+  // Only validated captures are atomically published at this path.
+  if (!forceRefresh && (await isFreshSnapshot(snapshotPath))) {
     return snapshotPath;
   }
 
@@ -238,11 +235,6 @@ async function validateSnapshot(
   opts: ShellSnapshotWrapOptions,
   snapshotPath: string,
 ): Promise<boolean> {
-  try {
-    await fs.access(snapshotPath);
-  } catch {
-    return false;
-  }
   const exitCode = await runShell({
     shell: opts.shell,
     shellArgs: opts.shellArgs,
@@ -367,7 +359,6 @@ function parseSafeEnvExports(envJson: string): string {
   return Object.entries(parsed)
     .filter(
       (entry): entry is [string, string] =>
-        VALID_ENV_NAME.test(entry[0]) &&
         SAFE_ENV_NAMES.has(entry[0]) &&
         !SECRET_ENV_PATTERN.test(entry[0]) &&
         typeof entry[1] === "string",
@@ -416,13 +407,15 @@ async function runShell(opts: {
   timeoutMs: number;
 }): Promise<number | null> {
   return await new Promise((resolve) => {
-    const child = spawnProcess(opts.shell, [...opts.shellArgs, opts.command], {
-      cwd: opts.cwd,
-      detached: process.platform !== "win32",
-      env: opts.env,
-      stdio: "ignore",
-      windowsHide: true,
-    });
+    const child = withChildProcessOperation("shell.snapshot", () =>
+      spawnProcess(opts.shell, [...opts.shellArgs, opts.command], {
+        cwd: opts.cwd,
+        detached: process.platform !== "win32",
+        env: opts.env,
+        stdio: "ignore",
+        windowsHide: true,
+      }),
+    );
     let settled = false;
     const finish = (status: number | null) => {
       if (settled) {
@@ -455,9 +448,7 @@ async function runShell(opts: {
     child.on("exit", (status) => {
       setTimeout(() => finish(status), 250);
     });
-    child.on("close", (status) => {
-      finish(status);
-    });
+    child.on("close", finish);
   });
 }
 

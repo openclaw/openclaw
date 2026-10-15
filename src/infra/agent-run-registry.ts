@@ -109,6 +109,7 @@ function storeRunContext(runId: string, context: AgentRunContext, predecessor?: 
   context.capacityWaits = undefined;
   context.executionActivity = undefined;
   context.eventState = { seq: 0 };
+  context.modelCallSequence = { value: 0 };
   context.registeredAt ??= Date.now();
   getAgentRunRegistryState().contexts.set(runId, context);
   recordAgentEventRouting(runId, context, predecessor);
@@ -231,8 +232,7 @@ export function claimAgentRunContext(
         currentOwners.preserveAfterRelease = false;
       }
       if (options.onClearRequested) {
-        currentOwners.clearListeners ??= new Map();
-        currentOwners.clearListeners.set(claimId, options.onClearRequested);
+        (currentOwners.clearListeners ??= new Map()).set(claimId, options.onClearRequested);
       }
     } else {
       state.owners.set(runId, {
@@ -288,7 +288,7 @@ export function retainQueuedAgentRunContext(
     return undefined;
   }
 
-  const wasLive = hasLiveAgentRunContext(runId);
+  const wasLive = hasAgentRunContextExecutionOwner(runId);
   const leases = (state.queuedRunContextLeases ??= new WeakMap<AgentRunContext, number>());
   leases.set(context, (leases.get(context) ?? 0) + 1);
   if (!wasLive) {
@@ -317,7 +317,7 @@ export function retainQueuedAgentRunContext(
       if (outcome === "admitted") {
         context.lastActiveAt = Date.now();
       }
-      if (!hasLiveAgentRunContext(runId)) {
+      if (!hasAgentRunContextExecutionOwner(runId)) {
         bumpAgentRunIndexVersion(context);
       }
     }

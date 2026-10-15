@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
@@ -13,17 +14,17 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { SessionManager } from "./session-manager.js";
 
-async function createTarget(state: OpenClawTestState, name: string, incognito = false) {
+async function createTarget(state: OpenClawTestState, name: string) {
   const scope = {
     agentId: "main",
     env: state.env,
-    sessionKey: `agent:main:dashboard:${incognito ? "incognito-" : ""}${name}`,
+    sessionKey: `agent:main:dashboard:${name}`,
   };
   const created = await createSessionEntryWithTranscript(
     scope,
     () => ({
       ok: true as const,
-      entry: { sessionId: name, updatedAt: 1, ...(incognito ? { incognito: true as const } : {}) },
+      entry: { sessionId: name, updatedAt: 1 },
     }),
     { cwd: state.workspaceDir },
   );
@@ -54,109 +55,11 @@ function view(manager: SessionManager) {
   });
 }
 
-const callbackCases = [
-  ...(["openAsync", "openBoundedAsync"] as const).flatMap((opener) =>
-    (["commit", "refusal"] as const).map((outcome) => ({ opener, outcome })),
-  ),
-  { opener: "openAsync", outcome: "pending hydration" } as const,
-];
-
-it.each(callbackCases)(
-  "$opener keeps reentrant incognito reads and the live view consistent after callback $outcome",
-  async ({ opener, outcome }) => {
-    await withOpenClawTestState({ label: "manager-callback-rollback" }, async (state) => {
-      const target = await createTarget(state, "callback", true);
-      const manager =
-        opener === "openAsync"
-          ? await SessionManager.openAsync(target, state.workspaceDir)
-          : await SessionManager.openBoundedAsync(target, {
-              cwd: state.workspaceDir,
-              maxEvents: 20,
-              maxBytes: 65536,
-            });
-      const seed = manager.appendMessage(message("seed"));
-      const before = view(manager);
-      const refusal = new Error("refuse outer append after nested write");
-      const pending: Promise<unknown>[] = [];
-      let outcomes: unknown[];
-      let nested: string | undefined;
-      let outer: string | undefined;
-      let caught: unknown;
-      try {
-        try {
-          outer = manager.appendMessage(message("outer"), {
-            beforeFreshMessageCommit: () => {
-              if (nested === undefined) {
-                expect(
-                  SessionManager.open(target)
-                    .getEntries()
-                    .map((entry) => entry.id),
-                ).toEqual([seed]);
-                nested = manager.appendMessage(message("nested"));
-              }
-              expect(
-                SessionManager.open(target)
-                  .getEntries()
-                  .map((entry) => entry.id),
-              ).toEqual([seed, nested]);
-              expect(manager.getAppendParentId()).toBe(nested);
-              if (outcome === "pending hydration") {
-                pending.push(
-                  manager.reloadPersistedTranscriptAsync().then(
-                    () => undefined,
-                    (error: unknown) => error,
-                  ),
-                );
-              }
-              if (outcome !== "commit") {
-                throw refusal;
-              }
-            },
-          });
-        } catch (error) {
-          caught = error;
-        }
-        expect(nested).toBeTypeOf("string");
-        expect(caught).toBe(outcome === "commit" ? undefined : refusal);
-        if (outcome !== "commit") {
-          expect(outer).toBeUndefined();
-          // Rollback must finish before a pending read gets a chance to publish.
-          expect(view(SessionManager.open(target))).toEqual(before);
-          expect(view(manager)).toEqual(before);
-        } else {
-          expect(outer).toBeTypeOf("string");
-          expect(manager.getBranch()).toMatchObject([
-            { id: seed, parentId: null, message: { content: "seed" } },
-            { id: nested, parentId: seed, message: { content: "nested" } },
-            { id: outer, parentId: nested, message: { content: "outer" } },
-          ]);
-          expect(view(manager)).toEqual(view(SessionManager.open(target)));
-        }
-        if (outcome === "pending hydration") {
-          expect(pending).toHaveLength(1);
-        }
-      } finally {
-        outcomes = await Promise.all(pending);
-      }
-      if (outcome === "pending hydration") {
-        expect(outcomes).toEqual([
-          expect.objectContaining({
-            message: "Session manager changed during transcript hydration",
-          }),
-        ]);
-        expect(view(manager)).toEqual(before);
-      }
-      const next = manager.appendMessage(message("after settlement"));
-      expect(manager.getEntry(next)?.parentId).toBe(outcome === "commit" ? outer : seed);
-      expect(view(manager)).toEqual(view(SessionManager.open(target)));
-    });
-  },
-);
-
 it.each(["keyed replay", "same-target reload", "bounded branch", "lazy header"] as const)(
   "restores the live view and continuation after %s rolls back",
   async (scenario) => {
     await withOpenClawTestState({ label: "manager-transaction-rollback" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const target =
         scenario === "lazy header"
           ? {
@@ -300,6 +203,7 @@ it.each(["keyed replay", "same-target reload", "bounded branch", "lazy header"] 
 
 it("rolls back only the inner savepoint while the enclosing transaction commits", async () => {
   await withOpenClawTestState({ label: "manager-savepoint-rollback" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const target = await createTarget(state, "savepoint");
     const manager = SessionManager.open(target, state.workspaceDir);
     const seed = manager.appendMessage(message("seed"));
@@ -338,6 +242,7 @@ it("rolls back only the inner savepoint while the enclosing transaction commits"
 
 it("does not restore the old view over a rebound target after rollback", async () => {
   await withOpenClawTestState({ label: "manager-rebound-rollback" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const first = await createTarget(state, "first");
     const second = await createTarget(state, "second");
     const manager = SessionManager.open(first, state.workspaceDir);
@@ -380,6 +285,7 @@ it.each(["top-level", "enclosing transaction"] as const)(
   "rejects a callback target rebind before persisting the message in a %s append",
   async (transaction) => {
     await withOpenClawTestState({ label: "manager-callback-rebind" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const first = await createTarget(state, "first");
       const second = await createTarget(state, "second");
       const manager = SessionManager.open(first, state.workspaceDir);

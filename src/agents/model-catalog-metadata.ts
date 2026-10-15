@@ -33,6 +33,8 @@ function clearRouteBoundCatalogMetadata(
 ): ModelCatalogEntry {
   const {
     contextWindow: _contextWindow,
+    contextWindowSource: _contextWindowSource,
+    contextCapacitySource: _contextCapacitySource,
     contextWindows: _contextWindows,
     contextWindowDefault: _contextWindowDefault,
     contextTokens: _contextTokens,
@@ -80,34 +82,27 @@ export function overlayCatalogMetadata(
     contextWindowDefault: _baseContextWindowDefault,
     ...selectionNeutralBase
   } = routeBase;
-  const contextWindowSelection =
-    overlay.contextWindows !== undefined
-      ? {
-          contextWindows: overlay.contextWindows,
-          ...(overlay.contextWindowDefault !== undefined
-            ? { contextWindowDefault: overlay.contextWindowDefault }
-            : {}),
-        }
-      : {
-          ...(routeBase.contextWindows !== undefined
-            ? { contextWindows: routeBase.contextWindows }
-            : {}),
-          ...((overlay.contextWindowDefault ?? routeBase.contextWindowDefault)
-            ? {
-                contextWindowDefault:
-                  overlay.contextWindowDefault ?? routeBase.contextWindowDefault,
-              }
-            : {}),
-        };
+  const replacesContextWindows = overlay.contextWindows !== undefined;
+  const contextWindows = replacesContextWindows ? overlay.contextWindows : routeBase.contextWindows;
+  const contextWindowDefault = replacesContextWindows
+    ? overlay.contextWindowDefault
+    : (overlay.contextWindowDefault ?? routeBase.contextWindowDefault) || undefined;
   const applyRoute = !options?.preserveBaseRoute;
   return {
     ...selectionNeutralBase,
-    ...contextWindowSelection,
+    ...(contextWindows !== undefined ? { contextWindows } : {}),
+    ...(contextWindowDefault !== undefined ? { contextWindowDefault } : {}),
     ...(routeChanged ? { name: overlay.name } : {}),
     ...(applyRoute && overlay.api !== undefined ? { api: overlay.api } : {}),
     ...(applyRoute && overlay.baseUrl !== undefined ? { baseUrl: overlay.baseUrl } : {}),
     ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
+    ...(overlay.contextWindow !== undefined
+      ? { contextWindowSource: overlay.contextWindowSource }
+      : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
+    ...(overlay.contextCapacitySource
+      ? { contextCapacitySource: overlay.contextCapacitySource }
+      : {}),
     ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
     ...(overlay.configuredReasoning !== undefined
       ? { configuredReasoning: overlay.configuredReasoning }

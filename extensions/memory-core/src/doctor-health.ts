@@ -5,6 +5,7 @@ import {
   asOptionalObjectRecord,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readDoctorAgentEntries } from "./doctor-agent-config.js";
 import {
   collectVectorProviderFindings,
   type ProviderFailure,
@@ -54,16 +55,11 @@ const registrationsByHost = new WeakMap<
 >();
 
 function resolveSelectedMemoryProvider(config: unknown, agentId: string): string | null {
-  // Doctor still diagnoses raw candidates when an include prevents roster migration.
   const cfg = asOptionalObjectRecord(config);
-  const agents = asOptionalObjectRecord(cfg?.agents);
-  const legacyList =
-    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
-      ? agents.list
-      : [];
+  const { keyed, listed } = readDoctorAgentEntries(config);
   const agent =
-    asOptionalObjectRecord(asOptionalObjectRecord(agents?.entries)?.[agentId]) ??
-    legacyList.map(asOptionalObjectRecord).find((entry) => entry?.id === agentId);
+    asOptionalObjectRecord(keyed?.[agentId]) ??
+    listed.map(asOptionalObjectRecord).find((entry) => entry?.id === agentId);
   const defaults = asOptionalObjectRecord(asOptionalObjectRecord(cfg?.memory)?.search);
   const overrides = asOptionalObjectRecord(asOptionalObjectRecord(agent?.memory)?.search);
   if (!(overrides?.enabled ?? defaults?.enabled ?? true)) {
@@ -113,7 +109,7 @@ function createManagedLocalEmbeddingSetupCheck(
                 reason: MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE,
                 requirement: "memory-embedding-provider-plugin",
                 fixHint:
-                  `Run \`${LLAMA_CPP_PROVIDER_INSTALL_COMMAND}\`, ensure the plugin is enabled, ` +
+                  `Run \`${LLAMA_CPP_PROVIDER_INSTALL_COMMAND}\`, check that the plugin is enabled, ` +
                   "then rerun this check.",
               };
             }

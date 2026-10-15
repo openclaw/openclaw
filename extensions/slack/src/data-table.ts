@@ -135,11 +135,6 @@ function parseSlackDataTable(value: unknown): ParsedSlackDataTable | undefined {
   return { caption, headers, rows };
 }
 
-/** Detect current native table blocks without depending on unreleased Slack SDK types. */
-function hasSlackDataTableBlock(blocks?: readonly unknown[]): boolean {
-  return blocks?.some((block) => asOptionalRecord(block)?.type === "data_table") ?? false;
-}
-
 /** Count display characters in one structurally valid native table. */
 export function countSlackDataTableCellCharacters(value: SlackDataTableBlock): number;
 export function countSlackDataTableCellCharacters(value: unknown): number | undefined;
@@ -166,7 +161,7 @@ export function countSlackDataTableBlocksCellCharacters(
 ): number | undefined {
   let total = 0;
   for (const block of blocks ?? []) {
-    if (!hasSlackDataTableBlock([block])) {
+    if (asOptionalRecord(block)?.type !== "data_table") {
       continue;
     }
     const cellCharacterCount = countSlackDataTableCellCharacters(block);

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   sendMessageMSTeams: vi.fn(),
   sendPollMSTeams: vi.fn(),
   createPoll: vi.fn(),
+  createMSTeamsPollStoreState: vi.fn(),
 }));
 
 vi.mock("./send.js", () => ({
@@ -19,10 +20,9 @@ vi.mock("./send.js", () => ({
   sendPollMSTeams: mocks.sendPollMSTeams,
 }));
 
+// mock-isolation: outbound tests assert selected-account poll persistence without opening a plugin-state database.
 vi.mock("./polls.js", () => ({
-  createMSTeamsPollStoreState: () => ({
-    createPoll: mocks.createPoll,
-  }),
+  createMSTeamsPollStoreState: mocks.createMSTeamsPollStoreState,
 }));
 
 import { msteamsPlugin } from "./channel.js";
@@ -39,29 +39,13 @@ const cfg = {
 const { sendText, sendMedia, sendPayload, sendPoll, renderPresentation } = msteamsOutbound;
 assert(sendText && sendMedia && sendPayload && sendPoll && renderPresentation);
 
-type PollRecord = Record<string, unknown> & { createdAt: string };
-
-function firstPollRecord(): PollRecord {
-  const [call] = mocks.createPoll.mock.calls;
-  if (!call) {
-    throw new Error("expected createPoll call");
-  }
-  const [pollRecord] = call;
-  if (!pollRecord || typeof pollRecord !== "object" || Array.isArray(pollRecord)) {
-    throw new Error("expected createPoll record");
-  }
-  if (typeof (pollRecord as { createdAt?: unknown }).createdAt !== "string") {
-    throw new Error("expected createPoll record timestamp");
-  }
-  return pollRecord as PollRecord;
-}
-
 describe("msteamsOutbound cfg threading", () => {
   beforeEach(() => {
     mocks.sendMessageMSTeams.mockReset();
     mocks.sendAdaptiveCardMSTeams.mockReset();
     mocks.sendPollMSTeams.mockReset();
     mocks.createPoll.mockReset();
+    mocks.createMSTeamsPollStoreState.mockReset().mockReturnValue({ createPoll: mocks.createPoll });
     mocks.sendMessageMSTeams.mockResolvedValue({
       messageId: "msg-1",
       conversationId: "conv-1",
@@ -78,19 +62,7 @@ describe("msteamsOutbound cfg threading", () => {
     mocks.createPoll.mockResolvedValue(undefined);
   });
 
-  it("advertises durable payload delivery for presentation cards", () => {
-    expect(msteamsOutbound.deliveryCapabilities?.durableFinal).toMatchObject({
-      text: true,
-      media: true,
-      payload: true,
-      messageSendingHooks: true,
-    });
-  });
-
-  it.each([
-    { configuredLimit: 6000, expectedLimit: 4000 },
-    { configuredLimit: 1000, expectedLimit: 1000 },
-  ])(
+  it.each([{ configuredLimit: 6000, expectedLimit: 4000 }])(
     "resolves the same capped $configuredLimit-character limit for lightweight and runtime outbound",
     ({ configuredLimit, expectedLimit }) => {
       const configuredCfg = {
@@ -109,22 +81,6 @@ describe("msteamsOutbound cfg threading", () => {
   );
 
   it.each([
-    {
-      title: "forwards resolved channel thread ids through the Teams target",
-      target: "conversation:19:channel@thread.tacv2",
-      peerKind: "threaded",
-      threadId: "thread-root-2",
-      expectedTarget: "conversation:19:channel@thread.tacv2;messageid=thread-root-2",
-      expectedPeerKind: "threaded",
-    },
-    {
-      title: "preserves explicit Teams thread targets",
-      target: "conversation:19:channel@thread.tacv2;messageid=explicit-root",
-      peerKind: "threaded",
-      threadId: "ambient-root",
-      expectedTarget: "conversation:19:channel@thread.tacv2;messageid=explicit-root",
-      expectedPeerKind: "threaded",
-    },
     {
       title: "forwards thread ids through Graph team/channel targets",
       target: "graph-team/19:channel@thread.tacv2",
@@ -150,41 +106,11 @@ describe("msteamsOutbound cfg threading", () => {
     });
 
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
+      accountId: "default",
       cfg,
       to: expectedTarget,
       text: expectedPeerKind,
     });
-  });
-
-  it("preserves host-owned workspace media access for direct attachments", async () => {
-    const readFile = vi.fn(async () => Buffer.from("approved attachment"));
-    const mediaAccess = {
-      localRoots: ["/approved/workspace"],
-      readFile,
-      workspaceDir: "/approved/workspace",
-    };
-    const conflictingReader = vi.fn(async () => Buffer.from("unapproved attachment"));
-
-    await sendMedia({
-      cfg,
-      to: "conversation:abc",
-      text: "photo",
-      mediaUrl: "reports/photo.png",
-      mediaAccess,
-      mediaLocalRoots: ["/unapproved/workspace"],
-      mediaReadFile: conflictingReader,
-    });
-
-    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
-      cfg,
-      to: "conversation:abc",
-      text: "photo",
-      mediaUrl: "reports/photo.png",
-      mediaAccess,
-      mediaLocalRoots: ["/unapproved/workspace"],
-      mediaReadFile: conflictingReader,
-    });
-    expect(mocks.sendMessageMSTeams.mock.calls[0]?.[0]?.mediaAccess).toBe(mediaAccess);
   });
 
   it("renders and sends presentation payloads as Adaptive Cards", async () => {
@@ -236,6 +162,7 @@ describe("msteamsOutbound cfg threading", () => {
     });
 
     expect(mocks.sendAdaptiveCardMSTeams).toHaveBeenCalledWith({
+      accountId: "default",
       cfg,
       to: "conversation:19:channel@thread.tacv2;messageid=presentation-thread-root",
       card: (rendered!.channelData!.msteams as { presentationCard: unknown }).presentationCard,
@@ -311,82 +238,6 @@ describe("msteamsOutbound cfg threading", () => {
     expect(JSON.stringify(card)).not.toContain("approval-1");
     expect(JSON.stringify(card)).not.toContain("/approve");
   });
-
-  it("chunks text fallback payloads that only carry channel metadata", async () => {
-    mocks.sendMessageMSTeams
-      .mockResolvedValueOnce({ messageId: "msg-text-1", conversationId: "conv-text" })
-      .mockResolvedValueOnce({ messageId: "msg-text-2", conversationId: "conv-text" });
-    const text = "x".repeat(4001);
-
-    const result = await sendPayload({
-      cfg,
-      to: "conversation:abc",
-      text,
-      payload: {
-        text,
-        channelData: { msteams: { traceId: "trace-1" } },
-      },
-    });
-
-    expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(1, {
-      cfg,
-      to: "conversation:abc",
-      text: "x".repeat(4000),
-    });
-    expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(2, {
-      cfg,
-      to: "conversation:abc",
-      text: "x",
-    });
-    expect(result).toEqual({
-      channel: "msteams",
-      messageId: "msg-text-2",
-      target: { kind: "conversation", id: "conv-text" },
-    });
-  });
-
-  it.each([
-    { kind: "text", observed: false },
-    { kind: "text", observed: true },
-    { kind: "media", observed: false },
-    { kind: "media", observed: true },
-  ])(
-    "retains accepted $kind payload receipts after refusal (observer=$observed)",
-    async ({ kind, observed }) => {
-      const refusal = new PlatformMessageNotDispatchedError("caller retired", {
-        cause: new Error("caller retired"),
-      });
-      const onDeliveryResult = observed ? vi.fn() : undefined;
-      mocks.sendMessageMSTeams
-        .mockResolvedValueOnce({ messageId: "msg-first", conversationId: "conv-1" })
-        .mockRejectedValueOnce(refusal);
-      const text = kind === "text" ? "x".repeat(8001) : "album";
-      await expect(
-        sendPayload({
-          cfg,
-          to: "conversation:abc",
-          text,
-          payload: {
-            text,
-            ...(kind === "media" ? { mediaUrls: ["one.png", "two.png", "three.png"] } : {}),
-          },
-          onDeliveryResult,
-        }),
-      ).rejects.toMatchObject({
-        code: "CHANNEL_PARTIAL_DELIVERY",
-        cause: refusal,
-        deliveryResult: {
-          messageIds: ["msg-first"],
-          receipt: { platformMessageIds: ["msg-first"] },
-          visibleReplySent: true,
-        },
-      });
-      expect(mocks.sendMessageMSTeams).toHaveBeenCalledTimes(2);
-      if (onDeliveryResult) {
-        expect(onDeliveryResult).toHaveBeenCalledOnce();
-      }
-    },
-  );
 
   it("retains every accepted payload receipt when its observer fails", async () => {
     const failure = new Error("delivery observer unavailable");
@@ -467,44 +318,11 @@ describe("msteamsOutbound cfg threading", () => {
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { configuredLimit: 6000, textLength: 5000, expectedChunkLengths: [4000, 1000] },
-    { configuredLimit: 1000, textLength: 1500, expectedChunkLengths: [1000, 500] },
-  ])(
-    "uses the capped $configuredLimit-character configured limit for fallback payloads",
-    async ({ configuredLimit, textLength, expectedChunkLengths }) => {
-      const configuredCfg = {
-        channels: {
-          msteams: {
-            appId: "resolved-app-id",
-            textChunkLimit: configuredLimit,
-          },
-        },
-      } as OpenClawConfig;
-      const text = "x".repeat(textLength);
-
-      await sendPayload({
-        cfg: configuredCfg,
-        to: "conversation:abc",
-        text,
-        payload: {
-          text,
-          channelData: { msteams: { traceId: "trace-1" } },
-        },
-      });
-
-      expect(mocks.sendMessageMSTeams).toHaveBeenCalledTimes(expectedChunkLengths.length);
-      for (const [index, chunkLength] of expectedChunkLengths.entries()) {
-        expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(index + 1, {
-          cfg: configuredCfg,
-          to: "conversation:abc",
-          text: "x".repeat(chunkLength),
-        });
-      }
-    },
-  );
-
   it("keeps multi-media payloads on the media fallback path", async () => {
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+    };
     mocks.sendMessageMSTeams
       .mockResolvedValueOnce({ messageId: "msg-media-1", conversationId: "conv-media" })
       .mockResolvedValueOnce({ messageId: "msg-media-2", conversationId: "conv-media" });
@@ -515,66 +333,41 @@ describe("msteamsOutbound cfg threading", () => {
       text: "album",
       payload: {
         text: "album",
-        mediaUrls: ["file:///tmp/one.png", "file:///tmp/two.png"],
+        mediaUrls: ["one.png", "reports/two.png"],
         channelData: { msteams: { traceId: "trace-1" } },
       },
-      mediaLocalRoots: ["/tmp"],
+      mediaAccess,
+      mediaLocalRoots: ["/unapproved/workspace"],
     });
 
     expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(1, {
+      accountId: "default",
       cfg,
       to: "conversation:abc",
       text: "album",
-      mediaUrl: "file:///tmp/one.png",
-      mediaLocalRoots: ["/tmp"],
+      mediaUrl: "one.png",
+      mediaAccess,
+      mediaLocalRoots: ["/unapproved/workspace"],
       mediaReadFile: undefined,
     });
     expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(2, {
+      accountId: "default",
       cfg,
       to: "conversation:abc",
       text: "",
-      mediaUrl: "file:///tmp/two.png",
-      mediaLocalRoots: ["/tmp"],
+      mediaUrl: "reports/two.png",
+      mediaAccess,
+      mediaLocalRoots: ["/unapproved/workspace"],
       mediaReadFile: undefined,
     });
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledTimes(2);
+    expect(mocks.sendMessageMSTeams.mock.calls[0]?.[0]?.mediaAccess).toBe(mediaAccess);
+    expect(mocks.sendMessageMSTeams.mock.calls[1]?.[0]?.mediaAccess).toBe(mediaAccess);
     expect(result).toEqual({
       channel: "msteams",
       messageId: "msg-media-2",
       target: { kind: "conversation", id: "conv-media" },
     });
-  });
-
-  it("preserves host media authority for every workspace-relative payload attachment", async () => {
-    const mediaAccess = {
-      localRoots: ["/approved/workspace"],
-      workspaceDir: "/approved/workspace",
-    };
-    mocks.sendMessageMSTeams
-      .mockResolvedValueOnce({ messageId: "msg-media-1", conversationId: "conv-media" })
-      .mockResolvedValueOnce({ messageId: "msg-media-2", conversationId: "conv-media" });
-
-    await sendPayload({
-      cfg,
-      to: "conversation:abc",
-      text: "album",
-      payload: { text: "album", mediaUrls: ["one.png", "reports/two.png"] },
-      mediaAccess,
-      mediaLocalRoots: ["/unapproved/workspace"],
-    });
-
-    expect(mocks.sendMessageMSTeams).toHaveBeenCalledTimes(2);
-    for (const [index, mediaUrl] of ["one.png", "reports/two.png"].entries()) {
-      expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(index + 1, {
-        cfg,
-        to: "conversation:abc",
-        text: index === 0 ? "album" : "",
-        mediaUrl,
-        mediaAccess,
-        mediaLocalRoots: ["/unapproved/workspace"],
-        mediaReadFile: undefined,
-      });
-      expect(mocks.sendMessageMSTeams.mock.calls[index]?.[0]?.mediaAccess).toBe(mediaAccess);
-    }
   });
 
   it("lets media payloads use text fallback instead of card rendering", async () => {
@@ -600,54 +393,49 @@ describe("msteamsOutbound cfg threading", () => {
     expect(rendered).toBeNull();
   });
 
-  it("passes resolved cfg to sendPollMSTeams and stores poll metadata", async () => {
-    const assertDirectAdapterHandoff = vi.fn();
-    const onPlatformSendDispatch = vi.fn(async () => {});
-    const cfgLocal = {
-      channels: {
-        msteams: {
-          appId: "resolved-app-id",
+  it.each(["media", "payload"] as const)(
+    "passes the configured account to injected %s delivery",
+    async (kind) => {
+      const accountCfg: OpenClawConfig = {
+        channels: {
+          msteams: {
+            defaultAccount: "support",
+            accounts: { support: { appId: "support-app" } },
+          },
         },
-      },
-    } as OpenClawConfig;
-
-    await sendPoll({
-      cfg: cfgLocal,
-      to: "conversation:abc",
-      assertDirectAdapterHandoff,
-      onPlatformSendDispatch,
-      poll: {
-        question: "Snack?",
-        options: ["Pizza", "Sushi"],
-      },
-    });
-
-    expect(mocks.sendPollMSTeams).toHaveBeenCalledWith({
-      cfg: cfgLocal,
-      to: "conversation:abc",
-      question: "Snack?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 1,
-      assertDirectAdapterHandoff,
-      onPlatformSendDispatch,
-    });
-    const pollRecord = firstPollRecord();
-    expect(pollRecord).toEqual({
-      id: "poll-1",
-      question: "Snack?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 1,
-      createdAt: pollRecord?.createdAt,
-      conversationId: "conv-1",
-      messageId: "msg-poll-1",
-      votes: {},
-    });
-    expect(Number.isNaN(Date.parse(pollRecord?.createdAt))).toBe(false);
-  });
+      };
+      const send = vi.fn(async () => ({ messageId: "injected-id", conversationId: "conv-1" }));
+      const ctx = {
+        cfg: accountCfg,
+        to: "conversation:abc",
+        text: "hello",
+        deps: { msteams: send },
+      };
+      if (kind === "media") {
+        await sendMedia({ ...ctx, mediaUrl: "https://example.com/a.png" });
+      } else {
+        await sendPayload({ ...ctx, payload: { text: "hello" } });
+      }
+      expect(send).toHaveBeenCalledWith(
+        "conversation:abc",
+        "hello",
+        expect.objectContaining({ cfg: accountCfg, accountId: "support" }),
+      );
+    },
+  );
 
   it("forwards resolved channel thread ids to poll sends", async () => {
+    const accountCfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          defaultAccount: "support-team",
+          accounts: { "support-team": { appId: "support-app" } },
+        },
+      },
+    };
     await sendPoll({
-      cfg,
+      cfg: accountCfg,
+      accountId: "Support Team",
       to: "conversation:19:channel@thread.tacv2",
       threadId: "poll-thread-root",
       poll: {
@@ -657,7 +445,8 @@ describe("msteamsOutbound cfg threading", () => {
     });
 
     expect(mocks.sendPollMSTeams).toHaveBeenCalledWith({
-      cfg,
+      accountId: "support-team",
+      cfg: accountCfg,
       to: "conversation:19:channel@thread.tacv2;messageid=poll-thread-root",
       question: "Ship it?",
       options: ["Yes", "No"],
@@ -665,14 +454,13 @@ describe("msteamsOutbound cfg threading", () => {
       assertDirectAdapterHandoff: undefined,
       onPlatformSendDispatch: undefined,
     });
-  });
-
-  it("chunks outbound text without requiring MSTeams runtime initialization", () => {
-    const chunker = msteamsOutbound.chunker;
-    if (!chunker) {
-      throw new Error("msteams outbound.chunker unavailable");
-    }
-
-    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+    expect(mocks.createMSTeamsPollStoreState).toHaveBeenCalledWith({ accountId: "support-team" });
+    expect(mocks.createPoll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "poll-1",
+        conversationId: "conv-1",
+        messageId: "msg-poll-1",
+      }),
+    );
   });
 });

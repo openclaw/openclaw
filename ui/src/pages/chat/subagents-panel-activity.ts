@@ -182,12 +182,13 @@ export function readSubagentActivitySnapshot(history: ChatHistoryResult): Subage
   };
 }
 
-export function subagentToolCallCount(snapshot: SubagentActivitySnapshot): number | undefined {
-  return snapshot.complete
-    ? summarizeAgentActivity(
-        Array.from(snapshot.calls, ([identity, item]) =>
-          Object.assign({}, item, { toolCallId: identity }),
-        ),
-      ).total
-    : undefined;
+export function subagentToolCallCount(
+  snapshot: SubagentActivitySnapshot,
+): { count: number; exact: boolean } | undefined {
+  const count = summarizeAgentActivity(
+    Array.from(snapshot.calls, ([identity, item]) =>
+      Object.assign({}, item, { toolCallId: identity }),
+    ),
+  ).total;
+  return snapshot.complete || count > 0 ? { count, exact: snapshot.complete } : undefined;
 }

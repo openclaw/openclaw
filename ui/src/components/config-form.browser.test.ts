@@ -1,20 +1,19 @@
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
-import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
 import {
-  analyzeConfigSchema,
-  renderConfigForm as renderConfigFormBase,
-  type JsonSchema,
-} from "./config-form.ts";
+  renderAnalyzedFormFixture,
+  renderConfigFormFixture,
+} from "../test-helpers/config-form-fixtures.tsx";
+import type { ConfigFormProps, JsonSchema } from "./config-form.shared.ts";
+import { analyzeConfigSchema } from "./config-form.ts";
 
 function renderConfigForm(
-  props: Omit<Parameters<typeof renderConfigFormBase>[0], "onShowAdvanced"> & {
+  props: Omit<ConfigFormProps, "onShowAdvanced"> & {
     onShowAdvanced?: () => void;
   },
 ) {
-  return renderConfigFormBase({ showAdvanced: true, onShowAdvanced: () => {}, ...props });
+  return { showAdvanced: true, onShowAdvanced: () => {}, ...props };
 }
 
 function object(properties: Record<string, JsonSchema>): JsonSchema {
@@ -44,9 +43,11 @@ const rootSchema = object({
 });
 const rootAnalysis = analyzeConfigSchema(rootSchema);
 let container: HTMLDivElement;
-let onPatch: ReturnType<typeof vi.fn<Parameters<typeof renderConfigFormBase>[0]["onPatch"]>>;
+let onPatch: ReturnType<typeof vi.fn<ConfigFormProps["onPatch"]>>;
 beforeEach(() => {
   container = document.createElement("div");
+  document.body.append(container);
+  onTestFinished(() => container.remove());
   onPatch = vi.fn();
 });
 
@@ -59,12 +60,10 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 function selectSegmented(control: HTMLElement) {
-  const group = expectElement(
-    control.closest<HTMLElement & { value: string }>("wa-radio-group"),
-    "segmented radio group",
-  );
-  group.value = control.getAttribute("value") ?? "";
-  group.dispatchEvent(new Event("change", { bubbles: true }));
+  expectElement(
+    control.querySelector<HTMLInputElement>('.settings-segmented__input[type="radio"]'),
+    "segmented radio input",
+  ).click();
 }
 
 afterEach(async () => {
@@ -72,6 +71,60 @@ afterEach(async () => {
 });
 
 describe("config form renderer", () => {
+  it.each([
+    { label: "Ingress", initiallyOpen: false },
+    { label: "Portals", initiallyOpen: true },
+  ])(
+    "retains the manually toggled $label disclosure across a form update",
+    ({ label, initiallyOpen }) => {
+      const schema = object({
+        gateway: object({
+          portals: {
+            ...object({
+              ingress: {
+                ...object({ port: { type: "integer" } }),
+                title: "Ingress",
+              },
+            }),
+            title: "Portals",
+          },
+        }),
+      });
+      const props = renderConfigForm({
+        schema,
+        uiHints: {},
+        value: { gateway: { portals: { ingress: { port: 443 } } } },
+        onPatch,
+      });
+      const findDisclosure = () =>
+        [...container.querySelectorAll<HTMLDetailsElement>("details.cfg-object")].find(
+          (node) =>
+            node.querySelector(":scope > summary .settings-row__title")?.textContent?.trim() ===
+            label,
+        );
+      renderConfigFormFixture(container, props);
+      const disclosure = expectElement(findDisclosure(), label);
+      const input = expectElement(
+        container.querySelector<HTMLInputElement>('input[type="number"]'),
+        "port field",
+      );
+      expect(input.value).toBe("443");
+      expect(disclosure.open).toBe(initiallyOpen);
+      expectElement(disclosure.querySelector("summary"), "object disclosure summary").click();
+      expect(disclosure.open).toBe(!initiallyOpen);
+
+      renderConfigFormFixture(container, {
+        ...props,
+        value: { gateway: { portals: { ingress: { port: 8443 } } } },
+      });
+
+      expect(findDisclosure()).toBe(disclosure);
+      expect(container.querySelector('input[type="number"]')).toBe(input);
+      expect(input.value).toBe("8443");
+      expect(disclosure.open).toBe(!initiallyOpen);
+    },
+  );
+
   it.each([
     {
       key: "gateway.auth.token",
@@ -116,7 +169,7 @@ describe("config form renderer", () => {
       const props = { value: {}, onPatch, uiHints: { [key]: { label, help } } };
       const heading = () =>
         field
-          ? container.querySelector("input")?.getAttribute("aria-label")
+          ? container.querySelector("input.settings-input")?.getAttribute("aria-label")
           : container.querySelector("h2.settings-section__heading")?.textContent?.trim();
       const expectHelp = (text: string) => {
         if (field) {
@@ -224,13 +277,12 @@ describe("config form renderer", () => {
     ["string or SecretRef", { type: ["string", "object"] }],
   ])("keeps a masked sensitive %s field editable across keystrokes", async (_name, tokenSchema) => {
     const { userEvent } = await import("vitest/browser");
-    document.body.append(container);
-    onTestFinished(() => container.remove());
     const analysis = analyzeConfigSchema(object({ token: tokenSchema }));
     const revealed = new Set<string>();
     let value: Record<string, unknown> = {};
     const draw = () =>
-      render(
+      renderConfigFormFixture(
+        container,
         renderConfigForm({
           schema: analysis.schema,
           unsupportedPaths: analysis.unsupportedPaths,
@@ -247,7 +299,6 @@ describe("config form renderer", () => {
             draw();
           },
         }),
-        container,
       );
     const token = () =>
       expectElement(
@@ -298,11 +349,10 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
     const checkbox = expectElement(
-      container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+      container.querySelector<HTMLInputElement>('.settings-toggle__input[role="switch"]'),
       "enabled switch",
     );
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    checkbox.click();
     expect(onPatch).toHaveBeenCalledWith(["enabled"], true);
 
     const addButton = expectElement(
@@ -347,8 +397,6 @@ describe("config form renderer", () => {
         },
       }),
     );
-    document.body.append(container);
-    onTestFinished(() => container.remove());
     const draw = (fromNumber: string) =>
       renderAnalyzedFormFixture(container, analysis, {
         uiHints: {
@@ -438,24 +486,25 @@ describe("config form renderer", () => {
       onPatch,
     });
     const checkbox = expectElement(
-      container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+      container.querySelector<HTMLInputElement>('.settings-toggle__input[role="switch"]'),
       "named toggle",
     );
     const row = expectElement(checkbox.closest(".settings-row"), "toggle row");
     const label = wildcard ? "Plugin Enabled" : "Beta";
     expect(row.tagName).toBe("DIV");
     expect(row.querySelector(".settings-row__title")?.textContent?.trim()).toBe(label);
-    expect(checkbox.textContent?.trim()).toBe(label);
+    expect(
+      container.querySelector(`#${checkbox.getAttribute("aria-labelledby")}`)?.textContent?.trim(),
+    ).toBe(label);
     if (!wildcard) {
       expect(row.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
         "Enable beta features",
       );
     }
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    checkbox.click();
     expect(onPatch).toHaveBeenCalledWith(
       wildcard ? ["plugins", "entries", "voice-call", "enabled"] : ["features", "beta"],
-      true,
+      !wildcard,
     );
   });
 
@@ -497,7 +546,8 @@ describe("config form renderer", () => {
         cron: object({ enabled: { type: "boolean" } }),
       }),
     );
-    render(
+    renderConfigFormFixture(
+      container,
       renderConfigForm({
         schema: analysis.schema,
         uiHints: { "cron.enabled": { label: "Automations Enabled", placeholder: "Default: On" } },
@@ -505,10 +555,9 @@ describe("config form renderer", () => {
         value: {},
         onPatch,
       }),
-      container,
     );
 
-    expect(container.querySelector("wa-switch.settings-toggle")).toBeNull();
+    expect(container.querySelector('.settings-toggle__input[role="switch"]')).toBeNull();
     const select = expectElement(
       container.querySelector<HTMLSelectElement>('select[aria-label="Automations Enabled"]'),
       "automations enabled select",
@@ -744,7 +793,7 @@ describe("config form renderer", () => {
     expect(descriptions.some((text) => text?.includes("nested-default"))).toBe(false);
   });
 
-  it.each([true, false])("renders section help only with a docs URL: %s", (hasDocs) => {
+  it.each([true, false])("renders section help only with a docs URL: %s", async (hasDocs) => {
     renderAnalyzedFormFixture(container, rootAnalysis, {
       uiHints: hasDocs
         ? { gateway: { docsUrl: "https://docs.openclaw.ai/gateway/configuration" } }
@@ -772,10 +821,25 @@ describe("config form renderer", () => {
     );
     expect(link.textContent?.trim()).toBe("Learn more");
     expect(link.classList.contains("learn-more-link")).toBe(true);
-    const popover = expectElement(link.closest("wa-popover"), "section help popover");
+    const popover = expectElement(link.closest('[role="dialog"]'), "section help popover");
     expect(button.getAttribute("aria-controls")).toBe(popover.id);
+    expect(popover.getAttribute("aria-label")).toBe("Help for Gateway");
     expect(link.getAttribute("href")).toBe("https://docs.openclaw.ai/gateway/configuration");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+
+    const { userEvent } = await import("vitest/browser");
+    button.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(popover.matches(":popover-open")).toBe(true);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    const hidden = new Promise<void>((resolve) => {
+      popover.addEventListener("overlay-after-hide", () => resolve(), { once: true });
+    });
+    await userEvent.keyboard("{Escape}");
+    await hidden;
+    expect(popover.matches(":popover-open")).toBe(false);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(button);
   });
 });

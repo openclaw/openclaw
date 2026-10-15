@@ -106,11 +106,11 @@ api.registerGatewayMethod("my-plugin.session.open", handleOpen, {
 });
 ```
 
-This requires a current authenticated profile, an existing canonical top-level
+This requires a current authenticated profile, an existing normalized top-level
 `sessionKey`, and, when supplied, its matching `agentId`. Broad writers retain
 the session's sharing rules. `allowOwnSessionScope` additionally admits
 `operator.sessions.write` only for the caller's own session. `requiredTool`
-checks the canonical effective session tool policy and an admitted agent run's
+checks the shared effective session tool policy and an admitted agent run's
 tool limits. Agent callers are bound to their own conversation. Currently,
 resource tool-policy admission does not support locked model selection.
 
@@ -142,7 +142,7 @@ the selected Gateway method still authorizes the request.
 
 `api.registerGatewayAccessPolicy({ authorize })` adds a plugin-owned access
 requirement to authenticated person admission. The callback receives the current
-configuration and the canonical profile's ID, email aliases, optional verified
+configuration and the primary profile's ID, email aliases, optional verified
 `githubAccountIds`, and assigned role. Account IDs come from the existing identity
 owner; display logins and public email do not establish that binding.
 The Gateway resolves `requiredByRole` from the person's effective role and this
@@ -200,6 +200,10 @@ retains the pending request instead of treating an unreadable grant as revoked.
 A renewal can retain the UUID only if it commits before the old grant expires;
 reinvitation after expiry or revocation must use a new UUID.
 
+After resuming a grant, recovery retains its authority and calls `assertCurrent`
+before effects instead of resuming it again. Other policies are still checked for
+new applicability on each assertion, including changes to plugin-owned state.
+
 Policies without durable grant support still govern live admission. Their
 unclassified authority cannot be converted into a restartable shared publication
 request. Shared publication currently supports one original governing grant;
@@ -227,6 +231,12 @@ applicable policy also requires fresh publication admission.
     `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
     before choosing this path from tools that can also run in standalone agent processes.
 
+    Pass `signal` in the request options to cancel the request and cooperating handler work,
+    for example the signal supplied to an agent tool's `execute` callback. It composes with
+    the current request/work lifetime; caller and plugin authority checks still apply.
+    Omitting it preserves the existing request behavior. Cancellation does not undo effects
+    that already committed.
+
     `await api.runtime.gateway.openPluginPanel({ panelId, sessionKey, agentId })`
     opens this plugin's registered native session panel in the requesting
     Control UI. Unlike arbitrary `request`, this narrow capability is also
@@ -240,7 +250,7 @@ applicable policy also requires fresh publication admission.
 
     `await api.runtime.gateway.readSessionFacts({ sessionKeys })` reads at most
     40 sessions and returns typed `{ sessions, warnings? }` data. Each session
-    includes its key, identity, agent, bounded redacted title and message preview,
+    includes its key, identity, agent, bounded title and message preview without secret masking,
     run state (`active`, `idle`, or `failed`), optional observer digest
     (health, headline, assessment, revision), pull-request numbers and states,
     archive state, and last activity time. The message preview is capped at
@@ -264,22 +274,19 @@ applicable policy also requires fresh publication admission.
     and person filters, including the people facet. Unchanged session facts retain
     object identity across reads; `revision` changes with the selected content or
     its activity or retry deadline. Eligible human readers receive a stable opaque
-    `scope` for their query and current viewer, profile, access, configuration,
-    and redaction facts. Other callers receive `undefined`. The scope is not authority:
+    `scope` for their query and current viewer, profile, access, and configuration
+    facts. Other callers receive `undefined`. The scope is not authority:
     the host rechecks the caller after the callback settles, including awaited
     plugin work. Consume reused results only inside this callback.
 
     Selected rows include `isMain`. Failed acquisition batches retain authorized
     roster fields with an `unavailable` reason; plugins can show their previous
-    facts for the same session identity and `redactionRevision`. When that revision
-    changes, discard retained text prepared under the old policy. Missing or no-longer-visible sessions are
+    facts for the same session identity. Missing or no-longer-visible sessions are
     omitted; `missingSessionKeys` identifies selected roster entries whose current
     facts were omitted, so consumers can retire their fallback facts. Selected PR
     facts retry from 60 seconds up to 15 minutes, retain a
     last-confirmed list with `pullRequestsStale: true`, and reset on lifecycle
-    replacement or a successful read. When redaction rules change, the host omits
-    retained PR titles until fresh source text is available, while preserving
-    confirmed states and retry deadlines.
+    replacement or a successful read. Session and PR text are not secret-masked.
     `activityExpiresAt` and `retryAt` describe the next relevant deadlines; no polling timer is created. Remove these
     selection-only fields when adapting facts to another public response contract.
 
@@ -295,10 +302,10 @@ applicable policy also requires fresh publication admission.
     implementing a private lookup. The transport owns timeout and identity validation.
 
     `await api.runtime.gateway.withUserProfileIdentity({ profileId, emails, githubAccountIds }, run)`
-    prepares the canonical profile's original binding lifetimes for up to 500
+    prepares the primary profile's original binding lifetimes for up to 500
     selected email aliases under the existing `users.list` / `operator.read`
     permission. Optional `githubAccountIds` binds up to 500 positive safe numeric
-    account IDs to that same canonical profile. The callback receives a synchronous `assertCurrent()` function.
+    account IDs to that same primary profile. The callback receives a synchronous `assertCurrent()` function.
     Compose it with the action's own authorization in the store's final commit
     guard and immediately before dispatching an external mutation. It reads
     current facts published by the profile owner without querying SQLite on the
@@ -384,7 +391,7 @@ applicable policy also requires fresh publication admission.
     retirement, or Gateway shutdown closes the channel and cancels outstanding
     node work. Successful node command completion and `channel.closed` wait
     for asynchronous message listeners already in progress. `close()` is
-    idempotent, and retained channel methods reject after closure.
+    safe to repeat, and retained channel methods reject after closure.
     `channel.closed` resolves with the successful command result or rejects
     with the node, authorization, transport, or cancellation error. Channels
     cannot reconnect or survive a node disconnection.
@@ -505,6 +512,60 @@ when the service stops or the scheduler is replaced, including while waiting for
 admission. This optional method is absent on older hosts; it has no caller-scoped
 fallback.
 
+Current service handles also expose `readEventSources()` and `runEvent(id, input)`
+for plugin-owned Automation event sources. The source namespace is bound to the
+service's plugin ID; a plugin cannot select another source owner. Snapshots contain
+`jobId`, `sourceIdentity`, `enabled`, and the source `options`, not credentials or
+creator authority. `runEvent` takes the immutable event envelope and an existing
+ingress claim token. It returns `transferred` with a run receipt, `pending` when
+busy/paused/stopped, or `invalidated` for a retired source. The host rechecks the
+source generation during admission and atomically transfers the claim to the run.
+Do not mark a pending event complete or turn a busy result into an acknowledgment
+of execution. These optional capabilities have no direct-agent fallback.
+
+For MCP-backed sources, `ctx.mcpEvents?.prepareSource({ jobId, sourceIdentity,
+serverName })` resolves the persisted creator and configured MCP account. The job
+must belong to the calling plugin's event-source namespace and reference that
+server in `options.server`. This capability is available to external plugins as
+well as the bundled adapter; callers cannot supply a principal or credentials.
+Keep one prepared handle per webhook binding. It exposes opaque account/principal
+IDs, `revalidate()`, `assertCurrent()`, bounded profile requests,
+`unsubscribe(signal)`, and `dispose()`. Await `revalidate()` before accepting a
+callback or dispatching a queued event, then pass its synchronous current-source
+assertion into authorized ingress and `runEvent`. Revalidation reads the canonical
+credential owner, including other-process changes, and refreshes benign
+policy/session changes without replacing the handle. Successful credential refresh
+preserves the authorization lifetime; logout, terminal authorization loss, and
+replacement do not. Requests acquire fresh resolver credentials under that same
+lifetime and pinned MCP endpoint. A changed resolved URL retires the binding rather
+than redirecting renewals or cleanup, even if the resolver reuses its grant ID.
+
+The first subscribe attempt captures one exact webhook identity and bounded cleanup
+authority, even if its remote outcome is unknown. Renewals must use that identity.
+`unsubscribe(signal)` closes subscribe admission, waits for its in-flight request,
+and cleans up only the captured identity. Cleanup survives benign revalidation and
+source removal, but cannot borrow a replacement credential lifetime or be restored
+from persisted binding facts after restart. Dispose the handle after cleanup
+settles; otherwise the finite remote lease must expire.
+
+Requester connection resolvers receive `requireLiveAuthority: true` for these
+consumers. Return an `authority` observation alongside `url` and `headers`, with
+a non-secret `authorizationId`, `assertCurrent()`, async `revalidate()`, and
+`dispose()`. The ID must survive refresh and restart but change after disconnect
+or replacement, even when the same requester reconnects. Assertions must belong
+to the credential owner, not a snapshot of resolved headers. Disposal releases
+the observation, not the account. Use error code `MCP_AUTHORIZATION_RETIRED` for
+known lifetime loss and `MCP_AUTHORIZATION_UNAVAILABLE` for a temporary inability
+to establish authority. Temporary failures retain pending work without admitting
+it. A retired binding must not reacquire a later authorization. Credential-only
+resolvers remain supported for ordinary tools but cannot authorize durable Events. Missing host support is an explicit
+capability gap, not permission to use operator or shared-credential fallbacks.
+
+Use [version 2 service scheduling](/plugins/sdk-runtime/gateway-and-nodes#service-scheduling)
+for subscription renewal and backoff. Keep deadlines reconstructible from the
+owning durable state; protocol maintenance must not create a second scheduler
+or invoke a model.
+
 Current Gateway service handles also provide `await cron.isEnabled()` to observe
 whether automatic scheduling is enabled, including the `OPENCLAW_SKIP_CRON`
 override. It returns only a boolean, not storage metadata or permission to mutate
@@ -542,7 +603,7 @@ cleanup remains owned.
 
 Trusted official diagnostics exporter services can also receive
 `ctx.internalDiagnostics.getRuntimeIdentity?.()`. It returns the hosting
-process's canonical `processInstanceId` and optional loaded `buildId`, with no
+process's actual `processInstanceId` and optional loaded `buildId`, with no
 filesystem lookup or RPC. Capture it during service startup; a retained getter
 throws after the service lease is revoked. Hosts that do not provide this
 optional capability leave runtime identity unavailable. This diagnostic fact
@@ -582,8 +643,10 @@ api.registerService({
 
 The handler runs in the Gateway process and does not add a Gateway protocol subscription. Keep the
 returned unsubscribe function and call it during service cleanup. The payload is a lightweight
-change notice; use `api.runtime.agent.session.getSessionEntry(...)` when the plugin needs the full
-current session entry.
+change notice; await `api.runtime.agent.session.getSessionEntryAsync(...)` when the plugin needs
+the full current session entry. Handle asynchronous refresh failures in the plugin's event handler.
+The synchronous `getSessionEntry` compatibility method is deprecated through
+2026-12-31; see the [session reader migration](/plugins/sdk-migration/sqlite-async#session-reads-and-inbound-envelopes).
 
 OpenClaw calls a service's `stop()` at most once per startup attempt, including when a replacement
 times out before startup fails. Failed-start rollback and shutdown share the same cleanup result;

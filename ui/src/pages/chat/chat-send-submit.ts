@@ -23,6 +23,7 @@ import {
   requireChatSessionAction,
   shouldQueueLocalSlashCommand,
 } from "./chat-commands.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
@@ -43,7 +44,6 @@ import { deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { sendDetachedCommandMessage } from "./chat-send-detached-command.ts";
 import {
   canSendVolatileQueueItem,
-  captureChatConnectionOwner,
   createPendingSendMessage,
   publishPendingSendMessage,
   reconnectSafeQueuedSendState,
@@ -51,6 +51,7 @@ import {
 } from "./chat-send-queue-state.ts";
 import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import {
+  chatSendAdmissionHoldReason,
   chatSendHoldReason,
   formatChatQueueAdmissionError,
   isChatResetCommand,
@@ -245,7 +246,7 @@ export async function handleSendChat(
       if (messageOverride == null) {
         recordNonTranscriptInputHistory(host, userMessage);
       }
-      await handleAbortChat(host);
+      await handleAbortChat(host, { scope: "session" });
       return undefined;
     }
 
@@ -390,17 +391,32 @@ export async function handleSendChat(
         });
         return undefined;
       }
+      const isRunCommand = parsed.command.key === "steer" || parsed.command.key === "redirect";
       const waitsForPicker = parsed.command.key === "redirect";
       const dispatchLocalCommand = async () => {
         if (waitsForPicker && !(await waitForSubmittedRoute(host, submittedSessionKey))) {
           return;
         }
+        if (
+          isRunCommand &&
+          (!submitGuardOptions.isCurrent() ||
+            !visibleSessionMatches(
+              host,
+              submitGuardOptions.scope.sessionKey,
+              submitGuardOptions.scope.agentId,
+            ) ||
+            rejectOversizedAttachments())
+        ) {
+          return;
+        }
         let recoveryComposer: PendingComposerSnapshot | undefined;
-        const recoveryScope = resolveUiConversationIdentity(host, submittedSessionKey);
+        const recoveryScope = isRunCommand
+          ? submitGuardOptions.scope
+          : resolveUiConversationIdentity(host, submittedSessionKey);
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, userMessage);
           if (parsed.command.key !== "export-session") {
-            recoveryComposer = clearComposer();
+            recoveryComposer = clearComposer(isRunCommand ? "annotations" : "none");
           }
         }
         const recovery = captureChatCommandComposerRecovery(host, recoveryScope, recoveryComposer);
@@ -411,6 +427,7 @@ export async function handleSendChat(
           host,
           parsed.command.key,
           parsed.args,
+          isRunCommand ? deliveredAttachments : undefined,
         );
         if (
           parsed.command.key === "export-session" &&
@@ -511,12 +528,17 @@ export async function handleSendChat(
     ) {
       return;
     }
-    if (chatSendHoldReason(host, submittedSessionKey, false, submittedAgentId)) {
+    const admissionHoldReason = () =>
+      intent || rawParsedCommand || isInlineEditSubmission
+        ? chatSendHoldReason(host, submittedSessionKey, false, submittedAgentId)
+        : chatSendAdmissionHoldReason(host, submittedSessionKey, submittedAgentId);
+    if (admissionHoldReason()) {
       // The composer owns transient recovery notices, including their removal.
       host.requestUpdate?.();
       return;
     }
     let pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
+    const initialTurnPending = host.hasPendingInitialTurn?.(submittedSessionKey) === true;
     const applyRunPolicy = hasDirectSessionRun(host) || isInitialChatHistoryUnavailable(host);
     // The edited row hands its place to the replacement and is retired by the same
     // store write, so a rejected write leaves the original queued and editable.
@@ -524,11 +546,13 @@ export async function handleSendChat(
       requestedEditId && resumedEditCandidate?.id === requestedEditId ? resumedEditCandidate : null;
     // Editing preserves the row's delivery choice; current composer defaults must
     // not turn an explicitly queued message into a steer or interrupt.
-    const followUpMode = resumedEdit
-      ? (resumedEdit.source.queueMode ?? "queue")
-      : (opts?.followUpMode ??
-        host.chatFollowUpMode ??
-        normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode));
+    const followUpMode = initialTurnPending
+      ? "queue"
+      : resumedEdit
+        ? (resumedEdit.source.queueMode ?? "queue")
+        : (opts?.followUpMode ??
+          host.chatFollowUpMode ??
+          normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode));
     const activeRunQueueMode =
       !intent && applyRunPolicy && followUpMode !== "queue" ? followUpMode : undefined;
     const allowActiveRunSend = Boolean(intent || (applyRunPolicy && followUpMode !== "queue"));
@@ -571,7 +595,7 @@ export async function handleSendChat(
         return;
       }
       queued = { ...queued, ...payload.update };
-      const hold = chatSendHoldReason(host, submittedSessionKey, false, submittedAgentId);
+      const hold = admissionHoldReason();
       if (hold || (intent && (isChatBusy(host) || hasDirectSessionRun(host)))) {
         retireOutboxPayload(queued);
         if (hold) {

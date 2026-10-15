@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
@@ -19,14 +23,23 @@ import * as registryReads from "./registry-read.js";
 import * as registry from "./registry.js";
 import { deleteRegistryWorktree, insertRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
+import { resolveRepository } from "./repository-paths.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
-import { resolveRepository } from "./service-preparation.js";
-import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
+import { IDLE_GC_MS, ManagedWorktreeService, WORKTREE_GC_INTERVAL_MS } from "./service.js";
 import {
   materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 import { hasTemplatesAsync } from "./template-registry-async.js";
+import type { ManagedWorktreeGcResult } from "./types.js";
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 describe("worktree Git maintenance", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -93,7 +106,7 @@ describe("worktree Git maintenance", () => {
     await requireGit(repo, ["multi-pack-index", "verify"]);
   });
 
-  it("preserves a checkout with missing snapshot objects until an explicit fetch repairs it", async () => {
+  it("preserves a checkout with missing snapshot objects until maintenance repairs it", async () => {
     const root = tempDirs.make("worktree-snapshot-missing-object-");
     const repo = await initRepo(root);
     const [record] = await materializeManagedWorktreeFixtures({
@@ -148,12 +161,8 @@ describe("worktree Git maintenance", () => {
         ).code,
       ).not.toBe(0);
 
-      await requireGit(
-        repo,
-        ["fetch", "--no-auto-maintenance", "--no-tags", "--no-write-fetch-head", "origin", missing],
-        { env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "file" } },
-      );
-      expect(await fs.readFile(trace, "utf8")).toContain("upload-pack");
+      await createWorktreeGitMaintenance(env)({ retryDeferred: true });
+      expect((await fs.readFile(trace, "utf8")).includes("upload-pack")).toBe(true);
       const removed = await service.remove({ id: worktree.id, reason: "completed" });
       expect(removed.removed).toBe(true);
       expect(await requireGit(repo, ["show", `${removed.snapshotRef}:README.md`])).toBe("base");
@@ -163,6 +172,129 @@ describe("worktree Git maintenance", () => {
       await expect(fs.access(worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("repairs linked-index-only objects on explicit retry without rewriting the index or files", async () => {
+    const root = tempDirs.make("worktree-index-object-repair-");
+    const repo = await initRepo(root);
+    const [record] = await materializeManagedWorktreeFixtures({
+      env,
+      repoRoot: repo,
+      stateDir: root,
+      names: ["index-only"],
+      now: 1,
+    });
+    const remote = path.join(root, "remote.git");
+    await requireGit(remote, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
+    const staged = "staged content\n";
+    const missing = await requireGit(remote, ["hash-object", "-w", "--stdin"], { input: staged });
+    await requireGit(repo, ["hash-object", "-w", "--stdin"], { input: staged });
+    await requireGit(record!.path, [
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      `100644,${missing},staged.txt`,
+    ]);
+    await fs.writeFile(path.join(record!.path, "staged.txt"), "unstaged content\n");
+    const indexPath = await requireGit(record!.path, ["rev-parse", "--git-path", "index"]);
+    const index = await fs.readFile(path.resolve(record!.path, indexPath));
+    await fs.unlink(path.join(repo, ".git", "objects", missing.slice(0, 2), missing.slice(2)));
+    await requireGit(repo, ["config", "remote.origin.promisor", "true"]);
+    await requireGit(repo, ["config", "remote.origin.partialclonefilter", "blob:none"]);
+    await requireGit(repo, ["remote", "set-url", "origin", path.join(root, "unavailable.git")]);
+    const maintain = createWorktreeGitMaintenance(env);
+    const logs = createWarnLogCapture("worktree-index-object-repair");
+    try {
+      await maintain({ retryDeferred: true });
+      expect(await logs.findText("worktree Git maintenance suspended (objects)")).toContain(
+        "--retry-deferred",
+      );
+      await requireGit(repo, ["remote", "set-url", "origin", remote]);
+      await maintain({});
+      expect(
+        (
+          await runGit(repo, ["cat-file", "-e", missing], {
+            env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+          })
+        ).code,
+      ).not.toBe(0);
+      await maintain({ retryDeferred: true });
+      expect(
+        await requireGit(repo, ["cat-file", "blob", missing], {
+          env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+        }),
+      ).toBe("staged content");
+      expect(await fs.readFile(path.resolve(record!.path, indexPath))).toEqual(index);
+      expect(await fs.readFile(path.join(record!.path, "staged.txt"), "utf8")).toBe(
+        "unstaged content\n",
+      );
+    } finally {
+      logs.cleanup();
+    }
+  });
+
+  it("makes bounded repair progress when a live index exceeds the per-pass object limit", async () => {
+    const root = tempDirs.make("worktree-object-repair-limit-");
+    const source = await initRepo(root);
+    const count = 4097;
+    const blobs = Array.from({ length: count }, (_, index) => {
+      const content = `payload-${index}\n`;
+      return `blob\nmark :${index + 1}\ndata ${Buffer.byteLength(content)}\n${content}`;
+    });
+    await requireGit(source, ["fast-import", "--quiet"], {
+      input: `${blobs.join("\n")}\ncommit refs/heads/bulk-repair\ncommitter Test <test@example.invalid> 1 +0000\ndata 6\nrepair\ndeleteall\n${Array.from({ length: count }, (_, index) => `M 100644 :${index + 1} file-${index}`).join("\n")}\n\n`,
+    });
+    await requireGit(source, ["config", "uploadpack.allowFilter", "true"]);
+    const repo = path.join(root, "partial");
+    await requireGit(root, [
+      "clone",
+      "--filter=blob:none",
+      "--no-checkout",
+      "--branch",
+      "bulk-repair",
+      pathToFileURL(source).href,
+      repo,
+    ]);
+    await requireGit(repo, ["read-tree", "HEAD"]);
+    await insertRegistryWorktree(env, {
+      id: "repair-limit",
+      name: "repair-limit",
+      repoFingerprint: "repair-limit",
+      repoRoot: repo,
+      path: repo,
+      branch: "bulk-repair",
+      baseRef: "HEAD",
+      ownerKind: "manual",
+      createdAt: 1,
+      lastActiveAt: 1,
+    });
+    const objects = await requireGit(source, [
+      "ls-tree",
+      "-r",
+      "--format=%(objectname)",
+      "bulk-repair",
+    ]);
+    const missing = async () =>
+      (
+        await requireGit(repo, ["cat-file", "--batch-check"], {
+          input: `${objects}\n`,
+          env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+        })
+      )
+        .split("\n")
+        .filter((line) => line.endsWith(" missing")).length;
+    expect(await missing()).toBe(count);
+    const maintain = createWorktreeGitMaintenance(env);
+    const logs = createWarnLogCapture("worktree-object-repair-limit");
+    try {
+      await maintain({ retryDeferred: true });
+      expect(await missing()).toBe(1);
+      expect(await logs.findText("4096-object limit")).toContain("retry");
+      await maintain({ retryDeferred: true });
+      expect(await missing()).toBe(0);
+    } finally {
+      logs.cleanup();
     }
   });
 
@@ -223,7 +355,8 @@ describe("worktree Git maintenance", () => {
         lastActiveAt: 1,
       });
     }
-    const service = new ManagedWorktreeService({ env, now: () => 3 });
+    let now = 3;
+    const service = new ManagedWorktreeService({ env, now: () => now });
     const controller = new AbortController();
     const execute = gitExec.executeGitCommand;
     const maintenanceRoots: string[] = [];
@@ -268,9 +401,11 @@ describe("worktree Git maintenance", () => {
       const result = await service.gc({ signal: controller.signal });
       expect(result).toMatchObject({
         removed: [],
-        outcome: "completed",
-        issues: [],
-        issueCount: 0,
+        outcome: "partial",
+        issues: [
+          expect.objectContaining({ stage: "git-maintenance", id: repo, outcome: "failed" }),
+        ],
+        issueCount: 1,
       });
       expect(maintenanceRoots.toSorted()).toEqual([repo, otherRepo].toSorted());
       expect(repairRoots.toSorted()).toEqual([repo, otherRepo].toSorted());
@@ -280,14 +415,17 @@ describe("worktree Git maintenance", () => {
       );
       const warning = await logs.findText("worktree Git maintenance");
       expect(warning).toContain("gc is already running");
+      now += WORKTREE_GC_INTERVAL_MS;
       await service.gc({ signal: controller.signal });
       expect(maintenanceRoots).toHaveLength(3);
       expect(repairRoots).toHaveLength(4);
       expect(maintenanceRoots.at(-1)).toBe(otherRepo);
       failPackRepair = true;
+      now += WORKTREE_GC_INTERVAL_MS;
       await service.gc({ signal: controller.signal });
       expect(repairRoots).toHaveLength(6);
       failPackRepair = false;
+      now += WORKTREE_GC_INTERVAL_MS;
       await service.gc({ signal: controller.signal });
       expect(repairRoots).toHaveLength(7);
       expect(maintenanceRoots).toHaveLength(5);
@@ -356,7 +494,7 @@ describe("worktree Git maintenance", () => {
     }
   });
 
-  it("warns without changing completed cleanup when the maintenance inventory fails", async () => {
+  it("reports incomplete maintenance when its inventory fails", async () => {
     vi.spyOn(registryReads, "readRegistryWorktrees").mockRejectedValueOnce(
       new Error("maintenance inventory unavailable"),
     );
@@ -365,9 +503,9 @@ describe("worktree Git maintenance", () => {
       const result = await new ManagedWorktreeService({ env }).gc();
       expect(result).toMatchObject({
         removed: [],
-        outcome: "completed",
-        issues: [],
-        issueCount: 0,
+        outcome: "partial",
+        issues: [expect.objectContaining({ stage: "git-maintenance", outcome: "failed" })],
+        issueCount: 1,
       });
       expect(await logs.findText("worktree Git maintenance inventory failed")).toContain(
         "maintenance inventory unavailable",
@@ -426,8 +564,20 @@ describe("worktree Git maintenance", () => {
     const trace = path.join(root, "pack-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
     try {
-      expect((await new ManagedWorktreeService({ env, now: () => 3 }).gc()).outcome).toBe(
-        "completed",
+      const checkpoints: Array<NonNullable<ManagedWorktreeGcResult["gitMaintenance"]>> = [];
+      const result = await new ManagedWorktreeService({ env, now: () => 3 }).gc({
+        checkpoint: async (progress) => {
+          if (progress.gitMaintenance) {
+            checkpoints.push({ ...progress.gitMaintenance });
+          }
+        },
+      });
+      expect(result).toMatchObject({ outcome: "completed", packsRemoved: 16 });
+      expect(checkpoints).toEqual(
+        expect.arrayContaining([
+          { repoRoot: repo, stage: "packs", packsBefore: 19, packsAfter: undefined },
+          { repoRoot: repo, stage: "maintenance", packsBefore: 19, packsAfter: 3 },
+        ]),
       );
       const remaining = await fs.readdir(packDirectory);
       expect(remaining.filter((name) => name.endsWith(".pack"))).toHaveLength(3);
@@ -445,6 +595,17 @@ describe("worktree Git maintenance", () => {
       );
       await requireGit(repo, ["multi-pack-index", "verify"]);
       expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
+      // Duplicate expiry below the rewrite threshold stays within its promise group.
+      const duplicate = await requireGit(repo, ["pack-objects", path.join(packDirectory, "pack")], {
+        input: `${objects[1]}\n`,
+      });
+      await fs.writeFile(path.join(packDirectory, `pack-${duplicate}.promisor`), "");
+      await createWorktreeGitMaintenance(env)({});
+      const afterDuplicate = await fs.readdir(packDirectory);
+      expect(afterDuplicate.filter((name) => name.endsWith(".pack"))).toHaveLength(3);
+      expect(afterDuplicate.filter((name) => name.endsWith(".promisor"))).toHaveLength(2);
+      expect(await requireGit(repo, ["cat-file", "-t", objects[1]!])).toBe("blob");
+      await requireGit(repo, ["multi-pack-index", "verify"]);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -484,7 +645,8 @@ describe("worktree Git maintenance", () => {
         createdAt: 1,
         lastActiveAt: 1,
       });
-      const service = new ManagedWorktreeService({ env, now: () => 3 });
+      let now = 3;
+      const service = new ManagedWorktreeService({ env, now: () => now });
       const writer = await fs.open(active, "r+");
       try {
         await service.gc();
@@ -493,6 +655,7 @@ describe("worktree Git maintenance", () => {
       } finally {
         await writer.close();
       }
+      now += WORKTREE_GC_INTERVAL_MS;
       await service.gc();
       await expect(fs.access(old)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(active)).rejects.toMatchObject({ code: "ENOENT" });
@@ -588,7 +751,8 @@ describe("worktree GC inventories", () => {
     return (
       args[0] === "maintenance" ||
       args[0] === "multi-pack-index" ||
-      (args[0] === "rev-parse" && args[1] === "--git-common-dir") ||
+      (args[0] === "rev-parse" &&
+        ["--git-common-dir", "--show-object-format"].includes(args[1]!)) ||
       (args[0] === "rev-parse" && args[1] === "--git-path" && args[2] === "objects/pack")
     );
   }
@@ -815,7 +979,12 @@ describe("worktree GC inventories", () => {
     console.log(JSON.stringify(measurements));
     expect(result.removed).toEqual([]);
     expect(result.protectedCount).toBe(count);
-    expect(result.issues.every((issue) => issue.reason === "run lease is active")).toBe(true);
+    expect(result.issues.filter((issue) => issue.reason === "run lease is active")).toHaveLength(
+      count,
+    );
+    // This fixture deliberately has no Git repository; maintenance now reports that failure.
+    expect(result.issues).toHaveLength(count + 1);
+    expect(result.issues.at(-1)?.stage).toBe("git-maintenance");
     expect(measurements).toMatchObject({
       writes: 0,
       registryReads: 1,

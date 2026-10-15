@@ -3,12 +3,11 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   assertSqliteIntegrity,
   isTerminalSqliteIntegrityError,
-  runSqliteIntegrityOperationSync,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
 } from "./sqlite-integrity.js";
-import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import {
   createSqliteTableContractReader,
   getCanonicalSqliteNamedIndexContracts,
@@ -35,17 +34,6 @@ type RepairCanonicalSqliteIndexesOptions = {
  * Verify the whole file before schema convergence. Physical corruption belongs
  * to explicit Doctor maintenance, including when only an index is damaged.
  */
-export function verifyAndRepairCanonicalSqliteIndexes(
-  db: DatabaseSync,
-  databaseLabel: string,
-  schemaSql: string,
-  options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> = {},
-): string[] {
-  return runSqliteIntegrityOperationSync(
-    verifyAndRepairCanonicalSqliteIndexSteps(db, databaseLabel, schemaSql, options),
-  );
-}
-
 export function* verifyAndRepairCanonicalSqliteIndexSteps(
   db: DatabaseSync,
   databaseLabel: string,
@@ -97,7 +85,7 @@ export function repairCanonicalSqliteIndexes(
   }
   const repairIndexes = new Set<CanonicalSqliteNamedIndexContract>();
   // One read snapshot also avoids a network lock round trip per metadata query.
-  runSqlitePinnedReadSnapshotSync(db, () => {
+  runSqliteSchemaReadSnapshotSync(db, () => {
     const readTable = createSqliteTableContractReader(db);
     for (const tableName of getCanonicalSqliteTableNames(schemaSql)) {
       assertSqliteIdentifier(tableName);

@@ -208,16 +208,22 @@ suite.define(() => {
         await expect
           .poll(profile)
           .toMatchObject({ type: "api_key", profileId: `${loginProvider}:default` });
-        await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
+        const completedLogin = page.locator("openclaw-modal-dialog");
+        await completedLogin
+          .getByRole("heading", { name: "Fixture browser sign-in is connected", exact: true })
+          .waitFor();
         await page
           .getByText("Fixture browser sign-in: Provider credentials saved.", { exact: true })
           .waitFor();
+        await completedLogin.getByRole("button", { name: "Close", exact: true }).click();
+        await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
         await page.screenshot({ path: path.join(suite.artifactDir, "login-completed.png") });
         await readback.client.stopAndWait();
         await fixture.instance.stopGateway();
         await fixture.instance.startGateway();
         readback = await connectReadbackClient();
-        await waitForControlUiGatewayReady(page);
+        // The browser may still be in its 15-second reconnect backoff.
+        await waitForControlUiGatewayReady(page, 30_000);
         expect(await profile()).toMatchObject({
           type: "api_key",
           profileId: `${loginProvider}:default`,

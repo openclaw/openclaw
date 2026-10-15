@@ -3,6 +3,10 @@ import fsAsync from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -14,6 +18,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { cleanupManagedOutgoingMediaRecords } from "./managed-image-attachments.js";
 import {
   claimManagedImageRecordCleanupIfCurrent,
@@ -75,12 +80,14 @@ function dropSessionNodes() {
 
 beforeEach(() => {
   stateDir = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "gc-availability-"));
+  setRuntimeConfigSnapshot({});
 });
 
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   fs.rmSync(stateDir, { recursive: true, force: true });
 });
 
@@ -180,10 +187,13 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
         .prepare("SELECT * FROM managed_outgoing_image_records ORDER BY attachment_id")
         .all();
     const persistedBefore = readPersistedRecords();
-    const counter = trackSqliteStatementExecutions(database.db, ["records"], (sql) =>
-      /^\s*select\b/i.test(sql) && sql.includes('from "managed_outgoing_image_records"')
-        ? "records"
-        : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["records"],
+      (sql) =>
+        /^\s*select\b/i.test(sql) && sql.includes('from "managed_outgoing_image_records"')
+          ? "records"
+          : null,
     );
     try {
       await expect(

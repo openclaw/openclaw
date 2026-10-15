@@ -41,19 +41,12 @@ function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelP
   }
   const selectedRegistry = registry ?? snapshot.registry;
 
-  const seen = new Set<string>();
   const entriesById = new Map<string, ActivePluginChannelRegistration>();
-  if (selectedRegistry && Array.isArray(selectedRegistry.channels)) {
-    for (const entry of selectedRegistry.channels) {
-      const plugin = entry?.plugin;
-      const id = normalizeOptionalString(plugin?.id);
-      if (!plugin || !id || seen.has(id)) {
-        continue;
-      }
-      // Channel registration is first-wins. Keep its implementation and
-      // provenance together so a colliding plugin cannot borrow its authority.
-      seen.add(id);
-      entriesById.set(plugin.id, { ...entry, plugin });
+  for (const entry of selectedRegistry?.channels ?? []) {
+    // Registration already normalizes ids. Retain the first row so its
+    // implementation and provenance cannot come from different plugins.
+    if (!entriesById.has(entry.plugin.id)) {
+      entriesById.set(entry.plugin.id, entry);
     }
   }
 
@@ -87,11 +80,7 @@ export function listLoadedChannelPluginsForRegistry(
 export function getLoadedChannelPluginById(
   id: string,
 ): ActiveChannelPluginRuntimeShape | undefined {
-  const resolvedId = normalizeOptionalString(id) ?? "";
-  if (!resolvedId) {
-    return undefined;
-  }
-  return resolveChannelPlugins().entriesById.get(resolvedId)?.plugin;
+  return getLoadedChannelPluginEntryById(id)?.plugin;
 }
 
 /** Returns one loaded channel plugin without triggering bundled discovery. */

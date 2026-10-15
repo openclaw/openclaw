@@ -201,34 +201,6 @@ describe("worker SSH preparation", () => {
     }
   });
 
-  it("shares a decreasing deadline while preserving fast fallback budget", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const prepared = await prepareTestWorkerSsh();
-    try {
-      const remainingTimeouts: number[] = [];
-      const result = await runWorkerSshCandidates(
-        prepared,
-        1_000,
-        async (port, remainingTimeoutMs) => {
-          remainingTimeouts.push(remainingTimeoutMs);
-          if (port === 2202) {
-            vi.advanceTimersByTime(1);
-            return { code: 255, termination: "exit" };
-          }
-          return { code: 0, termination: "exit" };
-        },
-      );
-
-      expect(remainingTimeouts).toEqual([1_000, 999]);
-      expect(result).toEqual({ code: 0, termination: "exit" });
-      expect(prepared.port).toBe(22);
-    } finally {
-      await prepared.dispose();
-      vi.useRealTimers();
-    }
-  });
-
   it("does not start a later candidate after the operation deadline", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -289,4 +261,48 @@ describe("worker SSH preparation", () => {
     await prepared.dispose();
     await expect(fs.stat(identityPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
+});
+
+describe("worker SSH candidate deadline clock domain", () => {
+  it.each([300_000, -300_000])(
+    "keeps the retry budget on the monotonic clock across a %i ms wall-clock jump",
+    async (wallClockStepMs) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const perfSpy = vi.spyOn(performance, "now");
+      const dateSpy = vi.spyOn(Date, "now");
+      let monotonicMs = 0;
+      let wallMs = 0;
+      perfSpy.mockImplementation(() => monotonicMs);
+      dateSpy.mockImplementation(() => wallMs);
+      const prepared = await prepareTestWorkerSsh();
+      try {
+        const attempted: number[] = [];
+        let retriedTimeoutMs: number | undefined;
+        const result = await runWorkerSshCandidates(
+          prepared,
+          10_000,
+          async (port, remainingTimeoutMs) => {
+            attempted.push(port);
+            if (attempted.length === 1) {
+              wallMs += wallClockStepMs;
+              monotonicMs += 200;
+              return { code: 255, termination: "exit" as const };
+            }
+            retriedTimeoutMs = remainingTimeoutMs;
+            return { code: 0, termination: "exit" as const };
+          },
+        );
+        expect(result.code).toBe(0);
+        expect(attempted.length).toBeGreaterThan(1);
+        expect(retriedTimeoutMs).toBeDefined();
+        expect(retriedTimeoutMs!).toBeGreaterThan(9_000);
+        expect(retriedTimeoutMs!).toBeLessThanOrEqual(10_000);
+      } finally {
+        await prepared.dispose();
+        dateSpy.mockRestore();
+        perfSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
 });

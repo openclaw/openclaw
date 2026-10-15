@@ -58,6 +58,7 @@ describe("OnePassword pending authorizations on the SQLite worker", () => {
     };
     api.runtime.state = {
       resolveStateDir: () => env.OPENCLAW_STATE_DIR,
+      openKeyedStoreV2: unused,
       openKeyedStore: (options) =>
         createPluginStateKeyedStoreForTests("onepassword", { ...options, env }),
       openSyncKeyedStore: (options) =>

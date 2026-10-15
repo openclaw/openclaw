@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
@@ -12,6 +16,31 @@ import {
 import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
 
 afterEach(() => resetConfigRuntimeState());
+
+it.each([undefined, "${SYNTHETIC_OPAQUE_VALUE}"])(
+  "rejects a pending env credential and preserves resolved opaque bytes: %s",
+  (credential) => {
+    const { config } = createProviderConfig();
+    config.models.providers.synthetic.apiKey = credential ?? "${SYNTHETIC_NODE_KEY}";
+    const source = structuredClone(config);
+    source.models.providers.synthetic.apiKey = "${SYNTHETIC_NODE_KEY}";
+    const path = "models.providers.synthetic.apiKey";
+    const refs = new Map([[path, "SYNTHETIC_NODE_KEY"]]);
+    setConfigResolutionFacts(
+      config,
+      createConfigResolutionFacts(
+        credential ? [] : [{ varName: "SYNTHETIC_NODE_KEY", configPath: path }],
+        credential ? undefined : refs,
+        undefined,
+        credential ? refs : undefined,
+      ),
+    );
+    setRuntimeConfigSnapshot(config, source);
+    expect(
+      resolveManagedSecretRefRuntimeProviderAuth({ cfg: config, provider: "synthetic" })?.apiKey,
+    ).toBe(credential);
+  },
+);
 
 function createProviderConfig(modelCount = 0) {
   const provider: ModelProviderConfig = {

@@ -250,7 +250,7 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(sockets).toHaveLength(2);
   });
 
-  it.each(["auto", "websocket", "websocket-cached"] as const)(
+  it.each(["auto", "websocket"] as const)(
     "leaves mid-stream connection expiry to transcript recovery over %s",
     async (transport) => {
       const { sockets, send, close } = installWebSocket((socket) => {
@@ -740,6 +740,23 @@ describe("streamOpenAICodexResponses transport", () => {
       tool_choice: "auto",
       parallel_tool_calls: true,
     });
+  });
+
+  it("classifies a normal WebSocket close before the terminal event as transient", async () => {
+    installWebSocket((socket) =>
+      socket.dispatchEvent(
+        Object.assign(new Event("close"), { code: 1000, reason: "", wasClean: true }),
+      ),
+    );
+
+    const result = await run({ transport: "websocket" });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "WebSocket closed 1000",
+      errorCode: "ERR_WEBSOCKET_TRANSPORT",
+    });
+    expect(isTransientNetworkError({ code: result.errorCode })).toBe(true);
   });
 
   it("does not classify a permanent WebSocket close as transient", async () => {

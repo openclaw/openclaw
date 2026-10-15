@@ -233,32 +233,33 @@ export function mergeConfiguredModelCost(params: {
   return normalizeResolvedPricing(mergeModelCost(params.catalogCost, authoredCost) ?? {});
 }
 
-export function mergeStaticCatalogInlineModel(
-  staticCatalogModel: ProviderRuntimeModel | undefined,
+export function mergeCatalogInlineModel(
+  catalogModel: ProviderRuntimeModel | undefined,
   inlineModel: Model,
 ): Model {
-  if (!staticCatalogModel) {
+  if (!catalogModel) {
     return inlineModel;
   }
   const compat = resolveCatalogOwnedModelCompat({
-    catalogRoute: staticCatalogModel,
-    catalogCompat: staticCatalogModel.compat,
+    catalogRoute: catalogModel,
+    catalogCompat: catalogModel.compat,
     configuredRoute: inlineModel,
     configuredCompat: inlineModel.compat,
   });
-  const mediaInput = mergeModelMediaInput(staticCatalogModel.mediaInput, inlineModel.mediaInput);
+  const mediaInput = mergeModelMediaInput(catalogModel.mediaInput, inlineModel.mediaInput);
   const params = mergeModelParams(
-    readModelParams(staticCatalogModel.params),
+    readModelParams(catalogModel.params),
     readModelParams(inlineModel.params),
   );
   return {
-    ...staticCatalogModel,
+    ...catalogModel,
     ...inlineModel,
-    api: inlineModel.api ?? staticCatalogModel.api,
+    api: inlineModel.api ?? catalogModel.api,
     baseUrl:
-      normalizeOptionalString(inlineModel.baseUrl) ??
-      normalizeOptionalString(staticCatalogModel.baseUrl),
-    headers: inlineModel.headers ?? staticCatalogModel.headers,
+      normalizeOptionalString(inlineModel.baseUrl) ?? normalizeOptionalString(catalogModel.baseUrl),
+    headers: inlineModel.headers ?? catalogModel.headers,
+    contextWindow: inlineModel.contextWindow ?? catalogModel.contextWindow,
+    contextTokens: inlineModel.contextTokens ?? catalogModel.contextTokens,
     compat,
     ...(mediaInput ? { mediaInput } : {}),
     ...(params ? { params } : {}),
@@ -524,6 +525,13 @@ export function applyConfiguredProviderOverrides(params: {
     return undefined;
   }
   const contextWindow = metadataOverrideModel?.contextWindow ?? discoveredModel.contextWindow;
+  // An authored native window replaces its provenance; a prompt cap does not.
+  const { contextWindowSource: _syntheticContextWindowSource, ...discoveredWithoutSizeSource } =
+    discoveredModel;
+  const discoveredSizing =
+    metadataOverrideModel?.contextWindow !== undefined
+      ? discoveredWithoutSizeSource
+      : discoveredModel;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
   const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
   const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
@@ -587,7 +595,7 @@ export function applyConfiguredProviderOverrides(params: {
     attachModelProviderLocalService(
       attachModelProviderRequestTransport(
         {
-          ...discoveredModel,
+          ...discoveredSizing,
           provider: params.provider,
           api: requestConfig.api ?? "openai-responses",
           baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,

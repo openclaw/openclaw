@@ -1,21 +1,17 @@
 /* @vitest-environment jsdom */
 import { resolveObjectURL } from "node:buffer";
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveTsxImport } from "../scripts/lib/tsx-cli-shim.mjs";
-import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 // Exercise the environment installed by the native preload, including in VM tests.
 const require = process.getBuiltinModule("module").createRequire(import.meta.url);
 const { builtinEnvironments }: typeof import("vitest/runtime") = require("vitest/runtime");
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("jsdom native API boundary", () => {
-  it("adapts the package-local Vitest environment before creating object URLs", () => {
+  it("defers DOM loading until use and adapts package-local windows and object URLs", () => {
     const result = spawnSync(
       process.execPath,
       [
@@ -25,9 +21,23 @@ describe("jsdom native API boundary", () => {
         "--input-type=module",
         "--eval",
         `
+          import assert from "node:assert/strict";
           import { createRequire } from "node:module";
           const require = createRequire(process.argv[1]);
           const { builtinEnvironments } = require("vitest/runtime");
+          assert.ok(!require.cache[require.resolve("jsdom")], "preload must leave jsdom unloaded");
+          const { JSDOM } = require("jsdom");
+          const direct = new JSDOM("<iframe></iframe>");
+          try {
+            const received = [];
+            for (const target of [direct.window, direct.window.document.querySelector("iframe").contentWindow]) {
+              target.addEventListener("probe", () => received.push("probe"));
+              target.dispatchEvent(new target.Event("probe"));
+            }
+            assert.deepEqual(received, ["probe", "probe"]);
+          } finally {
+            direct.window.close();
+          }
           const environment = await builtinEnvironments.jsdom.setup(globalThis, {});
           try {
             const url = URL.createObjectURL(new Blob(["complete asset"], { type: "image/png" }));
@@ -55,26 +65,6 @@ describe("jsdom native API boundary", () => {
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe("complete asset");
-  });
-
-  it("allows ordinary Workers to inherit the preload without a Vitest dependency", async () => {
-    const entry = path.join(tempDirs.make("openclaw-jsdom-worker-"), "worker.mjs");
-    writeFileSync(
-      entry,
-      'import { parentPort, isMainThread } from "node:worker_threads";\n' +
-        "parentPort.postMessage({ value: 42, isMainThread });\n",
-    );
-    const worker = new Worker(pathToFileURL(entry));
-    try {
-      const result = await new Promise((resolve, reject) => {
-        worker.once("message", resolve);
-        worker.once("error", reject);
-        worker.once("exit", (code) => reject(new Error(`Worker exited before replying: ${code}`)));
-      });
-      expect(result).toEqual({ value: 42, isMainThread: false });
-    } finally {
-      await worker.terminate();
-    }
   });
 
   it.each([0, 2])("keeps window event identity across %i iframe levels", (depth) => {

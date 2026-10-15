@@ -37,70 +37,21 @@ describe("amazon-bedrock provider-policy-api", () => {
     ]);
   });
 
-  it("defaults Bedrock Claude Opus 5 to high adaptive thinking", () => {
-    const profile = resolveThinkingProfile({
-      provider: "amazon-bedrock",
-      modelId: "global.anthropic.claude-opus-5",
-    });
+  it.each(["global.anthropic.claude-opus-4-70"])(
+    "does not treat numeric Opus version prefixes as supported models: %s",
+    (modelId) => {
+      const profile = resolveThinkingProfile({ provider: "amazon-bedrock", modelId });
 
-    expect(profile?.levels.map((level) => level.id)).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "adaptive",
-      "max",
-    ]);
-    expect(profile?.defaultLevel).toBe("high");
-  });
-
-  it("leaves Bedrock Claude Opus 4.8 thinking off by default with max effort available", () => {
-    const profile = resolveThinkingProfile({
-      provider: "amazon-bedrock",
-      modelId:
-        "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-opus-4-8",
-    });
-
-    expect(profile?.levels.map((level) => level.id)).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "adaptive",
-      "max",
-    ]);
-    expect(profile?.defaultLevel).toBe("off");
-  });
-
-  it("exposes max thinking for Bedrock Claude Opus 4.7 refs", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "amazon-bedrock",
-        modelId:
-          "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-opus-4-7",
-      })?.levels.map((level) => level.id),
-    ).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]);
-  });
-
-  it.each([
-    "global.anthropic.claude-opus-4-70",
-    "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-opus-4-80",
-  ])("does not treat numeric Opus version prefixes as supported models: %s", (modelId) => {
-    const profile = resolveThinkingProfile({ provider: "amazon-bedrock", modelId });
-
-    expect(profile?.levels.map((level) => level.id)).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-    ]);
-    expect(profile?.defaultLevel).toBeUndefined();
-  });
+      expect(profile?.levels.map((level) => level.id)).toEqual([
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+      ]);
+      expect(profile?.defaultLevel).toBeUndefined();
+    },
+  );
 
   it.each([
     {
@@ -109,19 +60,9 @@ describe("amazon-bedrock provider-policy-api", () => {
       preservesCatalogOptOut: true,
     },
     {
-      canonicalModelId: "claude-fable-5-1",
-      defaultLevel: "medium",
-      preservesCatalogOptOut: true,
-    },
-    {
       canonicalModelId: "claude-mythos-5",
       defaultLevel: "high",
       preservesCatalogOptOut: true,
-    },
-    {
-      canonicalModelId: "claude-opus-5",
-      defaultLevel: "high",
-      preservesCatalogOptOut: false,
     },
     {
       canonicalModelId: "claude-opus-4-8",

@@ -1,12 +1,12 @@
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
 
 export const page = definePage({
   ...routePageSpec("debug"),
   component: () =>
-    import("./debug-page.ts").then(() => ({
+    import("./debug-page.tsx").then((module) => ({
       header: true,
-      render: () => html`<openclaw-debug-page></openclaw-debug-page>`,
+      renderSolid: () => createComponent(module.DebugPage, {}),
     })),
 });

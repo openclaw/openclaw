@@ -47,7 +47,7 @@ export type EmbeddedAgentMeta = {
   provider: string;
   model: string;
   contextTokens?: number;
-  contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
+  contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
   agentHarnessId?: string;
   /** Sanitized provider-policy refusal attached to this physical attempt. */
   providerRefusal?: {
@@ -166,6 +166,13 @@ export type EmbeddedAgentRunMeta = {
   finalPromptText?: string;
   finalAssistantVisibleText?: string;
   finalAssistantRawText?: string;
+  /**
+   * Raw text of only the model's own latest message; "" when that message had
+   * no final text (empty, or it ended in a tool call). finalAssistantRawText can
+   * be cumulative (CLI) or runner-substituted earlier text, so diagnostics prefer
+   * this field. Unset when the runtime exposes no message (assistantTexts only).
+   */
+  finalAssistantMessageRawText?: string;
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
   timeoutPhase?: AgentRunTimeoutPhase;
@@ -230,6 +237,7 @@ export type EmbeddedAgentRunMeta = {
   requestShaping?: {
     authMode?: string;
     thinking?: string;
+    thinkingClamp?: string;
     reasoning?: string;
     verbose?: string;
     trace?: string;

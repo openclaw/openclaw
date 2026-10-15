@@ -5,8 +5,7 @@ import {
   type GeneratedMusicAsset,
   type MusicGenerationProvider,
 } from "openclaw/plugin-sdk/music-generation";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -212,7 +211,7 @@ export function buildMinimaxMusicGenerationProvider(
     label: "MiniMax",
     defaultModel: DEFAULT_MINIMAX_MUSIC_MODEL,
     models: [DEFAULT_MINIMAX_MUSIC_MODEL, "music-2.6-free", "music-cover", "music-cover-free"],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: providerId, ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: providerId, ...ctx }),
     capabilities: {
       generate: {
         maxTracks: 1,
@@ -236,29 +235,20 @@ export function buildMinimaxMusicGenerationProvider(
         throw new Error("MiniMax music generation currently supports mp3 output only.");
       }
 
-      const auth = await resolveApiKeyForProvider({
-        provider: providerId,
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("MiniMax API key missing");
-      }
-
       const fetchFn = fetch;
       const operationTimeoutMs = req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS;
+      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+        await resolveMinimaxMediaRequestConfig({
+          cfg: req.cfg,
+          providerId,
+          agentDir: req.agentDir,
+          authStore: req.authStore,
+          capability: "audio",
+        });
       const deadline = createProviderOperationDeadline({
         timeoutMs: operationTimeoutMs,
         label: "MiniMax music generation",
       });
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveMinimaxMediaRequestConfig({
-          cfg: req.cfg,
-          providerId,
-          apiKey: auth.apiKey,
-          capability: "audio",
-        });
       const requestPolicy: MinimaxRequestPolicy = { allowPrivateNetwork, dispatcherPolicy };
       const jsonHeaders = new Headers(headers);
       jsonHeaders.set("Content-Type", "application/json");

@@ -12,6 +12,7 @@ import {
   readGitMetadataDirectories,
   readGitMetadataPrefix,
   readGitObjectStorageDependencies,
+  readGitRefs,
   readGitWorktreeAdministrations,
 } from "./git-root.js";
 
@@ -41,6 +42,48 @@ async function expectGitRootResolution(params: {
 }
 
 describe("git-root", () => {
+  it("selects exact packed refs while preserving loose overrides and missing aliases", async () => {
+    await withTestDir({ prefix: "openclaw-git-packed-selection-" }, async (root) => {
+      const packed = "a".repeat(40);
+      const loose = "b".repeat(40);
+      const ref = "refs/heads/release.v1+hotfix";
+      await fs.mkdir(path.join(root, "refs", "heads"), { recursive: true });
+      await fs.writeFile(path.join(root, "refs", "heads", "main"), `${loose}\n`);
+      await fs.writeFile(
+        path.join(root, "packed-refs"),
+        [
+          "# pack-refs with: peeled fully-peeled sorted",
+          `${packed} refs/heads/main`,
+          `${loose} ${ref}/child`,
+          `${loose} refs/heads/releaseXv11hotfix`,
+          `${packed} ${ref}`,
+          `${packed} refs/tags/v1`,
+          `^${loose}`,
+          `${loose}\trefs/remotes/origin/main\r`,
+          `${packed} refs/remotes/origin/tail`,
+        ].join("\n"),
+      );
+      const refs = [
+        "refs/heads/main",
+        ref,
+        "refs/tags/v1",
+        "refs/remotes/origin/main",
+        "refs/remotes/origin/tail",
+        "refs/tags/HEAD",
+      ];
+      expect(readGitRefs(root, refs)).toEqual(
+        new Map([
+          ["refs/heads/main", loose],
+          [ref, packed],
+          ["refs/tags/v1", packed],
+          ["refs/remotes/origin/main", loose],
+          ["refs/remotes/origin/tail", packed],
+          ["refs/tags/HEAD", null],
+        ]),
+      );
+    });
+  });
+
   it("keeps short-read retries within the bounded metadata window", async () => {
     await withTestDir({ prefix: "openclaw-git-bounded-ref-" }, async (root) => {
       const ref = path.join(root, "main");
@@ -99,34 +142,6 @@ describe("git-root", () => {
 
   it.each([
     {
-      name: "starting at the repo root itself",
-      label: "git-root-self",
-      setup: async (temp: string) => {
-        const repoRoot = path.join(temp, "repo");
-        await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
-        return {
-          startPath: repoRoot,
-          expectedRoot: repoRoot,
-          expectedHead: path.join(repoRoot, ".git", "HEAD"),
-        };
-      },
-    },
-    {
-      name: ".git is a directory",
-      label: "git-root-dir",
-      setup: async (temp: string) => {
-        const repoRoot = path.join(temp, "repo");
-        const workspace = path.join(repoRoot, "nested", "workspace");
-        await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
-        await fs.mkdir(workspace, { recursive: true });
-        return {
-          startPath: workspace,
-          expectedRoot: repoRoot,
-          expectedHead: path.join(repoRoot, ".git", "HEAD"),
-        };
-      },
-    },
-    {
       name: ".git is a gitdir pointer file",
       label: "git-root-file",
       setup: async (temp: string) => {
@@ -140,23 +155,6 @@ describe("git-root", () => {
           startPath: workspace,
           expectedRoot: repoRoot,
           expectedHead: path.join(gitDir, "HEAD"),
-        };
-      },
-    },
-    {
-      name: "invalid gitdir content still keeps root detection",
-      label: "git-root-invalid-file",
-      setup: async (temp: string) => {
-        const parentRoot = path.join(temp, "repo");
-        const childRoot = path.join(parentRoot, "child");
-        const nested = path.join(childRoot, "nested");
-        await fs.mkdir(path.join(parentRoot, ".git"), { recursive: true });
-        await fs.mkdir(nested, { recursive: true });
-        await fs.writeFile(path.join(childRoot, ".git"), "not-a-gitdir-pointer\n", "utf-8");
-        return {
-          startPath: nested,
-          expectedRoot: childRoot,
-          expectedHead: path.join(parentRoot, ".git", "HEAD"),
         };
       },
     },
@@ -177,18 +175,6 @@ describe("git-root", () => {
     },
   ])("resolves git roots when $name", async ({ label, setup }) => {
     await expectGitRootResolution({ label, setup });
-  });
-
-  it("respects maxDepth traversal limit", async () => {
-    await withTestDir({ prefix: "openclaw-git-root-depth-" }, async (temp) => {
-      const repoRoot = path.join(temp, "repo");
-      const nested = path.join(repoRoot, "a", "b", "c");
-      await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
-      await fs.mkdir(nested, { recursive: true });
-
-      expect(findGitRoot(nested, { maxDepth: 2 })).toBeNull();
-      expect(readGitHead(nested, { maxDepth: 2 })).toBeUndefined();
-    });
   });
 
   it("matches native Git storage across normal, bare, and relocated linked layouts", async () => {

@@ -48,7 +48,7 @@ The budget uses the client IP resolved before the upgrade:
   these headers. Proxy-shaped requests without valid attribution are rejected
   before acquiring a slot; they do not fall back to a shared proxy-IP budget.
 - **Cloudflare Tunnel:** the same trusted-proxy rules apply. Trust the immediate
-  `cloudflared` socket source narrowly and ensure a safe `X-Forwarded-For`
+  `cloudflared` socket source narrowly and check that a safe `X-Forwarded-For`
   chain reaches the Gateway. `CF-Connecting-IP` is not used to select this
   budget. See [Cloudflare Tunnel and Access](/gateway/cloudflare-access).
 - **OpenClaw-managed Tailscale Serve:** the dedicated private listener uses the

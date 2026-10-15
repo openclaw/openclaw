@@ -1,17 +1,27 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type {
   McpAppDiscoverResult,
   McpAppDiscoveredServer,
   McpAppExtensionTarget,
 } from "../../../src/shared/mcp-app-extensions.js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "./format-error.ts";
-import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
+import { canCallGatewayMethod } from "./gateway-methods.ts";
+
+const discoveryRequests = new WeakMap<
+  GatewayBrowserClient,
+  Map<string, Promise<McpAppDiscoverResult>>
+>();
+
+type McpAppCatalogHost = {
+  requestUpdate(): void;
+  addController?(controller: McpAppCatalogController): void;
+};
 
 /** Presentation cache only. The Gateway remains the discovery and authorization owner. */
-export class McpAppCatalogController implements ReactiveController {
+export class McpAppCatalogController {
   servers: McpAppDiscoveredServer[] = [];
   onboarding: NonNullable<McpAppDiscoverResult["onboarding"]> = [];
   loading = false;
@@ -22,16 +32,18 @@ export class McpAppCatalogController implements ReactiveController {
   private cleanup: (() => void)[] = [];
   private connected = false;
   constructor(
-    private host: ReactiveControllerHost,
+    private host: McpAppCatalogHost,
     private context: () => ApplicationContext | undefined,
     private target: () => McpAppExtensionTarget,
     private prepareSession: () => boolean = () => false,
   ) {
-    host.addController(this);
+    host.addController?.(this);
   }
   get available() {
+    const snapshot = this.context()?.gateway.snapshot;
     return (
-      isGatewayMethodAdvertised(this.context()?.gateway.snapshot ?? {}, "mcp.app.discover") === true
+      canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.write") ||
+      canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.sessions.write")
     );
   }
   hostConnected() {
@@ -110,6 +122,13 @@ export class McpAppCatalogController implements ReactiveController {
     }
     const generation = ++this.generation;
     const scope = gatewayPresentationScope(context.gateway).key;
+    let pending = discoveryRequests.get(client);
+    if (!pending) {
+      pending = new Map();
+      discoveryRequests.set(client, pending);
+    }
+    // A config change during discovery may show the older catalog until the next refresh.
+    const requestKey = JSON.stringify([scope, target.agentId, target.sessionKey]);
     this.loading = true;
     this.error = null;
     this.host.requestUpdate();
@@ -136,10 +155,23 @@ export class McpAppCatalogController implements ReactiveController {
           if (!session) {
             throw new Error(context.sessions.state.error ?? t("mcpApp.errors.sessionUnavailable"));
           }
+          // A sibling's discovery may have observed the session before it existed.
+          pending.delete(requestKey);
         }
         this.preparedSessionIdentity = this.identity;
       }
-      const result = await client.request<McpAppDiscoverResult>("mcp.app.discover", target);
+      let request = pending.get(requestKey);
+      if (!request) {
+        request = client.request<McpAppDiscoverResult>("mcp.app.discover", target);
+        const release = () => {
+          if (pending.get(requestKey) === request) {
+            pending.delete(requestKey);
+          }
+        };
+        void request.then(release, release);
+        pending.set(requestKey, request);
+      }
+      const result = await request;
       if (current()) {
         this.servers = result.servers;
         this.onboarding = result.onboarding ?? [];

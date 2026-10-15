@@ -43,6 +43,41 @@ export function registerStatusSummarySessionRowCases(params: {
   setSessions: (store: SessionStore) => void;
 }): void {
   describe("status summary session rows", () => {
+    it.each([
+      { fastMode: true, fastFlag: "fast" },
+      { fastMode: false, fastFlag: "fast:off" },
+      { fastMode: "auto", fastFlag: "fast:auto" },
+      { fastMode: "ultrafast", fastFlag: "fast:ultrafast" },
+      { fastMode: undefined, fastFlag: undefined },
+    ])("keeps session flag order with fast mode $fastMode", async ({ fastMode, fastFlag }) => {
+      params.setSessions({
+        "agent:main:main": {
+          sessionId: "flag-order",
+          updatedAt: Date.now(),
+          thinkingLevel: "high",
+          verboseLevel: "on",
+          fastMode,
+          reasoningLevel: "on",
+          elevatedLevel: "full",
+          systemSent: true,
+          abortedLastRun: true,
+        },
+      });
+
+      const summary = await params.getStatusSummary();
+
+      expect(summary.sessions.recent[0]?.flags).toEqual([
+        "think:high",
+        "verbose:on",
+        ...(fastFlag === undefined ? [] : [fastFlag]),
+        "reasoning:on",
+        "elevated:full",
+        "system",
+        "aborted",
+        "id:flag-order",
+      ]);
+    });
+
     it("keeps status available when static catalog lookup fails", async () => {
       vi.mocked(
         params.getStatusSummaryRuntime().resolveConfiguredStatusModelRef,
@@ -51,12 +86,15 @@ export function registerStatusSummarySessionRowCases(params: {
         model: "broken-model",
       });
       params.rejectProviderStaticModel(new Error("static catalog unavailable"));
+      vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
+        undefined,
+      );
 
       await expect(params.getStatusSummary()).resolves.toMatchObject({
         sessions: {
           defaults: {
             model: "broken-model",
-            contextTokens: 200_000,
+            contextTokens: null,
           },
         },
       });

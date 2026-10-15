@@ -19,6 +19,10 @@ import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import * as pluginConfig from "../../plugins/config-state.js";
@@ -36,10 +40,7 @@ import {
   defineMediaGenerationCancellationTests,
   defineMediaGenerationDuplicateTests,
 } from "./media-generation-lifecycle.test-support.js";
-import {
-  createVideoGenerateDuplicateGuardResult,
-  createVideoGenerateStatusActionResult,
-} from "./video-generate-tool.actions.js";
+import { createVideoGenerateStatusActionResult } from "./video-generate-tool.actions.js";
 import { createVideoGenerateTool } from "./video-generate-tool.js";
 import { createVideoProviderSnapshot } from "./video-generate-tool.test-support.js";
 
@@ -67,7 +68,9 @@ function savedMedia(fileName: string, size: number, contentType = "video/mp4") {
 function configWithDefaults(
   defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
 ): OpenClawConfig {
-  return { agents: { defaults } };
+  const config = { agents: { defaults } };
+  setRuntimeConfigSnapshot(config, config);
+  return config;
 }
 
 const mediaActivityMocks = vi.hoisted(() => ({
@@ -229,6 +232,7 @@ describe("createVideoGenerateTool", () => {
   afterEach(() => {
     clearPluginMetadataLifecycleCaches();
     vi.unstubAllEnvs();
+    clearRuntimeConfigSnapshot();
   });
 
   it("exposes video generation for an auth-backed video provider", () => {
@@ -638,7 +642,10 @@ describe("createVideoGenerateTool", () => {
   defineMediaGenerationCancellationTests({
     kind: "video",
     tasks: taskExecutorMocks,
-    createTool: (options) => expectVideoGenerateTool(createVideoGenerateTool(options)),
+    createTool: (options) => {
+      setRuntimeConfigSnapshot(options.config ?? {}, options.config);
+      return expectVideoGenerateTool(createVideoGenerateTool(options));
+    },
     requesterOrigin: { channel: "discord", to: "channel:1" },
     references: ["./first.png", "./second.png"],
     referenceSignal: "caller",
@@ -667,7 +674,10 @@ describe("createVideoGenerateTool", () => {
     kind: "video",
     tasks: taskExecutorMocks,
     listTasks: mediaActivityMocks.listOperations,
-    createTool: (options) => expectVideoGenerateTool(createVideoGenerateTool(options)),
+    createTool: (options) => {
+      setRuntimeConfigSnapshot(options.config ?? {}, options.config);
+      return expectVideoGenerateTool(createVideoGenerateTool(options));
+    },
     requesterOrigin: { channel: "discord", to: "channel:1" },
     setupProviders: () => {
       vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
@@ -747,30 +757,6 @@ describe("createVideoGenerateTool", () => {
     });
   });
 
-  it("rejects fractional duration before calling the provider", async () => {
-    const generateVideo = mockGeneratedVideo({
-      provider: "google",
-      model: "veo-3.1-fast-generate-preview",
-    });
-
-    const tool = createVideoGenerateTool({
-      config: configWithDefaults({
-        mediaModels: { video: { primary: "google/veo-3.1-fast-generate-preview" } },
-      }),
-    });
-    if (!tool) {
-      throw new Error("expected video_generate tool");
-    }
-
-    await expect(
-      tool.execute("call-1", {
-        prompt: "friendly lobster surfing",
-        durationSeconds: 5.5,
-      }),
-    ).rejects.toThrow("durationSeconds must be a positive integer");
-    expect(generateVideo).not.toHaveBeenCalled();
-  });
-
   it("surfaces normalized video geometry from runtime metadata", async () => {
     mockGeneratedVideo({
       provider: "runway",
@@ -820,58 +806,13 @@ describe("createVideoGenerateTool", () => {
     expect(details).not.toHaveProperty("size");
   });
 
-  it("lists supported provider durations when advertised", async () => {
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
-      {
-        id: "google",
-        defaultModel: "veo-3.1-fast-generate-preview",
-        models: ["veo-3.1-fast-generate-preview"],
-        capabilities: {
-          generate: {
-            maxDurationSeconds: 8,
-            supportedDurationSeconds: [4, 6, 8],
-          },
-          imageToVideo: {
-            enabled: true,
-            maxInputImages: 1,
-            maxDurationSeconds: 8,
-            supportedDurationSeconds: [4, 6, 8],
-          },
-        },
-        generateVideo: vi.fn(async () => {
-          throw new Error("not used");
-        }),
-      },
-    ]);
-
-    const tool = createVideoGenerateTool({
-      config: configWithDefaults({
-        mediaModels: { video: { primary: "google/veo-3.1-fast-generate-preview" } },
-      }),
-    });
-    if (!tool) {
-      throw new Error("expected video_generate tool");
-    }
-
-    const result = await tool.execute("call-1", { action: "list" });
-    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
-    expect(text).toContain("modes=generate/imageToVideo");
-    expect(text).toContain("supportedDurationSeconds=4/6/8");
-    const providers = resultDetails(result).providers as Array<{
-      id?: string;
-      modes?: string[];
-    }>;
-    expect(providers).toHaveLength(1);
-    expect(providers[0]?.id).toBe("google");
-    expect(providers[0]?.modes).toEqual(["generate", "imageToVideo"]);
-  });
-
   it("lists model-specific catalog capabilities and modes", async () => {
     const imageToVideoCapabilities = {
       imageToVideo: {
         enabled: true,
         maxInputImages: 1,
         maxDurationSeconds: 15,
+        supportedDurationSeconds: [5, 10, 15],
         resolutions: ["480P", "720P", "1080P"] as const,
         aspectRatios: ["16:9", "9:16"] as const,
         supportsResolution: true,
@@ -912,7 +853,7 @@ describe("createVideoGenerateTool", () => {
     const result = await tool.execute("call-1", { action: "list" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
     expect(text).toContain(
-      "model image-video: modes=imageToVideo, maxInputImages=1, maxDurationSeconds=15, resolution, aspectRatio",
+      "model image-video: modes=imageToVideo, maxInputImages=1, maxDurationSeconds=15, supportedDurationSeconds=5/10/15, resolution, aspectRatio",
     );
     const providers = resultDetails(result).providers as Array<{
       catalog?: Array<{
@@ -927,89 +868,6 @@ describe("createVideoGenerateTool", () => {
       capabilities: imageToVideoCapabilities,
       modes: ["imageToVideo"],
     });
-  });
-
-  it("defers disabled primary modes to the fallback-aware runtime", async () => {
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
-      {
-        id: "video-plugin",
-        defaultModel: "vid-v1",
-        models: ["vid-v1"],
-        capabilities: {
-          imageToVideo: {
-            enabled: false,
-          },
-        },
-        generateVideo: vi.fn(async () => {
-          throw new Error("not used");
-        }),
-      },
-    ]);
-    const generateSpy = mockSavedVideoResult();
-
-    const tool = createVideoGenerateTool({
-      config: configWithDefaults({
-        mediaModels: { video: { primary: "video-plugin/vid-v1" } },
-      }),
-    });
-    if (!tool) {
-      throw new Error("expected video_generate tool");
-    }
-
-    await tool.execute("call-1", {
-      prompt: "lobster timelapse",
-      image: "data:image/png;base64,cG5n",
-    });
-
-    const request = firstMockCallArg(generateSpy) as { inputImages?: unknown[] };
-    expect(request.inputImages).toHaveLength(1);
-  });
-
-  it("defers model-specific reference limits to runtime overlays", async () => {
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
-      {
-        id: "video-plugin",
-        defaultModel: "r2v",
-        models: ["r2v"],
-        capabilities: {
-          imageToVideo: {
-            enabled: true,
-            maxInputImages: 1,
-          },
-        },
-        catalogByModel: {
-          r2v: {
-            modes: ["imageToVideo"],
-            capabilities: {
-              imageToVideo: {
-                enabled: true,
-                maxInputImages: 5,
-              },
-            },
-          },
-        },
-        generateVideo: vi.fn(async () => {
-          throw new Error("not used");
-        }),
-      },
-    ]);
-    const generateSpy = mockSavedVideoResult();
-    const tool = createVideoGenerateTool({
-      config: configWithDefaults({
-        mediaModels: { video: { primary: "video-plugin/r2v" } },
-      }),
-    });
-    if (!tool) {
-      throw new Error("expected video_generate tool");
-    }
-
-    await tool.execute("call-r2v", {
-      prompt: "animate both references",
-      images: ["data:image/png;base64,cG5n", "data:image/png;base64,cG5nMg=="],
-    });
-
-    const request = firstMockCallArg(generateSpy) as { inputImages?: unknown[] };
-    expect(request.inputImages).toHaveLength(2);
   });
 
   it("warns when optional provider overrides are ignored", async () => {
@@ -1161,15 +1019,21 @@ describe("createVideoGenerateTool", () => {
 
       await tool.execute("call-1", {
         prompt: "lobster",
+        aspectRatio: "17:9",
+        resolution: "draft-large",
         ...inputs,
       });
 
       expect(generateSpy).toHaveBeenCalledTimes(1);
       const call = firstMockCallArg(generateSpy) as {
         inputImages?: Array<{ buffer: Buffer; role?: string }>;
+        aspectRatio?: string;
+        resolution?: string;
       };
       expect(call.inputImages?.map((image) => image.buffer.toString())).toEqual(expectedImages);
       expect(call.inputImages?.map((image) => image.role)).toEqual(expectedRoles);
+      expect(call.aspectRatio).toBe("17:9");
+      expect(call.resolution).toBe("draft-large");
     },
   );
 
@@ -1246,65 +1110,6 @@ describe("createVideoGenerateTool", () => {
       }),
     ).rejects.toThrow("audio data: URLs are not supported for video_generate.");
     expect(generateSpy).not.toHaveBeenCalled();
-  });
-
-  it("accepts provider-specific aspectRatio and resolution values and forwards them to the runtime", async () => {
-    mockVideoPluginProvider();
-    const generateSpy = mockSavedVideoResult();
-    const tool = createConfiguredVideoTool();
-
-    await tool.execute("call-1", {
-      prompt: "lobster",
-      aspectRatio: "17:9",
-      resolution: "draft-large",
-    });
-
-    const input = firstMockCallArg(generateSpy) as { aspectRatio?: string; resolution?: string };
-    expect(input.aspectRatio).toBe("17:9");
-    expect(input.resolution).toBe("draft-large");
-  });
-
-  it("returns active task status instead of starting a duplicate generation", async () => {
-    mediaActivityMocks.listOperations.mockReturnValue([
-      {
-        taskId: "task-active",
-        runtime: "cli",
-        taskKind: VIDEO_GENERATION_TASK_KIND,
-        sourceId: "video_generate:openai",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        ownerKey: "agent:main:discord:direct:123",
-        scopeKind: "session",
-        runId: "tool:video_generate:active",
-        task: "friendly lobster surfing",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
-        progressSummary: "Generating video",
-      },
-    ]);
-
-    const result = await createVideoGenerateDuplicateGuardResult("agent:main:discord:direct:123", {
-      prompt: "friendly lobster surfing",
-    });
-
-    expect(result?.content).toStrictEqual([
-      {
-        type: "text",
-        text: "Video generation task task-active is already running with openai.\nProgress: Generating video.\nDo not call video_generate again for this request. Do not wait, poll, or yield for it: end this turn; the completion arrives as a later turn and sends the finished video here.",
-      },
-    ]);
-    expect(result?.details).toMatchObject({
-      action: "status",
-      duplicateGuard: true,
-      active: true,
-      existingTask: true,
-      status: "running",
-      taskKind: VIDEO_GENERATION_TASK_KIND,
-      provider: "openai",
-      task: { taskId: "task-active", runId: "tool:video_generate:active" },
-      progressSummary: "Generating video",
-    });
   });
 
   it("reports active task status when action=status is requested", async () => {

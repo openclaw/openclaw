@@ -13,6 +13,13 @@ import type { TSchema } from "typebox";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 import { cleanSchemaForLlamacppGbnf } from "./clean-for-llamacpp-gbnf.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
+import {
+  inheritToolSchemaTruncation,
+  reportToolSchemaTruncation,
+  truncateToolSchemaDepth,
+  wasToolSchemaTruncated,
+} from "./tool-schema-depth.js";
+import { getPublishedRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 import { createToolSchemaNormalizationCache } from "./tool-schema-normalization-cache.js";
 import { normalizeToolSchema } from "./tool-schema-normalization.js";
 import {
@@ -69,6 +76,7 @@ export function shouldOmitEmptyArrayItems(
 }
 
 export type ToolParameterSchemaOptions = {
+  toolName?: string;
   modelProvider?: string;
   modelId?: string;
   modelCompat?: ToolSchemaModelCompat;
@@ -254,6 +262,11 @@ export function normalizeToolParameterSchema(
   schema: unknown,
   options?: ToolParameterSchemaOptions,
 ): TSchema {
+  const published = getPublishedRuntimeToolInputSchema(schema);
+  const boundedSchema = published ? schema : truncateToolSchemaDepth(schema, options?.toolName);
+  if (published && wasToolSchemaTruncated(schema)) {
+    reportToolSchemaTruncation(schema, options?.toolName);
+  }
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(options?.modelId);
   const normalizedToolSchemaProfile = normalizeLowercaseStringOrEmpty(
@@ -274,11 +287,12 @@ export function normalizeToolParameterSchema(
   if (source) {
     const cached = toolParameterSchemaCache.get(source, cacheKey);
     if (cached) {
+      if (wasToolSchemaTruncated(cached)) {
+        reportToolSchemaTruncation(source, options?.toolName);
+      }
       return cached;
     }
   }
-  const rememberResult = (normalized: TSchema): TSchema =>
-    source ? toolParameterSchemaCache.remember(source, cacheKey, normalized) : normalized;
   const isGeminiProvider =
     normalizedProvider.includes("google") ||
     normalizedProvider.includes("gemini") ||
@@ -291,11 +305,15 @@ export function normalizeToolParameterSchema(
     !isGeminiProvider &&
     !isLlamacppGbnfProfile &&
     !["$ref", "$defs", "definitions"].some((key) => unsupportedToolSchemaKeywords.has(key)) &&
-    canPreserveRootSchemaRefs(schema);
+    canPreserveRootSchemaRefs(boundedSchema);
   const inlinedSchema = normalizeToolSchema(
-    preserveRefs ? schema : inlineLocalToolSchemaRefs(schema),
+    preserveRefs ? boundedSchema : inlineLocalToolSchemaRefs(boundedSchema, options?.toolName),
     "openapi",
   );
+  const rememberResult = (normalized: TSchema): TSchema => {
+    const result = inheritToolSchemaTruncation(inlinedSchema, normalized);
+    return source ? toolParameterSchemaCache.remember(source, cacheKey, result) : result;
+  };
   const schemaRecord =
     inlinedSchema && typeof inlinedSchema === "object"
       ? (inlinedSchema as Record<string, unknown>)

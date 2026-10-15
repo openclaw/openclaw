@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { ChatView, type ChatProps } from "./chat-view.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -16,18 +17,24 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanupSolid();
   resetChatViewState();
   resetTranscriptTestDom();
 });
 
-function renderChatInto(
-  container: HTMLElement,
-  overrides: Partial<Parameters<typeof renderChat>[0]> = {},
-) {
-  render(
-    renderChat(createChatProps({ currentSessionId: "goal-session", ...overrides })),
-    container,
-  );
+const views = new WeakMap<
+  HTMLElement,
+  ReturnType<typeof mountSolid<Parameters<typeof ChatView>[0]>>
+>();
+
+function renderChatInto(container: HTMLElement, overrides: Partial<ChatProps> = {}) {
+  const props = { props: createChatProps({ currentSessionId: "goal-session", ...overrides }) };
+  const previous = views.get(container);
+  if (previous) {
+    previous.update(props);
+  } else {
+    views.set(container, mountSolid(ChatView, props, container));
+  }
 }
 
 describe("chat goal status", () => {
@@ -158,6 +165,30 @@ describe("chat goal status", () => {
     const runningLabel = container.querySelector(".agent-chat__goal-label");
     expect(runningLabel?.hasAttribute("tabindex")).toBe(false);
     expect(runningLabel?.closest("openclaw-tooltip")?.content).toBe("");
+  });
+
+  it("restores goal actions and expansion after a transient missing session goal", () => {
+    const container = document.createElement("div");
+    onTestFinished(() => {
+      views.get(container)?.dispose();
+    });
+    const onGoalAction = vi.fn();
+    const selectedSession = goalSession({ status: "paused", pausedAt: Date.now() });
+    renderChatInto(container, { selectedSession, onGoalAction });
+    container.querySelector<HTMLButtonElement>('button[aria-label="Show goal details"]')!.click();
+
+    renderChatInto(container, { selectedSession: undefined, onGoalAction });
+    expect(container.querySelector(".agent-chat__goal")).toBeNull();
+
+    renderChatInto(container, {
+      selectedSession: goalSession({ status: "paused", lastStatusNote: "Ready to resume" }),
+      onGoalAction,
+    });
+    expect(container.querySelector(".agent-chat__goal-detail")?.getAttribute("aria-hidden")).toBe(
+      "false",
+    );
+    container.querySelector<HTMLButtonElement>('button[aria-label="Resume goal"]')!.click();
+    expect(onGoalAction).toHaveBeenCalledExactlyOnceWith("goal-1", "resume");
   });
 
   it("edits the plain objective and restores the conversation draft on cancellation", () => {

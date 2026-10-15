@@ -332,19 +332,13 @@ export async function refreshSessionEntryFromStore(params: {
   }
 }
 
-export function resolveAdmittedRunSessionFile(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-}): string | undefined {
-  return normalizeOptionalString(params.sessionKey) ?? params.sessionFile;
-}
-
 export async function handleReplyAgentRunError(
   error: unknown,
   context: {
     resolveVisibleReplyDelivery: () => Promise<boolean>;
     isHeartbeat: boolean;
     replyExpectation: ReplyExpectation;
+    userTurnAccepted?: boolean;
     isRestartRecoveryArmed: () => Promise<boolean>;
     replyOperation: ReplyOperation;
     resolvedVerboseLevel: VerboseLevel;
@@ -418,7 +412,11 @@ export async function handleReplyAgentRunError(
     return returnWithQueuedFollowupDrain(knownFailurePayload);
   }
   const visibleReplyDelivered = await resolveVisibleReplyDelivery();
-  if (!isHeartbeat && visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
+  if (
+    !isHeartbeat &&
+    (visibleReplyDelivered || context.userTurnAccepted) &&
+    !replyOperation.abortSignal.aborted
+  ) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({ replyExpectation, visibleReplyDelivered }),
@@ -494,7 +492,7 @@ export type RunReplyAgentParams = ReplyAgentTurnContext & {
   shouldFollowup: boolean;
   hasQueuedFollowups?: boolean;
   isActive: boolean;
-  isRunActive?: () => boolean;
+  isRunActive?: () => boolean | Promise<boolean>;
   typing: TypingController;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;

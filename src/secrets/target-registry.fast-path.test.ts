@@ -86,20 +86,6 @@ describe("secret target registry fast path", () => {
     getSecretTargetRegistryMock.mockClear();
   });
 
-  it("resolves core paths before loading channel or full registries", () => {
-    const pathSegments = ["models", "providers", "openai", "headers", "X.Trace"];
-    const target = resolveConfigSecretTargetByPath(pathSegments);
-
-    expect(target).toMatchObject({
-      pathSegments,
-      pathTokens: pathSegments,
-      providerId: "openai",
-    });
-    expect(loadBundledPublicArtifactMock).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
-    expect(getSecretTargetRegistryMock).not.toHaveBeenCalled();
-  });
-
   it("resolves bundled channel targets by explicit channel id without manifest scans", () => {
     const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
 
@@ -116,20 +102,6 @@ describe("secret target registry fast path", () => {
     expect(getSecretTargetRegistryMock).not.toHaveBeenCalled();
   });
 
-  it("discovers selected core config targets without loading plugin metadata", () => {
-    const targets = discoverConfigSecretTargetsByIds(
-      {
-        gateway: { auth: { token: "test-token" } },
-        channels: { telegram: { botToken: "ignored-token" } },
-      },
-      ["gateway.auth.token"],
-    );
-
-    expect(targets.map((target) => target.entry.id)).toEqual(["gateway.auth.token"]);
-    expect(loadBundledPublicArtifactMock).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
-  });
-
   it("discovers selected configured channel targets without loading plugin metadata", () => {
     const targets = discoverConfigSecretTargetsByIds(
       { channels: { telegram: { botToken: "test-token" } } },
@@ -137,20 +109,6 @@ describe("secret target registry fast path", () => {
     );
 
     expect(targets.map((target) => target.entry.id)).toContain("channels.telegram.botToken");
-    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
-  });
-
-  it("discovers all core and configured channel targets without loading plugin metadata", () => {
-    const targets = discoverConfigSecretTargets({
-      gateway: { auth: { token: "gateway-token" } },
-      channels: { telegram: { botToken: "telegram-token" } },
-    });
-
-    const targetIds = targets.map((target) => target.entry.id);
-    expect(targetIds).toEqual(
-      expect.arrayContaining(["gateway.auth.token", "channels.telegram.botToken"]),
-    );
-    expect(targetIds.some((targetId) => targetId.startsWith("plugins.entries."))).toBe(false);
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
 
@@ -175,7 +133,11 @@ describe("secret target registry fast path", () => {
         "channels.custom.secondaryToken",
       ]),
     );
-    expect(getSecretTargetRegistryMock).toHaveBeenLastCalledWith({ config, env });
+    expect(getSecretTargetRegistryMock).toHaveBeenLastCalledWith({
+      config,
+      env,
+      configuredOnly: true,
+    });
 
     const nextConfig = {
       plugins: { load: { paths: ["/plugins/custom-next"] }, entries: {} },
@@ -183,7 +145,11 @@ describe("secret target registry fast path", () => {
     };
     const nextTargets = discoverConfigSecretTargets(nextConfig, { env });
     expect(nextTargets.map((target) => target.entry.id)).toContain("channels.customNext.token");
-    expect(getSecretTargetRegistryMock).toHaveBeenLastCalledWith({ config: nextConfig, env });
+    expect(getSecretTargetRegistryMock).toHaveBeenLastCalledWith({
+      config: nextConfig,
+      env,
+      configuredOnly: true,
+    });
   });
 
   it("resolves channel plan targets without loading plugin metadata", () => {

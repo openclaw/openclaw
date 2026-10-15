@@ -23,6 +23,7 @@ import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "../logging/diagnostic-run-activity.js";
+import type { CliBackendLiveSessionHandle } from "../plugins/cli-backend.types.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
@@ -37,10 +38,7 @@ import {
   requireRecord,
   requireRegexMatch,
 } from "./cli-runner.test-helpers.js";
-import {
-  attachCliMessagingDeliveryEvidence,
-  getCliMessagingDeliveryEvidence,
-} from "./cli-runner/delivery-evidence.js";
+import { createCliLiveSessionCapability } from "./cli-runner/cli-live-session-registry.js";
 import { logCliInvocation } from "./cli-runner/execute-logging.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./cli-runner/execute.js";
 import {
@@ -53,6 +51,7 @@ import {
 } from "./cli-runner/execute.test-support.js";
 import { writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog } from "./cli-runner/log.js";
+import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
@@ -1081,6 +1080,83 @@ describe("runCliAgent spawn path", () => {
     expect(process.env.CLI_SKILL_API_KEY).toBeUndefined();
   });
 
+  it.for(["compact", "ordinary", "revoked"] as const)(
+    "retires only the compacted owner's warm process before execution: %s",
+    async (mode, { onTestFinished }) => {
+      const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+      const admission = prepareSystemAgentRunAdmission(
+        {},
+        context.params.runId,
+        "main",
+        "native-compaction-test",
+      );
+      onTestFinished(admission.close);
+      context.params.admittedRunContext = await admission.admit("plugin-harness");
+      const registered: Array<CliBackendLiveSessionHandle> = [];
+      onTestFinished(() => {
+        for (const handle of registered) {
+          handle.close("restart");
+        }
+      });
+      const register = (owner: PreparedCliRunContext) => {
+        const capability = createCliLiveSessionCapability({
+          context: owner,
+          argv: ["claude", "-p"],
+          env: {},
+          beginCapture: () => {},
+          abortSignal: new AbortController().signal,
+        });
+        const close = vi.fn(() => capability.remove(handle));
+        const handle: CliBackendLiveSessionHandle = {
+          generation: owner.params.sessionKey ?? "native-compaction-owner",
+          fingerprint: capability.fingerprint,
+          isIdle: () => true,
+          close,
+          waitForExit: async () => {},
+        };
+        capability.register(handle);
+        registered.push(handle);
+        return { capability, close, handle };
+      };
+      const warm = register(context);
+      const unrelated = register({
+        ...context,
+        params: { ...context.params, sessionKey: "agent:other:other-session" },
+        preparedBackend: { ...context.preparedBackend, closeLiveSession: undefined },
+      });
+      // A separate one-shot run never registered or activated the warm process.
+      context.preparedBackend = { ...context.preparedBackend, closeLiveSession: undefined };
+      context.params.disableCliLiveSession = true;
+      if (mode !== "ordinary") {
+        context.params.controlOperation = "compact";
+        context.backendResolved.manualCompaction = {
+          input: "arg",
+          buildPrompt: () => "/compact",
+          validateOutput: () => ({ ok: true }),
+        };
+      }
+      if (mode === "revoked") {
+        context.params.assertCurrent = () => {
+          throw new Error("caller revoked");
+        };
+      }
+      if (mode === "revoked") {
+        await expect(executePreparedCliRun(context)).rejects.toThrow("caller revoked");
+        expect(supervisorSpawnMock).not.toHaveBeenCalled();
+        expect(warm.close).not.toHaveBeenCalled();
+      } else {
+        supervisorSpawnMock.mockImplementationOnce(async () => {
+          expect(warm.close).toHaveBeenCalledTimes(mode === "compact" ? 1 : 0);
+          expect(unrelated.close).not.toHaveBeenCalled();
+          return createManagedRun({ ...createSuccessfulProcessExit(), stdout: CLAUDE_OK_JSONL });
+        });
+        await executePreparedCliRun(context);
+        expect(warm.capability.current()).toBe(mode === "compact" ? undefined : warm.handle);
+      }
+      expect(unrelated.close).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not inject skill env overrides into control operations", async () => {
     const previousEnvValue = process.env.CLI_SKILL_API_KEY;
     delete process.env.CLI_SKILL_API_KEY;
@@ -1409,17 +1485,6 @@ describe("runCliAgent spawn path", () => {
       diagnostics.stop();
       setCliRunnerExecuteTestDeps({ writeCliSystemPromptFile });
     }
-  });
-
-  it("wraps primitive and frozen failures to preserve delivery evidence", () => {
-    const evidence = { didSendViaMessagingTool: true };
-    const primitive = attachCliMessagingDeliveryEvidence("failed", evidence);
-    const frozen = attachCliMessagingDeliveryEvidence(Object.freeze(new Error("frozen")), evidence);
-
-    expect(primitive).toBeInstanceOf(Error);
-    expect(frozen).toBeInstanceOf(Error);
-    expect(getCliMessagingDeliveryEvidence(primitive)?.didSendViaMessagingTool).toBe(true);
-    expect(getCliMessagingDeliveryEvidence(frozen)?.didSendViaMessagingTool).toBe(true);
   });
 
   it("sanitizes dangerous backend env overrides before spawn", async () => {

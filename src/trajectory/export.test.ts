@@ -8,10 +8,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import type { SessionHeader } from "../agents/sessions/session-manager.js";
 import { createReadTool } from "../agents/sessions/tools/read.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import {
-  replaceSessionEntry,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -28,7 +26,7 @@ import {
   writeToolCallSessionFile,
 } from "./export.test-helpers.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES } from "./paths.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.test-support.js";
 import type { TrajectoryEvent } from "./types.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-"));
@@ -634,29 +632,6 @@ describe("exportTrajectoryBundle", () => {
     },
   );
 
-  it("preserves numeric transcript timestamps", async () => {
-    const { tmpDir, sessionFile, outputDir } = exportPaths();
-    writeSimpleSessionFile(sessionFile, {
-      userEntryTimestamp: Date.parse("2026-04-01T05:46:40.000Z"),
-    });
-
-    await exportTrajectoryBundle({
-      outputDir,
-      sessionFile,
-      sessionId: "session-1",
-      workspaceDir: tmpDir,
-    });
-
-    const exportedEvents = fs
-      .readFileSync(path.join(outputDir, "events.jsonl"), "utf8")
-      .trim()
-      .split(/\r?\n/u)
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
-    expect(exportedEvents.find((event) => event.type === "user.message")?.ts).toBe(
-      "2026-04-01T05:46:40.000Z",
-    );
-  });
-
   it("rejects retired media fields in versionless transcript inputs", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
@@ -697,7 +672,6 @@ describe("exportTrajectoryBundle", () => {
       }),
     ).rejects.toThrow("retired top-level media fields");
   });
-
   it("rejects retired media carriers in versionless runtime trajectories", async () => {
     const { tmpDir, sessionTarget } = exportPaths();
     await replaceTranscriptEvents(sessionTarget, simpleSessionEntries(tmpDir));
@@ -971,7 +945,7 @@ describe("exportTrajectoryBundle", () => {
       type: "message",
       id: "entry-user",
       parentId: null,
-      timestamp: "2026-04-01T05:46:40.000Z",
+      timestamp: Date.parse("2026-04-01T05:46:40.000Z"),
       message: userMessage("hello"),
     };
     const assistantEntry = {
@@ -1008,6 +982,9 @@ describe("exportTrajectoryBundle", () => {
 
     expect(bundle.manifest.transcriptEventCount).toBe(2);
     expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
+    expect(bundle.events.find((event) => event.type === "user.message")?.ts).toBe(
+      "2026-04-01T05:46:40.000Z",
+    );
     expect(bundle.manifest.warnings).toEqual([
       {
         source: "session",

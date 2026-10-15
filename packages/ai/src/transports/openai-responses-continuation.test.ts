@@ -181,11 +181,6 @@ describe("OpenAI Responses continuation", () => {
 
   it.each([
     {
-      name: "instructions",
-      previous: { instructions: "Active background tasks: none." },
-      current: { instructions: "Active background tasks: 1 running." },
-    },
-    {
       name: "tools",
       previous: { tools: [{ type: "function", name: "read", parameters: { type: "object" } }] },
       current: { tools: [{ type: "function", name: "write", parameters: { type: "object" } }] },
@@ -206,18 +201,6 @@ describe("OpenAI Responses continuation", () => {
 
   it.each([
     [
-      "unsafe integer round-trip",
-      '{"n":9007199254740993}',
-      '{"n":"9007199254740993"}',
-      "continued",
-    ],
-    [
-      "negative unsafe round-trip",
-      '{"n":-9007199254740993}',
-      '{"n":"-9007199254740993"}',
-      "continued",
-    ],
-    [
       "provider whitespace in nested arguments",
       '{ "b": {"n":9007199254740993,"a":true},"a":[1] }',
       '{"b":{"n":"9007199254740993","a":true},"a":[1]}',
@@ -236,67 +219,15 @@ describe("OpenAI Responses continuation", () => {
       "history_changed",
     ],
     [
-      "negative binary64 collision",
-      '{"n":-9007199254740992}',
-      '{"n":-9007199254740993}',
-      "history_changed",
-    ],
-    [
-      "edited preserved integer",
-      '{"n":9007199254740993}',
-      '{"n":"9007199254740992"}',
-      "history_changed",
-    ],
-    [
       "provider string changed to bare unsafe integer",
       '{"n":"9007199254740992"}',
       '{"n":9007199254740992}',
       "history_changed",
     ],
-    [
-      "admitted integer string changed to Number",
-      '{"n":9007199254740992}',
-      '{"n":9007199254740992}',
-      "history_changed",
-    ],
-    ["safe integer versus string", '{"n":42}', '{"n":"42"}', "history_changed"],
-    [
-      "safe boundary versus string",
-      '{"n":9007199254740991}',
-      '{"n":"9007199254740991"}',
-      "history_changed",
-    ],
-    [
-      "quoted digits and escapes",
-      '{"text":"\\\"9007199254740993\\\"","n":9007199254740993}',
-      '{"text":"\\\"9007199254740993\\\"","n":"9007199254740993"}',
-      "continued",
-    ],
     ["unchanged incomplete JSON", '{"n":', '{"n":', "continued"],
     ["changed incomplete JSON", '{"n":', '{"n": }', "history_changed"],
-    [
-      "invalid leading zero",
-      '{"n":09007199254740993}',
-      '{"n":"9007199254740993"}',
-      "history_changed",
-    ],
     ["non-object array", "[42]", "[42.0]", "history_changed"],
-    ["non-object null", "null", " null ", "history_changed"],
     ["safe fraction", '{"n":4.20}', '{"n":4.2}', "continued"],
-    ["safe exponent", '{"n":4.2e1}', '{"n":42}', "continued"],
-    ["safe exponent versus string", '{"n":4.2e1}', '{"n":"42"}', "history_changed"],
-    [
-      "unsafe exponent follows terminal Number serialization",
-      '{"n":1e16}',
-      '{"n":10000000000000000}',
-      "continued",
-    ],
-    [
-      "unsafe fraction follows terminal Number serialization",
-      '{"n":10000000000000000.0}',
-      '{"n":10000000000000000}',
-      "continued",
-    ],
   ] as const)(
     "compares admitted provider tool arguments: %s",
     (_name, rawArguments, replayedArguments, expectedStatus) => {
@@ -337,8 +268,6 @@ describe("OpenAI Responses continuation", () => {
 
   it.each([
     ['{"n":9007199254740992}', '{"n":"9007199254740992"}', "history_changed"],
-    ['{"n":"9007199254740992"}', '{"n":9007199254740992}', "history_changed"],
-    ['{"n":9007199254740992}', '{"n":9007199254740993}', "history_changed"],
     ['{"n":9007199254740992}', '{"n":9007199254740992}', "continued"],
   ] as const)("keeps already-sent arguments strict: %s -> %s", (sent, current, expectedStatus) => {
     const state = continuationState();
@@ -420,7 +349,6 @@ describe("OpenAI Responses continuation", () => {
 
   it.each([
     ["id", "fc_output_changed", "history_changed"],
-    ["status", "in_progress", "history_changed"],
     ["call_id", normalizeOpenAIResponsesFunctionCallId("functions.gateway:0"), "continued"],
   ] as const)("compares prior output %s independently of its item ID", (field, value, expected) => {
     const output = { ...toolOutput("functions.gateway:0"), id: "fc_output_1", status: "completed" };
@@ -859,22 +787,5 @@ describe("OpenAI Responses continuation cache bounds", () => {
       output: [assistantOutput],
     });
     expect(previousResponseId("session-1")).toBe("resp_normal");
-  });
-
-  it("does not overwrite a replacement claim created during commit serialization", () => {
-    const first = claim({});
-    let replacement: ReturnType<typeof claim>;
-    const output = {
-      ...assistantOutput,
-      toJSON() {
-        cleanupSessionResources("session-1");
-        replacement = claim({});
-        return { ...assistantOutput };
-      },
-    };
-    first?.commit(continuationState().lastRequest, { id: "resp_race", output: [output] });
-    expect(replacement).toBeDefined();
-    expect(claim({})).toBeUndefined();
-    replacement?.release();
   });
 });

@@ -1,5 +1,3 @@
-// Shared SQLite storage for bounded diagnostic audit records.
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -9,6 +7,8 @@ import {
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
 } from "./kysely-sync.js";
+// Shared SQLite storage for bounded diagnostic audit records.
+import type { EngineConnection } from "./sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
 type DiagnosticEventsTable = OpenClawStateKyselyDatabase["diagnostic_events"];
@@ -24,7 +24,7 @@ const LEGACY_AUDIT_SEQUENCE_BASE = Number.MIN_SAFE_INTEGER;
 export const diagnosticReadOperations = {
   "diagnostic.configAuditFacts": (
     input: { scope: string; lastSeenAuditSequence: number },
-    db: DatabaseSync,
+    db: EngineConnection,
   ) => {
     const store = createSqliteAuditRecordKernel<{ event: string }>(db, {
       scope: input.scope,
@@ -68,7 +68,7 @@ export const diagnosticReadOperations = {
 
   "diagnostic.latest": (
     input: { scope: string; limit: number; beforeSequence?: number },
-    db: DatabaseSync,
+    db: EngineConnection,
   ) => ({
     type: "diagnostic.latest" as const,
     entries: createSqliteAuditRecordKernel<unknown>(db, {
@@ -88,7 +88,7 @@ export type SequencedSqliteAuditRecordEntry<T> = SqliteAuditRecordEntry<T> & {
   sequence: number;
 };
 
-function getAuditRecordKysely(database: DatabaseSync) {
+function getAuditRecordKysely(database: EngineConnection) {
   return getNodeSqliteKysely<AuditRecordDatabase>(database);
 }
 
@@ -102,7 +102,7 @@ function parseAuditRecord<T>(row: DiagnosticEventRow): SequencedSqliteAuditRecor
 }
 
 function readAuditWriteState(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   scope: string;
   legacy: boolean;
   key?: string;
@@ -137,7 +137,7 @@ function readAuditWriteState(params: {
 }
 
 function pruneAuditRecords(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   scope: string;
   maxEntries: number;
   count: number;
@@ -181,7 +181,7 @@ export function prepareSqliteAuditRecord<T>(
 
 type AuditRecordInsert = DiagnosticEventRow & { scope: string };
 
-function createAuditRecordInsert(database: DatabaseSync) {
+function createAuditRecordInsert(database: EngineConnection) {
   return prepareSqliteQuerySync<AuditRecordInsert>(database, (parameter) =>
     getAuditRecordKysely(database)
       .insertInto("diagnostic_events")
@@ -200,11 +200,18 @@ const auditRecordInsert = createSqliteQueryCache(createAuditRecordInsert);
 
 /** Connection-bound operations; mutation callers retain the complete transaction. */
 export function createSqliteAuditRecordKernel<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   options: { scope: string; maxEntries: number },
 ) {
   const scope = options.scope;
   const maxEntries = options.maxEntries;
+  const prune = (count: number, protectedKey?: string) =>
+    pruneAuditRecords({ database, scope, maxEntries, count, protectedKey });
+  const selectEntries = () =>
+    getAuditRecordKysely(database)
+      .selectFrom("diagnostic_events")
+      .select(["event_key", "payload_json", "created_at", "sequence"])
+      .where("scope", "=", scope);
   function insertRecord(record: DiagnosticEventRow): number {
     return Number(auditRecordInsert(database)({ ...record, scope }).numAffectedRows ?? 0);
   }
@@ -230,13 +237,7 @@ export function createSqliteAuditRecordKernel<T>(
           }),
         ),
     );
-    pruneAuditRecords({
-      database,
-      scope,
-      maxEntries,
-      count: state.count + (state.keyExists ? 0 : 1),
-      protectedKey: record.event_key,
-    });
+    prune(state.count + (state.keyExists ? 0 : 1), record.event_key);
   }
 
   function deleteRecord(key: string): void {
@@ -257,13 +258,7 @@ export function createSqliteAuditRecordKernel<T>(
         sequence: state.nextSequence,
       });
       // Keep the just-addressed key while pruning the oldest rows in this scope.
-      pruneAuditRecords({
-        database,
-        scope,
-        maxEntries,
-        count: state.count + inserted,
-        protectedKey: record.event_key,
-      });
+      prune(state.count + inserted, record.event_key);
     },
     upsert: upsertPreparedRecord,
     delete: deleteRecord,
@@ -298,29 +293,21 @@ export function createSqliteAuditRecordKernel<T>(
         count += insertRecord({ ...record, sequence });
         sequence += 1;
       }
-      pruneAuditRecords({ database, scope, maxEntries, count });
+      prune(count);
     },
     entries(): SqliteAuditRecordEntry<T>[] {
-      return executeSqliteQuerySync(
-        database,
-        getAuditRecordKysely(database)
-          .selectFrom("diagnostic_events")
-          .select(["event_key", "payload_json", "created_at", "sequence"])
-          .where("scope", "=", scope)
-          .orderBy("sequence", "asc"),
-      ).rows.map((row) => {
-        const { sequence: _sequence, ...entry } = parseAuditRecord<T>(row);
-        return entry;
-      });
+      return executeSqliteQuerySync(database, selectEntries().orderBy("sequence", "asc")).rows.map(
+        (row) => {
+          const { sequence: _sequence, ...entry } = parseAuditRecord<T>(row);
+          return entry;
+        },
+      );
     },
     latest(params: {
       limit: number;
       beforeSequence?: number;
     }): SequencedSqliteAuditRecordEntry<T>[] {
-      const baseQuery = getAuditRecordKysely(database)
-        .selectFrom("diagnostic_events")
-        .select(["event_key", "payload_json", "created_at", "sequence"])
-        .where("scope", "=", scope);
+      const baseQuery = selectEntries();
       const query =
         params.beforeSequence === undefined
           ? baseQuery

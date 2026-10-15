@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const log = vi.hoisted(() => ({ info: vi.fn(), debug: vi.fn() }));
+// mock-isolation: Capture severity without opening process-global log sinks.
+vi.mock("openclaw/plugin-sdk/logging-core", () => ({ createSubsystemLogger: () => log }));
+
 function scopedRequests(
   api: typeof import("./github-api.js"),
   fetchImpl: typeof fetch,
@@ -19,7 +23,37 @@ function scopedRequests(
     );
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+});
+
+it.each([false, true])("keeps slow fetch diagnostics at debug (failed=%s)", async (failed) => {
+  const { fetchGitHubApi } = await import("./github-api.js");
+  vi.spyOn(performance, "now")
+    .mockReturnValueOnce(0)
+    .mockReturnValueOnce(100)
+    .mockReturnValueOnce(600);
+  const fetchImpl = vi.fn<typeof fetch>();
+  if (failed) {
+    fetchImpl.mockRejectedValue(new Error("synthetic network failure"));
+    await expect(
+      fetchGitHubApi("https://api.github.com/repos/acme/repo", fetchImpl),
+    ).rejects.toThrow("Could not reach GitHub");
+  } else {
+    fetchImpl.mockResolvedValue(new Response("{}"));
+    await expect(
+      fetchGitHubApi("https://api.github.com/repos/acme/repo", fetchImpl),
+    ).resolves.toBeInstanceOf(Response);
+  }
+  expect(log.debug).toHaveBeenCalledWith("Slow GitHub API request", {
+    authMs: 100,
+    networkMs: 500,
+    resource: "core",
+    aborted: false,
+  });
+  expect(log.info).not.toHaveBeenCalled();
+});
 
 describe("GitHub API base URL", () => {
   it("defaults to public GitHub", async () => {

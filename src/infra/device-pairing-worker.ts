@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { reserveWorkerEnvironmentNativePublication } from "../gateway/worker-environments/store-native-publication.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
@@ -27,6 +28,14 @@ export const DevicePairingAuthorityRefusedError = resolveGlobalSingleton(
       }
     },
 );
+
+const setupChanges = resolveGlobalSingleton(
+  Symbol.for("openclaw.devicePairSetupChanges"),
+  () => new Set<(databasePath: string) => void>(),
+);
+
+export const onDevicePairSetupChange = (listener: (databasePath: string) => void) =>
+  registerListener(setupChanges, listener);
 
 // The broker owns this private channel; domain kernels supply the discriminated facts.
 function admissionFacts(value: unknown): DevicePairingAdmissionFacts[] {
@@ -55,83 +64,11 @@ function admissionFacts(value: unknown): DevicePairingAdmissionFacts[] {
 }
 
 function commitReceipt(value: unknown): DevicePairingCommitReceipt {
-  if (
-    !isRecord(value) ||
-    value.kind !== "devicePairing" ||
-    typeof value.beforeRevision !== "string" ||
-    typeof value.revision !== "string" ||
-    !Array.isArray(value.changed) ||
-    !value.changed.every(
-      (entry) =>
-        isRecord(entry) &&
-        typeof entry.deviceId === "string" &&
-        (entry.operatorBinding === undefined ||
-          entry.operatorBinding === null ||
-          (isRecord(entry.operatorBinding) &&
-            typeof entry.operatorBinding.identity === "string" &&
-            Array.isArray(entry.operatorBinding.scopes) &&
-            entry.operatorBinding.scopes.every((scope) => typeof scope === "string"))) &&
-        (entry.binding === null ||
-          (isRecord(entry.binding) &&
-            typeof entry.binding.identity === "string" &&
-            (entry.binding.generation === undefined ||
-              typeof entry.binding.generation === "string"))),
-    )
-  ) {
+  if (!isRecord(value) || value.kind !== "devicePairing") {
     throw new Error("Invalid pairing commit receipt");
   }
-  let tokensReplaced: DevicePairingCommitReceipt["tokensReplaced"];
-  if (value.tokensReplaced !== undefined) {
-    const replaced = value.tokensReplaced;
-    if (
-      !isRecord(replaced) ||
-      typeof replaced.deviceId !== "string" ||
-      !Array.isArray(replaced.roles) ||
-      !replaced.roles.every((role) => typeof role === "string")
-    ) {
-      throw new Error("Invalid pairing token replacement receipt");
-    }
-    tokensReplaced = { deviceId: replaced.deviceId, roles: replaced.roles };
-  }
-  let workerEnvironment: DevicePairingCommitReceipt["workerEnvironment"];
-  if (value.workerEnvironment !== undefined) {
-    const environment = value.workerEnvironment;
-    if (
-      !isRecord(environment) ||
-      typeof environment.environmentId !== "string" ||
-      typeof environment.nodeDeviceId !== "string" ||
-      typeof environment.updatedAtMs !== "number"
-    ) {
-      throw new Error("Invalid pairing worker-environment receipt");
-    }
-    workerEnvironment = {
-      environmentId: environment.environmentId,
-      nodeDeviceId: environment.nodeDeviceId,
-      updatedAtMs: environment.updatedAtMs,
-    };
-  }
-  return {
-    kind: "devicePairing",
-    beforeRevision: value.beforeRevision,
-    revision: value.revision,
-    ...(tokensReplaced ? { tokensReplaced } : {}),
-    ...(workerEnvironment ? { workerEnvironment } : {}),
-    changed: value.changed.map((entry) => ({
-      deviceId: entry.deviceId,
-      operatorBinding: entry.operatorBinding
-        ? { identity: entry.operatorBinding.identity, scopes: [...entry.operatorBinding.scopes] }
-        : null,
-      binding:
-        entry.binding === null
-          ? null
-          : {
-              identity: entry.binding.identity,
-              ...(entry.binding.generation === undefined
-                ? {}
-                : { generation: entry.binding.generation }),
-            },
-    })),
-  };
+  // SAFETY: The private mutation worker builds this typed receipt after native COMMIT.
+  return value as DevicePairingCommitReceipt;
 }
 
 export function executeDevicePairingMutation<Key extends keyof DevicePairingWorkerOperations>(
@@ -140,8 +77,9 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
     baseDir?: string;
     context?: OpenClawStateWorkerContext;
     assertCurrent?: () => void;
-    admit?: (facts: Exclude<DevicePairingAdmissionFacts, { kind: "pairing-publication" }>) => void;
+    admit?: (facts: DevicePairingAdmissionFacts) => void;
     onTokensReplaced?: (deviceId: string, roles: readonly string[]) => void;
+    onNodeApproved?: (approval: NonNullable<DevicePairingCommitReceipt["nodeApproval"]>) => void;
     /** Map a refused operation only after its admission and publication have settled. */
     onAuthorityRefused?: () => DevicePairingWorkerOperations[Key]["output"];
   } = {},
@@ -162,12 +100,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       captured.type === "bootstrap.prune"
         ? undefined
         : captureDevicePairingPublication(context.admission);
-    // Runtime facts preserve pairing identity; publishing them must not interrupt live node work.
-    const mutation = publication?.beginMutation(
-      captured.type !== "node.updateSessionHost" &&
-        captured.type !== "node.recordHostStats" &&
-        captured.type !== "node.updateBins",
-    );
+    const mutation = publication?.beginMutation();
     let admission: SqliteWorkerOperationAdmission | undefined;
     let published = false;
     let publishEnvironment: ReturnType<typeof reserveWorkerEnvironmentNativePublication>;
@@ -190,6 +123,9 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
         // A callback can throw or read publication recursively; the commit is already installed.
         published = true;
         mutation.publish(receipt);
+        if (receipt.nodeApproval) {
+          options.onNodeApproved?.(receipt.nodeApproval);
+        }
         invalidatePairedCardRendererCache();
         if (environmentPublished) {
           sessionChanges.emit({ all: true, scope: "worker-environments" });
@@ -205,12 +141,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
         context,
         async (scope) => {
           try {
-            const result = await scope.execute(captured);
-            if (captured.type === "bootstrap.prune" && result === 0) {
-              context.admission.assertCurrent();
-              options.assertCurrent?.();
-            }
-            return result;
+            return await scope.execute(captured);
           } finally {
             install();
           }
@@ -225,19 +156,8 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
               }
               context.admission.assertCurrent();
               options.assertCurrent?.();
-              const facts = admissionFacts(request.facts);
-              // Publication receipts belong to this broker, not domain policy callbacks.
-              for (const fact of facts) {
-                if (fact.kind !== "pairing-publication") {
-                  options.admit?.(fact);
-                }
-              }
-              if (request.stage === "commit" && mutation) {
-                const publicationFact = facts.find((fact) => fact.kind === "pairing-publication");
-                if (!publicationFact) {
-                  throw new Error("Pairing commit requires its prospective publication");
-                }
-                mutation.prepare(commitReceipt(publicationFact.receipt));
+              for (const fact of admissionFacts(request.facts)) {
+                options.admit?.(fact);
               }
               if (request.stage === "commit" && captured.type === "bootstrap.consume") {
                 publishEnvironment = reserveWorkerEnvironmentNativePublication(
@@ -259,6 +179,15 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       } finally {
         mutation?.finish(!admission || admission.settlement?.kind === "completed");
         removeService?.();
+        // Unknown outcomes can have committed; retry discovery without reviving authority.
+        if (
+          captured.type === "bootstrap.consume" ||
+          captured.type === "bootstrap.confirm" ||
+          captured.type === "bootstrap.ensure" ||
+          captured.type === "bootstrap.readCompletion"
+        ) {
+          notifyListeners(setupChanges, context.admission.databasePath);
+        }
       }
     }
   });

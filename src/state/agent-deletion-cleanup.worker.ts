@@ -78,17 +78,10 @@ export function withAgentDeletionWorkerCleanup<T>(
   return withAgentDeletionWorkerDatabaseCleanup(
     {
       ...target,
+      ownsDatabase: target.agentId === guard.predicate.agentId,
       assertCurrent,
       assertJournal: (statePath, entries) => {
-        if (
-          statePath !== target.statePath ||
-          !entries.some(
-            (entry) =>
-              entry.agentId === guard.predicate.agentId &&
-              entry.operationId === guard.predicate.operationId &&
-              !entry.cleanupCompleted,
-          )
-        ) {
+        if (statePath !== target.statePath) {
           throw new Error(
             `Agent ${guard.predicate.agentId} deletion no longer owns database cleanup.`,
           );

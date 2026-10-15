@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { applyBoardOps, BoardValidationError, normalizeBoardLayout } from "./board-layout.js";
+import {
+  applyBoardOps,
+  BoardValidationError,
+  insertBoardWidget,
+  normalizeBoardLayout,
+} from "./board-layout.js";
 
 type BoardLayout = Parameters<typeof normalizeBoardLayout>[0];
 
@@ -38,15 +43,34 @@ function widgetOrder(state: BoardLayout, tabId: string): string[] {
 }
 
 describe("board layout", () => {
-  it("normalizes tab and per-tab widget positions without holes", () => {
-    const normalized = normalizeBoardLayout(layout());
-    expect(normalized.tabs.map((tab) => tab.position)).toEqual([0, 1]);
-    expect(
-      normalized.widgets
-        .filter((widget) => widget.tabId === "one")
-        .map((widget) => widget.position),
-    ).toEqual([0, 1]);
-    expect(normalized.widgets.find((widget) => widget.name === "gamma")?.position).toBe(0);
+  it("keeps nested widget metadata caller-owned across layout operations", () => {
+    const original = layout();
+    const widget = original.widgets[0]!;
+    widget.props = { series: [1, 2] };
+    widget.declared = { tools: ["sessions"] };
+    widget.declaredSummary = ["Tool access: sessions"];
+    const before = structuredClone(original);
+    const inserted = { ...widget, name: "inserted" };
+    const results = [
+      normalizeBoardLayout(original),
+      applyBoardOps(original, [
+        { kind: "widget_resize", name: "alpha", sizeW: 2, sizeH: 3 },
+        { kind: "widget_move", name: "alpha", position: 1 },
+      ]),
+      insertBoardWidget(original, inserted, { tabId: "two" }),
+    ];
+    for (const result of results) {
+      const copied = result.widgets.find((candidate) => candidate.name === "alpha")!;
+      copied.props!.series = [9];
+      copied.declared!.tools!.push("usage");
+      copied.declaredSummary!.push("changed");
+      result.tabs[0]!.title = "changed";
+    }
+    results[2]!.widgets
+      .find((candidate) => candidate.name === "inserted")!
+      .declared!.tools!.push("cron");
+    expect(original).toEqual(before);
+    expect(inserted.declared).toEqual({ tools: ["sessions"] });
   });
 
   it("reorders widgets by position and after anchors, including cross-tab moves", () => {

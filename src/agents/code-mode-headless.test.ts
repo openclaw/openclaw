@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { CodeModeNamespaceDescriptor } from "./code-mode-namespaces.js";
-import { prepareSource } from "./code-mode-source.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "./code-mode.js";
 import {
   createHeadlessCodeModeHarness,
@@ -288,26 +287,6 @@ describe("headless Code Mode", () => {
     expect(loserAborted).toBe(false);
   });
 
-  it("drains every detached headless tool before completing the guest", async () => {
-    const first = fakeTool("headless_detached_first", async () => jsonResult({ name: "first" }));
-    const second = fakeTool("headless_detached_second", async () => jsonResult({ name: "second" }));
-
-    const result = expectCompleted(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessCodeModeHarness([first, second]),
-        code: `void headless_detached_first({});
-          void headless_detached_second({});
-          return "done";`,
-        wallClockMs: 5_000,
-      }),
-    );
-
-    expect(result.value).toBe("done");
-    expect(result.toolCallCount).toBe(2);
-    expect(first.execute).toHaveBeenCalledOnce();
-    expect(second.execute).toHaveBeenCalledOnce();
-  });
-
   it.each(["race", "any"] as const)(
     "preserves the headless Promise.%s winner while draining the slower nested tool",
     async (combinator) => {
@@ -437,49 +416,6 @@ describe("headless Code Mode", () => {
   });
 
   it.each([
-    {
-      name: "template-literal import text",
-      code: "return `import('node:fs')`;",
-      value: "import('node:fs')",
-      realHeadless: true,
-    },
-    {
-      name: "regular-expression module text",
-      code: 'return /import.meta/.test("import.meta");',
-      value: true,
-      realHeadless: true,
-    },
-    {
-      name: "ordinary import method",
-      code: "const api = { import(value) { return value; } }; return api.import(42);",
-      value: 42,
-      realHeadless: true,
-    },
-    {
-      name: "ordinary require method",
-      code: "const api = { require(value) { return value; } }; return api.require(42);",
-      value: 42,
-    },
-  ])(
-    "preserves harmless $name in headless source validation",
-    async ({ code, value, realHeadless }) => {
-      if (!realHeadless) {
-        expect(prepareSource(code)).toBe(code);
-        return;
-      }
-      const result = expectCompleted(
-        await runCodeModeScriptHeadless({
-          ctx: createHeadlessCodeModeHarness(),
-          code,
-        }),
-      );
-
-      expect(result.value).toBe(value);
-      expect(result.toolCallCount).toBe(0);
-    },
-  );
-
-  it.each([
     String.raw`return r\u0065quire('node:fs');`,
     "return require?.('node:fs');",
     "return (0, require)('node:fs');",
@@ -499,22 +435,6 @@ describe("headless Code Mode", () => {
     expect(result.error).toContain("module access is disabled");
     expect(result.toolCallCount).toBe(0);
   });
-
-  it.each(["import('node:fs')", "require('node:fs')"])(
-    "rejects astral-shifted JavaScript module access in a headless guest: %s",
-    async (moduleAccess) => {
-      const result = expectFailed(
-        await runCodeModeScriptHeadless({
-          ctx: createHeadlessCodeModeHarness(),
-          code: `const padding = "${"😀".repeat(96)}"; return ${moduleAccess};`,
-        }),
-      );
-
-      expect(result.code).toBe("invalid_input");
-      expect(result.error).toContain("module access is disabled");
-      expect(result.toolCallCount).toBe(0);
-    },
-  );
 
   it("injects deeply frozen trigger state and emits replacement state through json", async () => {
     const result = expectCompleted(

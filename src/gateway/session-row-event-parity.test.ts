@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -24,7 +25,7 @@ import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 afterEach(() => vi.restoreAllMocks());
 
 it("delivers nested event rows identical to the full list for each viewer and clock without SQLite", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const now = 1_000_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const profiles = [
@@ -36,6 +37,7 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       ...rolePolicyConfig(),
       agents: { entries: { main: {} }, defaults: { model: { primary: "openai/gpt-5.4" } } },
     };
+    setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:parent";
     const childKey = "agent:main:child";
     const lineageKey = "agent:main:completed-lineage";
@@ -95,13 +97,6 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       startedAtMs: now - 100,
       expiresAtMs: now + 1000,
     });
-    const peers = profiles.map((profile, index) => {
-      const { client, send } = createSessionRowEventPeer(profile, `row-parity-${index}`, now);
-      connection.clients.add(client);
-      connection.sessionMessageSubscribers.subscribe(client.connId, key);
-      connection.sessionMessageSubscribers.subscribe(client.connId, lineageKey);
-      return { client, send };
-    });
     subagentRuns.set("row-parity-child", {
       runId: "row-parity-child",
       childSessionKey: childKey,
@@ -121,6 +116,13 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       collectorCompletion: { status: "done" },
     });
     await initializeSessionReadContext(context);
+    const peers = profiles.map((profile, index) => {
+      const { client, send } = createSessionRowEventPeer(profile, `row-parity-${index}`, now);
+      connection.clients.add(client);
+      connection.sessionMessageSubscribers.subscribe(client.connId, key);
+      connection.sessionMessageSubscribers.subscribe(client.connId, lineageKey);
+      return { client, send };
+    });
     const projection = getSessionRowProjection(context)!;
     const detach = connection.attachSessionRowProjection(projection);
     try {
@@ -393,6 +395,8 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       });
       for (const [index, peer] of peers.entries()) {
         const frame = JSON.parse(peer.send.mock.lastCall![0]);
+        expect(frame.event).toBe("sessions.changed");
+        expect(frame.payload.sessionKey).toBe(key);
         expect(frame.payload.childSessions).toEqual(expected[index]?.childSessions);
       }
     } finally {

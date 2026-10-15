@@ -403,9 +403,13 @@ it("awaits extension entry, name, and label persistence before publishing their 
   });
 });
 
-it.each(["persistent", "detached"] as const)(
-  "rejects a queued %s extension persistence capability closed before admission",
-  async (storage) => {
+it.each(
+  (["persistent", "detached"] as const).flatMap((storage) =>
+    (["extension", "session"] as const).map((surface) => ({ storage, surface })),
+  ),
+)(
+  "rejects a queued $storage $surface persistence capability closed before admission",
+  async ({ storage, surface }) => {
     await withOpenClawTestState({ label: "extension-persistence-revoked" }, async (state) => {
       const target = {
         agentId: "main",
@@ -434,7 +438,10 @@ it.each(["persistent", "detached"] as const)(
         await release.promise;
       });
       await entered.promise;
-      const pending = api.appendEntryAsync("revoked-state", { count: 1 });
+      const pending =
+        surface === "extension"
+          ? api.appendEntryAsync("revoked-state", { count: 1 })
+          : session.setSessionNameAsync("revoked name");
       const rejected = expect(pending).rejects.toThrow("extension owner closed");
       runtime.invalidate("extension owner closed");
       release.resolve();

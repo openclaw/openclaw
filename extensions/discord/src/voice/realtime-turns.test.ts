@@ -16,6 +16,8 @@ defineDiscordVoiceTests(
     resolveVoiceIngressWithParticipantsMock,
     controlRealtimeVoiceAgentRunMock,
     realtimeSessionMock,
+    createRealtimeSessionMock,
+    createRealtimeVoiceBridgeSessionMock,
     configureVoiceStateGateway,
     createClient,
     createManager,
@@ -38,18 +40,27 @@ defineDiscordVoiceTests(
     expectUserMessageIncludes,
     expectUserMessageNotIncludes,
   }) => {
-    it("flushes captured PCM while leaving trailing silence to the provider's input clock", async () => {
+    it("flushes captured PCM for warm and connecting speakers without dropping first audio", async () => {
       realtimeSessionMock.bridge.pacesInputAudio = true;
       const { entry, manager } = await createJoinedAgentProxyFixture();
+      const connecting = createDeferred<void>();
+      const nextSession = createRealtimeSessionMock();
+      nextSession.bridge.pacesInputAudio = true;
+      nextSession.connect.mockReturnValueOnce(connecting.promise);
+      createRealtimeVoiceBridgeSessionMock.mockReturnValueOnce(nextSession);
       try {
-        const turn = beginSpeakerTurn(entry);
-        expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
-        turn.close();
-        const audio = Buffer.concat(
-          realtimeSessionMock.sendAudio.mock.calls.map(([chunk]) => chunk),
-        );
-        expect(audio).toEqual(Buffer.alloc(960));
+        for (const [userId, session] of [
+          ["u-owner", realtimeSessionMock],
+          ["u-guest", nextSession],
+        ] as const) {
+          const turn = beginSpeakerTurn(entry, { userId });
+          expect(session.sendAudio).toHaveBeenCalled();
+          turn.close();
+          const audio = Buffer.concat(session.sendAudio.mock.calls.map(([chunk]) => chunk));
+          expect(audio).toEqual(Buffer.alloc(960));
+        }
       } finally {
+        connecting.resolve();
         await manager.destroy();
       }
     });
@@ -544,19 +555,11 @@ defineDiscordVoiceTests(
       expectUserMessageIncludes("wake answer");
     });
 
-    it.each([
-      {
-        name: "unfinished fuzzy name",
-        chunks: ["Mostly", " because the task is still running."],
-      },
-      {
-        name: "name inside a long transcript",
-        chunks: ["ordinary discussion ".repeat(30), `OpenClaw, ${"x".repeat(230)}`],
-      },
-    ])("does not acknowledge $name that the final wake gate rejects", async ({ chunks }) => {
+    it("does not acknowledge an unfinished fuzzy name that the final wake gate rejects", async () => {
       const { entry, bridgeParams } = await createWakeNameFixture();
       beginSpeakerTurn(entry);
       bridgeParams?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+      const chunks = ["Mostly", " because the task is still running."];
       for (const chunk of chunks) {
         bridgeParams?.onTranscript?.("user", chunk, false);
       }

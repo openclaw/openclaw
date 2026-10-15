@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -81,7 +84,13 @@ describe("ACP session listing", () => {
       if (!returned?.skillsSnapshot) {
         throw new Error("Expected complete session metadata");
       }
-      returned.skillsSnapshot.skills[0]!.name = "changed-return-value";
+      const snapshot = returned.skillsSnapshot;
+      expect(Object.isFrozen(snapshot)).toBe(true);
+      expect(Object.isFrozen(snapshot.skills)).toBe(true);
+      expect(Object.isFrozen(snapshot.skills[0])).toBe(true);
+      expect(() => {
+        snapshot.skills[0]!.name = "changed-return-value";
+      }).toThrow(TypeError);
       await upsertAcpSessionMeta({
         ...scope,
         sessionKey,
@@ -99,6 +108,7 @@ describe("ACP session listing", () => {
         agents: { ownership: "explicit", entries: { codex: {} } },
       } satisfies OpenClawConfig;
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const sessionKey = "agent:codex:acp:cold-config";
       await replaceSessionEntry(
         { agentId: "codex", sessionKey, env: state.env },

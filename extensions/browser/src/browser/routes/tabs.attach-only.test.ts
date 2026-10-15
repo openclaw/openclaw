@@ -12,6 +12,7 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function makeLoopbackProfile(attachOnly: boolean) {
@@ -75,6 +76,7 @@ describe("browser tab routes attachOnly loopback profiles", () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({
       running: true,
+      canAutoResizeViewport: false,
       tabs: [
         {
           targetId: "PAGE-1",
@@ -135,7 +137,7 @@ describe("browser tab routes attachOnly loopback profiles", () => {
 
       const ctx = createBrowserRouteContext({ getState: () => state });
       const { app, getHandlers, postHandlers } = createBrowserRouteApp();
-      registerBrowserTabRoutes(app, ctx as never);
+      registerBrowserTabRoutes(app, ctx);
       const getTabs = getHandlers.get("/tabs");
       const postTabsAction = postHandlers.get("/tabs/action");
       expect(getTabs).toBeTypeOf("function");

@@ -28,7 +28,7 @@ type WizardStepControlsProps = {
   answerLabel?: string;
   busyLabel?: string;
   confirmAffirmativeLabel?: string;
-  leadingAction?: TemplateResult;
+  leadingAction?: TemplateResult | HTMLElement;
   externalAuthInput?: boolean;
   sensitiveRevealed?: boolean;
   onToggleSensitiveVisibility?: () => void;
@@ -151,9 +151,9 @@ function renderAnswerButton(
 ) {
   const buttonLabel = props.answerLabel ?? label;
   if (props.presentation === "channels" && props.busy) {
-    return html`<div class="channels-wizard__footer">
+    return html`<openclaw-modal-actions class="channels-wizard__footer">
       ${renderWizardBusyButton(props.busyLabel ?? buttonLabel)}
-    </div>`;
+    </openclaw-modal-actions>`;
   }
   const button = html`
     <button
@@ -166,7 +166,9 @@ function renderAnswerButton(
     </button>
   `;
   if (props.presentation === "channels") {
-    return html`<div class="channels-wizard__footer">${button}</div>`;
+    return html`<openclaw-modal-actions class="channels-wizard__footer"
+      >${button}</openclaw-modal-actions
+    >`;
   }
   return props.leadingAction
     ? html`<div class="wizard-step__actions wizard-step__actions--split">
@@ -354,21 +356,14 @@ function renderOptionsStep(props: WizardStepControlsProps) {
 
 function renderConfirmStep(props: WizardStepControlsProps) {
   const actionClass = stepClass(props, props.presentation === "channels" ? "footer" : "actions");
-  return html`
-    ${renderMessage(props)}
-    <div
-      class=${
-        props.presentation !== "channels" && props.leadingAction
-          ? `${actionClass} wizard-step__actions--split`
-          : actionClass
-      }
-    >
-      ${props.presentation === "channels" ? nothing : (props.leadingAction ?? nothing)}
-      ${
-        props.presentation === "channels" && props.busy
-          ? renderWizardBusyButton(props.busyLabel ?? t("common.loading"))
-          : [false, true].map(
-              (answer) => html`<button
+  const actions = html`
+    ${props.presentation === "channels" ? nothing : (props.leadingAction ?? nothing)}
+    ${
+      props.presentation === "channels" && props.busy
+        ? renderWizardBusyButton(props.busyLabel ?? t("common.loading"))
+        : [false, true].map(
+            (answer) =>
+              html`<button
                 type="button"
                 class=${answer ? "btn primary" : "btn"}
                 ?disabled=${props.busy}
@@ -376,9 +371,20 @@ function renderConfirmStep(props: WizardStepControlsProps) {
               >
                 ${answer ? (props.confirmAffirmativeLabel ?? t("common.yes")) : t("common.no")}
               </button>`,
-            )
-      }
-    </div>
+          )
+    }
+  `;
+  return html`
+    ${renderMessage(props)}
+    ${
+      props.presentation === "channels"
+        ? html`<openclaw-modal-actions class=${actionClass}>${actions}</openclaw-modal-actions>`
+        : html`<div
+            class=${props.leadingAction ? `${actionClass} wizard-step__actions--split` : actionClass}
+          >
+            ${actions}
+          </div>`
+    }
   `;
 }
 

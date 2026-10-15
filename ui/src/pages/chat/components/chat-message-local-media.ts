@@ -41,11 +41,15 @@ export function buildAssistantAttachmentUrl(
   mediaTicket?: string | null,
   context?: AssistantMediaContext,
   filename?: string,
+  variant?: "thumbnail",
 ): string {
   if (!isLocalAssistantAttachmentSource(source)) {
     return source;
   }
-  return buildAssistantMediaUrl(source, resourceBasePath, mediaTicket, context, filename);
+  const url = buildAssistantMediaUrl(source, resourceBasePath, mediaTicket, context, filename);
+  return variant === "thumbnail" && isCanonicalInboundMediaSource(source)
+    ? `${url}&variant=thumbnail`
+    : url;
 }
 
 export function applyResourceBasePath(

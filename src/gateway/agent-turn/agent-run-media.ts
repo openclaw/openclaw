@@ -1,3 +1,4 @@
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { WebchatReplyMediaRequesterContext } from "../server-methods/chat-reply-media.js";
 import { resolveChatSendCallerContext } from "../server-methods/gateway-client-identity.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
@@ -6,7 +7,9 @@ import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.j
 /** Bind assistant media to the agent command before dispatch releases its run owner. */
 export function dispatchAgentRunWithMedia(
   dispatch: Parameters<typeof dispatchAgentRunFromGateway>[0],
-  params: Pick<StartAgentRunExecutionParams, "cfg" | "client" | "activeSessionAgentId">,
+  params: Pick<StartAgentRunExecutionParams, "cfg" | "client" | "activeSessionAgentId"> & {
+    prepared: Pick<StartAgentRunExecutionParams["prepared"], "lifecycleStorePath">;
+  },
 ) {
   const { ingressOpts, admittedRunEntry, abortController } = dispatch;
   const sessionKey = ingressOpts.sessionKey;
@@ -19,13 +22,17 @@ export function dispatchAgentRunWithMedia(
   const runContext = ingressOpts.runContext;
   // Preserve the dispatch object's execution-identity binding.
   dispatch.loadMedia = async () => {
-    const { createAgentRunMediaCustody } = await import("./agent-run-media-custody.js");
-    return createAgentRunMediaCustody({
+    const { createAssistantCommentaryMediaCustody } =
+      await import("../server-methods/chat-send-commentary-media.js");
+    const { createOutboundPayloadPlan } = await import("../../infra/outbound/payloads.js");
+    const cfg = dispatch.commandRuntimeContext?.config ?? params.cfg;
+    const mediaParams = {
       options: ingressOpts,
       incognito: dispatch.isIncognito === true,
       session: {
         agentId: params.activeSessionAgentId,
-        cfg: dispatch.commandRuntimeContext?.config ?? params.cfg,
+        cfg,
+        storePath: params.prepared.lifecycleStorePath,
         sessionKey,
         sessionLoadOptions: { agentId: params.activeSessionAgentId },
       },
@@ -56,7 +63,33 @@ export function dispatchAgentRunWithMedia(
       abortSignal: abortController.signal,
       logGateway: dispatch.context.logGateway,
       prepareAssistantTranscriptMessage: ingressOpts.prepareAssistantTranscriptMessage,
-    });
+    };
+    const commentary = createAssistantCommentaryMediaCustody(mediaParams);
+    return {
+      run: commentary.run,
+      prepareAssistantTranscriptMessage: commentary.prepareAssistantTranscriptMessage,
+      finalize: async (reply) => {
+        if (
+          !reply ||
+          mediaParams.incognito ||
+          ingressOpts.privateCompletion ||
+          ingressOpts.sessionEffects === "internal" ||
+          ingressOpts.deliver === true ||
+          ingressOpts.internalDeliveryMediaUrls !== undefined ||
+          !isInternalMessageChannel(ingressOpts.channel ?? ingressOpts.messageChannel)
+        ) {
+          return;
+        }
+        const plan = createOutboundPayloadPlan(reply.payloads).filter(
+          ({ payload }) => payload.sensitiveMedia !== true,
+        );
+        if (!plan.some(({ parts }) => parts.mediaUrls.length > 0)) {
+          return;
+        }
+        const { finalizeAgentRunMedia } = await import("./agent-run-final-media.js");
+        await finalizeAgentRunMedia(mediaParams, reply, plan);
+      },
+    };
   };
   return dispatchAgentRunFromGateway(dispatch);
 }

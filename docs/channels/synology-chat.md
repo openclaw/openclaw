@@ -48,7 +48,7 @@ Webhook auth details:
   - `x-webhook-token`
   - `x-openclaw-token`
   - `Authorization: Bearer <token>`
-- Empty or missing tokens fail closed.
+- Empty or missing tokens are rejected.
 - Payloads may be `application/x-www-form-urlencoded` or `application/json`; `token`, `user_id`, and `text` are required.
 
 ## Inbound durability
@@ -131,11 +131,14 @@ Multiple Synology Chat accounts are supported under `channels.synology-chat.acco
 Each account can override token, incoming URL, public webhook URL, webhook path, DM policy, and limits.
 Direct-message sessions are isolated per account and user, so the same numeric `user_id`
 on two different Synology accounts does not share transcript state.
+Outbound sends are paced independently for each incoming webhook URL, including its token.
+Text and attachments sent to the same webhook share the 500 ms minimum interval;
+a burst on one webhook does not delay another.
 Give each enabled account a distinct `webhookPath`. OpenClaw rejects duplicate exact paths
 and refuses to start named accounts that only inherit a shared webhook path in multi-account setups.
 If you intentionally need legacy inheritance for a named account, set
 `dangerouslyAllowInheritedWebhookPath: true` on that account or at `channels.synology-chat`,
-but duplicate exact paths are still rejected fail-closed. Prefer explicit per-account paths.
+but duplicate exact paths are still rejected. Prefer explicit per-account paths.
 
 ```json5
 {
@@ -167,7 +170,7 @@ but duplicate exact paths are still rejected fail-closed. Prefer explicit per-ac
 - Keep `token` secret and rotate it if leaked.
 - Keep `allowInsecureSsl: false` unless you explicitly trust a self-signed local NAS cert.
 - Inbound webhook requests are token-verified and rate-limited per sender (`rateLimitPerMinute`, default 30).
-- Invalid token checks use constant-time secret comparison and fail closed; repeated invalid-token attempts temporarily lock out the source IP.
+- Invalid token checks use constant-time secret comparison and reject the request; repeated invalid-token attempts temporarily lock out the source IP.
 - Inbound message text is sanitized against known prompt-injection patterns and truncated at 4000 characters.
 - Prefer `dmPolicy: "allowlist"` for production.
 - Keep `dangerouslyAllowNameMatching` off unless you explicitly need legacy username-based reply delivery.

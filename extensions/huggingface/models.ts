@@ -15,7 +15,6 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const HUGGINGFACE_MANIFEST_CATALOG = manifest.modelCatalog.providers.huggingface;
 export const HUGGINGFACE_BASE_URL = HUGGINGFACE_MANIFEST_CATALOG.baseUrl;
-export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
 const HUGGINGFACE_DISCOVERY_TIMEOUT_MS = 30_000;
 
 const HUGGINGFACE_DEFAULT_COST = {
@@ -48,11 +47,6 @@ export const HUGGINGFACE_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestM
   providerId: "huggingface",
   catalog: HUGGINGFACE_MANIFEST_CATALOG,
 }).models;
-
-export function isHuggingfacePolicyLocked(modelRef: string): boolean {
-  const ref = modelRef.trim();
-  return HUGGINGFACE_POLICY_SUFFIXES.some((suffix) => ref.endsWith(`:${suffix}`) || ref === suffix);
-}
 
 function isReasoningModelHeuristic(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);

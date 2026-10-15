@@ -16,7 +16,11 @@ const getRuntimeConfigMock = vi.hoisted(() =>
   vi.fn<() => import("../config/config.js").OpenClawConfig>(() => ({})),
 );
 
-vi.mock("../config/config.js", () => ({ getRuntimeConfig: getRuntimeConfigMock }));
+// mock-isolation: MCP supervision fixtures provide config without starting a real config owner.
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: getRuntimeConfigMock,
+  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfigMock(),
+}));
 vi.mock("../plugins/tools.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/tools.js")>();
   return {
@@ -115,7 +119,7 @@ describe("createCodexSupervisionToolsMcpServer", () => {
     vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS", "1");
     vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS", "1");
 
-    getRuntimeConfigMock.mockReturnValue({
+    const config = {
       plugins: {
         allow: [" CODEX "],
         deny: ["CoDeX"],
@@ -128,7 +132,8 @@ describe("createCodexSupervisionToolsMcpServer", () => {
           },
         },
       },
-    });
+    };
+    getRuntimeConfigMock.mockReturnValue(config);
     await serveCodexSupervisionToolsMcp();
 
     const context = acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0]?.context;
@@ -146,5 +151,8 @@ describe("createCodexSupervisionToolsMcpServer", () => {
       },
     });
     expect(context?.config?.plugins?.entries).not.toHaveProperty(" CODEX ");
+    expect(config.plugins.entries[" CODEX "].config.supervision.enabled).toBe(false);
+    expect(config.plugins.allow).toEqual([" CODEX "]);
+    expect(config.plugins.deny).toEqual(["CoDeX"]);
   });
 });

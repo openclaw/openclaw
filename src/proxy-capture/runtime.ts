@@ -7,6 +7,7 @@ import {
   hasRegisteredSecretValuesForRedaction,
   redactRegisteredSecretValues,
 } from "../logging/secret-redaction-registry.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveEnabledDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders, REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
@@ -33,7 +34,7 @@ import {
   type HttpCaptureParams,
 } from "./runtime-response-body.js";
 import { safeJsonString } from "./store.sqlite.js";
-import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
+import type { AsyncDebugProxyCaptureWriter } from "./store.types.js";
 import type {
   CaptureDirection,
   CaptureEventKind,
@@ -177,12 +178,17 @@ function createHttpCaptureEventBase(params: {
   };
 }
 
-/** @deprecated Use initializeDebugProxyCaptureAsync for worker-backed capture. */
+/** @deprecated Use initializeDebugProxyCaptureAsync for worker-backed capture. Final compatibility day: 2026-12-31. */
 export function initializeDebugProxyCapture(
   mode: string,
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-runtime",
+    method: "initializeDebugProxyCapture",
+    replacement: "await initializeDebugProxyCaptureAsync()",
+  });
   const settings = resolveEnabledDebugProxySettings(resolved);
   if (!settings) {
     return;
@@ -205,12 +211,18 @@ export function initializeDebugProxyCapture(
   installDebugProxyGlobalFetchPatch(owner, captureInstalledFetch, deps);
 }
 
-/** @deprecated Use captureHttpExchangeAsync and await capture finalization at shutdown. */
+/** @deprecated Use captureHttpExchangeAsync and await capture finalization at shutdown. Final compatibility day: 2026-12-31. */
 export function captureHttpExchange(
   params: HttpCaptureParams,
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-runtime",
+    method: "captureHttpExchange",
+    replacement:
+      "await captureHttpExchangeAsync() and await finalizeDebugProxyCaptureAsync() at shutdown",
+  });
   const settings = resolveEnabledDebugProxySettings(resolved);
   if (!settings) {
     return;
@@ -236,7 +248,7 @@ function captureInstalledFetch(
 
 type CaptureExecution =
   | { asynchronous: false }
-  | { asynchronous: true; store: AsyncDebugProxyCaptureStore };
+  | { asynchronous: true; store: AsyncDebugProxyCaptureWriter };
 
 function runOwnedCapture(
   owner: CaptureOwner,
@@ -510,12 +522,18 @@ function captureOwnedWsEvent(
 }
 
 // Websocket seams call this directly because Node fetch patching cannot observe frame traffic.
-/** @deprecated Use captureWsEventAsync and await capture finalization at shutdown. */
+/** @deprecated Use captureWsEventAsync and await capture finalization at shutdown. Final compatibility day: 2026-12-31. */
 export function captureWsEvent(
   params: WsCaptureParams,
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-runtime",
+    method: "captureWsEvent",
+    replacement:
+      "await captureWsEventAsync() and await finalizeDebugProxyCaptureAsync() at shutdown",
+  });
   const settings = resolveEnabledDebugProxySettings(resolved);
   if (!settings) {
     return;

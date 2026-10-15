@@ -52,7 +52,7 @@ export function resolveDirectCronDeliveryGeneration(
     | "cfgWithAgentDefaults"
   >,
 ) {
-  return params.job.sessionTarget === "isolated" &&
+  return (params.job.sessionTarget === "isolated" || params.job.sessionTarget === "current") &&
     params.sourceSessionKey &&
     params.sourceSessionGeneration &&
     !hasExplicitCronDeliveryTarget(params.deliveryPlan)
@@ -68,7 +68,7 @@ export function resolveDirectCronDeliveryGeneration(
     : undefined;
 }
 
-export function normalizeDeliveryTarget(channel: string, to: string): string {
+function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }
@@ -148,6 +148,16 @@ export async function resolveDescendantSubagentFollowup(params: {
   initialSynthesizedText: string;
   abortSignal?: AbortSignal;
 }): Promise<DescendantSubagentFollowup> {
+  if (params.spawnOnlyHandoff) {
+    const child = await (
+      await subagentFollowupRuntimeLoader.load()
+    ).waitForDescendantSubagentResult(params);
+    return {
+      finalReply: child?.reply,
+      hasUnsettledDescendants: child === undefined,
+      hadDescendants: true,
+    };
+  }
   const expectedFollowup = expectsSubagentFollowup(params.initialSynthesizedText);
   const subagentRegistryRuntime = await deliverySubagentRegistryRuntimeLoader.load();
   let hasUnsettledDescendants = await subagentRegistryRuntime.hasUnsettledCronDescendants(
@@ -156,7 +166,7 @@ export async function resolveDescendantSubagentFollowup(params: {
   const shouldCheckCompletedDescendants =
     !params.abortSignal?.aborted &&
     !hasUnsettledDescendants &&
-    (params.spawnOnlyHandoff || isLikelyInterimCronMessage(params.initialSynthesizedText));
+    isLikelyInterimCronMessage(params.initialSynthesizedText);
   const needsFollowupRuntime =
     shouldCheckCompletedDescendants || hasUnsettledDescendants || expectedFollowup;
   const followupRuntime = needsFollowupRuntime
@@ -171,10 +181,7 @@ export async function resolveDescendantSubagentFollowup(params: {
       })
     : undefined;
   const hadDescendants = hasUnsettledDescendants || Boolean(completedDescendantReply);
-  if (
-    (!params.deliveryBestEffort || params.spawnOnlyHandoff) &&
-    (hasUnsettledDescendants || expectedFollowup)
-  ) {
+  if (!params.deliveryBestEffort && (hasUnsettledDescendants || expectedFollowup)) {
     let finalReply = await followupRuntime?.waitForDescendantSubagentSummary({
       sessionKey: params.sessionKey,
       initialReply: params.initialSynthesizedText,
@@ -206,17 +213,6 @@ export async function logCronDeliveryWarn(message: string): Promise<void> {
   logWarn(message);
 }
 
-export async function logCronDeliveryError(message: string): Promise<void> {
-  const { logError } = await deliveryLoggerRuntimeLoader.load();
-  logError(message);
-}
-
-export function logCronDeliveryErrorDeferred(message: string): void {
-  void deliveryLoggerRuntimeLoader.load().then(({ logError }) => {
-    logError(message);
-  });
-}
-
 export function resolveStaleCronDeliveryError(params: {
   job: CronJob;
   runStartedAt: number;
@@ -234,7 +230,7 @@ export function resolveStaleCronDeliveryError(params: {
 export async function maybeApplyTtsToCronPayloads(params: {
   cfg: OpenClawConfig;
   payloads: ReplyPayload[];
-  delivery: SuccessfulCronDeliveryTarget;
+  delivery: Pick<SuccessfulCronDeliveryTarget, "channel" | "accountId">;
   agentId: string;
   ttsAuto?: TtsAutoMode;
 }): Promise<ReplyPayload[]> {
@@ -271,7 +267,7 @@ export async function maybeApplyTtsToCronPayloads(params: {
 export function buildDirectCronDeliveryIdempotencyKey(params: {
   jobId: string;
   runStartedAt: number;
-  delivery: SuccessfulCronDeliveryTarget;
+  delivery: Pick<SuccessfulCronDeliveryTarget, "channel" | "to" | "accountId" | "threadId">;
 }): string {
   // Include route identity, not just the cron execution id, because one run can
   // target different channels/accounts/threads across retry and fallback paths.

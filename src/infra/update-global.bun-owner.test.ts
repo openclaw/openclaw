@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import * as exec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -19,10 +19,21 @@ import {
   listActivePnpmIsolatedGlobalPackages,
   resolveGlobalInstallTarget,
   cleanupGlobalRenameDirs,
+  resolvePnpmGlobalInstallOwner,
 } from "./update-global.js";
 import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
 import { resolveUpdateInstallSurface } from "./update-runner-install-surface.js";
 import { createGatewayUpdateCheck } from "./update-startup.js";
+
+const runHostCommandBuffered = exec.runCommandBuffered;
+beforeEach(() => {
+  vi.spyOn(exec, "runCommandBuffered").mockImplementation((argv, options) =>
+    argv[0] === "pacman" || argv[0] === "/usr/sbin/pkg"
+      ? Promise.resolve(pkgQueryResult())
+      : runHostCommandBuffered(argv, options),
+  );
+});
+afterEach(() => vi.restoreAllMocks());
 
 async function writeGlobalPackageJson(packageRoot: string, version: string): Promise<void> {
   await fs.writeFile(
@@ -37,9 +48,19 @@ async function writePnpmIsolatedPackage(params: {
   installName: string;
   version: string;
   dependencies?: Record<string, string>;
+  nestedStore?: boolean;
 }): Promise<string> {
   const installDir = path.join(params.globalRoot, params.installName);
-  const packageRoot = path.join(installDir, "node_modules", "openclaw");
+  const packageRoot = params.nestedStore
+    ? path.join(
+        installDir,
+        "node_modules",
+        ".pnpm",
+        `openclaw@${params.version}`,
+        "node_modules",
+        "openclaw",
+      )
+    : path.join(installDir, "node_modules", "openclaw");
   await fs.mkdir(packageRoot, { recursive: true });
   await Promise.all([
     writeGlobalPackageJson(packageRoot, params.version),
@@ -52,12 +73,16 @@ async function writePnpmIsolatedPackage(params: {
       "utf8",
     ),
   ]);
+  if (params.nestedStore) {
+    await fs.symlink(packageRoot, path.join(installDir, "node_modules", "openclaw"), "dir");
+  }
   await fs.symlink(installDir, path.join(params.globalRoot, `hash-${params.installName}`), "dir");
   return packageRoot;
 }
 
 describe("pnpm isolated global install discovery", () => {
-  it.each([11])("detects pnpm %s isolated installs", async (layoutVersion) => {
+  it("detects nested pnpm v11 installs", async () => {
+    const layoutVersion = 11;
     await withTestDir({ prefix: "openclaw-update-pnpm-isolated-root-" }, async (base) => {
       const npmRoot = path.join(base, "npm", "lib", "node_modules");
       const pnpmGlobalDir = path.join(base, "pnpm-home", "global");
@@ -66,6 +91,7 @@ describe("pnpm isolated global install discovery", () => {
         globalRoot: pnpmGlobalRoot,
         installName: "a1b2",
         version: "2026.7.1",
+        nestedStore: true,
       });
       const hashLinkedPkgRoot = path.join(pnpmGlobalRoot, "hash-a1b2", "node_modules", "openclaw");
       const pnpmHomeAlias = path.join(base, "pnpm-home-alias");
@@ -95,9 +121,14 @@ describe("pnpm isolated global install discovery", () => {
         throw new Error(`unexpected command: ${command}`);
       });
 
-      await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBe(
-        "pnpm",
-      );
+      await expect(
+        resolveUpdateInstallSurface({
+          root: pkgRoot,
+          installKind: "package",
+          runCommand: (argv, options) =>
+            runCommand(argv, { ...options, timeoutMs: options.timeoutMs ?? 1000 }),
+        }),
+      ).resolves.toMatchObject({ kind: "global", mode: "pnpm", root: pkgRoot });
       await expect(
         detectGlobalInstallManagerForRoot(runCommand, hashLinkedPkgRoot, 1000),
       ).resolves.toBe("pnpm");
@@ -110,7 +141,7 @@ describe("pnpm isolated global install discovery", () => {
         command: "pnpm",
         pnpmIsolated: { layoutVersion },
         globalRoot: pnpmGlobalRoot,
-        packageRoot: pkgRoot,
+        packageRoot: hashLinkedPkgRoot,
       };
       await expect(
         resolveGlobalInstallTarget({
@@ -122,6 +153,10 @@ describe("pnpm isolated global install discovery", () => {
         }),
       ).resolves.toEqual(expectedTarget);
       expect(runCommand).not.toHaveBeenCalled();
+      await expect(resolvePnpmGlobalInstallOwner(pkgRoot)).resolves.toEqual({
+        ownerRoot: path.join(pnpmGlobalRoot, "a1b2"),
+        packageRoot: hashLinkedPkgRoot,
+      });
       await expect(
         resolveGlobalInstallTarget({ manager: "pnpm", runCommand, timeoutMs: 1000 }),
       ).resolves.toEqual(expectedTarget);
@@ -133,7 +168,7 @@ describe("pnpm isolated global install discovery", () => {
   it("prefers the invoking project when multiple installs are active", async () => {
     await withTestDir({ prefix: "openclaw-update-pnpm-isolated-owner-" }, async (base) => {
       const pnpmGlobalRoot = path.join(base, "pnpm-home", "global", "v11");
-      const otherPackageRoot = await writePnpmIsolatedPackage({
+      await writePnpmIsolatedPackage({
         globalRoot: pnpmGlobalRoot,
         installName: "a-other",
         version: "2026.7.1",
@@ -157,8 +192,14 @@ describe("pnpm isolated global install discovery", () => {
           packageName: "openclaw",
         }),
       ).resolves.toEqual([
-        { packageRoot: otherPackageRoot, packageNames: ["openclaw"] },
-        { packageRoot: invokingPackageRoot, packageNames: ["cowsay", "openclaw"] },
+        {
+          packageRoot: path.join(pnpmGlobalRoot, "hash-a-other", "node_modules", "openclaw"),
+          packageNames: ["openclaw"],
+        },
+        {
+          packageRoot: path.join(pnpmGlobalRoot, "hash-z-invoking", "node_modules", "openclaw"),
+          packageNames: ["cowsay", "openclaw"],
+        },
       ]);
       await expect(
         resolveGlobalInstallTarget({
@@ -173,7 +214,7 @@ describe("pnpm isolated global install discovery", () => {
         command: "pnpm",
         pnpmIsolated: { layoutVersion: 11 },
         globalRoot: pnpmGlobalRoot,
-        packageRoot: invokingPackageRoot,
+        packageRoot: path.join(pnpmGlobalRoot, "hash-z-invoking", "node_modules", "openclaw"),
       });
     });
   });
@@ -379,16 +420,12 @@ describe("pnpm isolated global install discovery", () => {
         timeoutMs: 1000,
         pkgRoot,
       });
-      if (!probeSucceeds && process.platform === "freebsd") {
-        await expect(resolution).rejects.toMatchObject({ reason: "pkg-ownership-unavailable" });
-      } else {
-        await expect(resolution).resolves.toEqual({
-          manager: "pnpm",
-          command: pnpmCommand,
-          globalRoot: probeSucceeds ? defaultPnpmRoot : null,
-          packageRoot: probeSucceeds ? path.join(defaultPnpmRoot, "openclaw") : null,
-        });
-      }
+      await expect(resolution).resolves.toEqual({
+        manager: "pnpm",
+        command: pnpmCommand,
+        globalRoot: probeSucceeds ? defaultPnpmRoot : null,
+        packageRoot: probeSucceeds ? path.join(defaultPnpmRoot, "openclaw") : null,
+      });
       expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([[pnpmCommand, "root", "-g"]]);
     });
   });
@@ -430,7 +467,6 @@ describe("custom Bun global installation ownership", () => {
   });
 
   it.each([
-    { runtime: "pinned", pathBun: "missing", supplyEnv: true, installFails: false },
     { runtime: "current", pathBun: "missing", supplyEnv: false, installFails: false },
     { runtime: "pinned", pathBun: "missing", supplyEnv: true, installFails: true },
   ] as const)(
@@ -584,30 +620,25 @@ describe("custom Bun global installation ownership", () => {
 
 describe("FreeBSD package-manager admission", () => {
   afterEach(() => vi.restoreAllMocks());
-  it.each(["unknown database", "exhausted budget"])(
-    "ends optional cleanup after %s without another pkg probe",
-    async (failure) => {
-      await withTestDir({ prefix: "openclaw-pkg-cleanup-budget-" }, async (base) => {
-        await fs.mkdir(path.join(base, ".openclaw-first"));
-        await fs.mkdir(path.join(base, ".openclaw-second"));
-        const now = Date.now();
-        const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-        const query = vi.spyOn(exec, "runCommandBuffered").mockImplementation(async () => {
-          if (failure === "exhausted budget") {
-            clock.mockReturnValue(now + 30_001);
-          }
-          return pkgQueryResult("", failure === "unknown database" ? { code: 1 } : {});
-        });
-        await withMockedPlatform("freebsd", async () => {
-          await expect(
-            cleanupGlobalRenameDirs({ globalRoot: base, packageName: "openclaw" }),
-          ).resolves.toEqual({ removed: [] });
-        });
-        expect(query).toHaveBeenCalledTimes(1);
-        expect(await fs.readdir(base)).toHaveLength(2);
+  it("stops cleanup when ownership inspection exhausts the budget", async () => {
+    await withTestDir({ prefix: "openclaw-pkg-cleanup-budget-" }, async (base) => {
+      await fs.mkdir(path.join(base, ".openclaw-first"));
+      await fs.mkdir(path.join(base, ".openclaw-second"));
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const query = vi.spyOn(exec, "runCommandBuffered").mockImplementation(async () => {
+        clock.mockReturnValue(now + 30_001);
+        return pkgQueryResult();
       });
-    },
-  );
+      await withMockedPlatform("freebsd", async () => {
+        await expect(
+          cleanupGlobalRenameDirs({ globalRoot: base, packageName: "openclaw" }),
+        ).resolves.toEqual({ removed: [] });
+      });
+      expect(query).toHaveBeenCalledOnce();
+      expect(await fs.readdir(base)).toHaveLength(2);
+    });
+  });
 
   it("refreshes pkg ownership separately before each cleanup deletion", async () => {
     await withTestDir({ prefix: "openclaw-pkg-cleanup-refresh-" }, async (base) => {
@@ -659,70 +690,55 @@ describe("FreeBSD package-manager admission", () => {
       );
     });
   });
-  it.each(["rpc surface", "startup"])(
-    "keeps %s discovery read-only for a pkg installation",
-    async (route) => {
-      await withTestDir({ prefix: "openclaw-pkg-discovery-" }, async (base) => {
-        const globalRoot = path.join(base, "lib", "node_modules");
-        const root = path.join(globalRoot, "openclaw");
-        await writePackageRoot(root, "1.0.0");
-        const runCommand = createRootRunner(globalRoot);
-        const query = vi
-          .spyOn(exec, "runCommandBuffered")
-          .mockResolvedValue(pkgQueryResult(`${root}/package.json\n`));
-        vi.spyOn(exec, "runCommandWithTimeout").mockImplementation(async (argv) => ({
-          ...(await runCommand(argv, { timeoutMs: 1000 })),
-          signal: null,
-          killed: false,
-          termination: "exit",
-        }));
-        vi.spyOn(gitExec, "executeGitCommand").mockResolvedValue({
-          stdout: "",
-          stderr: "not a git repository",
-          code: 128,
-          signal: null,
-          killed: false,
-          termination: "exit",
-          timeoutMs: 1000,
-        });
-        vi.spyOn(openclawRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
-        vi.spyOn(restartSentinel, "readVerifiedGitUpdateReceipt").mockResolvedValue(null);
-        await withMockedPlatform("freebsd", async () => {
-          if (route === "rpc surface") {
-            await expect(
-              resolveUpdateInstallSurface({
-                root,
-                installKind: "package",
-                runCommand: (argv, options) =>
-                  runCommand(argv, { ...options, timeoutMs: options.timeoutMs ?? 1000 }),
-                timeoutMs: 1000,
-              }),
-            ).resolves.toMatchObject({ kind: "global", mode: "npm", root });
-          } else {
-            const startup = createGatewayUpdateCheck({
-              lifecycle: createGatewayUpdateLifecycle(createTestGatewayScheduler()),
-              getConfig: () => ({}),
-              applyRemoteCatalogUpdate: async () => "unchanged",
-              log: { info: vi.fn() },
-              isNixMode: false,
-            });
-            try {
-              const first = await startup.initialize();
-              expect(first.status).toMatchObject({
-                root,
-                installKind: "package",
-                packageManager: "npm",
-              });
-              await expect(startup.initialize()).resolves.toBe(first);
-            } finally {
-              await startup.stop();
-            }
-          }
-        });
-        expect(query).not.toHaveBeenCalled();
+  it("keeps startup discovery read-only for a pkg installation", async () => {
+    await withTestDir({ prefix: "openclaw-pkg-discovery-" }, async (base) => {
+      const globalRoot = path.join(base, "lib", "node_modules");
+      const root = path.join(globalRoot, "openclaw");
+      await writePackageRoot(root, "1.0.0");
+      const runCommand = createRootRunner(globalRoot);
+      const query = vi
+        .spyOn(exec, "runCommandBuffered")
+        .mockResolvedValue(pkgQueryResult(`${root}/package.json\n`));
+      vi.spyOn(exec, "runCommandWithTimeout").mockImplementation(async (argv) => ({
+        ...(await runCommand(argv, { timeoutMs: 1000 })),
+        signal: null,
+        killed: false,
+        termination: "exit",
+      }));
+      vi.spyOn(gitExec, "executeGitCommand").mockResolvedValue({
+        stdout: "",
+        stderr: "not a git repository",
+        code: 128,
+        signal: null,
+        killed: false,
+        termination: "exit",
+        timeoutMs: 1000,
       });
-    },
-  );
+      vi.spyOn(openclawRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
+      vi.spyOn(restartSentinel, "readVerifiedGitUpdateReceipt").mockResolvedValue(null);
+      await withMockedPlatform("freebsd", async () => {
+        const startup = createGatewayUpdateCheck({
+          lifecycle: createGatewayUpdateLifecycle(createTestGatewayScheduler()),
+          getConfig: () => ({}),
+          applyRemoteCatalogUpdate: async () => "unchanged",
+          log: { info: vi.fn() },
+          isNixMode: false,
+        });
+        try {
+          const first = await startup.initialize();
+          expect(first.status).toMatchObject({
+            root,
+            installKind: "package",
+            packageManager: "npm",
+          });
+          await expect(startup.initialize()).resolves.toBe(first);
+        } finally {
+          await startup.stop();
+        }
+      });
+      expect(query).not.toHaveBeenCalled();
+    });
+  });
 
   it("checks the actual manager-selected destination before selecting its npm runtime", async () => {
     await withTestDir({ prefix: "openclaw-pkg-target-" }, async (base) => {

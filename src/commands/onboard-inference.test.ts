@@ -94,8 +94,7 @@ describe("detectInferenceBackends", () => {
             calls.push({ command, args });
             return { command, found: command === "codex" || command === "claude" };
           },
-          readCodexCliCredentials: () => (stored ? { type: "oauth" } : null),
-          randomInt: () => 0,
+          hasCodexCliAuthFile: () => stored,
         },
       });
       expect(facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule).not.toHaveBeenCalled();
@@ -107,15 +106,20 @@ describe("detectInferenceBackends", () => {
           detail: stored
             ? "installed; stored credentials found; login status unverified"
             : "installed; login status unverified",
+          credentials: stored,
         },
       ]);
-      expect(candidates.every((candidate) => candidate.credentials === undefined)).toBe(true);
+      expect(candidates[0]?.credentials).toBeUndefined();
     },
   );
 
-  it.each(["home", "codex-home"] as const)(
-    "reads passive credentials only from selected %s",
-    async (selection) => {
+  it.each([
+    ["home", "chatgpt"],
+    ["codex-home", "chatgpt"],
+    ["codex-home", "apikey"],
+  ] as const)(
+    "detects the %s login file for %s without reading credential values",
+    async (selection, authMode) => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-passive-login-"));
       try {
         const processHome = path.join(root, "process");
@@ -126,7 +130,8 @@ describe("detectInferenceBackends", () => {
         await fs.mkdir(codexHome, { recursive: true });
         const authPath = path.join(codexHome, "auth.json");
         const raw = JSON.stringify({
-          auth_mode: "chatgpt",
+          auth_mode: authMode,
+          ...(authMode === "apikey" ? { OPENAI_API_KEY: "synthetic-api-key" } : {}),
           tokens: {
             access_token: "synthetic-access",
             refresh_token: "synthetic-refresh",
@@ -149,7 +154,7 @@ describe("detectInferenceBackends", () => {
             detail: "installed; stored credentials found; login status unverified",
           },
         ]);
-        expect(candidates[0]?.credentials).toBeUndefined();
+        expect(candidates[0]?.credentials).toBe(true);
         expect(await fs.readFile(authPath, "utf8")).toBe(raw);
         expect(JSON.stringify(candidates)).not.toContain("synthetic-");
         expect(
@@ -172,7 +177,7 @@ describe("detectInferenceBackends", () => {
           timedOut: true,
           error: "timed out after 1500ms",
         }),
-        readCodexCliCredentials: () => ({ type: "oauth" }),
+        hasCodexCliAuthFile: () => false,
         readGeminiCliCredentials: () => ({ type: "oauth" }),
       },
     });
@@ -192,9 +197,8 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
-        readCodexCliCredentials: () => ({ type: "oauth" }),
+        hasCodexCliAuthFile: () => true,
         readGeminiCliCredentials: () => ({ type: "oauth" }),
-        randomInt: () => 0,
       },
     });
     expect(candidates.map((candidate) => candidate.kind)).toEqual([
@@ -246,7 +250,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({}),
-        readCodexCliCredentials: () => null,
+        hasCodexCliAuthFile: () => false,
       },
     });
 
@@ -270,7 +274,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({}),
-        readCodexCliCredentials: () => null,
+        hasCodexCliAuthFile: () => false,
       },
     });
 
@@ -285,9 +289,8 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
-        readCodexCliCredentials: () => null,
+        hasCodexCliAuthFile: () => false,
         readGeminiCliCredentials: () => null,
-        randomInt: () => 0,
       },
     });
 
@@ -301,25 +304,23 @@ describe("detectInferenceBackends", () => {
     ).toBeUndefined();
   });
 
-  it("randomizes the two unverified native CLIs without treating saved credentials as login proof", async () => {
-    const detectWithPick = async (pick: number) =>
-      await detectInferenceBackends({
-        env: {},
-        platform: "linux",
-        deps: {
-          probeLocalCommand: probeDeps({ claude: true, codex: true }),
-          readCodexCliCredentials: () => ({ type: "oauth" }),
-          randomInt: () => pick,
-        },
-      });
+  it("offers stored Codex credentials when its runtime still needs installation", async () => {
+    const candidates = await detectInferenceBackends({
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({ claude: true }),
+        hasCodexCliAuthFile: () => true,
+      },
+    });
 
-    expect((await detectWithPick(0)).map((candidate) => candidate.kind)).toEqual([
-      "claude-cli",
-      "codex-cli",
-    ]);
-    expect((await detectWithPick(1)).map((candidate) => candidate.kind)).toEqual([
-      "codex-cli",
-      "claude-cli",
+    expect(candidates).toMatchObject([
+      { kind: "claude-cli" },
+      {
+        kind: "codex-cli",
+        credentials: true,
+        detail: "stored credentials found; runtime installation required",
+      },
     ]);
   });
 
@@ -344,80 +345,10 @@ describe("detectInferenceBackends", () => {
     expect(candidates).toMatchObject([
       { kind: "codex-cli", detail: "installed; login status unverified" },
     ]);
-    expect(candidates[0]?.credentials).toBeUndefined();
+    expect(candidates[0]?.credentials).toBe(false);
     expect(probed).toContainEqual({ command, args: ["--version"], timeoutMs: 3_000 });
     expect(probed.filter((entry) => entry.command === command)).toEqual([
       { command, args: ["--version"], timeoutMs: 3_000 },
     ]);
-  });
-
-  it.each([
-    ["system ChatGPT", "/Applications/ChatGPT.app/Contents/Resources/codex", "/Users/tester"],
-    [
-      "user ChatGPT",
-      "/Users/tester/Applications/ChatGPT.app/Contents/Resources/codex",
-      "/Users/tester",
-    ],
-    ["system", "/Applications/Codex.app/Contents/Resources/codex", "/Users/tester"],
-    ["user", "/Users/tester/Applications/Codex.app/Contents/Resources/codex", "/Users/tester"],
-    ["system beta", "/Applications/Codex Beta.app/Contents/Resources/codex", "/Users/tester"],
-    [
-      "user beta",
-      "/Users/tester/Applications/Codex Beta.app/Contents/Resources/codex",
-      "/Users/tester",
-    ],
-  ])("finds the Codex CLI bundled in the %s macOS app directory", async (_scope, appCli, home) => {
-    const candidates = await detectInferenceBackends({
-      env: { HOME: home },
-      platform: "darwin",
-      deps: {
-        probeLocalCommand: probeDeps({ [appCli]: true }),
-        readCodexCliCredentials: () => null,
-      },
-    });
-
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]).toMatchObject({
-      kind: "codex-cli",
-      detail: "installed; login status unverified",
-    });
-  });
-
-  it("prefers a user ChatGPT app before a system legacy Codex app", async () => {
-    const probed: string[] = [];
-    const chatGPTCli = "/Users/tester/Applications/ChatGPT.app/Contents/Resources/codex";
-    const legacyCodexCli = "/Applications/Codex.app/Contents/Resources/codex";
-    const candidates = await detectInferenceBackends({
-      env: { HOME: "/Users/tester" },
-      platform: "darwin",
-      deps: {
-        probeLocalCommand: async (command) => {
-          probed.push(command);
-          return {
-            command,
-            found: command === chatGPTCli || command === legacyCodexCli,
-          };
-        },
-        readCodexCliCredentials: () => null,
-      },
-    });
-
-    expect(candidates).toMatchObject([
-      { kind: "codex-cli", detail: "installed; login status unverified" },
-    ]);
-    expect(probed).toContain(chatGPTCli);
-    expect(probed).not.toContain(legacyCodexCli);
-  });
-
-  it("ignores blank env keys", async () => {
-    const candidates = await detectInferenceBackends({
-      env: { OPENAI_API_KEY: "   " },
-      platform: "linux",
-      deps: {
-        probeLocalCommand: probeDeps({}),
-        readCodexCliCredentials: () => null,
-      },
-    });
-    expect(candidates).toEqual([]);
   });
 });

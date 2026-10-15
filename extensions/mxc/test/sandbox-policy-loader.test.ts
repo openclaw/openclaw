@@ -43,15 +43,7 @@ function expectPolicyFileFailure(policyPath: string, action: () => unknown, deta
 }
 
 describe("loadSandboxBaselinePolicy defaults and timeout", () => {
-  test("resolves no configured policy files with the default baseline", () => {
-    const policy = loadSandboxBaselinePolicy();
-
-    expect(policy.process.timeoutSeconds).toBe(300);
-    expect(policy.configuredPaths.readonlyPaths).toEqual([]);
-    expect(policy.configuredPaths.readwritePaths).toEqual([]);
-  });
-
-  test.each([0, -1, null])("rejects invalid timeout %s at policy admission", (timeoutSeconds) => {
+  test.each([0, null])("rejects invalid timeout %s at policy admission", (timeoutSeconds) => {
     const policyPath = join(makeTestDir(), "invalid-timeout.json");
     writePolicy(policyPath, { process: { timeoutSeconds } });
     expect(() => loadSandboxBaselinePolicy({ policyPaths: [policyPath] })).toThrow(

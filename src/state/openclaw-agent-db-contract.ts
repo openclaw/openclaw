@@ -6,10 +6,14 @@ import type {
 } from "../infra/sqlite-worker-identity.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 24;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 27;
+export const AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION = 27;
+export const AGENT_JSON_PREDICATE_SCHEMA_VERSION = 26;
+export const CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION = 25;
 export const AGENT_STORAGE_SCHEMA_VERSION = 23;
 export const TRANSCRIPT_FTS_ROW_SCHEMA_VERSION = 22;
 export const AGENT_MEDIA_SCHEMA_VERSION = 17;
+export const MEDIA_ROWS_MIGRATION_META_KEY = "media-persistence-rows-v1";
 export const CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION = 21;
 // Bound the disk work shared by startup inspection, admission, and canonical preparation.
 export { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "../infra/worker-pool-sizing.js";
@@ -47,6 +51,9 @@ export type OpenClawRegisteredAgentDatabase = {
 export type OpenClawAgentDatabaseRegistryReadResult =
   | { status: "available"; entries: OpenClawRegisteredAgentDatabase[] }
   | { status: "unavailable" };
+
+/** An in-process witness from the canonical invalidator, never serialized as authority. */
+export type AgentDatabaseRegistryChange = Readonly<{ previous: symbol; current: symbol }>;
 
 export type OpenClawAgentDatabaseRegistrationCommit = Readonly<{
   agentId: string;

@@ -6,11 +6,7 @@ import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
-import { waitForActiveCronTaskRuns } from "./service/active-run-cancellation.js";
-import {
-  observeCronRecoveryForTest,
-  recoverCronRunForTest,
-} from "./service/run-recovery.test-support.js";
+import { createCronRunHandle, finishCronRun } from "./service/run-history.js";
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
@@ -101,8 +97,6 @@ async function finishWatcherRun(params: {
   complete: () => void;
   recover: boolean;
   editAfterTask?: () => Promise<void>;
-  prepareRecoveryBeforeEdit?: boolean;
-  expectedReceiptStatus?: "ok" | "interrupted";
 }) {
   const { harness, jobId } = params;
   if (!params.recover) {
@@ -122,10 +116,43 @@ async function finishWatcherRun(params: {
     allowWrites();
   }
 
+  const job = harness.cron.getJob(jobId)!;
+  const historyState = createCronServiceState(harness.deps);
+  // Recover the split history/job commit left by released schedulers.
+  await finishCronRun(historyState, {
+    taskRunId: createCronRunHandle({
+      state: historyState,
+      job,
+      startedAt: receipt.startedAtMs,
+      runReceipt: receipt,
+    }).runId,
+    job,
+    event: {
+      jobId,
+      action: "finished",
+      status: "ok",
+      completionStatus: "succeeded",
+      summary: "done",
+      triggerFired: job.payload.kind !== "script" ? true : undefined,
+      runAtMs: receipt.startedAtMs,
+      durationMs: 0,
+      deliveryStatus: "not-requested",
+    },
+    ...(job.payload.kind === "script"
+      ? { scriptResult: { scriptStateChanged: true, scriptState: { owner: "obsolete payload" } } }
+      : {
+          triggerEval: {
+            fired: true,
+            stateChanged: true,
+            state: { owner: "completed evaluation" },
+          },
+        }),
+  });
+
   const readHistory = () =>
     readCronRunHistoryPageForTests({ storeKey: cronStoreKey(harness.storePath), jobId }).entries;
   const history = readHistory();
-  // The payload has durably succeeded, but its separate scheduler write failed.
+  // The legacy result is durable while its job still carries the running marker.
   expect(history).toEqual([
     expect.objectContaining({ jobId, status: "ok", completionStatus: "succeeded" }),
   ]);
@@ -133,31 +160,12 @@ async function finishWatcherRun(params: {
     receipt.receiptId,
   );
   expect(
-    (await loadCronStore(harness.storePath)).jobs.find((job) => job.id === jobId)?.state
-      .runningAtMs,
+    (await loadCronStore(harness.storePath)).jobs.find((currentJob) => currentJob.id === jobId)
+      ?.state.runningAtMs,
   ).toBe(receipt.startedAtMs);
 
   harness.cron.stop();
-  const recoveryState = params.prepareRecoveryBeforeEdit
-    ? createCronServiceState(harness.deps)
-    : undefined;
-  const proposal = recoveryState
-    ? await observeCronRecoveryForTest(recoveryState, jobId, undefined, receipt.startedAtMs)
-    : undefined;
   await params.editAfterTask?.();
-  if (params.expectedReceiptStatus === "interrupted") {
-    expect(
-      openOpenClawStateDatabase()
-        .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
-        .get(receipt.receiptId),
-    ).toMatchObject({ status: "interrupted" });
-  }
-  if (recoveryState && proposal) {
-    expect(proposal.receipt?.receiptId).toBe(receipt.receiptId);
-    expect(await recoverCronRunForTest(recoveryState, proposal, "startup")).toMatchObject({
-      kind: "repaired",
-    });
-  }
   harness.cron = new CronService(harness.deps);
   await harness.cron.start();
 
@@ -167,7 +175,7 @@ async function finishWatcherRun(params: {
     openOpenClawStateDatabase()
       .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
       .get(receipt.receiptId),
-  ).toMatchObject({ status: params.expectedReceiptStatus ?? "ok" });
+  ).toMatchObject({ status: "ok" });
   expect(harness.cron.getJob(jobId)?.state.runningAtMs).toBeUndefined();
 }
 
@@ -229,28 +237,6 @@ async function withPendingWatcher(
 }
 
 describe("cron trigger evaluation", () => {
-  it("releases a busy main condition without updating trigger state or running its payload", async () => {
-    const harness = await createHarness({ evaluateCronTrigger: async () => ({ kind: "busy" }) });
-    try {
-      const job = await harness.cron.add(
-        watcher({
-          sessionTarget: "main",
-          payload: { kind: "systemEvent", text: "must not enqueue" },
-        }),
-      );
-      await runWhenDue(harness.cron, job.id);
-      expect(harness.enqueueSystemEvent).not.toHaveBeenCalled();
-      await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({ drained: true, active: 0 });
-      const state = harness.cron.getJob(job.id)?.state;
-      expect(state?.triggerEvalCount).toBeUndefined();
-      expect(state?.lastTriggerEvalAtMs).toBeUndefined();
-      expect(state?.triggerState).toBeUndefined();
-      expect(harness.events.filter((event) => event.action === "finished")).toEqual([]);
-    } finally {
-      harness.cron.stop();
-    }
-  });
-
   it.each([
     { sessionTarget: "main", mutation: "remove" },
     { sessionTarget: "isolated", mutation: "disable" },
@@ -495,14 +481,12 @@ describe("cron trigger evaluation", () => {
     });
   });
 
-  it("preserves a terminal replacement after recovery preparation", async () => {
+  it("preserves a replacement made after a legacy terminal result", async () => {
     await withPendingWatcher({ agentId: "alpha" }, async (pending) => {
       const { harness, jobId } = pending;
       await finishWatcherRun({
         ...pending,
         recover: true,
-        prepareRecoveryBeforeEdit: true,
-        expectedReceiptStatus: "interrupted",
         editAfterTask: async () => {
           expect(
             readCronRunHistoryPageForTests({ storeKey: cronStoreKey(harness.storePath), jobId })
@@ -746,6 +730,7 @@ describe("cron trigger cadence", () => {
       const deps = createTriggerDeps(storePath, evaluateCronTrigger);
       let cron = new CronService(deps);
       await cron.start();
+      cron.pauseScheduling();
       try {
         const job = await cron.add({
           name: "cadence probe",
@@ -768,6 +753,7 @@ describe("cron trigger cadence", () => {
         vi.setSystemTime(Date.now() + 10_000);
         cron = new CronService(deps);
         await cron.start();
+        cron.pauseScheduling();
         expect(evaluateCronTrigger).toHaveBeenCalledTimes(1);
         expect(cron.getJob(job.id)?.state.nextRunAtMs).toBe(nextAt);
 

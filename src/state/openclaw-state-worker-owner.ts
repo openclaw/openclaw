@@ -10,7 +10,6 @@ import {
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   openSharedStateSqliteWorkerStore,
-  prepareSharedStateSqliteWorkerRuntime,
   closeUnclaimedSharedStateSqliteWorkers,
   hasUnclaimedSharedStateSqliteCleanup,
   isSqliteWorkerStoreAvailable,
@@ -27,6 +26,7 @@ import {
   captureOpenClawStateDatabaseReadAdmission,
   openClawStateDatabaseCache,
   publishOpenClawStateDatabaseWorkerAdmission,
+  assertPublishedOpenClawStateDatabaseLifecycle,
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "./openclaw-state-db-cache.js";
@@ -70,10 +70,8 @@ function createSharedStateWorkerOwner() {
       entry.actor ? active.actor === entry.actor : active === entry,
     );
   const clearIdleRetirement = (entry: Entry) => {
-    if (entry.idleTimer) {
-      clearTimeout(entry.idleTimer);
-      entry.idleTimer = undefined;
-    }
+    clearTimeout(entry.idleTimer);
+    entry.idleTimer = undefined;
   };
   const hasPendingCleanup = (entry: Entry) =>
     entry.cleanup?.pending ??
@@ -135,14 +133,10 @@ function createSharedStateWorkerOwner() {
       return;
     }
     const store = entry.store;
-    const generation = entry.operationGeneration;
     const deadline = performance.now() + SQLITE_IDLE_HANDLE_TTL_MS;
     const arm = (delay: number, inspect: boolean) => {
       const isCurrentIdle = () =>
-        entry.idleTimer === timer &&
-        entry.operationGeneration === generation &&
-        entry.activeOperations === 0 &&
-        stores.has(entry);
+        entry.idleTimer === timer && entry.activeOperations === 0 && stores.has(entry);
       const settle = async () => {
         if (!isCurrentIdle()) {
           return;
@@ -220,7 +214,6 @@ function createSharedStateWorkerOwner() {
       throw new Error("Shared-state worker operation lost its actor owner");
     }
     clearIdleRetirement(entry);
-    entry.operationGeneration += 1;
     entry.activeOperations += 1;
     activeEntries.add(entry);
     let released = false;
@@ -410,25 +403,23 @@ function createSharedStateWorkerOwner() {
   });
   function retireIdleWorkers() {
     for (const entry of stores) {
-      if (
-        entry.idleTimer &&
-        entry.store &&
-        !entry.context.maintenanceScope &&
-        !hasActiveActorOperations(entry)
-      ) {
-        void runInDetachedAsyncContext(() => retire(entry)).catch((error: unknown) => {
-          log.warn("Idle shared-state worker retirement failed", {
-            path: entry.context.admission.databasePath,
-            error,
-          });
+      void runInDetachedAsyncContext(() => retireIdle(entry))?.catch((error: unknown) => {
+        log.warn("Idle shared-state worker retirement failed", {
+          path: entry.context.admission.databasePath,
+          error,
         });
-      }
+      });
     }
   }
+  const retireIdle = (entry: Entry) =>
+    entry.idleTimer &&
+    entry.store &&
+    stores.has(entry) &&
+    !entry.context.maintenanceScope &&
+    !hasActiveActorOperations(entry)
+      ? retire(entry)
+      : undefined;
   return {
-    prepareRuntime() {
-      return prepareSharedStateSqliteWorkerRuntime(captureRuntimeWorkerSource(moduleUrl));
-    },
     close,
     retainOperation,
     // Source and bundled callers must share the owner's backend URL.
@@ -494,13 +485,7 @@ function createSharedStateWorkerOwner() {
       context: OpenClawStateWorkerContext,
       options: Omit<OperationOptions, "createAdmission"> = {},
     ): Promise<Store | undefined> {
-      const {
-        existingOnly = false,
-        assertCurrent,
-        preparation,
-        runtimePreparation,
-        signal,
-      } = options;
+      const { existingOnly = false, assertCurrent, preparation, signal } = options;
       const { admission } = context;
       const wait = <T>(pending: Promise<T>) => racePromiseWithAbortSignal(pending, signal);
       const source = captureRuntimeWorkerSource(moduleUrl);
@@ -620,8 +605,8 @@ function createSharedStateWorkerOwner() {
               {
                 maintenanceScope: context.maintenanceScope,
                 preparation,
-                runtimePreparation,
                 signal,
+                retireIdle: retireIdle.bind(undefined, admitted),
                 retainCleanup: (cleanup) => {
                   admitted.cleanup = cleanup;
                 },
@@ -635,11 +620,11 @@ function createSharedStateWorkerOwner() {
           openingAdmission: openingGuard.admission,
           existingOnly,
           activeOperations: 0,
-          operationGeneration: 0,
-          // Maintenance may already be draining an accepted callback; its native
-          // opening must retain that callback's live admission through settlement.
-          opening: context.maintenanceScope ? open() : runInDetachedAsyncContext(open),
+          opening: Promise.resolve(undefined),
         };
+        // Initialize the entry before binding retirement without retaining the opening caller.
+        // Maintenance may already be draining an accepted callback, so keep its live admission.
+        admitted.opening = context.maintenanceScope ? open() : runInDetachedAsyncContext(open);
         entry = admitted;
         admitted.opening = admitted.opening.then((store) => {
           if (store) {
@@ -716,9 +701,13 @@ function createSharedStateWorkerOwner() {
 }
 
 export function getOpenClawStateWorkerOwner() {
+  // The owner registers with and publishes into the cache that created it. A
+  // retired generation must neither install its owner nor drive the current one.
+  assertPublishedOpenClawStateDatabaseLifecycle();
   return resolveGlobalSingleton(
     Symbol.for("openclaw.sharedStateWorkerOwner"),
     createSharedStateWorkerOwner,
     (sharedOwner) => sharedOwner.close(),
+    "shared-state",
   );
 }

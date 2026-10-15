@@ -95,7 +95,7 @@
 }
 
 /* One-shot poke wave: the same gesture without the loop's long idle lead-in.
-   Duration must stay in sync with CLAWD_WAVE_MS in about-page.ts. */
+   Duration must stay in sync with CLAWD_WAVE_MS in about-page.tsx. */
 .about-hero__clawd--wave .lob-claw--r {
   animation: about-clawd-poke-wave 1.4s ease-in-out;
 }

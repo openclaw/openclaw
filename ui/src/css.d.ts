@@ -1,5 +1,15 @@
 declare module "*.css";
 
+declare module "*.html?raw" {
+  const html: string;
+  export default html;
+}
+
+declare module "*.sql?raw" {
+  const sql: string;
+  export default sql;
+}
+
 declare module "*.css?inline" {
   const css: string;
   export default css;

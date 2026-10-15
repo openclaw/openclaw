@@ -193,12 +193,19 @@ for (const stopMethod of ["button", "slash"] as const) {
               await composer.press("Enter");
             }
             const stopped = await wire.waitFor(
-              (rpc) => rpc.request.method === "chat.abort",
+              (rpc) =>
+                rpc.request.method === (stopMethod === "slash" ? "sessions.abort" : "chat.abort"),
               beforeStop,
             );
             expect(stopped.response.ok).toBe(true);
-            expect(stopped.request.params).toMatchObject({ sessionKey: fixture.key });
-            expect(stopped.response.payload).toMatchObject({ ok: true, aborted: true });
+            expect(stopped.request.params).toMatchObject(
+              stopMethod === "slash"
+                ? { key: fixture.key, clearQueued: true }
+                : { sessionKey: fixture.key, runId: expect.any(String) },
+            );
+            expect(stopped.response.payload).toMatchObject(
+              stopMethod === "slash" ? { status: "aborted" } : { ok: true, aborted: true },
+            );
             await provider.wait(provider.parentClosed, signal);
             await provider.wait(provider.childClosed, signal);
             await stop.waitFor({ state: "hidden" });
@@ -233,8 +240,11 @@ for (const stopMethod of ["button", "slash"] as const) {
             expect(provider.parentRequests()).toBe(3);
             await composer.fill(fixture.nextPrompt);
             await pane.getByRole("button", { name: "Send message", exact: true }).click();
-            await pane.getByRole("paragraph").filter({ hasText: fixture.nextReply }).waitFor();
+            // The reply proves the new run started; Stop may still be hidden during send admission.
+            await pane.filter({ hasText: fixture.nextReply }).waitFor();
             await stop.waitFor({ state: "hidden" });
+            // Live and persisted reply copies can overlap until the run settles.
+            await pane.getByRole("paragraph").filter({ hasText: fixture.nextReply }).waitFor();
             expect(
               provider.parentRequests(),
               "only the new human prompt may start another model turn",

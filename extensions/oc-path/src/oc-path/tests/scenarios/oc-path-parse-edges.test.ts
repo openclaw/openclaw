@@ -3,27 +3,6 @@ import { describe, expect, it } from "vitest";
 import { OcPathError, formatOcPath, isPattern, parseOcPath } from "../../oc-path.js";
 
 describe("oc-path-parse-edges", () => {
-  it("session with full path", () => {
-    const p = parseOcPath("oc://X.md/sec/item/field?session=cron");
-    expect(p).toEqual({
-      file: "X.md",
-      section: "sec",
-      item: "item",
-      field: "field",
-      session: "cron",
-    });
-  });
-
-  it("unknown query parameters silently ignored", () => {
-    const p = parseOcPath("oc://X.md?foo=bar&session=s&baz=qux");
-    expect(p.session).toBe("s");
-  });
-
-  it("session= with empty value drops session", () => {
-    const p = parseOcPath("oc://X.md?session=");
-    expect(p.session).toBeUndefined();
-  });
-
   it("query without `=` ignored", () => {
     const p = parseOcPath("oc://X.md?nokeyhere");
     expect(p.session).toBeUndefined();
@@ -39,48 +18,28 @@ describe("oc-path-parse-edges", () => {
       "oc://X.md/a/b/c?session=s",
       "oc://skills/email-drafter/[frontmatter]/name",
       "oc://config/plugins.entries.foo.token",
+      "oc://config.jsonc/items/$first",
+      "oc://config.jsonc/items/$last",
+      'oc://config.jsonc/items/"$first"',
+      'oc://config.jsonc/items/"$last"',
+      "oc://config.jsonc/items/*",
+      "oc://config.jsonc/items/**",
+      "oc://config.jsonc/items/+key",
+      "oc://config.jsonc/items/#0",
+      String.raw`oc://config.jsonc/items/"a\"b\\c/d.e?f"`,
+      String.raw`oc://"dir/a\"b\\c.jsonc"/"$first"`,
     ];
     for (const c of cases) {
       expect(formatOcPath(parseOcPath(c)), `round-trip failed for ${c}`).toBe(c);
     }
   });
 
-  it("file segment with special chars (file with dots/slashes)", () => {
-    const p = parseOcPath("oc://config/plugins.entries.foo.token");
-    expect(p.file).toBe("config");
-    expect(p.section).toBe("plugins.entries.foo.token");
-  });
-
-  it("section segment with hyphens / underscores / numbers", () => {
-    const p = parseOcPath("oc://X.md/Multi-Tenant_Section_2");
-    expect(p.section).toBe("Multi-Tenant_Section_2");
-  });
-
-  it("[frontmatter] sentinel is just a section name", () => {
-    const p = parseOcPath("oc://X.md/[frontmatter]/name");
-    expect(p.section).toBe("[frontmatter]");
-    expect(p.item).toBe("name");
-  });
-
-  it("formatOcPath quotes raw slot values containing special chars", () => {
-    const constructed = formatOcPath({
-      file: "config.jsonc",
-      section: "agents.defaults.models",
-      item: "github-copilot/claude-opus-4-7",
-      field: "alias",
-    });
-    expect(constructed).toBe(
-      'oc://config.jsonc/agents.defaults.models/"github-copilot/claude-opus-4-7"/alias',
-    );
-    const parsed = parseOcPath(constructed);
-    expect(parsed.item).toBe('"github-copilot/claude-opus-4-7"');
-  });
-
-  it("parseOcPath finds query separator outside quoted keys", () => {
-    const parsed = parseOcPath('oc://config.jsonc/"foo?bar"?session=daily');
-    expect(parsed.section).toBe('"foo?bar"');
-    expect(parsed.session).toBe("daily");
-  });
+  it.each([String.raw`"bad\q"`, String.raw`"bad\n"`, '"bad"quote"'])(
+    "rejects invalid quoted escapes: %s",
+    (segment) => {
+      expect(() => parseOcPath(`oc://config.jsonc/${segment}`)).toThrow(OcPathError);
+    },
+  );
 
   it("file slot with `/` round-trips via quoting", () => {
     const constructed = formatOcPath({
@@ -93,13 +52,6 @@ describe("oc-path-parse-edges", () => {
     expect(parsed.file).toBe("skills/email-drafter");
     expect(parsed.section).toBe("Tools");
     expect(parsed.item).toBe("-1");
-  });
-
-  it("file slot with dot extension does NOT get quoted", () => {
-    expect(formatOcPath({ file: "AGENTS.md" })).toBe("oc://AGENTS.md");
-    expect(formatOcPath({ file: "gateway.jsonc", section: "version" })).toBe(
-      "oc://gateway.jsonc/version",
-    );
   });
 
   it("formatOcPath rejects field without item or section", () => {

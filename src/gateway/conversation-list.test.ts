@@ -12,11 +12,15 @@ import {
   readConversation,
   resolveCurrentSessionPrimaryConversation,
 } from "../config/sessions/conversation-registry.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   historyLane,
   targetDiscoveryLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
+import * as historyWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -422,21 +426,24 @@ describe("worker conversation reads", () => {
   it("rechecks current route ownership after the worker reply is delayed", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const run = historyLane.pool.run.bind(historyLane.pool);
-    vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await run(...args);
-      if (
-        reply.ok &&
-        typeof reply.value === "object" &&
-        !Array.isArray(reply.value) &&
-        "kind" in reply.value &&
-        reply.value.kind === "conversation-rows"
-      ) {
-        entered.resolve();
-        await release.promise;
-      }
-      return reply;
-    });
+    const readDatabase = historyWorker.withSessionHistoryWorkerDatabase;
+    vi.spyOn(historyWorker, "withSessionHistoryWorkerDatabase").mockImplementation(
+      (database, consume, lane) =>
+        readDatabase(
+          database,
+          (owner) =>
+            consume({
+              ...owner,
+              async readConversations(...args) {
+                const rows = await owner.readConversations(...args);
+                entered.resolve();
+                await release.promise;
+                return rows;
+              },
+            }),
+          lane,
+        ),
+    );
     let current = config();
     const pending = runGatewayConversationList({
       config: current,
@@ -508,15 +515,15 @@ describe("worker conversation reads", () => {
     },
   );
 
-  it("keeps process-held incognito conversations with their native owner", async () => {
-    const native = {
+  it("keeps process-held incognito conversations with their memory owner", async () => {
+    const memory = {
       agentId: "main",
       storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
       sessionKey: "agent:main:dashboard:incognito-conversation-read",
       sessionId: "incognito-conversation-read",
     };
-    replaceSessionEntrySync(native, {
-      sessionId: native.sessionId,
+    await replaceSessionEntry(memory, {
+      sessionId: memory.sessionId,
       updatedAt: 100,
       chatType: "channel",
       delivery: {
@@ -533,14 +540,14 @@ describe("worker conversation reads", () => {
     const worker = vi.spyOn(historyLane.pool, "run");
     const prepared = await prepareConversationRegistryScope({
       agentId: "main",
-      config: { session: { store: native.storePath } },
+      config: { session: { store: memory.storePath } },
     });
     const rows = await listConversations(prepared);
     expect(rows).toEqual([
-      expect.objectContaining({ sessionId: native.sessionId, sessionKey: native.sessionKey }),
+      expect.objectContaining({ sessionId: memory.sessionId, sessionKey: memory.sessionKey }),
     ]);
-    expect(await resolveCurrentSessionPrimaryConversation(native)).toEqual(rows[0]);
+    expect(await resolveCurrentSessionPrimaryConversation(memory)).toEqual(rows[0]);
     expect(worker).not.toHaveBeenCalled();
-    await expect(fs.stat(native.storePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(memory.storePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

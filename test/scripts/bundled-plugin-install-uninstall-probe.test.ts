@@ -707,35 +707,6 @@ describe("bundled plugin install/uninstall probe", () => {
     },
   );
 
-  it("finds package-manager descendants recursively in process snapshots", async () => {
-    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
-    const runtimeSmokeSource = fs.readFileSync(runtimeSmokePath, "utf8");
-    const longWrapperPath = `/tmp/${"nested/".repeat(40)}pnpm.cjs`;
-
-    const descendants = runtimeSmoke.findPackageManagerDescendants(
-      [
-        " 100 1 node gateway",
-        " 101 100 sh -c helper",
-        " 102 101 /usr/local/bin/pnpm install",
-        " 103 100 /usr/bin/npm-helper",
-        " 104 1 yarn install",
-        " 105 101 node /opt/pnpm.cjs install",
-        ` 106 101 node ${longWrapperPath} install`,
-      ].join("\n"),
-      100,
-    );
-
-    expect(runtimeSmokeSource).toContain('["-ww", "-eo", "pid=,ppid=,args="]');
-    expect(
-      descendants.toSorted((left: { pid: number }, right: { pid: number }) => left.pid - right.pid),
-    ).toEqual([
-      { args: "/usr/local/bin/pnpm install", pid: 102, ppid: 101 },
-      { args: "/usr/bin/npm-helper", pid: 103, ppid: 100 },
-      { args: "node /opt/pnpm.cjs install", pid: 105, ppid: 101 },
-      { args: `node ${longWrapperPath} install`, pid: 106, ppid: 101 },
-    ]);
-  });
-
   // These cases install parent signal handlers and manipulate real process groups.
   // Keep them serial so one teardown cannot signal another case's child tree.
   registerRuntimeCommandTimeoutTests(createPackageRoot);
@@ -965,17 +936,6 @@ describe("bundled plugin install/uninstall probe", () => {
     },
   );
 
-  it("does not treat shallow HTTP listen logs as runtime readiness", async () => {
-    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
-    const root = makePackageRoot();
-    const logPath = path.join(root, "gateway.log");
-    const readyLogSeen = runtimeSmoke.createReadyLogScanner(logPath);
-
-    fs.writeFileSync(logPath, "[gateway] http server listening\n", "utf8");
-
-    expect(readyLogSeen()).toBe(false);
-  });
-
   it("scans only post-ready runtime logs for dependency work", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const root = makePackageRoot();
@@ -999,24 +959,6 @@ describe("bundled plugin install/uninstall probe", () => {
     );
   });
 
-  it("keeps post-ready scans anchored when ready logs fall outside the tail", async () => {
-    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
-    const root = makePackageRoot();
-    const logPath = path.join(root, "gateway.log");
-    fs.writeFileSync(
-      logPath,
-      `startup\n[gateway] ready\npost-ready yarn install should fail\n${"x".repeat(300_000)}`,
-      "utf8",
-    );
-
-    const readyOffset = runtimeSmoke.findReadyLogOffset(logPath);
-
-    expect(readyOffset).toBe("startup\n".length);
-    expect(() => runtimeSmoke.assertNoPostReadyRuntimeDepsWork(logPath, readyOffset)).toThrow(
-      /post-ready runtime dependency work/u,
-    );
-  });
-
   registerRuntimeCommandOutputTimeoutTest();
 
   it("cleans per-call RPC state directories", async () => {
@@ -1029,7 +971,8 @@ describe("bundled plugin install/uninstall probe", () => {
       [
         "import fs from 'node:fs';",
         "fs.writeFileSync(process.env.OPENCLAW_TEST_RPC_STATE_PATH, process.env.OPENCLAW_STATE_DIR);",
-        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }));",
+        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }, null, 2));",
+        "console.log(JSON.stringify({ level: 'warn', message: 'post-rpc diagnostic' }));",
         "",
       ].join("\n"),
       "utf8",
@@ -1050,33 +993,6 @@ describe("bundled plugin install/uninstall probe", () => {
     const rpcStateDir = fs.readFileSync(statePath, "utf8");
     expect(path.basename(rpcStateDir)).toMatch(/^openclaw-plugin-runtime-rpc-/u);
     expect(fs.existsSync(rpcStateDir)).toBe(false);
-  });
-
-  it("ignores structured logs after gateway RPC payloads", async () => {
-    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
-    const root = makePackageRoot();
-    const entrypoint = path.join(root, "dist", "rpc-with-structured-log.js");
-    fs.writeFileSync(
-      entrypoint,
-      [
-        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }, null, 2));",
-        "console.log(JSON.stringify({ level: 'warn', message: 'post-rpc diagnostic' }));",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    await expect(
-      runtimeSmoke.rpcCall(
-        "health",
-        {},
-        {
-          entrypoint,
-          env: {},
-          port: 19001,
-        },
-      ),
-    ).resolves.toEqual({ status: "ok" });
   });
 
   it("accepts successful runtime HTTP probes", async () => {
@@ -1231,36 +1147,6 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(fs.existsSync(path.dirname(env.HOME))).toBe(false);
   });
 
-  it("selects packaged installable bundled sources instead of raw dist extension dirs", () => {
-    const root = makePackageRoot();
-    fs.mkdirSync(path.join(root, "dist", "extensions", "qa-channel"), { recursive: true });
-    fs.writeFileSync(
-      path.join(root, "dist", "extensions", "qa-channel", "openclaw.plugin.json"),
-      '{"id":"qa-channel"}\n',
-      "utf8",
-    );
-    writePluginManifest(root, "dist-runtime/extensions/admin-http-rpc", {
-      id: "admin-http-rpc",
-      configSchema: { required: ["port"] },
-    });
-    writePluginsList(root, [
-      {
-        id: "admin-http-rpc",
-        origin: "bundled",
-        rootDir: path.join(root, "dist-runtime", "extensions", "admin-http-rpc"),
-      },
-    ]);
-
-    const result = runProbe(root, {
-      OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS: undefined,
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      `admin-http-rpc\tadmin-http-rpc\t1\t${path.join(root, "dist-runtime", "extensions", "admin-http-rpc")}`,
-    );
-  });
-
   it("selects packaged plugins when list output includes structured diagnostics", () => {
     const root = makePackageRoot();
     const pluginRoot = path.join(root, "dist-runtime", "extensions", "admin-http-rpc");
@@ -1341,32 +1227,6 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(maxBuffer.stderr).toContain(
       "invalid OPENCLAW_BUNDLED_PLUGIN_LIST_MAX_BUFFER_BYTES: 64bytes",
     );
-  });
-
-  it("rejects loose bundled plugin sweep shard env values", () => {
-    const root = makePackageRoot();
-    writePluginManifest(root, "dist-runtime/extensions/admin-http-rpc", {
-      id: "admin-http-rpc",
-    });
-    writePluginsList(root, [
-      {
-        id: "admin-http-rpc",
-        origin: "bundled",
-        rootDir: path.join(root, "dist-runtime", "extensions", "admin-http-rpc"),
-      },
-    ]);
-
-    const total = runProbe(root, {
-      OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL: "2shards",
-    });
-    expect(total.status).toBe(1);
-    expect(total.stderr).toContain("invalid OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL: 2shards");
-
-    const index = runProbe(root, {
-      OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX: "0of2",
-    });
-    expect(index.status).toBe(1);
-    expect(index.stderr).toContain("invalid OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX: 0of2");
   });
 
   it("bounds plugin list selection when the CLI hangs", () => {

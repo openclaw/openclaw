@@ -2,20 +2,18 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { SystemInfoResult } from "../../packages/gateway-protocol/src/schema/system-info.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { readStartupRecoveryWarning } from "../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
-import {
-  loadExactSessionEntryReadOnly,
-  type SessionEntrySummary,
-} from "../config/sessions/session-accessor.js";
+import type { SessionEntrySummary } from "../config/sessions/session-accessor.js";
+import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveSessionTotalTokens,
@@ -62,16 +60,6 @@ const channelPluginIdsModuleLoader = createLazyImportLoader(
   () => import("../plugins/channel-plugin-ids.js"),
 );
 const linkChannelModuleLoader = createLazyImportLoader(() => import("./link-channel.js"));
-const staticModelCatalogResolverLoader = createLazyImportLoader(async () => {
-  const modelCatalog = await import("../agents/embedded-agent-runner/model.static-catalog.js");
-  return {
-    resolveManifestModel: modelCatalog.createBundledStaticCatalogModelResolver({
-      // Runtime-discovery manifest rows still provide a cold-cache fallback.
-      includeRuntimeDiscovery: true,
-    }),
-    createProviderContextResolver: modelCatalog.createBundledProviderStaticCatalogContextResolver,
-  };
-});
 
 const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
   () => import("./summary.runtime.js"),
@@ -82,39 +70,24 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
     return [];
   }
-  const flags: string[] = [];
-  const think = entry?.thinkingLevel;
-  if (typeof think === "string" && think.length > 0) {
-    flags.push(`think:${think}`);
+  const stringFlag = (label: string, value: unknown) =>
+    typeof value === "string" && value.length > 0 ? `${label}:${value}` : undefined;
+  let fastFlag: string | undefined;
+  if (entry.fastMode === "auto" || entry.fastMode === "ultrafast") {
+    fastFlag = `fast:${entry.fastMode}`;
+  } else if (typeof entry.fastMode === "boolean") {
+    fastFlag = entry.fastMode ? "fast" : "fast:off";
   }
-  const verbose = entry?.verboseLevel;
-  if (typeof verbose === "string" && verbose.length > 0) {
-    flags.push(`verbose:${verbose}`);
-  }
-  if (entry?.fastMode === "auto" || entry?.fastMode === "ultrafast") {
-    flags.push(`fast:${entry.fastMode}`);
-  } else if (typeof entry?.fastMode === "boolean") {
-    flags.push(entry.fastMode ? "fast" : "fast:off");
-  }
-  const reasoning = entry?.reasoningLevel;
-  if (typeof reasoning === "string" && reasoning.length > 0) {
-    flags.push(`reasoning:${reasoning}`);
-  }
-  const elevated = entry?.elevatedLevel;
-  if (typeof elevated === "string" && elevated.length > 0) {
-    flags.push(`elevated:${elevated}`);
-  }
-  if (entry?.systemSent) {
-    flags.push("system");
-  }
-  if (entry?.abortedLastRun) {
-    flags.push("aborted");
-  }
-  const sessionId = entry.sessionId;
-  if (typeof sessionId === "string" && sessionId.length > 0) {
-    flags.push(`id:${sessionId}`);
-  }
-  return flags;
+  return [
+    stringFlag("think", entry.thinkingLevel),
+    stringFlag("verbose", entry.verboseLevel),
+    fastFlag,
+    stringFlag("reasoning", entry.reasoningLevel),
+    stringFlag("elevated", entry.elevatedLevel),
+    entry.systemSent ? "system" : undefined,
+    entry.abortedLastRun ? "aborted" : undefined,
+    stringFlag("id", entry.sessionId),
+  ].filter((flag): flag is string => flag !== undefined);
 };
 
 function compareSessionCandidatesByUpdatedAt(
@@ -124,54 +97,29 @@ function compareSessionCandidatesByUpdatedAt(
   return (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0);
 }
 
-async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
+async function prepareSessionStatusDetails(
+  cfg: OpenClawConfig,
+  now: number,
+  candidates: readonly SessionEntrySummary[],
+) {
   const {
     classifySessionKey,
     resolveConfiguredStatusModelRef,
     resolveAuthoredModelContextTokens,
     resolveContextTokensForModel,
     resolveSessionRuntime,
+    readSessionRuntimeMetadata,
     resolveSessionModelRef,
     resolveStatusModelComparisonLabel,
     resolveStatusModelLookupRef,
-    waitForContextWindowCacheLoad,
+    createStatusModelContextResolver,
   } = await loadStatusSummaryRuntimeModule();
-  await waitForContextWindowCacheLoad();
-  const { resolveManifestModel, createProviderContextResolver } =
-    await staticModelCatalogResolverLoader.load();
-  const resolveProviderContext = createProviderContextResolver({ cfg });
-  const modelContextCache = new Map<
-    string,
-    Promise<{ modelContextWindow?: number; modelContextTokens?: number }>
-  >();
-  const resolveStaticModelContext = async (
-    provider: string | undefined,
-    model: string | undefined,
-  ) => {
-    if (!provider || !model) {
-      return {};
-    }
-    const key = `${provider}\0${model}`;
-    const cached = modelContextCache.get(key);
-    if (cached) {
-      return cached;
-    }
-    const resolved = (async () => {
-      try {
-        const entry =
-          resolveManifestModel({ provider, modelId: model }) ??
-          (await resolveProviderContext({ provider, modelId: model }));
-        return {
-          ...(entry?.contextWindow ? { modelContextWindow: entry.contextWindow } : {}),
-          ...(entry?.contextTokens ? { modelContextTokens: entry.contextTokens } : {}),
-        };
-      } catch {
-        return {};
-      }
-    })();
-    modelContextCache.set(key, resolved);
-    return resolved;
-  };
+  // Read runtime metadata once for every displayed row, including overlapping windows.
+  const metadata = await readSessionRuntimeMetadata(cfg, candidates);
+  const metadataByCandidate = new Map(
+    candidates.map((candidate, index) => [candidate, metadata[index] ?? null]),
+  );
+  const resolveModelContext = await createStatusModelContextResolver(cfg);
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,
@@ -179,7 +127,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
     defaultModel: DEFAULT_MODEL,
   });
   const configModel = resolved.model ?? DEFAULT_MODEL;
-  const configModelContext = await resolveStaticModelContext(
+  const configModelContext = await resolveModelContext(
     resolved.provider ?? DEFAULT_PROVIDER,
     configModel,
   );
@@ -189,17 +137,17 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
       provider: resolved.provider ?? DEFAULT_PROVIDER,
       model: configModel,
       ...configModelContext,
-      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
       // Keep `status`/`status --json` startup read-only. These summary lookups
       // use offline static catalogs but never start live provider discovery.
       allowAsyncLoad: false,
-    }) ?? DEFAULT_CONTEXT_TOKENS;
+      allowCacheLookup: false,
+    }) ?? null;
 
   // Aggregate rows reuse this request's completed agent projection, with independent DTOs.
   const sessionRows = new Map<SessionEntrySummary, SessionStatus>();
-  const buildSessionRows = async (candidates: SessionEntrySummary[]) =>
+  const buildSessionRows = async (rows: SessionEntrySummary[]) =>
     Promise.all(
-      candidates.map(async (candidate) => {
+      rows.map(async (candidate) => {
         const cached = sessionRows.get(candidate);
         if (cached) {
           return { ...cached, flags: [...cached.flags] };
@@ -225,10 +173,6 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
             defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
           }) ?? resolvedModel;
         const lookupModelId = lookupModel.model ?? model;
-        const modelContext = await resolveStaticModelContext(
-          lookupModel.provider,
-          lookupModelId ?? undefined,
-        );
         const selectedModelLabel =
           resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
         const configuredSessionModelComparisonLabel = resolveStatusModelComparisonLabel({
@@ -260,14 +204,6 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
         // Session rows show the live selected model and warn for user-pinned
         // differences as well as runtime fallback selections (#96126).
-        const resolvedContextTokens = resolveContextTokensForModel({
-          cfg,
-          provider: lookupModel.provider,
-          model: lookupModelId,
-          ...modelContext,
-          fallbackContextTokens: configContextTokens,
-          allowAsyncLoad: false,
-        });
         const runtime = resolveSessionRuntime({
           cfg,
           entry,
@@ -275,6 +211,22 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           model: lookupModelId ?? "",
           agentId,
           sessionKey: key,
+          acpMeta: metadataByCandidate.get(candidate) ?? null,
+        });
+        const modelContext = await resolveModelContext(
+          lookupModel.provider,
+          lookupModelId ?? undefined,
+          agentId,
+          runtime.id,
+          entry,
+        );
+        const resolvedContextTokens = resolveContextTokensForModel({
+          cfg,
+          provider: lookupModel.provider,
+          model: lookupModelId,
+          ...modelContext,
+          allowAsyncLoad: false,
+          allowCacheLookup: false,
         });
         const contextTokens =
           resolveProjectedSessionContextTokens({
@@ -361,7 +313,7 @@ export async function getStatusSummary(
   } = {},
 ) {
   const { includeSensitive = true, includeChannelSummary = true } = options;
-  const cfg = options.config ?? getRuntimeConfig();
+  const cfg = options.config ?? (await captureRuntimeConfigAsyncReader()());
   const channelScopeConfig =
     options.sourceConfig === undefined
       ? { config: cfg }
@@ -370,8 +322,8 @@ export async function getStatusSummary(
     includeChannelSummary &&
     (await channelPluginIdsModuleLoader
       .load()
-      .then(({ hasConfiguredChannelsForReadOnlyScope }) =>
-        hasConfiguredChannelsForReadOnlyScope(channelScopeConfig),
+      .then(({ hasConfiguredChannelsForReadOnlyScopeAsync }) =>
+        hasConfiguredChannelsForReadOnlyScopeAsync(channelScopeConfig),
       ));
   const linkContext = needsChannelPlugins
     ? await linkChannelModuleLoader
@@ -391,8 +343,14 @@ export async function getStatusSummary(
     );
     return agentList.agents.map((agent, index) => {
       const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
-      let waitingForRoute = false;
-      let ownerRoute: Parameters<typeof hasResolvableHeartbeatOwnerRoute>[0] | undefined;
+      let routeTarget:
+        | {
+            storePath: string;
+            sessionKey: string;
+            target: "last" | "owner";
+            heartbeat: Parameters<typeof hasResolvableHeartbeatOwnerRoute>[0]["heartbeat"];
+          }
+        | undefined;
       if (
         summary.enabled &&
         !agent.admissionRefusal &&
@@ -405,42 +363,80 @@ export async function getStatusSummary(
         );
         // Only these enabled targets consume the session route. Keep the probe
         // read-only so status cannot create, register, or migrate an absent store.
-        const entry = loadExactSessionEntryReadOnly({
-          agentId: agent.id,
+        routeTarget = {
           storePath: heartbeatSession.storePath,
           sessionKey: heartbeatSession.sessionKey,
-        })?.entry;
-        const route = deliveryContextFromSession(entry);
-        if (summary.target === "last") {
-          waitingForRoute = !(route?.channel && route.to);
-        } else {
-          ownerRoute = {
-            cfg,
-            agentId: agent.id,
-            entry,
-            heartbeat: {
-              ...cfg.agents?.defaults?.heartbeat,
-              ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-            },
-          };
-        }
+          target: summary.target,
+          heartbeat: {
+            ...cfg.agents?.defaults?.heartbeat,
+            ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
+          },
+        };
       }
-      return {
-        status: {
-          agentId: agent.id,
-          enabled: summary.enabled && !agent.admissionRefusal,
-          every: summary.every,
-          everyMs: summary.everyMs,
-          waitingForRoute,
-        } satisfies HeartbeatStatus,
-        ownerRoute,
+      const status: HeartbeatStatus = {
+        agentId: agent.id,
+        enabled: summary.enabled && !agent.admissionRefusal,
+        every: summary.every,
+        everyMs: summary.everyMs,
+        waitingForRoute: false,
       };
+      return { status, routeTarget };
     });
   });
+  const heartbeatStores = new Map<
+    string,
+    { agentId: string; storePath: string; sessionKeys: string[] }
+  >();
+  for (const { status, routeTarget } of heartbeatInputs) {
+    if (!routeTarget) {
+      continue;
+    }
+    let store = heartbeatStores.get(routeTarget.storePath);
+    if (!store) {
+      store = { agentId: status.agentId, storePath: routeTarget.storePath, sessionKeys: [] };
+      heartbeatStores.set(routeTarget.storePath, store);
+    }
+    store.sessionKeys.push(routeTarget.sessionKey);
+  }
+  const heartbeatStoreInputs = [...heartbeatStores.values()];
+  const heartbeatEntries = heartbeatStoreInputs.length
+    ? await withSessionEntriesFromStoresInWorker(
+        heartbeatStoreInputs.map(({ agentId, storePath, sessionKeys }) => ({
+          agentId,
+          storePath,
+          sessionKeys,
+          projection: "exact",
+          snapshotFields: [],
+        })),
+        (reads) =>
+          new Map(
+            reads.flatMap(({ result }, index) =>
+              result.entries.map(
+                (row) =>
+                  [
+                    `${heartbeatStoreInputs[index]!.storePath}\0${row.sessionKey}`,
+                    row.entry,
+                  ] as const,
+              ),
+            ),
+          ),
+      )
+    : new Map<string, SessionEntry>();
   const heartbeatAgents: HeartbeatStatus[] = [];
-  for (const { status, ownerRoute } of heartbeatInputs) {
-    if (ownerRoute) {
-      status.waitingForRoute = !(await hasResolvableHeartbeatOwnerRoute(ownerRoute));
+  for (const { status, routeTarget } of heartbeatInputs) {
+    if (routeTarget) {
+      const entry = heartbeatEntries.get(`${routeTarget.storePath}\0${routeTarget.sessionKey}`);
+      if (routeTarget.target === "last") {
+        const route = deliveryContextFromSession(entry);
+        status.waitingForRoute = !(route?.channel && route.to);
+      } else {
+        status.waitingForRoute = !(await hasResolvableHeartbeatOwnerRoute({
+          cfg,
+          agentId: status.agentId,
+          entry,
+          heartbeat: routeTarget.heartbeat,
+        }));
+      }
     }
     heartbeatAgents.push(status);
   }
@@ -467,8 +463,6 @@ export async function getStatusSummary(
   );
   const now = Date.now();
 
-  const sessionDetails = includeSensitive ? await prepareSessionStatusDetails(cfg, now) : undefined;
-
   const sessionStores =
     options.sessionStores ??
     (await readStatusSessionStores(
@@ -477,6 +471,16 @@ export async function getStatusSummary(
       includeSensitive ? STATUS_RECENT_SESSION_LIMIT : 0,
       options.sessionRowProjection,
     ));
+  const recentCandidates = sortAndLimitBy(
+    sessionStores.recent,
+    STATUS_RECENT_SESSION_LIMIT,
+    compareSessionCandidatesByUpdatedAt,
+  );
+  const sessionDetails = includeSensitive
+    ? await prepareSessionStatusDetails(cfg, now, [
+        ...new Set([...recentCandidates, ...sessionStores.byAgent.flatMap(({ recent }) => recent)]),
+      ])
+    : undefined;
   const byAgent = await Promise.all(
     sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
       agentId: agent.id,
@@ -489,15 +493,7 @@ export async function getStatusSummary(
       recent: sessionDetails ? await sessionDetails.buildSessionRows(recent) : [],
     })),
   );
-  const recent = sessionDetails
-    ? await sessionDetails.buildSessionRows(
-        sortAndLimitBy(
-          sessionStores.recent,
-          STATUS_RECENT_SESSION_LIMIT,
-          compareSessionCandidatesByUpdatedAt,
-        ),
-      )
-    : [];
+  const recent = sessionDetails ? await sessionDetails.buildSessionRows(recentCandidates) : [];
   const hostDesktopStatus =
     options.hostDesktopStatus ??
     (

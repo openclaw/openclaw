@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import { getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 
@@ -23,7 +23,7 @@ export type PersistedClawMcpServerRef = {
 export type McpDatabase = Pick<DB, "claw_mcp_server_refs">;
 export type McpRefRow = Selectable<DB["claw_mcp_server_refs"]>;
 
-export function selectMcpRefs(db: DatabaseSync) {
+export function selectMcpRefs(db: EngineConnection) {
   return getNodeSqliteKysely<McpDatabase>(db)
     .selectFrom("claw_mcp_server_refs")
     .select([

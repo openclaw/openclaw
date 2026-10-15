@@ -4,7 +4,7 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -35,14 +35,14 @@ export function resolveHeartbeatSessionKey(
     agentId: resolvedAgentId,
     env,
   });
-  const mainSession = (suppressOriginatingContext = false) => ({
-    sessionKey: mainSessionKey,
+  const selectSession = (sessionKey = mainSessionKey, suppressOriginatingContext = false) => ({
+    sessionKey,
     storePath,
     suppressOriginatingContext,
   });
 
   if (scope === "global") {
-    return mainSession();
+    return selectSession();
   }
 
   const resolveCandidate = (requestKey: string) => {
@@ -69,37 +69,31 @@ export function resolveHeartbeatSessionKey(
   // Guard: never route heartbeats to subagent sessions, regardless of entry path.
   const forced = forcedSessionKey?.trim();
   if (forced && isSubagentSessionKey(forced)) {
-    return mainSession(true);
+    return selectSession(mainSessionKey, true);
   }
 
   const forcedCanonical = forced ? resolveCandidate(forced) : undefined;
   if (forcedCanonical) {
-    return {
-      sessionKey:
-        resolveMainScopedEventSessionKey({
-          cfg,
-          sessionKey: forcedCanonical,
-          agentId: resolvedAgentId,
-        }) ?? forcedCanonical,
-      storePath,
-      suppressOriginatingContext: false,
-    };
+    return selectSession(
+      resolveMainScopedEventSessionKey({
+        cfg,
+        sessionKey: forcedCanonical,
+        agentId: resolvedAgentId,
+      }) ?? forcedCanonical,
+    );
   }
 
   const trimmed = heartbeat?.session?.trim() ?? "";
   if (!trimmed || isSubagentSessionKey(trimmed)) {
-    return mainSession();
+    return selectSession();
   }
 
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "main" || normalized === "global") {
-    return mainSession();
+    return selectSession();
   }
 
-  const canonical = resolveCandidate(trimmed);
-  return canonical
-    ? { sessionKey: canonical, storePath, suppressOriginatingContext: false }
-    : mainSession();
+  return selectSession(resolveCandidate(trimmed) || mainSessionKey);
 }
 
 /** The heartbeat's event queue session and its stored row. */
@@ -190,14 +184,14 @@ export type HeartbeatSessionSelection = ResolvedHeartbeatSession & {
 };
 
 /** Selects the execution key and descriptive conversation for an already-resolved event queue. */
-export function resolveHeartbeatSessionSelection(
+export async function resolveHeartbeatSessionSelection(
   cfg: OpenClawConfig,
   agentId: string,
   heartbeat: HeartbeatConfig | undefined,
   session: ResolvedHeartbeatSession,
   isolated: boolean,
   env: NodeJS.ProcessEnv = process.env,
-): HeartbeatSessionSelection {
+): Promise<HeartbeatSessionSelection> {
   if (!isolated) {
     return {
       ...session,
@@ -223,7 +217,7 @@ export function resolveHeartbeatSessionSelection(
     conversationEntry:
       isolatedBaseSessionKey === session.sessionKey
         ? session.entry
-        : loadSessionEntry({
+        : await readSessionEntryInWorker({
             agentId,
             storePath: session.storePath,
             sessionKey: isolatedBaseSessionKey,
@@ -255,10 +249,6 @@ export async function restoreHeartbeatUpdatedAt(params: {
 }) {
   const { updatedAt, ...scope } = params;
   if (typeof updatedAt !== "number") {
-    return;
-  }
-  const entry = loadSessionEntry(scope);
-  if (!entry || entry.updatedAt === Math.max(entry.updatedAt ?? 0, updatedAt)) {
     return;
   }
   await patchSessionEntryCore(

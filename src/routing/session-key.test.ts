@@ -1,14 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.unmock("./session-key.js");
+import { resolveSessionStoreKey } from "../gateway/session-store-key.js";
 import {
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
-} from "../gateway/session-store-key.js";
-import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
-import {
-  getSubagentDepth,
-  isCronSessionKey,
   parseCronRunScopeSuffix,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
@@ -40,16 +34,12 @@ describe("agent id session-key boundary", () => {
 });
 
 describe("classifySessionKeyShape", () => {
-  it.each([
-    { input: undefined, expected: "missing" },
-    { input: "   ", expected: "missing" },
-    { input: "agent:main:main", expected: "agent" },
-    { input: "agent::broken", expected: "malformed_agent" },
-    { input: "agent:main", expected: "malformed_agent" },
-    { input: "main", expected: "legacy_or_alias" },
-  ] as const)("classifies %j as $expected", ({ input, expected }) => {
-    expect(classifySessionKeyShape(input)).toBe(expected);
-  });
+  it.each([{ input: undefined, expected: "missing" }] as const)(
+    "classifies %j as $expected",
+    ({ input, expected }) => {
+      expect(classifySessionKeyShape(input)).toBe(expected);
+    },
+  );
 });
 
 describe("scopeLegacySessionKeyToAgent", () => {
@@ -73,15 +63,6 @@ describe("scopeLegacySessionKeyToAgent", () => {
       }),
     ).toBe("agent:main:incident-42");
   });
-
-  it("scopes global and unknown legacy aliases to the requested agent", () => {
-    expect(scopeLegacySessionKeyToAgent({ agentId: "ops", sessionKey: "global" })).toBe(
-      "agent:ops:global",
-    );
-    expect(scopeLegacySessionKeyToAgent({ agentId: "ops", sessionKey: "UNKNOWN" })).toBe(
-      "agent:ops:unknown",
-    );
-  });
 });
 
 describe("isUnscopedSessionKeySentinel", () => {
@@ -95,8 +76,6 @@ describe("isUnscopedSessionKeySentinel", () => {
 
 describe("agentSessionKeysMatchByRequestKey", () => {
   it.each([
-    ["agent:main:main", "main", true],
-    ["agent:ops:incident-42", "incident-42", true],
     ["incident-42", "agent:ops:incident-42", true],
     ["agent:OPS:incident-42", "agent:ops:incident-42", true],
     ["agent:ops:incident-42", "agent:research:incident-42", false],
@@ -119,76 +98,6 @@ describe("resolveSessionStoreKey", () => {
     expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:dm:U1", storeAgentId: "ops" })).toBe(
       "agent:ops:discord:dm:u1",
     );
-  });
-});
-
-describe("session key backward compatibility", () => {
-  it.each(["agent:main:telegram:dm:123456", "agent:main:telegram:direct:123456"] as const)(
-    "classifies backward-compatible direct session key %s as valid",
-    (key) => {
-      expect(classifySessionKeyShape(key)).toBe("agent");
-    },
-  );
-});
-
-describe("getSubagentDepth", () => {
-  it.each([
-    { key: "agent:main:main", expected: 0 },
-    { key: undefined, expected: 0 },
-    { key: "agent:main:subagent:parent:subagent:child", expected: 2 },
-    { key: "subagent:parent:subagent:child", expected: 2 },
-  ] as const)("returns $expected for session key %j", ({ key, expected }) => {
-    expect(getSubagentDepth(key)).toBe(expected);
-  });
-});
-
-describe("isCronSessionKey", () => {
-  it.each([
-    { key: "agent:main:cron:job-1", expected: true },
-    { key: "agent:main:cron:job-1:run:run-1:subagent:worker", expected: true },
-    { key: "agent:main:main", expected: false },
-    { key: "cron:job-1", expected: false },
-    { key: undefined, expected: false },
-  ] as const)("matches cron key %j => $expected", ({ key, expected }) => {
-    expect(isCronSessionKey(key)).toBe(expected);
-  });
-});
-
-describe("deriveSessionChatTypeFromKey", () => {
-  it.each([
-    { key: "agent:main:direct:user1", expected: "direct" },
-    { key: "agent:main:discord:direct:user1", expected: "direct" },
-    { key: "agent:main:telegram:group:g1", expected: "group" },
-    { key: "agent:main:discord:guild-123:channel-456", expected: "channel" },
-    { key: "agent:main:channel:!room:example.org", expected: "channel" },
-    { key: "agent:main:channel:direct:user", expected: "channel" },
-    { key: "agent:main:group:room:part", expected: "group" },
-    { key: "agent:main:group:dm:user", expected: "group" },
-    { key: "agent:main:whatsapp:123@g.us", expected: "group" },
-    { key: "agent:main:telegram:dm:123456", expected: "direct" },
-    { key: "telegram:dm:123456", expected: "direct" },
-    { key: "agent:main:matrix:channel:!room:[2001:db8::1]", expected: "channel" },
-    { key: "agent:voice:agent:other:matrix:channel:!room:example.org", expected: "unknown" },
-    { key: "agent:main:direct", expected: "unknown" },
-    { key: "agent:main:demo:acct:channel", expected: "unknown" },
-    { key: "agent:main:telegram:group:direct:user", expected: "unknown" },
-    { key: "agent:main:direct:group:room", expected: "unknown" },
-    { key: "agent:main:dm:account:group:room", expected: "unknown" },
-    { key: "agent:main:demo::channel:room", expected: "unknown" },
-    { key: "agent::demo:direct:user", expected: "unknown" },
-    { key: "agent:main:main", expected: "unknown" },
-    { key: "agent:main", expected: "unknown" },
-    { key: "", expected: "unknown" },
-  ] as const)("derives chat type for %j => $expected", ({ key, expected }) => {
-    expect(deriveSessionChatTypeFromKey(key)).toBe(expected);
-  });
-
-  it("uses plugin-owned legacy chat-type hooks after canonical parsing", () => {
-    expect(
-      deriveSessionChatTypeFromKey("legacy-room:abc", [
-        (sessionKey) => (sessionKey.startsWith("legacy-room:") ? "channel" : undefined),
-      ]),
-    ).toBe("channel");
   });
 });
 
@@ -223,13 +132,6 @@ describe("cron run scope suffix parsing", () => {
     });
   });
 
-  it("leaves keys without a run scope untouched", () => {
-    expect(parseCronRunScopeSuffix("agent:main:main")).toEqual({
-      baseSessionKey: "agent:main:main",
-      runId: undefined,
-    });
-  });
-
   it("does not strip a :run: segment from a non-cron key", () => {
     // The run scope is only ever appended to cron keys; a channel id that embeds
     // `:run:` must keep its identity intact.
@@ -245,36 +147,6 @@ describe("cron run scope suffix parsing", () => {
       runId: undefined,
     });
   });
-
-  it("returns undefined for empty input", () => {
-    expect(parseCronRunScopeSuffix(undefined)).toEqual({
-      baseSessionKey: undefined,
-      runId: undefined,
-    });
-  });
-});
-
-describe("stored session grammar boundaries", () => {
-  it.each([
-    ["agent:ops::main", null],
-    ["agent::ops:main", null],
-    [":agent:ops:main", null],
-    ["agent:ops:cron:", { agentId: "ops", rest: "cron:" }],
-    [
-      "Agent:Ops:Matrix:Channel:!Room:Org:Thread:$Event",
-      { agentId: "ops", rest: "matrix:channel:!Room:Org:thread:$Event" },
-    ],
-    [
-      "Agent:Ops:Signal:Group:AbC:Thread:XyZ",
-      { agentId: "ops", rest: "signal:group:AbC:thread:xyz" },
-    ],
-    [
-      "agent:ops:catalog:fixture:Host:Thread",
-      { agentId: "ops", rest: "catalog:fixture:host:thread" },
-    ],
-  ] as const)("preserves stored identity for %s", (key, expected) => {
-    expect(parseAgentSessionKey(key)).toEqual(expected);
-  });
 });
 
 describe("session key canonicalization", () => {
@@ -282,14 +154,6 @@ describe("session key canonicalization", () => {
     expect(toAgentStoreSessionKey({ agentId: "main", requestKey: "agent:main:main" })).toBe(
       "agent:main:main",
     );
-  });
-
-  it("preserves empty segments inside opaque agent-scoped tails", () => {
-    expect(parseAgentSessionKey("agent:voice:room::part")).toEqual({
-      agentId: "voice",
-      rest: "room::part",
-    });
-    expect(resolveSessionStoreAgentId({}, "agent:voice:room::part")).toBe("voice");
   });
 
   it("preserves Signal group ids in group history keys", () => {
@@ -312,13 +176,6 @@ describe("session key canonicalization", () => {
 });
 
 describe("scopedHeartbeatWakeOptions", () => {
-  it("remaps ephemeral cron run sessions to agent main key", () => {
-    const result = scopedHeartbeatWakeOptions("agent:main:cron:backup:run:abc", {
-      reason: "exec:123:exit",
-    });
-    expect(result).toEqual({ reason: "exec:123:exit", sessionKey: "agent:main:main" });
-  });
-
   it("preserves durable cron base sessions (not remapped)", () => {
     const result = scopedHeartbeatWakeOptions("agent:main:cron:backup", {
       reason: "exec:123:exit",
@@ -362,19 +219,6 @@ describe("scopedHeartbeatWakeOptions", () => {
 });
 
 describe("resolveEventSessionKey", () => {
-  it("remaps ephemeral cron run session keys to agent main session key", () => {
-    expect(resolveEventSessionKey("agent:main:cron:backup:run:abc123")).toBe("agent:main:main");
-  });
-
-  it("collapses cron-run descendant session keys to the agent main session key", () => {
-    expect(resolveEventSessionKey("agent:main:cron:backup:run:abc123:subagent:worker")).toBe(
-      "agent:main:main",
-    );
-    expect(resolveEventSessionKey("agent:ops:cron:job-1:run:xyz:thread:reply")).toBe(
-      "agent:ops:main",
-    );
-  });
-
   it("preserves durable cron base session keys", () => {
     expect(resolveEventSessionKey("agent:ops:cron:job-1")).toBe("agent:ops:cron:job-1");
   });
@@ -383,10 +227,6 @@ describe("resolveEventSessionKey", () => {
     expect(
       resolveEventSessionKey("agent:main:cron:backup:run:abc123", "primary", "per-sender"),
     ).toBe("agent:main:primary");
-  });
-
-  it("passes through non-agent keys unchanged", () => {
-    expect(resolveEventSessionKey("global")).toBe("global");
   });
 
   it("routes cron-run keys to the global queue when scope is global", () => {

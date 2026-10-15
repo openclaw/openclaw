@@ -120,13 +120,13 @@ vi.mock("../config/sessions.js", async (importOriginal) => ({
   resolveMainSessionKey: () => "agent:main:main",
 }));
 
-vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../config/sessions/session-accessor.entry.js")>();
   return {
     ...actual,
-    resolveSessionEntryAccessTarget: (params: { sessionKey: string }) => ({
-      entry: sessionEntries.get(params.sessionKey),
-    }),
+    readResolvedSessionEntryInWorker: async (params: { sessionKey: string }) =>
+      sessionEntries.get(params.sessionKey),
   };
 });
 
@@ -1784,6 +1784,29 @@ describe("mcp loopback server", () => {
     );
   });
 
+  it("bounds capture draining by elapsed time after a wall-clock rollback", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const captureKey = "clock-rollback";
+    beginMcpLoopbackToolCallCapture({ captureKey, onToolCallResult: vi.fn() });
+    markMcpLoopbackToolCallStarted({ captureKey, toolName: "message", args: {} });
+    const settled = vi.fn();
+    const idle = waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
+      timeoutMs: 120,
+      admissionGraceMs: 0,
+    }).then(settled);
+    try {
+      vi.setSystemTime(Date.now() - 60_000);
+      await vi.advanceTimersByTimeAsync(119);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toHaveBeenCalledWith(false);
+    } finally {
+      clearMcpLoopbackToolCallCapture(captureKey);
+      await idle;
+      vi.useRealTimers();
+    }
+  });
+
   it("waits through a quiet admission grace before clearing a failed-turn capture", async () => {
     const captureKey = "admission-grace";
     beginMcpLoopbackToolCallCapture({
@@ -2067,29 +2090,6 @@ describe("mcp loopback server", () => {
     expect(response.status).toBe(202);
     await expect(response.text()).resolves.toBe("");
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("dispatches tools/call notifications without returning a response", async () => {
-    const execute = vi.fn(async () => ({
-      content: [{ type: "text", text: "ok" }],
-    }));
-    mockScopedTools([makeMessageTool({ execute })]);
-    const { runtime, port } = await startLoopbackServerForTest();
-    const response = await sendRaw({
-      port,
-      token: runtime.ownerToken,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "tools/call",
-        params: { name: "message", arguments: { body: "hello" } },
-      }),
-    });
-
-    expect(response.status).toBe(202);
-    await expect(response.text()).resolves.toBe("");
-    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(1);
-    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("keeps delayed valid MCP request bodies open when timeout config exceeds Node's timer ceiling", async () => {

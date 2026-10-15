@@ -1,9 +1,11 @@
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
+import { isLocalManagedProfile } from "../config.js";
 import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
-  BrowserTargetAmbiguousError,
   toBrowserErrorResponse,
 } from "../errors.js";
 import {
@@ -14,13 +16,13 @@ import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { isManagedOnlyBrowserRequest } from "../request-policy.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
-import { resolveTargetIdFromTabs } from "../target-id.js";
+import { resolveBrowserTabOrThrow } from "../target-id.js";
 import {
   browserNavigationPolicyForProfile,
   handleRouteError,
   resolveProfileContext,
 } from "./agent.shared.js";
-import { readRouteNonNegativeInteger } from "./route-numeric.js";
+import { readRouteNonNegativeInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, runProfileRouteOperation, toStringOrEmpty } from "./utils.js";
 
@@ -198,7 +200,13 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       navigationPolicy: browserNavigationPolicyForProfile(ctx, profileCtx),
     });
     signal.throwIfAborted();
-    return { running: true, tabs };
+    // Only an isolated browser owned by OpenClaw may follow the preview size.
+    // Attached sessions and remote CDP browsers retain their existing viewport.
+    return {
+      running: true,
+      tabs,
+      canAutoResizeViewport: isLocalManagedProfile(profileCtx.profile),
+    };
   };
 
   const focusTab = async (
@@ -233,10 +241,21 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
   });
 
   app.post("/tabs/open", async (req, res) => {
-    const url = toStringOrEmpty((req.body as { url?: unknown })?.url);
+    const body = asNullableRecord(req.body);
+    const url = toStringOrEmpty(body?.url);
     const label = readOptionalTabLabel(req.body);
     if (!url) {
       return jsonError(res, 400, "url is required");
+    }
+    let timeoutMs: number | undefined;
+    try {
+      const requestedTimeoutMs = readRouteTimerTimeoutMs(body?.timeoutMs);
+      timeoutMs =
+        requestedTimeoutMs === undefined
+          ? undefined
+          : resolveBrowserNavigationTimeoutMs(requestedTimeoutMs);
+    } catch (err) {
+      return jsonError(res, 400, String(err instanceof Error ? err.message : err));
     }
 
     await runTabsProfileRoute({
@@ -254,6 +273,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         const opened = await profileCtx.openTab(url, {
           label,
           signal,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
           ...(isManagedOnlyBrowserRequest(req) ? { requireDurableOwnership: true } : {}),
         });
         return { ...opened, resolvedProfile: profileCtx.profile.name };
@@ -273,17 +293,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       targetId,
       mutate: async (profileCtx, id, signal) => {
         const tabs = await profileCtx.listTabs({ signal });
-        const resolved = resolveTargetIdFromTabs(id, tabs);
-        if (!resolved.ok) {
-          if (resolved.reason === "ambiguous") {
-            throw new BrowserTargetAmbiguousError();
-          }
-          throw new BrowserTabNotFoundError({ input: id });
-        }
-        const tab = tabs.find((currentTab) => currentTab.targetId === resolved.targetId);
-        if (!tab) {
-          throw new BrowserTabNotFoundError({ input: id });
-        }
+        const tab = resolveBrowserTabOrThrow(id, tabs);
         return await focusTab(req, profileCtx, tab, signal);
       },
     });

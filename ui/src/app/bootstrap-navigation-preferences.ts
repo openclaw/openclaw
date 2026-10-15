@@ -1,3 +1,4 @@
+import { serializeSidebarEntry } from "../app-navigation.ts";
 import type {
   ApplicationNavigationPreferences,
   ApplicationNavigationPreferencesSnapshot,
@@ -66,4 +67,18 @@ export function togglePinnedAgent(navigation: ApplicationNavigationPreferences, 
     ? pinned.filter((id) => id !== agentId)
     : [...pinned, agentId];
   navigation.update({ pinnedAgentIds: next });
+}
+
+/** Menu surfaces share the personal reference owner instead of patching session metadata. */
+export function togglePinnedSession(
+  navigation: ApplicationNavigationPreferences,
+  sessionKey: string,
+) {
+  const entry = serializeSidebarEntry({ type: "session", key: sessionKey });
+  const entries = navigation.snapshot.sidebarEntries;
+  navigation.update({
+    sidebarEntries: entries.includes(entry)
+      ? entries.filter((candidate) => candidate !== entry)
+      : [...entries, entry],
+  });
 }

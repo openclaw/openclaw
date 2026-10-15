@@ -1,6 +1,7 @@
-import { stableStringify } from "@openclaw/normalization-core";
+import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withSandboxRuntimeStatusesInWorker } from "../../../agents/sandbox/runtime-status.js";
+import { withPreparedSessionCapabilityRead } from "../../../agents/subagents/spawn/subagent-session-store.js";
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { combineChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
@@ -13,6 +14,7 @@ import {
   resolveReplyPersonalToolTargets,
   resolveReplyToolAuthorityContext,
 } from "../reply-tool-authority.js";
+import { updateFollowupRetryHeartbeats } from "./lifecycle.js";
 import {
   FollowupRunDeferredError,
   isFollowupRunAborted,
@@ -182,60 +184,34 @@ export async function prepareNextDeliveryGroup(
   assertDrainCurrent: () => void,
 ): Promise<{ items: FollowupRun[]; assertCurrent: () => void }> {
   const items = readItems().slice();
-  const sourceKey = (item: FollowupRun) =>
-    JSON.stringify([
-      resolveFollowupDeliveryStorageKey(item),
-      item.run.agentId,
-      item.run.sessionKey,
-      item.run.sessionId,
-      item.run.sessionFile,
-      item.admissionSessionId,
-      item.run.gatewayUiCommandTarget,
-    ]);
-  const sources = items.map((item) => ({
-    item,
-    run: item.run,
-    config: item.run.config,
-    lifecycle: item.turnAdoptionLifecycle,
-    operator: item.operatorAuthority,
-    key: sourceKey(item),
-  }));
   const assertCurrent = () => {
     assertDrainCurrent();
-    for (const source of sources) {
-      source.item.operatorAuthority?.assertCurrent();
-    }
-    const current = readItems();
-    for (const [index, source] of sources.entries()) {
-      const { item } = source;
-      if (
-        current[index] !== item ||
-        isFollowupRunAborted(item) ||
-        item.run !== source.run ||
-        item.run.config !== source.config ||
-        item.turnAdoptionLifecycle !== source.lifecycle ||
-        item.operatorAuthority !== source.operator ||
-        sourceKey(item) !== source.key
-      ) {
+    for (const item of items) {
+      item.operatorAuthority?.assertCurrent();
+      if (isFollowupRunAborted(item)) {
         throw new FollowupRunDeferredError("Queued delivery source changed during preparation");
       }
     }
-    assertDrainCurrent();
   };
-  assertCurrent();
-  if (items.length <= 1) {
-    return { items, assertCurrent };
-  }
-  const policyItems = items.filter((item) => item.run.gatewayUiCommandTarget && !item.disableTools);
-  return withSandboxRuntimeStatusesInWorker(
-    policyItems.map(({ run }) => ({
-      cfg: run.config,
-      agentId: run.agentId,
-      sessionKey: run.sessionKey,
-      classificationSessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
-    })),
-    { env: { ...process.env }, cwd: process.cwd(), assertCurrent },
-    (statuses) => {
+  try {
+    assertCurrent();
+    if (items.length <= 1) {
+      return { items, assertCurrent };
+    }
+    const policyItems = items.filter(
+      (item) => item.run.gatewayUiCommandTarget && !item.disableTools,
+    );
+    const statuses = await withSandboxRuntimeStatusesInWorker(
+      policyItems.map(({ run }) => ({
+        cfg: run.config,
+        agentId: run.agentId,
+        sessionKey: run.sessionKey,
+        classificationSessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
+      })),
+      { env: { ...process.env }, cwd: process.cwd(), assertCurrent },
+      (prepared) => prepared,
+    );
+    return await withPreparedSessionCapabilityRead(() => {
       const group: FollowupRun[] = [];
       let firstKey: string | undefined;
       for (const item of items) {
@@ -243,7 +219,11 @@ export async function prepareNextDeliveryGroup(
         const profile =
           index < 0
             ? undefined
-            : resolveReplyToolAuthorityContext(item, undefined, statuses[index]).capabilityProfile;
+            : resolveReplyToolAuthorityContext(
+                item,
+                undefined,
+                expectDefined(statuses[index], "prepared sandbox status"),
+              ).capabilityProfile;
         const storageKey = resolveFollowupDeliveryStorageKey(item);
         const personalTargets = profile
           ? resolveReplyPersonalToolTargets(item, profile)
@@ -261,8 +241,11 @@ export async function prepareNextDeliveryGroup(
       }
       assertCurrent();
       return { items: group, assertCurrent };
-    },
-  );
+    });
+  } catch (error) {
+    updateFollowupRetryHeartbeats(error, items);
+    throw error;
+  }
 }
 
 export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
@@ -391,6 +374,11 @@ export function collectRuntimeMetadata(
   // Delivery-key equality proves every source has the same turn authority.
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);
+  const terminalObservers = items.flatMap((item) =>
+    item.runObservers?.onAgentRunTerminalOutcome
+      ? [item.runObservers.onAgentRunTerminalOutcome]
+      : [],
+  );
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const explicitSkillSelections = [
     ...new Map(
@@ -424,7 +412,25 @@ export function collectRuntimeMetadata(
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
     replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
     queuedFollowupReplyDisposition: collectReplyDisposition(items),
-    runObservers: items.at(-1)?.runObservers,
+    runObservers:
+      terminalObservers.length === 0
+        ? authoritySource?.runObservers
+        : {
+            ...authoritySource?.runObservers,
+            onAgentRunTerminalOutcome: (outcome) => {
+              const failures: unknown[] = [];
+              for (const observer of terminalObservers) {
+                try {
+                  observer(outcome);
+                } catch (error) {
+                  failures.push(error);
+                }
+              }
+              if (failures.length > 0) {
+                throw failures[0];
+              }
+            },
+          },
   };
 }
 
@@ -473,6 +479,8 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     enqueuedAt: source.enqueuedAt,
     ...getFollowupOriginRouting(source),
     abortSignal: source.abortSignal,
+    deliveryCorrelations: source.deliveryCorrelations,
+    onQueueDisposition: source.onQueueDisposition,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     replyOperationRunStates: source.replyOperationRunStates,
     queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,

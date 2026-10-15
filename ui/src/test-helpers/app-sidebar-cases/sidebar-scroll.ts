@@ -1,18 +1,20 @@
-import { html } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar scroll", () => {
   it("shows fades only toward additional content", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const contextualContent = document.createElement("p");
+    contextualContent.textContent = "Gateway machine";
     sidebar.contextualSidebar = {
       key: "systems",
       data: undefined,
       loaderPending: false,
-      render: () => html`<p>Gateway machine</p>`,
+      render: () => contextualContent,
     };
     await sidebar.updateComplete;
     const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body");
@@ -32,6 +34,7 @@ describe("AppSidebar scroll", () => {
     ) => {
       scroller.scrollTop = scrollTop;
       scroller.dispatchEvent(new Event("scroll"));
+      vi.advanceTimersToNextFrame();
       await sidebar.updateComplete;
       expect(scroller.classList.contains(`sidebar-shell__body--scroll-${expected}`)).toBe(true);
     };

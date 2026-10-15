@@ -12,6 +12,7 @@ import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtim
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  normalizeVideoGenerationDuration,
   selectSupportedVideoDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
@@ -23,8 +24,6 @@ import {
   createGoogleVideoGenerationProviderMetadata,
   DEFAULT_GOOGLE_VIDEO_MODEL,
   GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
-  GOOGLE_VIDEO_MAX_DURATION_SECONDS,
-  GOOGLE_VIDEO_MIN_DURATION_SECONDS,
 } from "./generation-provider-metadata.js";
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 import { createGoogleGenAI, type GoogleGenAIClient } from "./google-genai-runtime.js";
@@ -100,13 +99,10 @@ function resolveResolution(params: {
 }
 
 function resolveDurationSeconds(durationSeconds: number | undefined): number | undefined {
-  if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds)) {
+  const rounded = normalizeVideoGenerationDuration({ durationSeconds });
+  if (rounded === undefined) {
     return undefined;
   }
-  const rounded = Math.min(
-    GOOGLE_VIDEO_MAX_DURATION_SECONDS,
-    Math.max(GOOGLE_VIDEO_MIN_DURATION_SECONDS, Math.round(durationSeconds)),
-  );
   return selectSupportedVideoDuration(rounded, GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS);
 }
 
@@ -507,11 +503,10 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
             operation: () => client.operations.getVideosOperation({ operation: sdkOperation }),
           });
         }
+        if (sdkOperation.error) {
+          throw new Error(JSON.stringify(sdkOperation.error));
+        }
         operation = sdkOperation;
-      }
-      const finalOperation = operation as { error?: unknown; name?: string };
-      if (finalOperation.error) {
-        throw new Error(JSON.stringify(finalOperation.error));
       }
       let generatedVideos = extractGeneratedVideos(operation);
       if (generatedVideos.length === 0 && !hasReferenceInputs && !usedRestFallback) {
@@ -521,6 +516,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       if (generatedVideos.length === 0) {
         throw new Error(GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE);
       }
+      const finalOperation = operation as { name?: string };
       const maxVideoBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
       const videos = await Promise.all(
         generatedVideos.map(async (entry, index) => {

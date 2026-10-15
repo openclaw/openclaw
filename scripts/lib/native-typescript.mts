@@ -1,12 +1,7 @@
-import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { SourceFile } from "typescript/unstable/ast";
-import {
-  createVirtualFileSystem,
-  type FileSystem,
-  type FileSystemEntries,
-} from "typescript/unstable/fs";
+import { createFileSystem, createFileSystemLayer, type FileSystem } from "typescript/unstable/fs";
 import {
   API,
   type CreateSnapshotParams,
@@ -40,74 +35,29 @@ function compilerFileName(cwd: string, file: string) {
   return path.resolve(cwd, file).split(path.sep).join("/");
 }
 
-function directoryEntries(directory: string): FileSystemEntries {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(directory, { withFileTypes: true });
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error.code === "ENOENT" || error.code === "ENOTDIR")
-    ) {
-      return { files: [], directories: [] };
-    }
-    throw error;
-  }
-  const files: string[] = [];
-  const directories: string[] = [];
-  for (const entry of entries) {
-    const isDirectory = entry.isSymbolicLink()
-      ? fs.statSync(path.join(directory, entry.name), { throwIfNoEntry: false })?.isDirectory()
-      : entry.isDirectory();
-    (isDirectory ? directories : files).push(entry.name);
-  }
-  return { files, directories };
-}
-
-function overlayFileSystem(
-  cwd: string,
-  files: Readonly<Record<string, string>>,
-  base: FileSystem = {},
-): FileSystem {
-  const contents = Object.fromEntries(
-    Object.entries(files).map(([file, text]) => [compilerFileName(cwd, file), text]),
-  );
-  const virtual = createVirtualFileSystem(contents);
-  const hasFile = (file: string) => Object.hasOwn(contents, compilerFileName(cwd, file));
-  return {
-    readFile: (file) =>
-      hasFile(file) ? contents[compilerFileName(cwd, file)] : base.readFile?.(file),
-    fileExists: (file) => (hasFile(file) ? true : base.fileExists?.(file)),
-    directoryExists: (directory) =>
-      virtual.directoryExists?.(directory) || base.directoryExists?.(directory),
-    realpath: (file) => (hasFile(file) ? compilerFileName(cwd, file) : base.realpath?.(file)),
-    getAccessibleEntries(directory) {
-      const added = virtual.getAccessibleEntries?.(directory);
-      if (!added) {
-        return base.getAccessibleEntries?.(directory);
-      }
-      const existing = base.getAccessibleEntries?.(directory) ?? directoryEntries(directory);
-      return {
-        files: [...new Set([...existing.files, ...added.files])],
-        directories: [...new Set([...existing.directories, ...added.directories])],
-      };
-    },
-  };
-}
-
 /** Own one native compiler process and its immutable semantic snapshot. */
 export function createNativeTypeScriptProject(options: ProjectOptions) {
   const cwd = path.resolve(options.cwd);
   const configFileName = compilerFileName(cwd, options.configFileName);
   const api = new API({
     cwd,
-    fs: options.files ? overlayFileSystem(cwd, options.files, options.fs) : options.fs,
+    fs: options.fs,
   });
   let snapshot: Snapshot;
   let project: Project;
   try {
-    snapshot = api.createSnapshot({ openProjects: [configFileName], ensurePrograms: true });
+    snapshot = api.createSnapshot({
+      openProjects: [configFileName],
+      ensurePrograms: true,
+      fileSystem: options.files
+        ? createFileSystemLayer(
+            Object.entries(options.files).map(([file, text]) => [
+              compilerFileName(cwd, file),
+              text,
+            ]),
+          )
+        : undefined,
+    });
     const opened = snapshot.getConfiguredProject(configFileName);
     if (!opened) {
       throw new Error(`Native TypeScript did not open ${configFileName}`);
@@ -135,12 +85,20 @@ export async function createNativeTypeScriptProjectAsync(options: ProjectOptions
   const configFileName = compilerFileName(cwd, options.configFileName);
   const api = new AsyncAPI({
     cwd,
-    fs: options.files ? overlayFileSystem(cwd, options.files, options.fs) : options.fs,
+    fs: options.fs,
   });
   try {
     const snapshot = await api.createSnapshot({
       openProjects: [configFileName],
       ensurePrograms: true,
+      fileSystem: options.files
+        ? createFileSystemLayer(
+            Object.entries(options.files).map(([file, text]) => [
+              compilerFileName(cwd, file),
+              text,
+            ]),
+          )
+        : undefined,
     });
     const project = snapshot.getConfiguredProject(configFileName);
     if (!project) {
@@ -162,8 +120,6 @@ export function createNativeTypeScriptParser({
 }: { cwd?: string; tsserverPath?: string } = {}) {
   const root = path.resolve(cwd);
   const configFileName = compilerFileName(root, ".openclaw-native-parser.tsconfig.json");
-  let files: Record<string, string> = {};
-  let virtual = createVirtualFileSystem(files);
   let api: API | undefined;
   let snapshot: Snapshot | undefined;
   let project: Project | undefined;
@@ -190,7 +146,7 @@ export function createNativeTypeScriptParser({
     if (names.includes(configFileName)) {
       throw new Error(`Native TypeScript parser source conflicts with ${configFileName}`);
     }
-    files = Object.fromEntries(
+    const files = Object.fromEntries(
       sources.map((source) => [compilerFileName(root, source.fileName), source.text]),
     );
     files[configFileName] = JSON.stringify({
@@ -205,23 +161,15 @@ export function createNativeTypeScriptParser({
       },
       files: names,
     });
-    virtual = createVirtualFileSystem(files);
     api ??= new API({
       cwd: root,
       tsserverPath,
-      fs: {
-        readFile: (file) => virtual.readFile?.(file) ?? null,
-        fileExists: (file) => virtual.fileExists?.(file) ?? false,
-        directoryExists: (directory) => virtual.directoryExists?.(directory) ?? false,
-        getAccessibleEntries: (directory) =>
-          virtual.getAccessibleEntries?.(directory) ?? { files: [], directories: [] },
-        realpath: (file) => file,
-      },
     });
     const previousNames = new Set(sourceNames);
     const currentNames = new Set(names);
     const changes: CreateSnapshotParams = {
       ...(previous ? {} : { openProjects: [configFileName] }),
+      fileSystem: createFileSystem(Object.entries(files)),
       // A config-file change reloads its root list; invalidateAll retains the old roots.
       fileNotifications: {
         changed: [configFileName, ...names.filter((name) => previousNames.has(name))],
@@ -255,8 +203,6 @@ export function createNativeTypeScriptParser({
     api = undefined;
     project = undefined;
     snapshot = undefined;
-    files = {};
-    virtual = createVirtualFileSystem(files);
     sourceNames = [];
   };
   return {

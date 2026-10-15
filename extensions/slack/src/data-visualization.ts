@@ -55,21 +55,33 @@ function hasUniqueStrings(values: readonly string[]): boolean {
   return new Set(values).size === values.length;
 }
 
-function canRenderSlackDataVisualization(block: MessagePresentationChartBlock): boolean {
+export function buildSlackDataVisualizationBlock(
+  block: MessagePresentationChartBlock,
+): SlackDataVisualizationBlock | undefined {
   if (!isStringWithin(block.title, SLACK_CHART_TITLE_MAX)) {
-    return false;
+    return undefined;
   }
   if (block.chartType === "pie") {
-    return (
-      block.segments.length >= 1 &&
-      block.segments.length <= SLACK_CHART_SERIES_MAX &&
-      block.segments.every(
+    if (
+      block.segments.length < 1 ||
+      block.segments.length > SLACK_CHART_SERIES_MAX ||
+      !block.segments.every(
         (segment) =>
           isStringWithin(segment.label, SLACK_CHART_LABEL_MAX) &&
           Number.isFinite(segment.value) &&
           segment.value > 0,
       )
-    );
+    ) {
+      return undefined;
+    }
+    return {
+      type: "data_visualization",
+      title: block.title,
+      chart: {
+        type: "pie",
+        segments: block.segments.map((segment) => ({ ...segment })),
+      },
+    };
   }
   if (
     block.categories.length < 1 ||
@@ -80,33 +92,15 @@ function canRenderSlackDataVisualization(block: MessagePresentationChartBlock): 
     block.series.length > SLACK_CHART_SERIES_MAX ||
     !hasUniqueStrings(block.series.map((series) => series.name)) ||
     (block.xLabel !== undefined && !isStringWithin(block.xLabel, SLACK_CHART_AXIS_LABEL_MAX)) ||
-    (block.yLabel !== undefined && !isStringWithin(block.yLabel, SLACK_CHART_AXIS_LABEL_MAX))
+    (block.yLabel !== undefined && !isStringWithin(block.yLabel, SLACK_CHART_AXIS_LABEL_MAX)) ||
+    !block.series.every(
+      (series) =>
+        isStringWithin(series.name, SLACK_CHART_LABEL_MAX) &&
+        series.values.length === block.categories.length &&
+        series.values.every((value) => Number.isFinite(value)),
+    )
   ) {
-    return false;
-  }
-  return block.series.every(
-    (series) =>
-      isStringWithin(series.name, SLACK_CHART_LABEL_MAX) &&
-      series.values.length === block.categories.length &&
-      series.values.every((value) => Number.isFinite(value)),
-  );
-}
-
-export function buildSlackDataVisualizationBlock(
-  block: MessagePresentationChartBlock,
-): SlackDataVisualizationBlock | undefined {
-  if (!canRenderSlackDataVisualization(block)) {
     return undefined;
-  }
-  if (block.chartType === "pie") {
-    return {
-      type: "data_visualization",
-      title: block.title,
-      chart: {
-        type: "pie",
-        segments: block.segments.map((segment) => ({ ...segment })),
-      },
-    };
   }
   return {
     type: "data_visualization",

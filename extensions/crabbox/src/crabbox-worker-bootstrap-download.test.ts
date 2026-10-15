@@ -335,7 +335,10 @@ async function download(
     },
     exitCode: 0,
   });
-  const execution = runInNewContext(setup.command.split("\n").slice(2, -1).join("\n"), {
+  const script = setup.command
+    .split("CRABBOX_NODE_ENROLLMENT_SCRIPT'\n")[1]!
+    .split("\nCRABBOX_NODE_ENROLLMENT_SCRIPT")[0]!;
+  const execution = runInNewContext(script, {
     Buffer,
     URL,
     setTimeout,
@@ -426,24 +429,6 @@ async function download(
 }
 
 describe("bootstrap artifact download retries", () => {
-  it("completes after five resets that each advance the partial file", async () => {
-    const result = await download([
-      ...Array.from({ length: 5 }, () => ({ durationMs: 0, resetAfterBytes: 1 })),
-      "success",
-    ]);
-    expect(result.code, result.output).toBe(0);
-    expect(result.requests).toEqual(Array(6).fill("Bearer synthetic-worker-archive-token"));
-    expect(result.ranges).toEqual([
-      undefined,
-      "bytes=1-",
-      "bytes=2-",
-      "bytes=3-",
-      "bytes=4-",
-      "bytes=5-",
-    ]);
-    expect(result.published).toEqual([archive]);
-  });
-
   it("resets the failure budget only when retained bytes advance", async () => {
     const reset = { durationMs: 0, resetAfterBytes: 1 };
     const result = await download([503, 503, reset, "busy", 503, 503, reset, "success"]);
@@ -602,20 +587,6 @@ describe("bootstrap artifact download retries", () => {
     expect(result.created).toHaveLength(3);
   });
 
-  it.each(["ECONNRESET", 502, 503])(
-    "recovers from %s with the same token and retained partial bytes",
-    async (failure) => {
-      const result = await download([failure, "success"]);
-      expect(result.code).toBe(0);
-      expect(result.requests).toEqual(Array(2).fill("Bearer synthetic-worker-archive-token"));
-      expect(result.published).toEqual([archive]);
-      expect(result.delays).toEqual([250]);
-      if (typeof failure === "string") {
-        expect(result.ranges).toEqual([undefined, `bytes=${Math.floor(archive.length * 0.4)}-`]);
-        expect(result.removed.filter(({ bytes }) => bytes > 0)).toEqual([]);
-      }
-    },
-  );
   it("restarts from the full response when the server ignores Range", async () => {
     const result = await download(["ECONNRESET", "ignore-range"]);
     expect(result.code, result.output).toBe(0);

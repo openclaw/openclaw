@@ -1,6 +1,6 @@
 import { html, LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import "./components/chat-sidebar-region.runtime.ts";
+import "./components/chat-sidebar-region.runtime.tsx";
 import "../../components/browser/browser-panel.ts";
 import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -46,11 +46,12 @@ function fixture() {
   const definitions = createDeferred<CustomElementConstructor>();
   const commit = createDeferred<boolean>();
   vi.spyOn(customElements, "whenDefined").mockReturnValue(definitions.promise);
-  const region = document.createElement("div");
+  const region = document.createElement("openclaw-chat-sidebar-region");
   const deliverPanelEvent = vi.fn();
-  Object.assign(region, { updateComplete: commit.promise, deliverPanelEvent });
+  Object.defineProperty(region, "updateComplete", { value: commit.promise });
+  region.deliverPanelEvent = deliverPanelEvent;
   const root = document.createElement("div");
-  vi.spyOn(root, "querySelector").mockReturnValue(region);
+  root.append(region);
   const state = createPageState(
     createInitializationContext(),
     { invalidate: vi.fn(), afterCommit: () => () => {} },
@@ -90,13 +91,17 @@ function fixture() {
     deliverPanelEvent,
     event,
     owner,
+    root,
     pending,
     state,
     updateSidebarLayout,
   };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe("plugin panel intent delivery", () => {
   it.each(["buffered", "direct"] as const)(
@@ -138,6 +143,41 @@ describe("plugin panel intent delivery", () => {
 });
 
 describe("session link-reader intent delivery", () => {
+  it.each(["ready", "closed", "session"] as const)(
+    "waits for the recipient commit before delivering an intent (%s)",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const f = fixture();
+      const recipientCommit = createDeferred<boolean>();
+      const recipient = document.createElement("openclaw-link-reader-panel");
+      Object.defineProperty(recipient, "updateComplete", { value: recipientCommit.promise });
+      f.root.append(recipient);
+      const event = f.event();
+      f.controller.handle("link-reader", "openclaw-link-reader-panel", event);
+      f.definitions.resolve(HTMLElement);
+      f.commit.resolve(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.deliverPanelEvent).not.toHaveBeenCalled();
+      if (outcome === "closed") {
+        f.controller.handle(
+          "link-reader",
+          "openclaw-link-reader-panel",
+          new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, { detail: { open: false } }),
+        );
+      } else if (outcome === "session") {
+        f.state.sessionKey = "session-b";
+      }
+      recipientCommit.resolve(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.pending.size).toBe(0);
+      if (outcome === "ready") {
+        expect(f.deliverPanelEvent).toHaveBeenCalledExactlyOnceWith("link-reader", event);
+      } else {
+        expect(f.deliverPanelEvent).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("delivers every buffered reader intent in order after the lazy commit", async () => {
     const f = fixture();
     const first = f.event();
@@ -351,7 +391,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
     expect(
       pane
         .querySelector("openclaw-browser-panel")
-        ?.shadowRoot?.querySelector(".bp-shot")
+        ?.renderRoot?.querySelector(".bp-shot")
         ?.getAttribute("alt"),
     ).toBe("Local preview");
   } finally {

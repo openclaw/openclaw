@@ -20,6 +20,8 @@ This reference covers supported Node.js lines, why the minimum versions exist, a
 
 The exact engines expression is `>=24.16.0 <25 || >=26.1.0`. It remains the documented support policy and the `package.json` engine range used by package managers.
 
+The Bun opt-in runtime requires **Bun 1.4.3+** or the pinned OpenClaw fork; see [Bun compatibility](/install/bun-compatibility).
+
 ## How the gate decides
 
 Startup, doctor, Gateway runtime selection, update preflight, and installer runtime validation check the actual `node:sqlite` binding: it must be present, load a WAL-safe SQLite library, and preserve embedded and trailing NULs through TEXT, BLOB, and JSON round trips. The check uses an in-memory database and caches the current process result; checks of another executable run the same check in that executable with a bounded timeout. A build within the supported version table is refused if the check fails.
@@ -45,7 +47,9 @@ Separately, the **`node:sqlite` TEXT decoder** in Node 22.23.x, 24.15.0, 25.9.0,
 
 ## V8 compiler settings
 
-On Node 24 and 26, `process.exit()` can hang forever after a command has printed its output: Node joins V8's background threads while a Maglev or concurrent Sparkplug compile job waits for a garbage collection the exiting main thread never runs ([nodejs/node#64274](https://github.com/nodejs/node/issues/64274)). OpenClaw's CLI, Gateway, hook relay, and macOS node worker therefore start with Maglev and concurrent Sparkplug turned off, the tiering Node 22 used; TurboFan still optimizes hot code. Passing `--maglev` or `--concurrent-sparkplug` to `node` keeps that compiler enabled.
+OpenClaw keeps Node's default V8 compiler settings, including Maglev and concurrent Sparkplug. Its executable entrypoints close their owned resources, await accepted work, and record `process.exitCode` before returning. They do not force normal termination with `process.exit()`.
+
+On affected Node 24 and 26 releases, forced exit can join a compiler worker that is waiting for main-thread garbage collection, deadlocking after output has already appeared ([nodejs/node#64274](https://github.com/nodejs/node/issues/64274)). Natural shutdown lets Node tear down the isolate before joining the platform workers. The runtime boundary linter rejects `process.exit()` and `process.reallyExit()` so new entrypoints retain this lifecycle. This does not fix unrelated native shutdown stalls, including macOS system-certificate enumeration; system certificate trust remains enabled.
 
 ## Platform consequences
 

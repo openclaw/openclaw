@@ -13,7 +13,7 @@ import {
 } from "../state-contract.js";
 import { normalizeIMessageEchoText } from "./echo-text-corruption.js";
 
-type PersistedEchoStore = PluginStateKeyedStore<PersistedEchoEntry>;
+type PersistedEchoStore = PluginStateKeyedStore<PersistedEchoEntry, 2>;
 
 let persistenceFailureLogged = false;
 function reportFailure(scope: string, err: unknown): void {
@@ -37,7 +37,7 @@ function normalizeMedia(
 }
 
 function openPersistedEchoStore(): PersistedEchoStore {
-  return getIMessageRuntime().state.openKeyedStore<PersistedEchoEntry>({
+  return getIMessageRuntime().state.openKeyedStoreV2<PersistedEchoEntry>({
     namespace: IMESSAGE_SENT_ECHOES_NAMESPACE,
     maxEntries: IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
   });

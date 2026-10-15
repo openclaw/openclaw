@@ -4,9 +4,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { extractArchive } from "openclaw/plugin-sdk/archive";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleDirFetch } from "../node-host/dir-fetch.js";
 import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 import * as filePolicy from "./policy.js";
@@ -18,6 +22,14 @@ vi.mock("./audit.js", () => ({
 const requireRecord = createRequireRecord("object", "label-not-object");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
 async function createRealDirFetchContext(input: {
   approved: string;
   maxBytes: number;
@@ -28,10 +40,13 @@ async function createRealDirFetchContext(input: {
     request: vi.fn(async () => ({ id: "approval-1", decision: "deny" as const })),
   };
   const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(
-    async ({ params } = {}) => ({
-      ok: true,
-      payload: await handleDirFetch((params ?? {}) as Parameters<typeof handleDirFetch>[0]),
-    }),
+    async (options = {}) => {
+      const { params } = options;
+      return {
+        ok: true,
+        payload: await handleDirFetch((params ?? {}) as Parameters<typeof handleDirFetch>[0]),
+      };
+    },
   );
   const ctx: OpenClawPluginNodeInvokePolicyContext = {
     nodeId: "node-1",

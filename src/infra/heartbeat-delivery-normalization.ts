@@ -10,7 +10,7 @@ import {
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
-import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { escapeRegExp } from "../utils.js";
@@ -62,25 +62,35 @@ function stripTrailingHeartbeatNotifyFalse(text: string): {
     : { text, silent: false };
 }
 
-function normalizeHeartbeatReply(
-  payload: ReplyPayload,
+function normalizeHeartbeatDelivery(
+  source:
+    | { response: HeartbeatToolResponse }
+    | { payload: ReplyPayload; ackMaxChars: number; mode: "heartbeat" | "message" },
   responsePrefix: string | undefined,
-  ackMaxChars: number,
-  mode: "heartbeat" | "message" = "heartbeat",
 ): NormalizedHeartbeatDelivery {
-  const rawText = typeof payload.text === "string" ? payload.text : "";
-  const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
-  const isSilentReply = isSilentReplyPayloadText(textForStrip);
-  const stripped = stripHeartbeatToken(isSilentReply ? "" : textForStrip, {
-    mode,
-    maxAckChars: ackMaxChars,
-  });
-  const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-  const notifyFalse = stripTrailingHeartbeatNotifyFalse(stripped.text);
-  notifyFalse.silent ||= isSilentReply;
-  const isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(notifyFalse.text);
-  let finalText =
-    (stripped.shouldSkip && !hasMedia) || isInternalPlaceholderOnly ? "" : notifyFalse.text;
+  let finalText: string;
+  let hasMedia = false;
+  let isInternalPlaceholderOnly = false;
+  let silent: boolean;
+  if ("response" in source) {
+    finalText = getHeartbeatToolNotificationText(source.response);
+    silent = !source.response.notify;
+  } else {
+    const { payload, mode, ackMaxChars } = source;
+    const rawText = typeof payload.text === "string" ? payload.text : "";
+    const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
+    const isSilentReply = isSilentReplyPayloadText(textForStrip);
+    const stripped = stripHeartbeatToken(isSilentReply ? "" : textForStrip, {
+      mode,
+      maxAckChars: ackMaxChars,
+    });
+    hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
+    const notifyFalse = stripTrailingHeartbeatNotifyFalse(stripped.text);
+    silent = notifyFalse.silent || isSilentReply;
+    isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(notifyFalse.text);
+    finalText =
+      (stripped.shouldSkip && !hasMedia) || isInternalPlaceholderOnly ? "" : notifyFalse.text;
+  }
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
   }
@@ -89,24 +99,7 @@ function normalizeHeartbeatReply(
     text: finalText,
     hasMedia,
     isInternalPlaceholderOnly,
-    ...(notifyFalse.silent ? { silent: true } : {}),
-  };
-}
-
-function normalizeHeartbeatToolNotification(
-  response: HeartbeatToolResponse,
-  responsePrefix: string | undefined,
-): NormalizedHeartbeatDelivery {
-  let finalText = getHeartbeatToolNotificationText(response);
-  if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
-    finalText = `${responsePrefix} ${finalText}`;
-  }
-  return {
-    shouldSkip: finalText.trim().length === 0,
-    text: finalText,
-    hasMedia: false,
-    isInternalPlaceholderOnly: false,
-    ...(response.notify ? {} : { silent: true }),
+    ...(silent ? { silent: true } : {}),
   };
 }
 
@@ -156,15 +149,16 @@ export function classifyHeartbeatAgentOutcome(params: {
     return { kind: "ack", eventStatus: "ok-empty" } as const;
   }
   const mode = params.hasRelayableExecCompletion ? "message" : "heartbeat";
-  const normalized =
+  const normalized = normalizeHeartbeatDelivery(
     heartbeatToolResponse && !shouldSuppressSourceReply && !(hasExplicitFailure && replyPayload)
-      ? normalizeHeartbeatToolNotification(heartbeatToolResponse, params.responsePrefix)
-      : normalizeHeartbeatReply(
-          shouldSuppressSourceReply ? {} : (replyPayload ?? {}),
-          params.responsePrefix,
-          params.ackMaxChars,
+      ? { response: heartbeatToolResponse }
+      : {
+          payload: shouldSuppressSourceReply ? {} : (replyPayload ?? {}),
+          ackMaxChars: params.ackMaxChars,
           mode,
-        );
+        },
+    params.responsePrefix,
+  );
   if (agentRunFailed && params.useHeartbeatFailureCopy) {
     const replacement = replaceGenericExternalRunFailureText(normalized.text);
     if (replacement.replaced) {
@@ -176,18 +170,18 @@ export function classifyHeartbeatAgentOutcome(params: {
     !shouldSuppressSourceReply &&
     (!heartbeatToolResponse || agentRunFailed) &&
     replyPayload !== undefined &&
-    hasOutboundReplyContent({
-      ...replyPayload,
-      text: undefined,
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    hasOutboundReplyContent(
+      copyReplyPayloadMetadata(replyPayload, {
+        ...replyPayload,
+        text: undefined,
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      }),
+    );
   const shouldSkipMain =
     // A completed quiet turn also suppresses tool warnings and media; a later crash does not.
     (!agentRunFailed && heartbeatToolResponse?.notify === false) ||
-    (normalized.shouldSkip &&
-      !normalized.hasMedia &&
-      (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly));
+    (normalized.shouldSkip && (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly));
   if (hasExplicitFailure) {
     return {
       kind: "failure",

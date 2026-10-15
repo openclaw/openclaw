@@ -5,7 +5,7 @@ import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { splitNullBuffer } from "../agents/worktrees/git-path-inventory.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { gitNullConfigPath } from "../infra/git-exec.js";
+import { gitNullConfigPath, gitReadOnlyEnvironment } from "../infra/git-exec.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
@@ -56,7 +56,9 @@ export async function runPublicationCommand(argv: string[], options: GitCommandO
         runCommandBuffered(argv, {
           ...(options.cwd ? { cwd: options.cwd } : {}),
           env: {
-            ...(options.env ?? process.env),
+            ...(argv[0] === "git"
+              ? gitReadOnlyEnvironment(argv.slice(1), options.env ?? process.env)
+              : (options.env ?? process.env)),
             GIT_NO_REPLACE_OBJECTS: "1",
             // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
             GIT_CONFIG_COUNT: "1",
@@ -94,27 +96,21 @@ export function createGitHubPublicationCommandRunner(
     assertCurrent?.();
     return result;
   };
-  const run = async (argv: string[], options: GitCommandOptions = {}) => {
-    const result = await runPublicationCommand(argv, {
-      ...options,
-      operation: gitOperation,
-      beforeRun: assertCurrent,
-    });
-    assertCurrent?.();
-    return result;
-  };
-  return {
-    step,
-    run,
-    require: async (argv: string[], options: GitCommandOptions = {}) => {
-      const result = await requirePublicationCommand(argv, {
+  const guarded =
+    <T>(command: (argv: string[], options: GitCommandOptions) => Promise<T>) =>
+    async (argv: string[], options: GitCommandOptions = {}): Promise<T> => {
+      const result = await command(argv, {
         ...options,
         operation: gitOperation,
         beforeRun: assertCurrent,
       });
       assertCurrent?.();
       return result;
-    },
+    };
+  return {
+    step,
+    run: guarded(runPublicationCommand),
+    require: guarded(requirePublicationCommand),
   };
 }
 

@@ -268,7 +268,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
           database,
           pathname: f.databasePath,
           start: { generation: "", sessionId: "" },
-          transformContent: transformMediaArchiveContent,
+          transformLine: transformMediaArchiveContent,
         });
         const elapsed = performance.now() - started;
         expect(result).toEqual({ rewrittenArchives: 0, warnings: [] });
@@ -377,6 +377,21 @@ describe("media migration of canonical SQLite transcript archives", () => {
       const originalFile = fs.readFileSync(f.archivePath);
       const result = await migrateLegacyMediaPersistence({ env: f.env });
       expect(result.warnings).toEqual([]);
+      const recoveryDirectories = () =>
+        fs
+          .readdirSync(path.dirname(f.databasePath))
+          .filter((name) => name.startsWith("openclaw-media-persistence-recovery-"));
+      const backups = recoveryDirectories();
+      expect(backups).toHaveLength(1);
+      withDatabase(
+        path.join(path.dirname(f.databasePath), backups[0]!, "database.sqlite"),
+        (database) => {
+          expect(database.prepare("SELECT * FROM session_transcript_archives").get()).toEqual(
+            before,
+          );
+        },
+        true,
+      );
       const after = f.read();
       expectCanonical(after);
       expectPreservedIdentity(before, after);
@@ -401,6 +416,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
       });
       expect(f.read()).toEqual(after);
       expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(after.archive_blob));
+      expect(recoveryDirectories()).toEqual(backups);
     },
   );
 
@@ -507,6 +523,11 @@ describe("media migration of canonical SQLite transcript archives", () => {
     });
     expect(f.read()).toEqual(before);
     expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(before.archive_blob));
+    expect(
+      fs
+        .readdirSync(path.dirname(f.databasePath))
+        .filter((name) => name.startsWith("openclaw-media-persistence-recovery-")),
+    ).toEqual([]);
 
     const reads = vi.spyOn(fs, "readFileSync");
     expect(await migrateLegacyMediaPersistence({ env: f.env })).toEqual({

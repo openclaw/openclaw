@@ -2,13 +2,17 @@ import fs from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
 import { resolveHeartbeatDeliveryTarget } from "../infra/outbound/targets.js";
 import { loadLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
-import { resolveAgentIdFromSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 
 /**
@@ -27,10 +31,7 @@ export async function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig):
   const warnings: string[] = [];
   const sessionScope = cfg.session?.scope ?? "per-sender";
   for (const { agentId, heartbeat: heartbeatConfig } of resolveHeartbeatAgents(cfg)) {
-    if (!heartbeatConfig) {
-      continue;
-    }
-    if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeatConfig)) {
+    if (!heartbeatConfig || !resolveHeartbeatIntervalMs(cfg, undefined, heartbeatConfig)) {
       continue;
     }
     const configuredSession = normalizeOptionalString(heartbeatConfig.session);
@@ -83,12 +84,14 @@ export async function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig):
     }
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const entry =
-      loadSessionEntryReadOnly({
+      (await readSessionEntryReadOnlyInWorker({
         agentId,
         sessionKey: canonicalSession,
         storePath,
-      }) ??
-      (!storePath.endsWith(".sqlite") && fs.existsSync(storePath)
+      })) ??
+      (!isIncognitoSessionKey(canonicalSession) &&
+      !storePath.endsWith(".sqlite") &&
+      fs.existsSync(storePath)
         ? loadLegacySessionStore(storePath)[canonicalSession]
         : undefined);
     if (entry) {

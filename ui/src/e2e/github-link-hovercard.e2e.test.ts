@@ -8,6 +8,7 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gat
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -481,7 +482,9 @@ suite.define(() => {
       expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
       expect(await pullLink.getAttribute("aria-haspopup")).toBeNull();
       await captureArtifact(page, "github-hovercard-pending-silent");
-      expect(await page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(0);
+      expect(
+        await page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count(),
+      ).toBe(0);
       expect(await page.locator("body").getAttribute("data-title-tooltip-mounts")).toBe("0");
       expect(await pullLink.getAttribute("title")).toBeFalsy();
       expect(await pullLink.getAttribute("href")).toBe(PULL_HREF);
@@ -609,7 +612,9 @@ suite.define(() => {
     expect(await externalLink.getAttribute("href")).toBe(PULL_HREF);
     expect(await page.locator("body").getAttribute("data-preview-empty-mounts")).toBe("0");
     expect(await page.locator("body").getAttribute("data-title-tooltip-mounts")).toBe("0");
-    expect(await page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(0);
+    expect(
+      await page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count(),
+    ).toBe(0);
     expect((await gateway.getRequests("forge.preview")).length).toBe(1);
     expect(await pullLink.getAttribute("aria-haspopup")).toBe("dialog");
 
@@ -755,7 +760,13 @@ suite.define(() => {
     }
 
     await expect
-      .poll(() => page.getByRole("link", { name: "#99817" }).getAttribute("href"))
+      .poll(() =>
+        page
+          .getByRole("link", {
+            name: "a-very-long-organization-name/a-very-long-repository-name#99817",
+          })
+          .getAttribute("href"),
+      )
       .toBe(
         "https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/99817",
       );
@@ -764,6 +775,8 @@ suite.define(() => {
       .toBe("https://github.com/blader/humanizer/blob/main/SKILL.md");
 
     const pullLink = page.locator('a.markdown-github-link[href$="/pull/99816"]');
+
+    await expectText(pullLink, "openclaw/openclaw#99816");
 
     const decorationLine = (link: Locator) =>
       link.evaluate((element) => getComputedStyle(element).textDecorationLine);
@@ -778,7 +791,9 @@ suite.define(() => {
     await expectText(card, "−12");
     await page.clock.runFor(300);
     await captureArtifact(page, "github-hovercard-title-tooltip");
-    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    await expect
+      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
+      .toBe(0);
     expect(await pullLink.getAttribute("title")).toBeNull();
     await expect.poll(() => card.locator("img").count()).toBe(4);
     expect(await previewRequestsFor(99816)).toHaveLength(1);
@@ -794,7 +809,9 @@ suite.define(() => {
     await expectText(card, "Keep hover previews compact");
     await expectText(card, "octocat");
     await expectText(card, "Comments: 4");
-    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    await expect
+      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
+      .toBe(0);
     await expect.poll(() => card.locator("img").count()).toBe(1);
     expect(await previewRequestsFor(99815)).toHaveLength(1);
 
@@ -812,7 +829,11 @@ suite.define(() => {
     const fileLink = page.getByRole("link", { name: "SKILL.md" });
     await fileLink.hover();
     await expect
-      .poll(() => page.locator("openclaw-tooltip[open]").textContent())
+      .poll(() =>
+        page
+          .locator("openclaw-tooltip .tooltip-surface[popover]:popover-open .tooltip-content")
+          .textContent(),
+      )
       .toContain("https://github.com/blader/humanizer/blob/main/SKILL.md");
 
     const missingLink = page.getByRole("link", { name: "missing item" });
@@ -837,7 +858,9 @@ suite.define(() => {
 
     await pullLink.focus();
     await expectText(card, "Merged");
-    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    await expect
+      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
+      .toBe(0);
     await page.keyboard.press("Escape");
     await expect.poll(() => card.count()).toBe(0);
     await expect
@@ -845,6 +868,26 @@ suite.define(() => {
       .toBe(true);
 
     await expectModifiedNavigation(page, () => pullLink.click({ modifiers: ["Shift"] }), PULL_HREF);
+
+    const longReference = page.locator(
+      'a[href="https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/99817"]',
+    );
+    await page.setViewportSize({ width: 320, height: 800 });
+    await longReference.scrollIntoViewIfNeeded();
+    const bounds = await longReference.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+    if (artifactDir) {
+      const frame = await takeControlUiScreenshotFrame(page, longReference, [longReference], {
+        elements: [longReference],
+        animations: "disabled",
+      });
+      await writeFile(
+        path.join(artifactDir, "github-reference-mobile.png"),
+        frame.elements[0]!.png,
+      );
+    }
   });
 
   it("keeps the card open while the pointer crosses the gap onto it, then closes once it leaves both", async () => {

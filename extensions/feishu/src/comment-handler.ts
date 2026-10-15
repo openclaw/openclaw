@@ -100,10 +100,8 @@ export async function handleFeishuCommentEvent(
         senderId: turn.senderId,
         senderIdLine: `Your Feishu user id: ${turn.senderId}`,
         meta: { name: turn.senderId },
-        onCreated: ({ code }) => {
-          log(
-            `feishu[${account.accountId}]: comment pairing request sender=${turn.senderId} code=${code}`,
-          );
+        onCreated: () => {
+          log(`feishu[${account.accountId}]: comment pairing request sender=${turn.senderId}`);
         },
         sendPairingReply: async (text) => {
           await deliverCommentThreadText(client, {

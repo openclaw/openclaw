@@ -39,7 +39,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
         const trigger = page.locator("#new-session-where-trigger");
-        const picker = page.locator("wa-popover.new-session-page__where-popover");
+        const picker = page.locator(".oc-popover.new-session-page__where-popover");
         await trigger.click();
         await picker.getByRole("button", { name: "aws", exact: true }).click();
         await picker.locator('[data-value="cloud:aws"]').hover();

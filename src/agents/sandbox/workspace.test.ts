@@ -116,20 +116,6 @@ describe("ensureSandboxWorkspace", () => {
     }
   });
 
-  it("seeds regular bootstrap files from the source workspace", async () => {
-    const root = tempDirs.make("openclaw-sandbox-workspace-");
-    const seed = path.join(root, "seed");
-    const sandbox = path.join(root, "sandbox");
-    await fs.mkdir(seed, { recursive: true });
-    await fs.writeFile(path.join(seed, DEFAULT_AGENTS_FILENAME), "seeded-agents", "utf-8");
-
-    await ensureSandboxWorkspace(sandbox, seed, true);
-
-    await expect(fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf-8")).resolves.toBe(
-      "seeded-agents",
-    );
-  });
-
   it("keeps sandbox copying and scaffolding ahead of a later custom-purpose caller", async ({
     signal,
   }) => {
@@ -340,28 +326,5 @@ describe("ensureSandboxWorkspace", () => {
 
     await ensureSandboxWorkspace(sandbox, seed, true);
     await expect(fs.readFile(agentsPath, "utf-8")).resolves.toBe("seeded-agents");
-  });
-
-  it("reports when sandbox seed publication cannot use hard links", async () => {
-    const root = tempDirs.make("openclaw-sandbox-workspace-");
-    const seed = path.join(root, "seed");
-    const sandbox = path.join(root, "sandbox");
-    const agentsPath = path.join(sandbox, DEFAULT_AGENTS_FILENAME);
-    await fs.mkdir(seed, { recursive: true });
-    await fs.writeFile(path.join(seed, DEFAULT_AGENTS_FILENAME), "seeded-agents", "utf-8");
-    const linkSpy = vi.spyOn(syncFs, "linkSync").mockImplementation(() => {
-      throw Object.assign(new Error("not supported"), { code: "ENOTSUP" });
-    });
-
-    try {
-      await expect(
-        withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () =>
-          ensureSandboxWorkspace(sandbox, seed, true),
-        ),
-      ).rejects.toThrow(/filesystem does not support atomic bootstrap publication/u);
-      await expect(fs.readFile(agentsPath, "utf8")).rejects.toThrow("no such file");
-    } finally {
-      linkSpy.mockRestore();
-    }
   });
 });

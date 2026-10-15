@@ -277,7 +277,7 @@ function applyLaneConfig(
       ...new Set([
         ...(Array.isArray(tools.alsoAllow) ? tools.alsoAllow : []),
         FAKE_PLUGIN_ID,
-        ...(params.lane !== "normal" ? ["tool_search", "tool_describe", "tool_call"] : []),
+        ...(params.lane !== "normal" ? ["tool_search", "tool_describe", "dispatch_action"] : []),
       ]),
     ],
     toolSearch: params.lane === "tools" ? { enabled: true, mode: "tools" } : false,
@@ -443,6 +443,7 @@ export async function runToolSearchGatewayLane(params: {
     plannedWireToolName?: string;
   }>;
   const lastRequest = laneRequests.at(-1) ?? {};
+  const declaredTools = Array.isArray(lastRequest.body?.tools) ? lastRequest.body.tools : [];
   // The last provider request contains the terminal target result, while earlier
   // requests contain discovery results needed to prove the complete structured flow.
   const providerToolOutputs = laneRequests
@@ -450,7 +451,7 @@ export async function runToolSearchGatewayLane(params: {
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
   const toolCallRequestIndex = laneRequests.findIndex(
-    (request) => (request.plannedWireToolName ?? request.plannedToolName) === "tool_call",
+    (request) => (request.plannedWireToolName ?? request.plannedToolName) === "dispatch_action",
   );
   const providerToolSearchResult = parseJson(
     toolCallRequestIndex >= 0 ? laneRequests[toolCallRequestIndex]?.toolOutput : undefined,
@@ -489,14 +490,10 @@ export async function runToolSearchGatewayLane(params: {
     providerToolOutputSnippet: truncateUtf16Safe(providerToolOutputs, 4_000),
     providerToolSearchResult,
     providerToolCallResult,
-    providerDeclaredToolCount: Array.isArray(lastRequest.body?.tools)
-      ? lastRequest.body.tools.length
-      : 0,
-    providerDeclaredToolNames: Array.isArray(lastRequest.body?.tools)
-      ? lastRequest.body.tools.flatMap((tool) =>
-          isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-        )
-      : [],
+    providerDeclaredToolCount: declaredTools.length,
+    providerDeclaredToolNames: declaredTools.flatMap((tool) =>
+      isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
+    ),
     providerDirectoryContainsTarget:
       providerPromptText.includes("### Deferred Tool Schemas") &&
       providerPromptText.includes(`- ${targetTool}`),
@@ -519,12 +516,7 @@ export function assertToolSearchLaneResults(params: {
   const laneDebug = () =>
     JSON.stringify(
       Object.fromEntries(
-        (
-          [
-            ["normal", normal],
-            ["tools", tools],
-          ] as const
-        ).map(([name, result]) => [
+        Object.entries({ normal, tools }).map(([name, result]) => [
           name,
           {
             plannedTools: result.providerPlannedTools,
@@ -540,20 +532,18 @@ export function assertToolSearchLaneResults(params: {
       null,
       2,
     );
-  assert(
-    normal.providerPlannedTools.includes(targetTool) &&
-      normal.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
-      normal.gatewayOutputText.includes(targetTool) &&
-      (normal.sessionLogToolMentions[targetTool] ?? 0) > 0,
-    `normal lane did not call ${targetTool}: ${laneDebug()}`,
-  );
-  assert(
-    tools.providerPlannedTools.includes("tool_call") &&
-      tools.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
-      tools.gatewayOutputText.includes(targetTool) &&
-      (tools.sessionLogToolMentions[targetTool] ?? 0) > 0,
-    `structured lane did not call ${targetTool}: ${laneDebug()}`,
-  );
+  for (const [result, label, plannedTool] of [
+    [normal, "normal", targetTool],
+    [tools, "structured", "dispatch_action"],
+  ] as const) {
+    assert(
+      result.providerPlannedTools.includes(plannedTool) &&
+        result.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
+        result.gatewayOutputText.includes(targetTool) &&
+        (result.sessionLogToolMentions[targetTool] ?? 0) > 0,
+      `${label} lane did not call ${targetTool}: ${laneDebug()}`,
+    );
+  }
   assert(
     tools.providerDirectoryContainsTarget,
     `structured lane did not advertise ${targetTool} in the capability directory: ${laneDebug()}`,
@@ -575,12 +565,12 @@ export function assertToolSearchLaneResults(params: {
     `expected Tool Search request to be smaller: normal=${normal.providerRawBytes} tools=${tools.providerRawBytes}`,
   );
   assert(
-    (tools.sessionLogToolMentions.tool_call ?? 0) > 0 &&
+    (tools.sessionLogToolMentions.dispatch_action ?? 0) > 0 &&
       (tools.sessionLogToolMentions[targetTool] ?? 0) > 0,
     "structured lane session log did not record call and target tool mentions",
   );
   assert(
-    !normal.providerPlannedTools.includes("tool_call"),
+    !normal.providerPlannedTools.includes("dispatch_action"),
     "normal lane unexpectedly used structured Tool Search",
   );
   for (const lane of [normal, tools]) {
@@ -613,7 +603,7 @@ export function assertToolSearchBatchLaneResult(params: {
       2,
     );
   assert(tools.status === "completed", `structured lane did not complete successfully: ${debug()}`);
-  const structuredControlTools = new Set(["tool_search", "tool_describe", "tool_call"]);
+  const structuredControlTools = new Set(["tool_search", "tool_describe", "dispatch_action"]);
   assert(
     [...structuredControlTools].every((name) => tools.providerDeclaredToolNames.includes(name)) &&
       tools.providerDirectoryContainsTarget,
@@ -621,9 +611,9 @@ export function assertToolSearchBatchLaneResult(params: {
   );
   assert(
     tools.providerPlannedTools.filter((name) => name === "tool_search").length === 1 &&
-      tools.providerPlannedTools.filter((name) => name === "tool_call").length === 1 &&
+      tools.providerPlannedTools.filter((name) => name === "dispatch_action").length === 1 &&
       tools.providerPlannedTools.indexOf("tool_search") <
-        tools.providerPlannedTools.indexOf("tool_call"),
+        tools.providerPlannedTools.indexOf("dispatch_action"),
     `structured lane did not use one batch search followed by one catalog call: ${debug()}`,
   );
   const batchResult = tools.providerToolSearchResult;
@@ -662,7 +652,7 @@ export function assertToolSearchBatchLaneResult(params: {
   );
   assert(
     (tools.sessionLogToolMentions.tool_search ?? 0) > 0 &&
-      (tools.sessionLogToolMentions.tool_call ?? 0) > 0,
+      (tools.sessionLogToolMentions.dispatch_action ?? 0) > 0,
     `structured lane session log did not record search and call mentions: ${debug()}`,
   );
   assert(

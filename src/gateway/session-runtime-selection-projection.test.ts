@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -43,6 +44,7 @@ describe("session runtime selection ownership projection", () => {
               },
             },
           };
+          setRuntimeConfigSnapshot(cfg);
           const modelLocked = ["locked-harness", "locked-override", "acp-locked-harness"].includes(
             kind,
           );
@@ -91,7 +93,6 @@ describe("session runtime selection ownership projection", () => {
             storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
             modelCatalog: catalog,
             lightweightListRow: true,
-            skipTranscriptUsageFallback: true,
           });
           expect(row.runtimeSelectionLocked).toBe(locked);
           expect(row.modelSelectionLocked).toBe(modelLocked ? true : undefined);

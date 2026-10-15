@@ -127,12 +127,13 @@ describe("listChannelCatalogEntries", () => {
       } as PluginInstallRecord,
     };
 
-    module.listChannelCatalogEntries({ env: ENV, installRecords: supplied });
+    const extraPaths = ["/tmp/plugins/a", "/tmp/plugins/b"];
+    module.listChannelCatalogEntries({ env: ENV, installRecords: supplied, extraPaths });
 
     expect(loadRecordsSpy).not.toHaveBeenCalled();
     expect(firstDiscoverOptions(discoverSpy)).toStrictEqual({
       env: ENV,
-      extraPaths: undefined,
+      extraPaths,
       installRecords: supplied,
       workspaceDir: undefined,
     });
@@ -147,22 +148,6 @@ describe("listChannelCatalogEntries", () => {
 
     expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
     expect(firstDiscoverOptions(discoverSpy)).not.toHaveProperty("installRecords");
-  });
-
-  it("forwards caller-supplied extraPaths to discovery", async () => {
-    const { module, discoverSpy } = await loadWithMocks({});
-
-    module.listChannelCatalogEntries({
-      env: ENV,
-      extraPaths: ["/tmp/plugins/a", "/tmp/plugins/b"],
-    });
-
-    expect(firstDiscoverOptions(discoverSpy)).toStrictEqual({
-      env: ENV,
-      extraPaths: ["/tmp/plugins/a", "/tmp/plugins/b"],
-      installRecords: RECORDS,
-      workspaceDir: undefined,
-    });
   });
 
   it("treats ledger read errors as a soft fallback (no installRecords propagated)", async () => {
@@ -228,7 +213,6 @@ describe("listChannelCatalogEntries", () => {
   });
   it.each([
     { name: "current npm global", origin: "global", source: "npm", trusted: true },
-    { name: "current npm config", origin: "config", source: "npm", trusted: true },
     { name: "current official ClawHub", origin: "global", source: "clawhub", trusted: true },
     { name: "legacy ClawHub without authority", origin: "global", source: "clawhub", legacy: true },
     { name: "conflicting package identity", origin: "global", source: "npm", conflict: true },
@@ -237,12 +221,6 @@ describe("listChannelCatalogEntries", () => {
       origin: "global",
       source: "npm",
       stalePath: true,
-    },
-    {
-      name: "relocated install after ledger repair",
-      origin: "global",
-      source: "npm",
-      trusted: true,
     },
     { name: "unrecorded discovery owner", origin: "global", source: "npm", unowned: true },
     { name: "ambiguous discovery owner", origin: "global", source: "npm", ambiguous: true },

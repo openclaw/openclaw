@@ -6,6 +6,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { projectAssistantDisplayContent } from "../../../../src/shared/assistant-display-content.js";
+import { resolveAssistantMessagePhase } from "../../../../src/shared/chat-message-content.js";
 import { t } from "../../i18n/index.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -14,11 +15,13 @@ import {
   isSilentReplyStream,
   shouldHideAssistantChatMessage,
 } from "../../lib/chat/message-visibility.ts";
+import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import { materializeVisibleAssistantStreamMessages } from "./chat-history-stream.ts";
 import type { ChatEventPayload } from "./chat-history.ts";
-import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import { withChatReasoning } from "./chat-reasoning.ts";
+import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
@@ -123,8 +126,13 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     payload.state === "final" && payload.seq === 0 && payload.runId?.startsWith("inject-")
       ? payload.runId.slice("inject-".length)
       : null;
+  const sessionMatches = visibleSessionMatches(state, payload.sessionKey, payload.agentId);
   const incomingFinalMessage =
-    payload.state === "final" ? normalizeFinalAssistantMessage(payload.message) : null;
+    payload.state === "final"
+      ? sessionMatches && (!state.chatRunId || payload.runId === state.chatRunId)
+        ? withChatReasoning(state, normalizeFinalAssistantMessage(payload.message), payload.runId)
+        : normalizeFinalAssistantMessage(payload.message)
+      : null;
   // Only seq-zero inject deliveries encode a row ID: ordinary runs start at one
   // and may use any client-selected ID. Reconcile with session.message/history.
   const normalizedFinalMessage =
@@ -134,6 +142,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
           __openclaw: { ...asRecord(incomingFinalMessage["__openclaw"]), id: injectedMessageId },
         }
       : incomingFinalMessage;
+  const hasPairingQr = readPairingQrContent(normalizedFinalMessage).length > 0;
   const terminalAfterSequence = (
     messages: unknown[],
     runId: string | null | undefined,
@@ -154,7 +163,6 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     return latestSteer ? (readSessionMessageIdentity(latestSteer)?.sequence ?? null) : undefined;
   };
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
-  const sessionMatches = visibleSessionMatches(state, payload.sessionKey, payload.agentId);
   const activeRunMatches =
     state.chatRunId !== null &&
     typeof payload.runId === "string" &&
@@ -269,7 +277,6 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         sessionKey: state.sessionKey,
         sessionKeys,
         clearLocalRun: true,
-        clearChatStream: true,
       });
       return;
     }
@@ -277,7 +284,9 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       terminalStatus === "completed"
         ? ("done" as const)
         : terminalStatus === "aborted"
-          ? ("killed" as const)
+          ? payload.stopReason === "restart"
+            ? ("interrupted" as const)
+            : ("killed" as const)
           : terminalStatus === "timeout"
             ? ("timeout" as const)
             : ("failed" as const);
@@ -291,7 +300,6 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       sessionKey: state.sessionKey,
       sessionKeys,
       clearLocalRun: true,
-      clearChatStream: true,
       armLocalTerminalReconcile: hadActiveRunBeforeEvent && activeRunMatches,
     });
   };
@@ -330,7 +338,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       (payload.state === "final" &&
         (!incomingFinal ||
           shouldHideAssistantChatMessage(incomingFinal) ||
-          hasSessionProjectionAcceptedFinal(previousTerminalRun, incomingFinal)))
+          (!hasPairingQr && hasSessionProjectionAcceptedFinal(previousTerminalRun, incomingFinal))))
     ) {
       reconcileOwnedTerminalRun();
       return payload.state;
@@ -414,6 +422,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       ? typeof payload.seq === "number" && {
           phase: "retrying" as const,
           seq: payload.seq,
+          ...(payload.retry.retryAt === undefined ? {} : { retryAt: payload.retry.retryAt }),
           message: t("chat.startupStatus.retrying", {
             attempt: String(payload.retry.attempt),
             maxAttempts: String(payload.retry.maxAttempts),
@@ -434,10 +443,25 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   }
 
   if (payload.state === "delta") {
-    if (payload.runId && payload.runId === state.chatRunId) {
+    const next = payload.message == null ? null : (extractText(payload.message) ?? "");
+    if (
+      payload.runId &&
+      payload.runId === state.chatRunId &&
+      next?.trim() &&
+      resolveAssistantMessagePhase(payload.message) !== "commentary"
+    ) {
+      reconcileChatRunStartup(state, {
+        state: "status",
+        phase: "answer",
+        runId: payload.runId,
+      });
+    } else if (
+      payload.runId &&
+      payload.runId === state.chatRunId &&
+      isChatRunRecoveryStatus(state.chatRunStartup)
+    ) {
       reconcileChatRunStartup(state, { state: "activity", runId: payload.runId });
     }
-    const next = payload.message == null ? null : (extractText(payload.message) ?? "");
     if (typeof next === "string") {
       const hidden =
         isSilentReplyStream(next) || isAssistantHeartbeatAckForDisplay(payload.message);
@@ -451,7 +475,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizedFinalMessage;
-    if (authoritativeTerminalMatches) {
+    if (authoritativeTerminalMatches && !hasPairingQr) {
       // History already owns this run's terminal message. Discard the live
       // projection; terminal cleanup below clears its remaining stream.
     } else if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {

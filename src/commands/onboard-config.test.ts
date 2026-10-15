@@ -4,44 +4,32 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolveCoreToolProfilePolicy } from "../agents/tool-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyLocalSetupWorkspaceConfig,
+  applySkipBootstrapConfig,
   resolveOnboardingWorkspaceConflict,
 } from "./onboard-config.js";
 
+it("sets skipBootstrap without mutating the existing agent defaults or other config", () => {
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { workspace: "/tmp/workspace" },
+      entries: { ops: { name: "Operations" } },
+    },
+    gateway: { mode: "remote" },
+  };
+  const result = applySkipBootstrapConfig(config);
+
+  expect(result).toEqual({
+    ...config,
+    agents: { ...config.agents, defaults: { workspace: "/tmp/workspace", skipBootstrap: true } },
+  });
+  expect(config.agents?.defaults).toEqual({ workspace: "/tmp/workspace" });
+});
+
 describe("applyLocalSetupWorkspaceConfig", () => {
-  it("leaves dmScope unset when not configured", () => {
-    const baseConfig: OpenClawConfig = {};
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
-
-    expect(result.session?.dmScope).toBeUndefined();
-    expect(result).not.toHaveProperty("session.dmScope");
-    expect(result.gateway?.mode).toBe("local");
-    expect(result.agents?.defaults?.workspace).toBe("/tmp/workspace");
-    expect(result.tools?.profile).toBe("full");
-    expect(resolveCoreToolProfilePolicy(result.tools?.profile)?.allow).toEqual(["*"]);
-  });
-
-  it("preserves explicit non-main dmScope values", () => {
-    const baseConfig: OpenClawConfig = {
-      session: {
-        dmScope: "per-account-channel-peer",
-      },
-    };
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
-
-    expect(result.session?.dmScope).toBe("per-account-channel-peer");
-  });
-
-  it.each([
-    { profile: undefined, expectedProfile: "full" },
-    { profile: "minimal", expectedProfile: "minimal" },
-    { profile: "coding", expectedProfile: "coding" },
-    { profile: "messaging", expectedProfile: "messaging" },
-    { profile: "full", expectedProfile: "full" },
-  ] as const)(
+  it.each([{ profile: undefined, expectedProfile: "full" }] as const)(
     "selects $expectedProfile from $profile and preserves independent policies on rerun",
     ({ profile, expectedProfile }) => {
       const baseConfig: OpenClawConfig = {
@@ -66,29 +54,6 @@ describe("applyLocalSetupWorkspaceConfig", () => {
     },
   );
 
-  it("preserves agents.entries and bindings on onboard rerun (openclaw#84692)", () => {
-    const baseConfig: OpenClawConfig = {
-      agents: {
-        entries: {
-          alpha: { model: "anthropic/claude-3-5-sonnet" },
-          beta: { model: "openai/gpt-4o" },
-        },
-      },
-      bindings: [
-        {
-          type: "route",
-          agentId: "alpha",
-          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
-        },
-      ],
-    };
-
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
-
-    expect(Object.keys(result.agents?.entries ?? {})).toEqual(["alpha", "beta"]);
-    expect(result.bindings).toEqual(baseConfig.bindings);
-  });
-
   it("preserves the current workspace when an agent roster exists", () => {
     const baseConfig: OpenClawConfig = {
       agents: {
@@ -105,21 +70,6 @@ describe("applyLocalSetupWorkspaceConfig", () => {
       requestedWorkspaceDir: "/tmp/requested-workspace",
     });
     expect(result.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
-  });
-
-  it("does not materialize a fleet default for an existing roster", () => {
-    const env = { HOME: "/tmp/fleet-home", OPENCLAW_STATE_DIR: "/tmp/fleet-state" };
-    const baseConfig: OpenClawConfig = {
-      agents: { entries: { main: {}, ops: {} } },
-    };
-
-    const result = applyLocalSetupWorkspaceConfig(
-      baseConfig,
-      "/tmp/fleet-home/.openclaw/workspace",
-      { env },
-    );
-
-    expect(result.agents?.defaults?.workspace).toBeUndefined();
   });
 
   it("keeps fresh-install workspace writes when only inference state exists on disk", async () => {

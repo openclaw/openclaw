@@ -6,9 +6,6 @@ import { probeSqliteNativeClose } from "./bun-sqlite-close-probe.js";
 
 vi.hoisted(() => vi.resetModules());
 
-vi.mock("./runtime-process-entrypoints.js", () => ({
-  runtimeProcessEntrypoints: { sqliteCloseProbe: {} },
-}));
 vi.mock("./runtime-worker-url.js", () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///fixture/sqlite-close-probe.js"),
 }));
@@ -31,7 +28,8 @@ vi.mock("node:fs/promises", () => ({
   rm: state.remove,
 }));
 vi.mock("node:timers/promises", () => ({ setImmediate: async () => {} }));
-vi.mock("node:worker_threads", () => ({
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
   Worker: class extends EventEmitter {
     terminate = vi.fn(() => state.join);
     unref = vi.fn(() => this);

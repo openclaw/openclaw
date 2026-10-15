@@ -330,22 +330,31 @@ export function buildAnthropicVerificationProbeRequest(params: {
   };
 }
 
+function isCustomApiCompatibility(value: string): value is CustomApiCompatibility {
+  return value === "openai" || value === "openai-responses" || value === "anthropic";
+}
+
 function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
   const compatibilityRaw = normalizeOptionalLowercaseString(raw);
   if (!compatibilityRaw) {
     return "openai";
   }
-  if (
-    compatibilityRaw !== "openai" &&
-    compatibilityRaw !== "openai-responses" &&
-    compatibilityRaw !== "anthropic"
-  ) {
+  if (!isCustomApiCompatibility(compatibilityRaw)) {
     throw new CustomApiError(
       "invalid_compatibility",
       'Invalid --custom-compatibility (use "openai", "openai-responses", or "anthropic").',
     );
   }
   return compatibilityRaw;
+}
+
+function assertValidCustomProviderId(providerId: string | undefined): void {
+  if (providerId && !normalizeEndpointId(providerId)) {
+    throw new CustomApiError(
+      "invalid_provider_id",
+      "Custom provider ID must include letters, numbers, or hyphens.",
+    );
+  }
 }
 
 export function resolveCustomProviderId(params: {
@@ -356,12 +365,7 @@ export function resolveCustomProviderId(params: {
   const providers = params.config.models?.providers ?? {};
   const baseUrl = params.baseUrl.trim();
   const explicitProviderId = params.providerId?.trim();
-  if (explicitProviderId && !normalizeEndpointId(explicitProviderId)) {
-    throw new CustomApiError(
-      "invalid_provider_id",
-      "Custom provider ID must include letters, numbers, or hyphens.",
-    );
-  }
+  assertValidCustomProviderId(explicitProviderId);
   const requestedId =
     normalizeEndpointId(explicitProviderId || buildEndpointIdFromUrl(baseUrl)) || "custom";
   const existing = providers[requestedId];
@@ -396,12 +400,7 @@ export function parseNonInteractiveCustomApiFlags(params: ParseNonInteractiveCus
 
   const apiKey = normalizeOptionalString(params.apiKey);
   const providerId = normalizeOptionalString(params.providerId);
-  if (providerId && !normalizeEndpointId(providerId)) {
-    throw new CustomApiError(
-      "invalid_provider_id",
-      "Custom provider ID must include letters, numbers, or hyphens.",
-    );
-  }
+  assertValidCustomProviderId(providerId);
   return {
     baseUrl,
     modelId,
@@ -421,17 +420,6 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams) {
     throw new CustomApiError(
       "invalid_base_url",
       "Custom provider base URL must be a valid HTTP or HTTPS URL.",
-    );
-  }
-
-  if (
-    params.compatibility !== "openai" &&
-    params.compatibility !== "openai-responses" &&
-    params.compatibility !== "anthropic"
-  ) {
-    throw new CustomApiError(
-      "invalid_compatibility",
-      'Custom provider compatibility must be "openai", "openai-responses", or "anthropic".',
     );
   }
 

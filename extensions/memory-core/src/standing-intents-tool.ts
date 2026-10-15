@@ -1,4 +1,8 @@
 import { jsonResult } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+} from "openclaw/plugin-sdk/param-readers";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import {
   cancelStandingIntent,
@@ -39,16 +43,6 @@ function renderArmedIntentMessage(scope: IntentScope): string {
         ? "for this conversation"
         : "everywhere";
   return `Intent is armed ${scopeDescription}. ${STANDING_INTENT_AUTOMATION_GUIDANCE}`;
-}
-
-function integerOption(value: unknown, field: string, fallback: number, minimum: 0 | 1): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
-    throw new Error(`${field} must be a ${minimum === 1 ? "positive" : "non-negative"} integer`);
-  }
-  return value;
 }
 
 function normalizeKeywords(value: unknown): string[] {
@@ -110,11 +104,9 @@ export function createStandingIntentExecutor(options: {
       const provider = options.provider?.trim();
       const senderId = options.senderId?.trim();
       if (!provider || !senderId) {
-        const missingIdentity = !provider
-          ? senderId
-            ? "channel"
-            : "channel and sender"
-          : "sender";
+        const missingIdentity = [provider ? null : "channel", senderId ? null : "sender"]
+          .filter(Boolean)
+          .join(" and ");
         throw new Error(
           `authenticated ${missingIdentity} identity is unavailable for this turn; retry from an authenticated channel conversation`,
         );
@@ -160,13 +152,9 @@ export function createStandingIntentExecutor(options: {
               }),
         creatorSender: senderId,
         expiresAt: parseExpiry(params.expiresAt, nowMs),
-        maxFires: integerOption(params.maxFires, "maxFires", DEFAULT_INTENT_MAX_FIRES, 1),
-        cooldownSeconds: integerOption(
-          params.cooldownSeconds,
-          "cooldownSeconds",
-          DEFAULT_INTENT_COOLDOWN_SECONDS,
-          0,
-        ),
+        maxFires: readPositiveIntegerParam(params, "maxFires") ?? DEFAULT_INTENT_MAX_FIRES,
+        cooldownSeconds:
+          readNonNegativeIntegerParam(params, "cooldownSeconds") ?? DEFAULT_INTENT_COOLDOWN_SECONDS,
         sourceSessionId: options.sourceSessionId,
         nowMs,
       });

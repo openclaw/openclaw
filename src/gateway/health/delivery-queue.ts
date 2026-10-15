@@ -47,15 +47,16 @@ export async function buildDeliveryQueueHealthSummary(
     }
     return countFailedDeliveryQueueEntries(undefined, context.stateContext);
   });
+  const stateContext = "stateContext" in context ? context.stateContext : undefined;
   const ingressFailed = await readQueueHealth(
     "channel ingress failed queue health read failed",
-    countFailedChannelIngressQueueEntries,
+    () =>
+      countFailedChannelIngressQueueEntries(stateContext?.stateDir, stateContext?.workerContext),
   );
   const ingressPressure =
     cachedIngressPressure ??
-    (await readQueueHealth(
-      "channel ingress pressure health read failed",
-      countChannelIngressQueuePressure,
+    (await readQueueHealth("channel ingress pressure health read failed", () =>
+      countChannelIngressQueuePressure(stateContext?.stateDir, stateContext?.workerContext),
     ));
 
   if (failed.length === 0 && ingressFailed.length === 0 && ingressPressure.length === 0) {

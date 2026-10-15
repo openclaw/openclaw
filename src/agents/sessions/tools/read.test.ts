@@ -21,7 +21,8 @@ const decodeWindowsTextFileBufferMock = vi.hoisted(() =>
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-vi.mock("../../../infra/windows-encoding.js", () => ({
+vi.mock("../../../infra/windows-encoding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/windows-encoding.js")>()),
   decodeWindowsTextFileBuffer: decodeWindowsTextFileBufferMock,
 }));
 
@@ -104,26 +105,20 @@ describe("read tool", () => {
     }
   });
 
-  it.each(["extension", "embedded"])("omits images for a non-vision %s model", async (source) => {
+  it("omits images for a non-vision extension model", async () => {
     const stateDir = tempDirs.make("openclaw-read-vision-");
     const imagePath = path.join(stateDir, "pixel.png");
     await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
 
-    const result =
-      source === "embedded"
-        ? await createReadTool(stateDir, {
-            autoResizeImages: false,
-            modelHasVision: false,
-          }).execute("embedded-read", { path: imagePath })
-        : await createReadToolDefinition(stateDir, { autoResizeImages: false }).execute(
-            "extension-read",
-            { path: imagePath },
-            undefined,
-            undefined,
-            {
-              model: { input: ["text"] },
-            } as never,
-          );
+    const result = await createReadToolDefinition(stateDir, { autoResizeImages: false }).execute(
+      "extension-read",
+      { path: imagePath },
+      undefined,
+      undefined,
+      {
+        model: { input: ["text"] },
+      } as never,
+    );
     const imageParts = result.content.filter((part) => part.type === "image");
     expect(imageParts).toHaveLength(0);
     expect(textContent(result)).toContain("does not support images");
@@ -247,6 +242,19 @@ describe("read tool", () => {
     const result = await executeRead(tool, { path: "empty.txt" });
 
     expect(textContent(result)).toBe("File is empty (0 bytes).");
+  });
+
+  it("reads later lines from isolated files larger than 16 MiB", async () => {
+    const tempDir = tempDirs.make("openclaw-read-large-");
+    const filePath = path.join(tempDir, "large.sqlite");
+    await fs.writeFile(filePath, `${"x".repeat(17 * 1024 * 1024)}\nlast line\n`);
+
+    const result = await executeRead(createReadToolDefinition(tempDir), {
+      path: filePath,
+      offset: 2,
+    });
+
+    expect(textContent(result)).toBe("last line\n");
   });
 
   it("reports the byte count when a BOM-only file decodes to empty text", async () => {

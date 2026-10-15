@@ -22,7 +22,8 @@ import {
 } from "./gateway-active-work.js";
 
 const GATEWAY_SUSPEND_TTL_MS = 2 * 60_000;
-const GATEWAY_SUSPEND_RETRY_AFTER_MS = 20_000;
+const GATEWAY_SUSPEND_BUSY_RETRY_AFTER_MS = 20_000;
+const GATEWAY_SUSPEND_DRAIN_POLL_MS = 5_000;
 const GATEWAY_SCHEDULER_RECOVERY_RETRY_MS = 1_000;
 
 type GatewaySuspendTerminalPolicy = NonNullable<GatewaySuspendPrepareParams["terminalPolicy"]>;
@@ -55,7 +56,6 @@ type GatewaySuspendCoordinatorEntryBase = {
   reopenAdmission: () => boolean;
   warn?: (message: string) => void;
   timer?: ReturnType<typeof setTimeout>;
-  timerGeneration?: number;
 };
 
 type HeldGatewaySuspension = GatewaySuspendCoordinatorEntryBase & {
@@ -109,7 +109,6 @@ function schedulerRecoveryResult(): GatewaySchedulerRecoveryResult {
 }
 
 function clearEntryTimer(entry: GatewaySuspendCoordinatorEntry): void {
-  entry.timerGeneration = (entry.timerGeneration ?? 0) + 1;
   if (entry.timer) {
     clearTimeout(entry.timer);
     entry.timer = undefined;
@@ -118,9 +117,8 @@ function clearEntryTimer(entry: GatewaySuspendCoordinatorEntry): void {
 
 function scheduleResume(entry: GatewaySuspendCoordinatorEntry, delayMs: number): void {
   clearEntryTimer(entry);
-  const generation = entry.timerGeneration;
   entry.timer = setTimeout(() => {
-    if (entry.timerGeneration === generation && COORDINATOR_STATE.current === entry) {
+    if (COORDINATOR_STATE.current === entry) {
       resumeAndReopen(entry);
     }
   }, delayMs);
@@ -272,7 +270,7 @@ function heldPrepareResult(
   };
   return snapshot.idle
     ? { status: "ready", ...result }
-    : { status: "draining", ...result, retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS };
+    : { status: "draining", ...result, retryAfterMs: GATEWAY_SUSPEND_DRAIN_POLL_MS };
 }
 
 /** Acquire an idle lease, or optionally preserve existing work behind a drain fence. */
@@ -345,7 +343,7 @@ export function prepareGatewaySuspend(params: {
     return {
       status: "busy",
       reason: "gateway-draining",
-      retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
+      retryAfterMs: GATEWAY_SUSPEND_BUSY_RETRY_AFTER_MS,
       activeCount: snapshot.counts.totalActive,
       blockers: snapshot.blockers,
       writeCustody: snapshot.writeCustody,
@@ -381,7 +379,7 @@ export function prepareGatewaySuspend(params: {
       return {
         status: "busy",
         reason: "active-work",
-        retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
+        retryAfterMs: GATEWAY_SUSPEND_BUSY_RETRY_AFTER_MS,
         activeCount: snapshot.counts.totalActive,
         blockers: snapshot.blockers,
         writeCustody: snapshot.writeCustody,
@@ -595,7 +593,7 @@ export function getGatewaySuspendStatus(
       activeCount: snapshot.counts.totalActive,
       blockers: snapshot.blockers,
       writeCustody: snapshot.writeCustody,
-      retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
+      retryAfterMs: GATEWAY_SUSPEND_DRAIN_POLL_MS,
     };
   }
   return {

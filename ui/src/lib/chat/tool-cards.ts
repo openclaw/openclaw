@@ -24,7 +24,6 @@ import {
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import { readBrowserTabTarget } from "../../components/browser/browser-target.ts";
-import { redactToolPayloadText } from "../browser-redact.ts";
 import type { ToolCard, ToolCardOutcome, ToolOutputMetadata } from "./chat-types.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 import { readLiveDiffStat } from "./tool-call-diff.ts";
@@ -58,9 +57,7 @@ function normalizeContent(content: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(content)) {
     return [];
   }
-  return content.filter(
-    (entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object",
-  );
+  return content.filter((entry): entry is Record<string, unknown> => readRecord(entry) !== null);
 }
 
 function coerceArgs(value: unknown): unknown {
@@ -82,10 +79,7 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   }
   if (Array.isArray(item.content)) {
     const parts = item.content.flatMap((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return [];
-      }
-      const text = (entry as { text?: unknown }).text;
+      const text = readRecord(entry)?.text;
       return typeof text === "string" ? [text] : [];
     });
     if (parts.length > 0) {
@@ -300,24 +294,12 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
   if (!isRecord(args)) {
     return undefined;
   }
-  const record = args;
   for (const key of TOOL_ARGUMENT_PREVIEW_KEYS) {
-    const value = record[key];
+    const value = args[key];
     if (typeof value !== "string") {
       continue;
     }
-    const firstContent = value.search(/\S/);
-    let firstLine: string | undefined;
-    if (firstContent >= 0) {
-      const start =
-        Math.max(value.lastIndexOf("\r", firstContent), value.lastIndexOf("\n", firstContent)) + 1;
-      const lineEnd = /[\r\n]/g;
-      lineEnd.lastIndex = firstContent;
-      firstLine = value.slice(start, lineEnd.exec(value)?.index ?? value.length);
-    }
-    const preview = formatCollapsedToolPreviewText(
-      firstLine ? redactToolPayloadText(firstLine) : undefined,
-    );
+    const preview = formatCollapsedToolPreviewText(value.trimStart().split(/[\r\n]/, 1)[0]);
     if (preview) {
       return preview;
     }

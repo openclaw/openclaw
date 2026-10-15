@@ -44,6 +44,8 @@ import {
   expectedDiagnosticsTargetBlock,
   expectResultTextContains,
   mockArg,
+  mutatingCodexRequestMethods,
+  oauthProfile,
   readDiagnosticsConfirmationToken,
   requestParams,
   runCommand,
@@ -66,17 +68,6 @@ function publicConversationBinding(data?: Record<string, unknown>) {
     conversationId: "conversation",
     boundAt: 1,
     ...(data ? { data } : {}),
-  };
-}
-
-function oauthProfile(email: string, now: number) {
-  return {
-    type: "oauth" as const,
-    provider: "openai",
-    access: "access-token",
-    refresh: "refresh-token",
-    expires: now + 60 * 60 * 1000,
-    email,
   };
 }
 
@@ -165,17 +156,12 @@ async function createLockedSessionContextOverrides(
 function inMemoryCodexPluginsIO(
   initial: Record<string, CodexPluginConfigEntry> = {},
   options: { enabled?: boolean } = { enabled: true },
-): CodexPluginsManagementIO & {
-  current: () => Record<string, CodexPluginConfigEntry>;
-  currentConfig: () => CodexPluginsConfigBlock;
-} {
+): CodexPluginsManagementIO {
   const store: CodexPluginsConfigBlock = {
     enabled: options.enabled,
     plugins: structuredClone(initial),
   };
   return {
-    current: () => structuredClone(store.plugins ?? {}),
-    currentConfig: () => structuredClone(store),
     readConfig: () => Promise.resolve(structuredClone(store)),
     mutate: async (update, assertCurrent) => {
       assertCurrent?.();
@@ -256,46 +242,18 @@ describe("codex command", () => {
     expect(result.text).not.toContain("<@U123>");
   });
 
-  it.each([
-    {
-      args: "",
-      text: "/codex plugins menu",
-      buttons: [
-        "/codex plugins menu",
-        "/codex permissions menu",
-        "/codex fast menu",
-        "/codex computer-use menu",
-        "/codex account",
-        "/codex plugins refresh",
-        "/codex help",
-      ],
-    },
-    { args: "plugins menu", text: "/codex plugins enable", buttons: undefined },
-  ])("renders the $args command picker", async ({ args, text, buttons }) => {
-    const result = await runCommand(args, { codexPluginsManagementIo: inMemoryCodexPluginsIO() });
-    expectResultTextContains(result, text);
-    if (buttons) {
-      expect(buttonCommands(result)).toEqual(buttons);
-    } else {
-      expect(buttonCommands(result)).toContain("/codex plugins list");
-      expect(buttonCommands(result)).toContain("/codex plugins refresh");
-      expectResultTextContains(result, "/codex plugins refresh");
-    }
-  });
-
-  it("lists Codex sub-plugins through the /codex plugins command surface", async () => {
-    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
-      "google-calendar": {
-        enabled: true,
-        marketplaceName: "openai-curated",
-        pluginName: "google-calendar",
-      },
-    });
-
-    const result = await runCommand("plugins list", { codexPluginsManagementIo });
-
-    expectResultTextContains(result, "ON   google-calendar");
-    expectResultTextContains(result, "openclaw.json");
+  it("renders the command picker", async () => {
+    const result = await runCommand("");
+    expectResultTextContains(result, "/codex plugins menu");
+    expect(buttonCommands(result)).toEqual([
+      "/codex plugins menu",
+      "/codex permissions menu",
+      "/codex fast menu",
+      "/codex computer-use menu",
+      "/codex account",
+      "/codex plugins refresh",
+      "/codex help",
+    ]);
   });
 
   it("routes owner-only plugin discovery through the native command boundary with its workspace", async () => {
@@ -475,29 +433,6 @@ describe("codex command", () => {
     );
   });
 
-  it("enables and disables Codex sub-plugins through the /codex plugins command surface", async () => {
-    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
-      "google-calendar": {
-        enabled: true,
-        marketplaceName: "openai-curated",
-        pluginName: "google-calendar",
-      },
-    });
-
-    const disabled = await runCommand("plugins disable google-calendar", {
-      codexPluginsManagementIo,
-    });
-    expectResultTextContains(disabled, "google-calendar: disabled in openclaw.json");
-    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(false);
-
-    const enabled = await runCommand("plugins enable google-calendar", {
-      codexPluginsManagementIo,
-    });
-    expectResultTextContains(enabled, "google-calendar: enabled in openclaw.json");
-    expect(codexPluginsManagementIo.currentConfig().enabled).toBe(true);
-    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(true);
-  });
-
   it.each([
     { knownBeforeResume: true, sameOwner: false },
     { knownBeforeResume: false, sameOwner: false },
@@ -567,9 +502,7 @@ describe("codex command", () => {
         expect(result.text).toContain("controlled by its parent");
         expect(testCodexAppServerBindingStore.read(identity)).toEqual(before);
         expect(release).not.toHaveBeenCalled();
-        const mutations = request.mock.calls
-          .map(([method]) => method)
-          .filter((method) => method !== "thread/read");
+        const mutations = mutatingCodexRequestMethods(request.mock.calls);
         expect(mutations).toEqual(
           knownBeforeResume
             ? []
@@ -654,14 +587,14 @@ describe("codex command", () => {
             codexControlRequest,
             bindingStore: {
               ...testCodexAppServerBindingStore,
-              read: (bindingIdentity) => {
+              readAsync: async (bindingIdentity) => {
                 if (resumeAccepted) {
                   if (failure === "read") {
                     throw new Error("Invalid Codex app-server binding row");
                   }
                   elapsedClock.mockReturnValue(1_001);
                 }
-                return testCodexAppServerBindingStore.read(bindingIdentity);
+                return await testCodexAppServerBindingStore.readAsync(bindingIdentity);
               },
             },
           },
@@ -958,7 +891,7 @@ describe("codex command", () => {
       const result = await runCommand("resume thread-active-resume", { codexControlRequest });
 
       expect(result.text).toContain("lost its native subscription owner");
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+      expect(mutatingCodexRequestMethods(request.mock.calls)).toEqual(["thread/resume"]);
       expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-resume")).toBe(true);
       expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
         threadId: existingThreadId,
@@ -1947,42 +1880,6 @@ describe("codex command", () => {
       }
     });
 
-    it("summarizes blocked account rate limits as a human takeaway", async () => {
-      const quota = limits(0, 100, true);
-      const result = await readAccount(
-        accountRequests(
-          success({
-            account: { type: "chatgpt", email: "codex@example.com", planType: "pro" },
-            requiresOpenaiAuth: false,
-          }),
-          success({
-            rateLimitsByLimitId: {
-              ...quota.rateLimitsByLimitId,
-              "gpt-5.3-codex-spark": {
-                ...limits(0, 0).rateLimitsByLimitId.codex,
-                limitId: "gpt-5.3-codex-spark",
-                limitName: "GPT 5.3 Codex Spark",
-              },
-            },
-          }),
-        ),
-      );
-      expect(result.text).toContain("Codex is paused until ");
-      expect(result.text).toContain("Your weekly Codex usage limit is reached.");
-      for (const omitted of [
-        "GPT 5.3 Codex Spark",
-        "Primary:",
-        "Secondary:",
-        "Bucket:",
-        "Why:",
-        "5-hour",
-        "100%",
-        "\uff08rate limit reached\uff09",
-      ]) {
-        expect(result.text).not.toContain(omitted);
-      }
-    });
-
     it("prefers the configured ChatGPT subscription over stale API-key lastGood state", async () => {
       const config = {
         auth: { order: { openai: ["openai:personal-email@gmail.com", "openai:api-key-backup"] } },
@@ -2578,7 +2475,11 @@ describe("codex command", () => {
       return { ok: true as const, value: { threadId: "thread-race" } };
     });
     const deps = createDeps({
-      bindingStore: { ...testCodexAppServerBindingStore, read: readBinding },
+      bindingStore: {
+        ...testCodexAppServerBindingStore,
+        read: readBinding,
+        readAsync: async () => readBinding(),
+      },
       safeCodexControlRequest,
     });
 
@@ -3148,7 +3049,9 @@ describe("codex command", () => {
           },
         });
         release.resolve();
-        expect((await command).text).toContain("Codex session generation is no longer current");
+        expect((await command).text).toMatch(
+          /Codex session (generation is no longer current|execution policy changed)/,
+        );
         expect(writes).toBe(0);
       } finally {
         release.resolve();

@@ -10,6 +10,7 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import { WORKTREE_CAPACITY_RESERVATION_SCOPE } from "./capacity-contract.js";
 import { reserveWorktreeCapacity, releaseWorktreeCapacity } from "./capacity-store.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
+import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import type { WorktreeLeaseSet, WorktreeWorkerAuthority } from "./types.js";
 
@@ -60,14 +61,16 @@ export async function requireAllocationSpace(
   repository: { commonDir: string; sourceRoot: string },
   bytes = 0,
 ) {
-  await guard.requireDiskSpace(
-    [
-      { path: target, bytes },
-      { path: repository.commonDir, bytes: 0 },
-      { path: repository.sourceRoot, bytes: 0 },
-      { path: resolveStateDir(env), bytes: 0 },
-    ],
-    "worktree allocation",
+  await timeWorktreePreparationPhase("diskAdmission", () =>
+    guard.requireDiskSpace(
+      [
+        { path: target, bytes },
+        { path: repository.commonDir, bytes: 0 },
+        { path: repository.sourceRoot, bytes: 0 },
+        { path: resolveStateDir(env), bytes: 0 },
+      ],
+      "worktree allocation",
+    ),
   );
 }
 
@@ -175,7 +178,9 @@ export function createWorktreeDiskAdmission(params: {
 export async function estimateWorktreeGitBytes(
   repoRoot: string,
   ref: string,
-  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent" | "git"> = {},
+  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent" | "git"> & {
+    preparationKey?: string;
+  } = {},
 ): Promise<number> {
   return await runGitWorkerOperation(
     {
@@ -184,6 +189,7 @@ export async function estimateWorktreeGitBytes(
         repoRoot,
         ref,
         replacementRefBase: process.env.GIT_REPLACE_REF_BASE ?? "refs/replace/",
+        preparationKey: options.preparationKey,
       },
     },
     options,

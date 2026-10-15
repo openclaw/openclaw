@@ -30,6 +30,10 @@ import { withSessionCompactionPersistenceAsync } from "../../agents/sessions/ses
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptEvent,
@@ -40,7 +44,8 @@ import {
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import { readActiveTranscriptStats } from "../../config/sessions/session-accessor.sqlite-history.test-support.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import * as transcriptAccounting from "../../config/sessions/session-transcript-accounting.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -133,10 +138,9 @@ type MemoryFlushTestParams = Parameters<typeof runMemoryFlushIfNeededRaw>[0] & {
 
 async function runMemoryFlushIfNeeded(params: MemoryFlushTestParams) {
   const { modelContextTokens, ...runParams } = params;
-  return await runMemoryFlushIfNeededRaw({
-    ...runParams,
-    cfg: withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens }),
-  });
+  const cfg = withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens });
+  setRuntimeConfigSnapshot(cfg);
+  return await runMemoryFlushIfNeededRaw({ ...runParams, cfg });
 }
 
 type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNeededRaw>[0] & {
@@ -145,10 +149,9 @@ type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNee
 
 async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParams) {
   const { modelContextTokens, ...runParams } = params;
-  return await runSessionCompactionIfNeededRaw({
-    ...runParams,
-    cfg: withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens }),
-  });
+  const cfg = withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens });
+  setRuntimeConfigSnapshot(cfg);
+  return await runSessionCompactionIfNeededRaw({ ...runParams, cfg });
 }
 
 function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
@@ -424,8 +427,7 @@ describe("runMemoryFlushIfNeeded", () => {
       const previous = params.sessionStore[sessionKey] as SessionEntry;
       const nextEntry: SessionEntry = {
         ...previous,
-        compactionCount: (previous.compactionCount ?? 0) + Math.max(0, params.amount ?? 1),
-        transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
+        ...projectCompactionAccountingPatch(previous, params),
       };
       params.sessionStore[sessionKey] = nextEntry;
       if (typeof params.storePath === "string") {
@@ -436,6 +438,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   afterEach(async () => {
+    clearRuntimeConfigSnapshot();
     cliBackendsTesting.resetDepsForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearMemoryPluginState();
@@ -718,27 +721,6 @@ describe("runMemoryFlushIfNeeded", () => {
         cleanup();
       }
     }
-  });
-
-  it("honors a time-refreshed null plan before preparing or registering a run", async () => {
-    const resolver = vi
-      .fn<MemoryFlushPlanResolver>()
-      .mockImplementationOnce(createMemoryFlushPlan)
-      .mockReturnValueOnce(null);
-    registerMemoryFlushPlanResolverForTest(resolver);
-    const sessionEntry = createFlushSessionEntry();
-
-    const result = await runDefaultMemoryFlush(sessionEntry, {
-      followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
-      defaultModel: "anthropic/claude-opus-4-7",
-    });
-
-    expect(result).toEqual({ sessionEntry, outcome: "skipped" });
-    await expect(fs.stat(path.join(rootDir, "memory/2023-11-14.md"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect(registerAgentRunContextMock).not.toHaveBeenCalled();
-    expect(runEmbeddedAgentEntryMock).not.toHaveBeenCalled();
   });
 
   it("marks flush as completed after MAX_FLUSH_FAILURES to break retry loop", async () => {

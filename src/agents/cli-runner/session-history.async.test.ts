@@ -4,11 +4,13 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   loadTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
+  withTranscriptWriteLock,
 } from "../../config/sessions/session-accessor.js";
 import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
@@ -48,6 +50,7 @@ function targetIn(stateDir: string) {
 }
 
 function createRecorder(target: ReturnType<typeof targetIn>, text: string, timestamp = 1) {
+  setRuntimeConfigSnapshot({});
   return createUserTurnTranscriptRecorder({
     target: { ...target, sessionEntry: undefined },
     input: { text, timestamp },
@@ -55,7 +58,9 @@ function createRecorder(target: ReturnType<typeof targetIn>, text: string, times
   });
 }
 
-it("reads CLI presence after an earlier admitted transcript write settles", async ({ signal }) => {
+it("reads CLI presence under a transcript lock after an earlier write settles", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ label: "cli-presence-admission" }, async ({ stateDir }) => {
     const target = targetIn(stateDir);
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
@@ -77,20 +82,23 @@ it("reads CLI presence after an earlier admitted transcript write settles", asyn
     let restore = () => {};
     try {
       await withinTest(entered.promise, signal);
+      const admitWorker = agentWriteAdmission.runOpenClawAgentWorkerWrite;
       const admission = vi
-        .spyOn(agentWriteAdmission, "runOpenClawAgentWriteAdmission")
+        .spyOn(agentWriteAdmission, "runOpenClawAgentWorkerWrite")
         .mockImplementation((...args) => {
-          const pending = admit(...args);
+          const pending = admitWorker(...args);
           queued.resolve();
           return pending;
         });
       restore = () => admission.mockRestore();
-      reading = hasCliSessionTranscript({ sessionTarget: target });
+      reading = withTranscriptWriteLock(target, () =>
+        hasCliSessionTranscript({ sessionTarget: target }),
+      );
       await withinTest(
         awaitGateBeforeSettlement(
           queued.promise,
           reading,
-          "CLI presence bypassed the earlier admitted writer",
+          "Locked CLI presence bypassed the earlier admitted writer",
         ),
         signal,
       );
@@ -167,10 +175,16 @@ it.each(["schema", "owner"] as const)(
         new DatabaseSync(target.storePath).close();
       } else {
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        openOpenClawAgentDatabase({ agentId: "main", path: target.storePath }).db.exec(
-          "UPDATE schema_meta SET agent_id = 'different' WHERE meta_key = 'primary'",
-        );
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+        fs.renameSync(target.storePath, `${target.storePath}.template`);
+        fs.copyFileSync(
+          `${target.storePath}.template`,
+          target.storePath,
+          fs.constants.COPYFILE_EXCL,
+        );
+        const database = new DatabaseSync(target.storePath);
+        database.exec("UPDATE schema_meta SET agent_id = 'different' WHERE meta_key = 'primary'");
+        database.close();
       }
       await expect(
         loadCliSessionContextEngineMessages({ sessionTarget: target }),

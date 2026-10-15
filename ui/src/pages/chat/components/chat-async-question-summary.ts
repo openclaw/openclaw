@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { t } from "../../../i18n/index.ts";
+import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import type { AsyncQuestionPresentation, AsyncQuestions } from "./chat-async-question.types.ts";
 import { questionDraftValues } from "./chat-question-answer-controls.ts";
 
@@ -81,7 +82,7 @@ export function renderAsyncQuestionSummary(
             ? "chat.asyncQuestions.failed"
             : queued.sendState === "unconfirmed"
               ? "chat.queue.deliveryUnconfirmed"
-              : queued.sendState === "waiting-reconnect"
+              : isChatSendReconnecting(queued.sendState, presentation.connected)
                 ? "chat.queue.states.waitingForReconnect"
                 : queued.sendState === "sending"
                   ? "chat.asyncQuestions.sending"
@@ -96,24 +97,25 @@ export function renderAsyncQuestionSummary(
       unparsedText
         ? html`<div class="chat-question-summary__prompt">${unparsedText}</div>`
         : questions.questions.map(
-            (question, index) => html`<div>
-              <strong>${question.title}</strong>
-              <div>
-                ${
-                  answers
-                    ? questionDraftValues(answers.get(String(index)), {}).join(", ")
-                    : t(
-                        reopening
-                          ? "chat.asyncQuestions.reopening"
-                          : dismissed
-                            ? "chat.asyncQuestions.dismissed"
-                            : archived
-                              ? "chat.asyncQuestions.archived"
-                              : "chat.asyncQuestions.inComposer",
-                      )
-                }
-              </div>
-            </div>`,
+            (question, index) =>
+              html`<div>
+                <strong>${question.title}</strong>
+                <div>
+                  ${
+                    answers
+                      ? questionDraftValues(answers.get(String(index)), {}).join(", ")
+                      : t(
+                          reopening
+                            ? "chat.asyncQuestions.reopening"
+                            : dismissed
+                              ? "chat.asyncQuestions.dismissed"
+                              : archived
+                                ? "chat.asyncQuestions.archived"
+                                : "chat.asyncQuestions.inComposer",
+                        )
+                  }
+                </div>
+              </div>`,
           )
     }
     ${

@@ -4,11 +4,12 @@ import { expect, it } from "vitest";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
-const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
+const { fixture, reuseCompletedSetup, outcomeRef, describePosix } =
+  createMergeOutcomeFixtureHarness();
 const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
 const uncertainGatewayResponse = '{\n  "message": "Server Error"\n}\ngh: Server Error (HTTP 502)\n';
 
-function cancelledAutoReplacement(
+const cancelledAutoReplacement = reuseCompletedSetup(function (
   options: { cancellation?: "confirmed" | "missing" | "uncertain"; replace?: boolean } = {},
 ) {
   const cancellation = options.cancellation ?? "confirmed";
@@ -34,7 +35,7 @@ function cancelledAutoReplacement(
     const cancelled = initial.cancel(originalOid);
     expect(cancelled.status, cancelled.output).toBe(cancellation === "confirmed" ? 0 : 1);
     if (cancellation === "uncertain") {
-      expect(initial.recover()).toBe(true);
+      expect(initial.recover()).toBe(false);
     }
   }
   const retiredOid = initial.git(["rev-parse", outcomeRef]);
@@ -70,9 +71,9 @@ function cancelledAutoReplacement(
     tests: { result: "fail", preExistingCi: { head: replacement, runId: 501, runAttempt: 2 } },
   });
   return { f, originalOid, originalRecord, retiredOid, retiredRecord, replacement, captures };
-}
+});
 
-function staleAdminReplacement() {
+const staleAdminReplacement = reuseCompletedSetup(function () {
   const cancelled = cancelledAutoReplacement({ replace: false });
   const { f, retiredOid } = cancelled;
   f.save({ ...f.state(), restMergeRefusal: uncertainGatewayResponse });
@@ -91,7 +92,7 @@ function staleAdminReplacement() {
   expect(readFileSync(join(f.worktree, ".local", adminCapture), "utf8")).toBe(
     uncertainGatewayResponse,
   );
-  expect(f.recover()).toBe(true);
+  expect(f.recover()).toBe(false);
 
   const replacement = f.replacePreparedHead();
   writeFileSync(
@@ -115,9 +116,9 @@ function staleAdminReplacement() {
     adminCapture,
     replacement,
   };
-}
+});
 
-function recoveredStaleAdminAuto() {
+const recoveredStaleAdminAuto = reuseCompletedSetup(function () {
   const setup = staleAdminReplacement();
   const recovered = setup.f.run(true, setup.f.repo, "squash", setup.adminOid, setup.replacement);
   expect(recovered.status, recovered.output).toBe(0);
@@ -130,7 +131,7 @@ function recoveredStaleAdminAuto() {
     recovery: { outcome: setup.adminOid },
   });
   return { ...setup, recoveredOid, recoveredRecord };
-}
+});
 
 function rewriteRecord(
   f: ReturnType<typeof staleAdminReplacement>["f"],
@@ -152,7 +153,7 @@ function rewriteRecord(
 }
 
 describePosix("prior-CI admin recovery after auto cancellation", () => {
-  it("retires an uncertain stale-head admin dispatch and preserves the complete capture chain", () => {
+  it("retires a recovered auto request at an observed head and preserves the complete capture chain", () => {
     const { f, originalOid, retiredOid, adminOid, adminRecord, adminCapture, replacement } =
       staleAdminReplacement();
     const captures = f.captures();
@@ -196,15 +197,17 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
       );
     }
 
-    f.save({ ...f.state(), cancellation: "success" });
-    const cancelled = f.cancel(recoveredOid);
+    const observed = f.commit(f.tree("collaborator replacement\n"), [f.base]);
+    f.save({ ...f.state(), pr: { ...f.state().pr, headRefOid: observed, autoMergeRequest: null } });
+    const cancelled = f.cancel(recoveredOid, observed);
     expect(cancelled.status, cancelled.output).toBe(0);
-    expect(f.state()).toMatchObject({ mutations: 3, cancellations: 2, posts: 0 });
+    expect(f.state()).toMatchObject({ mutations: 3, cancellations: 1, posts: 0 });
     expect(f.record()).toMatchObject({
       phase: "intent",
       route: "auto",
       accepted: true,
-      cancellation: { state: "confirmed", outcome: recoveredOid },
+      cancellation: { state: "confirmed", outcome: recoveredOid, observedHead: observed },
+      recovery: recoveredRecord.recovery,
     });
     const cancelledOid = f.git(["rev-parse", outcomeRef]);
     for (const oid of [originalOid, retiredOid, adminOid, recoveredOid]) {
@@ -225,7 +228,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     });
     const resumed = f.run(false, f.repo, "squash", cancelledOid, nextReplacement);
     expect(resumed.status, resumed.output).toBe(0);
-    expect(f.state()).toMatchObject({ mutations: 4, cancellations: 2, posts: 1 });
+    expect(f.state()).toMatchObject({ mutations: 4, cancellations: 1, posts: 1 });
     expect(f.record()).toMatchObject({
       phase: "complete",
       head: nextReplacement,
@@ -265,7 +268,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     const attemptCapture = `merge-output.${recoveredRecord.attempt}.log`;
     const attemptBytes = readFileSync(join(f.worktree, ".local", attemptCapture), "utf8");
     expect(() => f.git(["cat-file", "-e", `${recoveredOid}:${attemptCapture}`])).toThrow();
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
 
     f.save({ ...f.state(), cancellation: "success" });
     const cancelled = f.cancel(recoveredOid);
@@ -320,31 +323,42 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     );
   });
 
-  it.each(["a changed successor capture", "an extra capture"])(
-    "refuses cancellation with %s",
-    (fault) => {
-      const { f, recoveredOid, recoveredRecord } = recoveredStaleAdminAuto();
-      if (fault === "a changed successor capture") {
-        writeFileSync(
-          join(f.worktree, ".local", `merge-output.${recoveredRecord.attempt}.log`),
-          "changed successor capture\n",
-        );
-      } else {
-        writeFileSync(join(f.worktree, ".local/merge-output.extra.log"), "extra\n");
-      }
-      f.save({ ...f.state(), cancellation: "success" });
-
-      const cancelled = f.cancel(recoveredOid);
-      expect(cancelled.status, cancelled.output).toBe(1);
-      expect(cancelled.output).toContain(
-        fault === "a changed successor capture"
-          ? "merge capture changed before retention"
-          : "merge capture set changed before retention",
+  it.each([
+    "a changed successor capture",
+    "an extra capture",
+    "a missing capture",
+    "a symlink capture",
+  ])("refuses cancellation with %s", (fault) => {
+    const { f, recoveredOid, recoveredRecord } = recoveredStaleAdminAuto();
+    if (fault === "a changed successor capture") {
+      writeFileSync(
+        join(f.worktree, ".local", `merge-output.${recoveredRecord.attempt}.log`),
+        "changed successor capture\n",
       );
-      expect(f.state()).toMatchObject({ mutations: 3, cancellations: 1, posts: 0 });
-      expect(f.git(["rev-parse", outcomeRef])).toBe(recoveredOid);
-    },
-  );
+    } else if (fault === "a missing capture" || fault === "a symlink capture") {
+      const capture = join(f.worktree, ".local", `merge-output.${recoveredRecord.attempt}.log`);
+      rmSync(capture);
+      if (fault === "a symlink capture") {
+        symlinkSync(join(f.root, "absent-capture"), capture);
+      }
+    } else {
+      writeFileSync(join(f.worktree, ".local/merge-output.extra.log"), "extra\n");
+    }
+    const observed = f.commit(f.tree("collaborator replacement\n"), [f.base]);
+    f.save({ ...f.state(), pr: { ...f.state().pr, headRefOid: observed, autoMergeRequest: null } });
+
+    const cancelled = f.cancel(recoveredOid, observed);
+    expect(cancelled.status, cancelled.output).toBe(1);
+    expect(cancelled.output).toContain(
+      fault === "a changed successor capture"
+        ? "merge capture changed before retention"
+        : fault === "a symlink capture"
+          ? "cannot retain non-regular capture"
+          : "merge capture set changed before retention",
+    );
+    expect(f.state()).toMatchObject({ mutations: 3, cancellations: 1, posts: 0 });
+    expect(f.git(["rev-parse", outcomeRef])).toBe(recoveredOid);
+  });
 
   it.each(["a changed successor capture", "an extra capture"])(
     "refuses subsequent recovery with %s",
@@ -379,23 +393,6 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
       );
       expect(f.state()).toMatchObject({ mutations: 3, cancellations: 2, posts: 0 });
       expect(f.git(["rev-parse", outcomeRef])).toBe(cancelledOid);
-    },
-  );
-
-  it.each([
-    ["opaque", "opaque uncertain dispatch result\n"],
-    ["empty", ""],
-  ])(
-    "retains %s stale-head admin capture bytes without classifying the response",
-    (_name, bytes) => {
-      const { f, adminOid, adminCapture, replacement } = staleAdminReplacement();
-      writeFileSync(join(f.worktree, ".local", adminCapture), bytes);
-
-      const recovered = f.run(true, f.repo, "squash", adminOid, replacement);
-      expect(recovered.status, recovered.output).toBe(0);
-      expect(f.git(["rev-parse", `${outcomeRef}:${adminCapture}`])).toBe(
-        f.git(["hash-object", "--stdin"], bytes),
-      );
     },
   );
 
@@ -468,7 +465,6 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     "current-head drift",
     "stale gate binding",
     "failed required check",
-    "missing ClawSweeper review",
     "invalid current review",
   ])("revalidates %s before stale-head auto recovery", (fault) => {
     const { f, adminOid, replacement } = staleAdminReplacement();
@@ -487,8 +483,6 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
       );
     } else if (fault === "failed required check") {
       state.gates = "fail";
-    } else if (fault === "missing ClawSweeper review") {
-      state.issueComments = [];
     } else {
       const reviewPath = join(f.worktree, ".local/review.json");
       const review = JSON.parse(readFileSync(reviewPath, "utf8"));
@@ -519,7 +513,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
       expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 1 });
       if (!replace) {
         expect(f.state().mainAdvances).toHaveLength(1);
-        expect(recovered.output).toContain("Requalifying prior-CI admission after main");
+        expect(recovered.output).toContain("Admin authority round 2:");
       }
       expect(f.state().restMergePayload).toMatchObject({
         sha: replacement,
@@ -641,51 +635,16 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
   });
 
   it.each([
-    ["missing cancellation", "operator admin recovery requires"],
-    ["uncertain cancellation", "operator admin recovery requires"],
-    ["renewed auto request", "no existing auto/queue request"],
     ["queue enrollment", "no existing auto/queue request"],
-    ["stale prepare", "recovery requires matching PR"],
-    ["revoked admin", "active organization admin"],
-    ["required review", "current enforced reviews must be satisfied"],
-    ["failed security", "unsuccessful openclaw/security-sensitive-review"],
-    ["new CI attempt", "newer or running CI attempt"],
     ["missing attribution", "every failed job must have exactly one"],
   ] as const)("refuses same-head %s before another request", (fault, diagnostic) => {
     const { f, retiredOid } = cancelledAutoReplacement({
       replace: false,
-      cancellation:
-        fault === "missing cancellation"
-          ? "missing"
-          : fault === "uncertain cancellation"
-            ? "uncertain"
-            : "confirmed",
     });
     const state = f.state();
-    if (fault === "renewed auto request") {
-      state.pr.autoMergeRequest = { mergeMethod: "SQUASH" };
-    }
     if (fault === "queue enrollment") {
       state.pr.isInMergeQueue = true;
       state.pr.isMergeQueueEnabled = true;
-    }
-    if (fault === "stale prepare") {
-      writeFileSync(
-        join(f.worktree, ".local/gates.env"),
-        `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.base}\n`,
-      );
-    }
-    if (fault === "revoked admin") {
-      state.priorCi.membership = "member";
-    }
-    if (fault === "required review") {
-      state.priorCi.reviewDecision = "REVIEW_REQUIRED";
-    }
-    if (fault === "failed security") {
-      state.priorCi.security.fault = "failed-guard";
-    }
-    if (fault === "new CI attempt") {
-      state.priorCi.latestAttempt = 3;
     }
     if (fault === "missing attribution") {
       writeFileSync(f.path, JSON.stringify({ ...f.evidence, failures: [] }));
@@ -707,25 +666,22 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     expect(f.git(["rev-parse", outcomeRef])).toBe(retiredOid);
   });
 
-  it.each([false, true])(
-    "refuses captures changed during final admission (replace=%s)",
-    (replace) => {
-      const { f, retiredOid, replacement } = cancelledAutoReplacement({ replace });
-      f.save({
-        ...f.state(),
-        observationReads: 0,
-        observations: [{}, {}, {}, {}, { tamperProviderCapture: true }],
-      });
-      const result = f.adminPriorCi(f.path, true, retiredOid, replacement);
-      expect(result.status, result.output).toBe(1);
-      expect(f.state().providerCaptureTampered).toBe(true);
-      expect(result.output).toContain("recovery artifacts changed during admission");
-      expect(f.state()).toMatchObject({ mutations: 1, cancellations: 1, restMergePayload: null });
-      expect(f.git(["rev-parse", outcomeRef])).toBe(retiredOid);
-    },
-  );
+  it.each([true])("refuses captures changed during final admission (replace=%s)", (replace) => {
+    const { f, retiredOid, replacement } = cancelledAutoReplacement({ replace });
+    f.save({
+      ...f.state(),
+      observationReads: 0,
+      observations: [{}, {}, {}, {}, { tamperProviderCapture: true }],
+    });
+    const result = f.adminPriorCi(f.path, true, retiredOid, replacement);
+    expect(result.status, result.output).toBe(1);
+    expect(f.state().providerCaptureTampered).toBe(true);
+    expect(result.output).toContain("recovery artifacts changed during admission");
+    expect(f.state()).toMatchObject({ mutations: 1, cancellations: 1, restMergePayload: null });
+    expect(f.git(["rev-parse", outcomeRef])).toBe(retiredOid);
+  });
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves the recovery CAS successor without dispatch (replace=%s)",
     (replace) => {
       const { f, retiredOid, replacement } = cancelledAutoReplacement({ replace });

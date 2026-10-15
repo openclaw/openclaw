@@ -5,10 +5,8 @@ import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
-import type {
-  AgentDatabaseExecutionScope,
-  AgentDatabaseRequestExecutionSource,
-} from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
+import type { AgentDatabaseExecutionScope } from "./openclaw-agent-execution-contract.js";
 import { openOpenClawAgentSqliteWorkerStore } from "./openclaw-agent-worker-store.js";
 
 const boundary = vi.hoisted(() => ({

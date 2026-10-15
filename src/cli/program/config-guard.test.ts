@@ -10,6 +10,7 @@ import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-m
 import {
   adoptProcessPluginCache,
   createPluginCache,
+  getPluginCacheRetirementSignal,
   getProcessPluginCache,
   withPluginCache,
 } from "../../plugins/plugin-cache.js";
@@ -130,6 +131,7 @@ describe("ensureConfigReady", () => {
     runStartupConfigPreflightMock.mockResolvedValue({
       snapshot,
       baseConfig: {},
+      pluginCache: preflightCache,
       pluginMetadataSnapshot: preflightMetadata,
     });
     return snapshot;
@@ -171,12 +173,14 @@ describe("ensureConfigReady", () => {
     runStartupConfigPreflightMock.mockImplementation(async () => ({
       snapshot: makeSnapshot(),
       baseConfig: {},
+      pluginCache: preflightCache,
       pluginMetadataSnapshot: preflightMetadata,
     }));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     adoptProcessPluginCache(processCache);
+    await preflightCache[Symbol.asyncDispose]();
     envSnapshot?.restore();
     envSnapshot = undefined;
     for (const root of tempRoots.splice(0)) {
@@ -257,7 +261,39 @@ describe("ensureConfigReady", () => {
     }
   });
 
+  it.each([true, false])("retires non-Gateway preflight resources with valid=%s", async (valid) => {
+    if (!valid) {
+      setInvalidSnapshot();
+    }
+    const retired = getPluginCacheRetirementSignal(preflightCache);
+    const runtime = makeRuntime();
+    runtime.exit.mockImplementation((code: number): never => {
+      throw new ExitError(code);
+    });
+
+    const ready = ensureConfigReady({ runtime, commandPath: ["message"] });
+    if (valid) {
+      await ready;
+    } else {
+      await expect(ready).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(plainErrorCalls(runtime)).toEqual([
+        "OpenClaw config is invalid",
+        "File: /tmp/openclaw.json",
+        "Problem:",
+        "  - channels.quietchat: invalid",
+        "",
+        `Inspect: ${formatCliCommand("openclaw config validate")}`,
+        "Audit, status, health, logs, and doctor commands still run with invalid config.",
+        `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
+      ]);
+    }
+
+    expect(retired.aborted).toBe(true);
+    expect(getProcessPluginCache()).toBe(processCache);
+  });
+
   it("retains accepted startup facts with stdout suppressed", async () => {
+    const retired = getPluginCacheRetirementSignal(preflightCache);
     await runEnsureConfigReady(["gateway", "run"], true);
 
     expect(runStartupConfigPreflightMock).toHaveBeenCalledWith({
@@ -265,6 +301,7 @@ describe("ensureConfigReady", () => {
       validateStartupConfig: expect.any(Function),
     });
     expect(getProcessPluginCache() === preflightCache).toBe(true);
+    expect(retired.aborted).toBe(false);
     // Cache reuse must not freeze the Gateway inventory before its final config read.
     expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
   });
@@ -349,23 +386,6 @@ describe("ensureConfigReady", () => {
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(undefined, {});
-  });
-
-  it("exits for invalid config on non-allowlisted commands", async () => {
-    setInvalidSnapshot();
-    const runtime = await runEnsureConfigReady(["message"]);
-
-    expect(plainErrorCalls(runtime)).toEqual([
-      "OpenClaw config is invalid",
-      "File: /tmp/openclaw.json",
-      "Problem:",
-      "  - channels.quietchat: invalid",
-      "",
-      `Inspect: ${formatCliCommand("openclaw config validate")}`,
-      "Audit, status, health, logs, and doctor commands still run with invalid config.",
-      `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
-    ]);
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("runs doctor and retries the config guard once after consent", async () => {

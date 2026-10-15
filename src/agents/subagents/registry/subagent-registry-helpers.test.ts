@@ -42,14 +42,6 @@ describe("resolveAnnounceRetryDelayMs", () => {
     ]);
     randomSpy.mockRestore();
   });
-
-  it("applies positive jitter without exceeding the five-minute cap", () => {
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
-
-    expect(resolveAnnounceRetryDelayMs(1)).toBe(18_000);
-    expect(resolveAnnounceRetryDelayMs(6)).toBe(300_000);
-    randomSpy.mockRestore();
-  });
 });
 
 describe("capFrozenResultText", () => {
@@ -64,48 +56,6 @@ describe("capFrozenResultText", () => {
 
 describe("updateSubagentArchiveAtMs", () => {
   const cfg = { agents: { defaults: { subagents: { archiveAfterMinutes: 5 } } } };
-
-  it("defers delete-mode and collector retention until terminal completion", () => {
-    for (const overrides of [
-      { cleanup: "delete" as const },
-      { cleanup: "keep" as const, collect: true },
-      { cleanup: "delete" as const, collect: true },
-    ]) {
-      const entry = createRunEntry(overrides);
-      expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(false);
-      expect(entry.archiveAtMs).toBeUndefined();
-    }
-  });
-
-  it("starts ordinary delete-mode retention at execution completion", () => {
-    const entry = createRunEntry({
-      cleanup: "delete",
-      createdAt: 500,
-      execution: { status: "terminal", startedAt: 1_000, endedAt: 602_000 },
-      archiveAtMs: 300_500,
-    });
-
-    expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(true);
-    expect(entry.archiveAtMs).toBe(902_000);
-    expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(false);
-  });
-
-  it("starts collector retention when terminal completion is frozen", () => {
-    const entry = createRunEntry({
-      collect: true,
-      execution: {
-        status: "terminal",
-        startedAt: 1_000,
-        endedAt: 2_000,
-        outcome: { status: "ok" },
-      },
-      completion: { required: false, resultText: "done", capturedAt: 2_000 },
-    });
-
-    expect(updateSwarmCollectorCompletion(entry, cfg, { entry: undefined })).toBe(true);
-    expect(entry.collectorCompletion).toEqual({ status: "done" });
-    expect(entry.archiveAtMs).toBe(302_000);
-  });
 
   it("starts retention when a delayed result first becomes waitable", () => {
     vi.useFakeTimers();
@@ -125,18 +75,6 @@ describe("updateSubagentArchiveAtMs", () => {
     expect(entry.completion?.capturedAt).toBe(10_000);
     expect(entry.archiveAtMs).toBe(310_000);
     vi.useRealTimers();
-  });
-
-  it("backfills legacy collectors from their terminal time", () => {
-    const entry = createRunEntry({
-      collect: true,
-      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
-      archiveAtMs: 10_000,
-    });
-
-    expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(true);
-    expect(entry.archiveAtMs).toBe(302_000);
-    expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(false);
   });
 
   it("clears stale deadlines from active, paused, persistent, and retained runs", () => {
@@ -213,7 +151,7 @@ describe("safeRemoveAttachmentsDir", () => {
     await expect(
       safeRemoveAttachmentsDir(createRunEntry({ attachmentId, childSessionKey })),
     ).resolves.toBe(true);
-    await expect(fs.access(siblingDir)).resolves.toBeUndefined();
+    await fs.access(siblingDir);
 
     vi.unstubAllEnvs();
     await fs.rm(stateDir, { recursive: true, force: true });

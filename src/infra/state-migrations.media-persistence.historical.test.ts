@@ -6,13 +6,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import * as transcriptFts from "../config/sessions/session-transcript-fts.js";
+import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -28,34 +31,42 @@ import {
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
 import { historicalV14AgentSchemaSql } from "./state-migrations.media-persistence.historical-schema.test-support.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
+import { repairDoctorSessionWindowsBeforeMigration } from "./state-migrations.session-window-repair.js";
 
 const tempDirs: string[] = [];
 
-function seedOrphanSessionWindows(pathname: string) {
-  using database = new NativeDatabaseSync(pathname);
+function seedOrphanSessionWindows(pathname: string, schemaVersion: number) {
+  using database = nodeSqlite.openNodeSqliteDatabase(pathname);
+  admitSqliteSchema(database);
   database.exec("PRAGMA foreign_keys = OFF;");
   const insertNode = database.prepare(`INSERT INTO session_nodes
     (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)`);
   const insertWindow = database.prepare(`INSERT INTO session_windows
     (session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)`);
-  const insertEvent = database.prepare(`INSERT INTO transcript_events
-    (session_id, seq, event_json, created_at) VALUES (?, 0, ?, 1)`);
+  const insertLegacyEvent =
+    schemaVersion < OPENCLAW_AGENT_SCHEMA_VERSION
+      ? database.prepare(`INSERT INTO transcript_events
+        (session_id, seq, event_json, created_at) VALUES (?, 0, ?, 1)`)
+      : undefined;
   for (const sessionId of ["retained", "orphan-one", "orphan-two"]) {
     const sessionKey = `agent:main:${sessionId}`;
     insertNode.run(sessionKey, sessionId, JSON.stringify({ sessionId, updatedAt: 1 }));
     insertWindow.run(sessionId, sessionKey);
-    insertEvent.run(
-      sessionId,
-      JSON.stringify({
-        id: `message-${sessionId}`,
-        type: "message",
-        message: { role: "user", content: sessionId },
-      }),
-    );
+    const eventJson = JSON.stringify({
+      id: `message-${sessionId}`,
+      type: "message",
+      message: { role: "user", content: sessionId },
+    });
+    if (insertLegacyEvent) {
+      insertLegacyEvent.run(sessionId, eventJson);
+    } else {
+      createTranscriptEventInserter(database, sessionId)({ seq: 0, eventJson, createdAt: 1 });
+    }
     transcriptFts.createSessionTranscriptFtsInserter(
       database,
       sessionId,
@@ -72,17 +83,39 @@ function seedOrphanSessionWindows(pathname: string) {
   database.exec("DELETE FROM session_nodes WHERE current_session_id != 'retained';");
 }
 
-it.each(["repair", "unrelated violation", "cleanup failure"] as const)(
-  "Doctor preserves original orphan history before repair and refuses unsafe changes (%s)",
-  async (scenario) => {
+it.each([
+  ["repair", OPENCLAW_AGENT_SCHEMA_VERSION, false],
+  ["unrelated violation", OPENCLAW_AGENT_SCHEMA_VERSION, false],
+  ["cleanup failure", OPENCLAW_AGENT_SCHEMA_VERSION, false],
+  ["repair", 24, false],
+  ["repair", 24, true],
+] as const)(
+  "Doctor preserves original orphan history before repair (%s, schema %i, before migration %s)",
+  async (scenario, schemaVersion, beforeMigration) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = { agentId: "main", env: state.env };
-      const { path: pathname } = openOpenClawAgentDatabase(options);
+      const pathname = resolveOpenClawAgentSqlitePath(options);
+      if (schemaVersion === 24) {
+        openOpenClawStateDatabase({ env: state.env });
+        fs.mkdirSync(path.dirname(pathname), { recursive: true });
+        using source = new NativeDatabaseSync(pathname);
+        source.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
+        source.exec(`PRAGMA user_version = 24;
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+          VALUES ('primary', 'agent', 24, 'main', '2026.9.9', 1, 1)`);
+        registerOpenClawAgentDatabase({ ...options, path: pathname, schemaVersion });
+      } else {
+        openOpenClawAgentDatabase(options);
+      }
       closeOpenClawAgentDatabasesForTest();
-      seedOrphanSessionWindows(pathname);
+      seedOrphanSessionWindows(pathname, schemaVersion);
       const readRows = (database: DatabaseSync) => ({
         windows: database.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
-        events: database.prepare("SELECT * FROM transcript_events ORDER BY session_id, seq").all(),
+        events: database
+          .prepare(
+            "SELECT session_id, seq, event_json, event_zstd, event_utf8_bytes, navigation_json, created_at FROM transcript_events ORDER BY session_id, seq",
+          )
+          .all(),
         search: database
           .prepare("SELECT session_id, text FROM session_transcript_fts ORDER BY session_id")
           .all(),
@@ -123,7 +156,21 @@ it.each(["repair", "unrelated violation", "cleanup failure"] as const)(
           throw new Error("fixture cleanup refused after deleting search rows");
         });
       }
+      const preMigrationChanges = beforeMigration
+        ? await repairDoctorSessionWindowsBeforeMigration({
+            env: state.env,
+            targets: [
+              {
+                agentId: "main",
+                path: pathname,
+                realPath: fs.realpathSync(pathname),
+                source: "registry",
+              },
+            ],
+          })
+        : [];
       const result = await migrateLegacyMediaPersistence({ env: state.env });
+      result.changes.unshift(...preMigrationChanges);
       if (scenario === "cleanup failure") {
         expect(removedSearchRows).toBe(1);
       }
@@ -134,11 +181,23 @@ it.each(["repair", "unrelated violation", "cleanup failure"] as const)(
           `Removed 2 orphan session window(s) from ${pathname}; their dependent history remains in the backup.`,
         );
         expect(repaired.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(repaired.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
         const retained = readRows(repaired);
         for (const key of ["windows", "events", "search"] as const) {
-          expect(retained[key]).toEqual(
-            original[key].filter((row) => row.session_id === "retained"),
-          );
+          const expected = [];
+          for (const row of original[key]) {
+            if (row.session_id !== "retained") {
+              continue;
+            }
+            expected.push(
+              key === "windows" && schemaVersion === 24
+                ? { ...row, row_transcript_json: null, row_transcript_updated_at: null }
+                : row,
+            );
+          }
+          expect(retained[key]).toEqual(expected);
         }
         expect(() => openOpenClawAgentDatabase(options)).not.toThrow();
       } else {
@@ -402,7 +461,11 @@ describe("legacy media persistence Doctor migration from historical schemas", ()
     try {
       const result = await scope.run(() => migrateLegacyMediaPersistence({ env }));
       expect(rejected).toBe(true);
-      expect(result.changes).toEqual([]);
+      expect(result.changes).toEqual([
+        expect.stringContaining(
+          `Saved pre-repair SQLite backup: ${path.join(path.dirname(databasePath), "openclaw-media-persistence-recovery-")}`,
+        ),
+      ]);
       expect(result.warnings).toEqual([
         expect.stringContaining("Recovery backup coverage is no longer current"),
       ]);
@@ -550,7 +613,7 @@ describe("media persistence gateway lifecycle recovery", () => {
     const nowMs = 1_000_000;
     for (let index = 0; index < 3; index += 1) {
       const bootId = recordGatewayBootStart(env, nowMs + index);
-      completeGatewayBootLifecycle(
+      await completeGatewayBootLifecycle(
         bootId,
         {
           outcome: "startup_failed",

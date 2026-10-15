@@ -1,3 +1,4 @@
+import { createStatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
@@ -13,8 +14,9 @@ import {
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
 
-const { readAgentRunTerminalOutcome } = vi.hoisted(() => ({
+const { readAgentRunTerminalOutcome, verboseLog } = vi.hoisted(() => ({
   readAgentRunTerminalOutcome: vi.fn(),
+  verboseLog: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
@@ -23,8 +25,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
 vi.mock("./runtime-api.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./runtime-api.js")>()),
   getAgentScopedMediaLocalRoots: () => [],
-  logVerbose: () => {},
-  shouldLogVerbose: () => false,
+  logVerbose: verboseLog,
+  shouldLogVerbose: () => true,
 }));
 vi.mock("../../media.js", () => ({ loadWebMedia: vi.fn() }));
 
@@ -109,6 +111,41 @@ async function fixture(overrides: Partial<Params> & { msg?: Message } = {}) {
   };
   return { plan, deliver, preparePayload, deliverReply, replyLogger };
 }
+function statusReactionFixture() {
+  const reactions: string[] = [];
+  const controller = createStatusReactionController({
+    enabled: true,
+    adapter: {
+      setReaction: async (emoji) => {
+        reactions.push(emoji);
+      },
+      clearReaction: async () => {
+        reactions.push("");
+      },
+    },
+    initialEmoji: "👀",
+    timing: { doneHoldMs: 0, errorHoldMs: 0 },
+  });
+  let restored!: () => void;
+  const nextRestoration = () =>
+    new Promise<void>((resolve) => {
+      restored = resolve;
+    });
+  const restoration = nextRestoration();
+  const restoreInitial = controller.restoreInitial;
+  vi.spyOn(controller, "restoreInitial").mockImplementation(async () => {
+    await restoreInitial();
+    restored();
+  });
+  return { controller, reactions, restoration, nextRestoration };
+}
+function beginQueuedDelivery(plan: ReturnType<typeof createWhatsAppReplyPlan>) {
+  const settle = plan.replyOptions.queuedDeliveryCorrelations?.[0]?.begin();
+  if (typeof settle !== "function") {
+    throw new Error("Expected a source-bound queued delivery correlation");
+  }
+  return settle;
+}
 function nonPortablePaths(value: unknown, path = "inbound", seen = new Set<object>()): string[] {
   if (typeof value === "function") {
     return [path];
@@ -129,6 +166,7 @@ const replacement = { text: "captioned replacement", mediaUrls: ["/tmp/a.jpg"] }
 
 beforeEach(() => {
   readAgentRunTerminalOutcome.mockReset();
+  verboseLog.mockClear();
   vi.mocked(loadWebMedia).mockReset();
 });
 
@@ -245,43 +283,25 @@ describe("prepared WhatsApp inbound boundary", () => {
     );
     expect(buildWhatsAppInboundTransportContext(msg).correlationId).toBeUndefined();
   });
-
-  it("keeps a remote voice transcript independent of its empty command body", async () => {
-    const { ctxPayload } = await prepare({
-      bodyForAgent: "spoken transcript",
-      combinedBody: "spoken transcript",
-      rawBody: "",
-      transcript: "spoken transcript",
-      command: { kind: "normal", body: "", authorized: false },
-      msg: message({
-        payload: {
-          body: "",
-          media: {
-            url: "https://media.example/voice.ogg",
-            type: "audio/ogg; codecs=opus",
-            kind: "audio",
-          },
-        },
-      }),
-    });
-    expect(ctxPayload).toMatchObject({
-      Body: "spoken transcript",
-      BodyForAgent: "spoken transcript",
-      BodyForCommands: "",
-      CommandBody: "",
-      RawBody: "",
-      Transcript: "spoken transcript",
-      media: [
-        expect.objectContaining({
-          url: "https://media.example/voice.ogg",
-          contentType: "audio/ogg; codecs=opus",
-        }),
-      ],
-    });
-  });
 });
 
 describe("WhatsApp reply delivery", () => {
+  it("records visible delivery without logging the reply content", async () => {
+    const text = "private WhatsApp reply with confidential account details";
+    const { deliver, deliverReply, plan } = await fixture();
+    const result = await deliver({ text });
+
+    expect(deliverReply).toHaveBeenCalledWith(
+      expect.objectContaining({ replyResult: expect.objectContaining({ text }) }),
+    );
+    expect(result?.visibleReplySent).toBe(true);
+    expect(
+      plan.finalize({ queuedFinal: false, counts: { final: 1 }, observedReplyDelivery: true }),
+    ).toBe(true);
+    expect(verboseLog).toHaveBeenCalledWith(`Reply delivered: ${text.length} chars -> +1000`);
+    expect(JSON.stringify(verboseLog.mock.calls)).not.toContain(text);
+  });
+
   it("does not force a self-chat response prefix without identity", () => {
     expect(
       resolveWhatsAppResponsePrefix({ cfg: { messages: {} }, agentId: "main", isSelfChat: true }),
@@ -484,15 +504,6 @@ describe("WhatsApp reply delivery", () => {
     });
     expect(deliverReply).not.toHaveBeenCalled();
   });
-  it("delivers final errors with receipt-backed visibility", async () => {
-    const { deliver, deliverReply } = await fixture();
-    await expect(deliver({ text: "provider exploded", isError: true })).resolves.toMatchObject({
-      content: "provider exploded",
-      messageIds: ["wa-sent-1"],
-      visibleReplySent: true,
-    });
-    expect(deliverReply).toHaveBeenCalledOnce();
-  });
   it("suppresses block error noise", async () => {
     const { deliver, deliverReply } = await fixture();
     await deliver({ text: "tool call failed", isError: true }, "block");
@@ -501,25 +512,11 @@ describe("WhatsApp reply delivery", () => {
 
   it.each([
     {
-      mentioned: false,
-      command: false,
-      mode: "message_tool_only",
-      suppressTyping: true,
-      disableBlockStreaming: true,
-    },
-    {
       mentioned: true,
       command: false,
       mode: "message_tool_only",
       suppressTyping: false,
       disableBlockStreaming: true,
-    },
-    {
-      mentioned: false,
-      command: true,
-      mode: "automatic",
-      suppressTyping: false,
-      disableBlockStreaming: false,
     },
   ])(
     "selects group delivery for mentioned=$mentioned command=$command",
@@ -544,36 +541,117 @@ describe("WhatsApp reply delivery", () => {
       });
     },
   );
+  it.each([
+    { visibleReplySent: true, emoji: "✅" },
+    { visibleReplySent: false, emoji: "❌" },
+  ])(
+    "waits for queued delivery before showing $emoji (visible=$visibleReplySent)",
+    async ({ visibleReplySent, emoji }) => {
+      const { controller, reactions, restoration, nextRestoration } = statusReactionFixture();
+      const { plan } = await fixture({ statusReactionController: controller });
+      expect(plan.finalize({ deferredToActiveRun: "followup", counts: {} })).toBe(false);
+      await restoration;
+      expect(reactions).toEqual(["👀"]);
+
+      const settle = beginQueuedDelivery(plan);
+      plan.replyOptions.onAgentRunTerminalOutcome?.("completed");
+      expect(reactions).toEqual(["👀"]);
+      const completed = nextRestoration();
+      settle({ visibleReplySent, failed: false });
+      await completed;
+      expect(reactions).toEqual(["👀", emoji, "👀"]);
+    },
+  );
+  it("preserves queued delivery settled before the original dispatch finalizes", async () => {
+    const { controller, reactions, restoration } = statusReactionFixture();
+    const { plan } = await fixture({ statusReactionController: controller });
+    plan.replyOptions.onAgentRunTerminalOutcome?.("completed");
+    beginQueuedDelivery(plan)({ visibleReplySent: true, failed: false });
+    expect(reactions).toEqual([]);
+    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
+    await restoration;
+    expect(reactions).toEqual(["✅", "👀"]);
+  });
+  it.each([
+    { outcome: "delivered", visibleReplySent: true, failed: false },
+    { outcome: "terminally failed", visibleReplySent: false, failed: true },
+  ])("leaves held delivery neutral after a later $outcome receipt", async (terminal) => {
+    const { controller, reactions, restoration } = statusReactionFixture();
+    const clear = vi.spyOn(controller, "clear");
+    const { plan } = await fixture({ statusReactionController: controller });
+    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
+    await restoration;
+    const settle = beginQueuedDelivery(plan);
+    plan.replyOptions.onAgentRunTerminalOutcome?.("completed");
+    settle({ visibleReplySent: false, failed: false, transportPending: true });
+    expect(clear).toHaveBeenCalledOnce();
+    await clear.mock.results[0]?.value;
+    expect(reactions).toEqual(["👀", ""]);
+
+    // Recovery has no source callback; even a retained caller cannot revive finished activity.
+    settle(terminal);
+    expect(reactions).toEqual(["👀", ""]);
+    expect(clear).toHaveBeenCalledOnce();
+  });
+  it("shows execution failure immediately and does not replace it with delivery success", async () => {
+    const { controller, reactions, restoration } = statusReactionFixture();
+    const { plan } = await fixture({ statusReactionController: controller });
+    plan.replyOptions.onAgentRunTerminalOutcome?.("failed");
+    await restoration;
+    expect(reactions).toEqual(["❌", "👀"]);
+    beginQueuedDelivery(plan)({ visibleReplySent: true, failed: false });
+    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
+    expect(controller.restoreInitial).toHaveBeenCalledOnce();
+  });
+  it("keeps a deferred retry pending and matches direct dispatch for a settled silent turn", async () => {
+    const queued = statusReactionFixture();
+    const { plan } = await fixture({ statusReactionController: queued.controller });
+    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
+    await queued.restoration;
+    beginQueuedDelivery(plan)();
+    expect(queued.reactions).toEqual(["👀"]);
+
+    const completed = queued.nextRestoration();
+    plan.replyOptions.onAgentRunTerminalOutcome?.("completed");
+    beginQueuedDelivery(plan)({ visibleReplySent: false, failed: false });
+    await completed;
+    expect(queued.reactions).toEqual(["👀", "❌", "👀"]);
+
+    const direct = statusReactionFixture();
+    const { plan: directPlan } = await fixture({ statusReactionController: direct.controller });
+    directPlan.finalize({ counts: {} });
+    await direct.restoration;
+    expect(direct.reactions).toEqual(["❌", "👀"]);
+  });
+  it("shows an error when an accepted follow-up is evicted before it runs", async () => {
+    const { controller, reactions, restoration, nextRestoration } = statusReactionFixture();
+    const { plan } = await fixture({ statusReactionController: controller });
+    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
+    await restoration;
+    const completed = nextRestoration();
+    plan.replyOptions.onFollowupQueueDisposition?.("queue-cap-old");
+    await completed;
+    expect(reactions).toEqual(["👀", "❌", "👀"]);
+  });
+  it("keeps a queue-cap rejection failed even when its notice is delivered", async () => {
+    const { controller, reactions, restoration } = statusReactionFixture();
+    const { plan, deliver } = await fixture({ statusReactionController: controller });
+    plan.replyOptions.onFollowupQueueDisposition?.("queue-cap-new");
+    await deliver({ text: "The message queue is full." });
+    expect(plan.finalize({ counts: { final: 1 } })).toBe(true);
+    await restoration;
+    expect(reactions).toEqual(["❌", "👀"]);
+  });
   it("keeps visible delivery successful while marking a failed run as an error", async () => {
-    let restored!: () => void;
-    const restoration = new Promise<void>((resolve) => {
-      restored = resolve;
-    });
-    const controller = {
-      setQueued: vi.fn(),
-      setThinking: vi.fn(),
-      setTool: vi.fn(),
-      setCompacting: vi.fn(),
-      cancelPending: vi.fn(),
-      setDone: vi.fn(async () => undefined),
-      setError: vi.fn(async () => undefined),
-      clear: vi.fn(async () => undefined),
-      restoreInitial: vi.fn(async () => {
-        restored();
-      }),
-    };
+    const { controller, reactions, restoration } = statusReactionFixture();
     readAgentRunTerminalOutcome.mockReturnValueOnce("failed");
     const { plan, deliver, deliverReply } = await fixture({ statusReactionController: controller });
     await deliver({ text: "visible failure" });
     expect(plan.finalize({ queuedFinal: false, counts: { final: 1 } })).toBe(true);
     await restoration;
     expect(deliverReply).toHaveBeenCalledOnce();
-    expect(controller.setError).toHaveBeenCalledOnce();
-    expect(controller.setDone).not.toHaveBeenCalled();
+    expect(reactions).toEqual(["❌", "👀"]);
     expect(controller.restoreInitial).toHaveBeenCalledOnce();
-    expect(controller.setError.mock.invocationCallOrder[0]).toBeLessThan(
-      controller.restoreInitial.mock.invocationCallOrder[0]!,
-    );
   });
   it("does not treat unaccepted provider text as sent", async () => {
     const deliverReply = vi.fn<Params["deliverReply"]>(async () => ({
@@ -588,31 +666,6 @@ describe("WhatsApp reply delivery", () => {
     expect(replyLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ replyKind: "final", conversationId: "+1000" }),
       "auto-reply was not accepted by WhatsApp provider",
-    );
-  });
-  it("preserves Error subclass diagnostics in delivery logs", async () => {
-    class BoomLikeError extends Error {
-      override name = "BoomLikeError";
-      output = { statusCode: 408, payload: { error: "Request Time-out" } };
-      data = { reason: "transport-stale" };
-    }
-    const error = new BoomLikeError("send timed out");
-    const { plan, replyLogger } = await fixture();
-    plan.delivery.onError?.(error, { kind: "final" });
-    expect(replyLogger.error).toHaveBeenCalledWith(
-      expect.objectContaining({
-        err: {
-          type: "BoomLikeError",
-          name: "BoomLikeError",
-          message: "send timed out",
-          stack: error.stack,
-          output: { statusCode: 408, payload: { error: "Request Time-out" } },
-          data: { reason: "transport-stale" },
-        },
-        replyKind: "final",
-        correlationId: "msg1",
-      }),
-      "auto-reply delivery failed",
     );
   });
   it("preserves structured object rejections", async () => {

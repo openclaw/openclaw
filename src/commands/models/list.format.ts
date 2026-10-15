@@ -24,17 +24,15 @@ export const padTerminalCell = (value: string, size: number) => {
 };
 
 export const formatTag = (tag: string) => {
-  if (tag === "default") {
-    return theme.success(tag);
-  }
-  if (tag === "image") {
-    return theme.accentBright(tag);
-  }
-  if (tag === "configured") {
-    return theme.accent(tag);
-  }
-  if (tag === "missing") {
-    return theme.error(tag);
+  switch (tag) {
+    case "default":
+      return theme.success(tag);
+    case "image":
+      return theme.accentBright(tag);
+    case "configured":
+      return theme.accent(tag);
+    case "missing":
+      return theme.error(tag);
   }
   if (tag.startsWith("fallback#") || tag.startsWith("img-fallback#")) {
     return theme.warn(tag);
@@ -55,3 +53,15 @@ export const truncate = (value: string, max: number) => {
   }
   return `${truncateToVisibleWidth(sanitized, max - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
 };
+
+export function groupByProvider<T extends { provider: string }>(
+  entries: readonly T[],
+): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const entry of entries) {
+    const group = groups.get(entry.provider) ?? [];
+    group.push(entry);
+    groups.set(entry.provider, group);
+  }
+  return groups;
+}

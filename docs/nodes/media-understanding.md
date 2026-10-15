@@ -141,7 +141,7 @@ See [Tools and custom providers](/gateway/config-tools) for profiles, env vars, 
 ## Rules and behavior
 
 - Media exceeding `maxBytes` skips that model and tries the next one.
-- Audio files under 1024 bytes are treated as empty/corrupt and skipped before transcription; the agent gets a deterministic placeholder transcript instead.
+- Audio files under 1024 bytes are treated as empty/corrupt and skipped before transcription; the agent gets a fixed placeholder transcript instead.
 - If the active primary image model already supports vision natively, OpenClaw skips the `[Image]` summary block and passes the original image into the model directly. MiniMax is an exception: `minimax`, `minimax-cn`, `minimax-portal`, and `minimax-portal-cn` always route image understanding through the plugin-owned `MiniMax-VL-01` media provider, even if legacy MiniMax M2.x chat metadata claims image input (only `MiniMax-M3` and later are treated as natively vision-capable).
 - If a Gateway/WebChat primary model is text-only, image attachments are preserved as offloaded `media://inbound/*` refs so image/PDF tools or a configured image model can still inspect them instead of losing the attachment.
 - Explicit `openclaw infer image describe --file <path> --model <provider/model>` (alias: `openclaw capability image describe`) runs that image-capable provider/model directly, including Ollama refs such as `ollama/qwen2.5vl:7b` when a matching image-capable model is configured under `models.providers.ollama.models[]`.
@@ -197,7 +197,7 @@ To disable auto-detection for a capability:
 ```
 
 <Note>
-Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI is on `PATH` (`~` is expanded), or set an explicit CLI model entry with a full command path.
+Binary detection is best-effort across macOS/Linux/Windows; put the CLI on `PATH` (`~` is expanded), or set an explicit CLI model entry with a full command path.
 </Note>
 
 ### Proxy support (audio/video provider calls)

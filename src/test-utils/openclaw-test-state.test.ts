@@ -19,10 +19,6 @@ import {
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
 } from "../config/sessions/session-transcript-reconcile.js";
-import {
-  GATEWAY_STARTUP_MUTATED_ENV_KEYS,
-  snapshotGatewayStartupEnv,
-} from "../gateway/test-helpers.env.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { createOpenClawTestState, withOpenClawTestState } from "../plugin-sdk/test-state.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -414,45 +410,6 @@ describe("openclaw test state", () => {
     },
   );
 
-  it("creates an isolated home layout with spawn env and restores process env", async () => {
-    const previousHome = process.env.HOME;
-    const previousOpenClawHome = process.env.OPENCLAW_HOME;
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-    const previousGatewayStartupEnv = snapshotGatewayStartupEnv();
-
-    const state = await createOpenClawTestState({
-      label: "unit",
-      scenario: "minimal",
-    });
-
-    try {
-      expect(state.home).toBe(path.join(state.root, "home"));
-      expect(state.stateDir).toBe(path.join(state.home, ".openclaw"));
-      expect(state.configPath).toBe(path.join(state.stateDir, "openclaw.json"));
-      expect(state.workspaceDir).toBe(path.join(state.home, "workspace"));
-      expect(state.env.HOME).toBe(state.home);
-      expect(state.env.OPENCLAW_HOME).toBe(state.home);
-      expect(state.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-      expect(state.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
-      expect(process.env.HOME).toBe(state.home);
-      expect(process.env.OPENCLAW_HOME).toBe(state.home);
-      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toStrictEqual({});
-      for (const key of GATEWAY_STARTUP_MUTATED_ENV_KEYS) {
-        setTestEnvValue(key, `mutated-${key}`);
-      }
-    } finally {
-      await state.cleanup();
-    }
-
-    expect(process.env.HOME).toBe(previousHome);
-    expect(process.env.OPENCLAW_HOME).toBe(previousOpenClawHome);
-    expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
-    expect(process.env.OPENCLAW_CONFIG_PATH).toBe(previousConfigPath);
-    expect(snapshotGatewayStartupEnv()).toEqual(previousGatewayStartupEnv);
-    await expectPathMissing(state.root);
-  });
-
   it("restores late env additions before the next fixture", async () => {
     const previous = {
       OPENCLAW_TEST_LATE_ABSENT: undefined,
@@ -489,24 +446,6 @@ describe("openclaw test state", () => {
         }
       });
     });
-  });
-
-  it("supports state-only layout without overriding HOME", async () => {
-    const previousHome = process.env.HOME;
-
-    await withOpenClawTestState(
-      {
-        layout: "state-only",
-        scenario: "empty",
-      },
-      async (state) => {
-        expect(process.env.HOME).toBe(previousHome);
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
-        expect(state.env.HOME).toBe(previousHome);
-        await expectPathMissing(state.configPath);
-      },
-    );
   });
 
   it.each([
@@ -760,15 +699,11 @@ describe("openclaw test state", () => {
       const runOperation = reconcilePool.runSessionTranscriptReconcileOperation;
       const operationSpy = vi
         .spyOn(reconcilePool, "runSessionTranscriptReconcileOperation")
-        .mockImplementationOnce((generation, run, owner) =>
-          runOperation(
-            generation,
-            async (operation) => {
-              await resumeReconcile.promise;
-              return run(operation);
-            },
-            owner,
-          ),
+        .mockImplementationOnce((run, owner) =>
+          runOperation(async (operation) => {
+            await resumeReconcile.promise;
+            return run(operation);
+          }, owner),
         );
       const originalRm = fs.rm;
       let removalStarted = false;

@@ -366,10 +366,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       return 0;
     }
     pendingLifecycle.clear(runId);
-    if (
-      typeof entry.cleanupCompletedAt === "number" &&
-      entry.terminalOwner !== "interrupted-recovery"
-    ) {
+    if (typeof entry.cleanupCompletedAt === "number") {
       return hasCompleteSubagentTerminalState(entry) ? 1 : 0;
     }
     let publishedEntry = entry;
@@ -531,12 +528,7 @@ export function createSubagentResumeReader(params: {
             if (check === null || typeof check === "string") {
               reason = check;
             } else {
-              try {
-                reason = (await check.read(assertCurrent)).orphanReason;
-              } catch {
-                // A failed read cannot establish orphanhood; authority is rechecked below.
-                reason = null;
-              }
+              reason = (await check.read(assertCurrent)).orphanReason;
             }
             if (!isReadCurrent()) {
               return;
