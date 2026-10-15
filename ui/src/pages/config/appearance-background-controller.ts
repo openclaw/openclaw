@@ -610,11 +610,8 @@ export class AppearanceBackgroundController {
         expectedPreference: current.preference,
         isCurrent,
       });
+      this.metadata = { ...scope, revision: this.metadataRevision, snapshot: result };
       this.context?.theme.refresh();
-      await this.readMetadata();
-      if (!isCurrent()) {
-        return;
-      }
       this.message = {
         kind: "status",
         text: t(
