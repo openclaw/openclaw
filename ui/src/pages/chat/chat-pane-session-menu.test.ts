@@ -64,8 +64,7 @@ describe("chat pane session menu boundary", () => {
         state: { result: sessionsResult([row, child], 1) },
         describe: async () => ({ session: row }),
         refreshList: async (query) => {
-          children = query.spawnedBy === row.key ? [child] : [];
-          return sessionsResult(children, 1);
+          children = query?.spawnedBy === row.key ? [child] : [];
         },
         listSnapshot: () => ({
           result: sessionsResult(children, 1),

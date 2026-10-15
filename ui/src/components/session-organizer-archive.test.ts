@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
+import type { SessionRefreshOptions } from "../lib/sessions/session-capability.ts";
 import {
   answerConfirmDialog,
   createModalDialogTestFixture,
@@ -24,9 +25,8 @@ vi.mock("../lib/toast.ts", async (importOriginal) => ({
 function prepareArchiveTree(harness: ReturnType<typeof createHarness>, rows: GatewaySessionRow[]) {
   let children: GatewaySessionRow[] = [];
   const describeSession = vi.fn(async () => ({ session: rows[0]! }));
-  const refreshList = vi.fn(async (query: { spawnedBy?: string }) => {
-    children = rows.filter((row) => row.parentSessionKey === query.spawnedBy);
-    return sessionsResult(children, 1);
+  const refreshList = vi.fn(async (query?: SessionRefreshOptions) => {
+    children = rows.filter((row) => row.parentSessionKey === query?.spawnedBy);
   });
   harness.scope.sessions.describe = describeSession;
   harness.scope.sessions.refreshList = refreshList;
@@ -39,6 +39,11 @@ function prepareArchiveTree(harness: ReturnType<typeof createHarness>, rows: Gat
   return { describeSession, refreshList };
 }
 
+function gatewayRow(index: number, overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  const { key, sessionId, sharingRole } = sessionRow(index);
+  return { key, sessionId, sharingRole, kind: "direct", updatedAt: index, ...overrides };
+}
+
 describe("session organizer nested archive choice", () => {
   it.each(["confirm", "alternative", "cancel"] as const)(
     "honors %s with one active-work warning and guarded descendant-first batches",
@@ -47,9 +52,9 @@ describe("session organizer nested archive choice", () => {
       const harness = createHarness();
       const root = { ...sessionRow(0), hasArchiveDescendants: true, hasActiveRun: true };
       prepareArchiveTree(harness, [
-        { ...root, kind: "direct" },
-        { ...sessionRow(1), kind: "direct", parentSessionKey: root.key },
-        { ...sessionRow(2), kind: "direct", parentSessionKey: sessionRow(1).key },
+        gatewayRow(0, { hasActiveRun: true }),
+        gatewayRow(1, { parentSessionKey: root.key }),
+        gatewayRow(2, { parentSessionKey: sessionRow(1).key }),
       ]);
       try {
         const pending = modal.track(archiveSessionWithUndo(harness.host, root, harness.scope));
@@ -111,8 +116,8 @@ describe("session organizer nested archive choice", () => {
     const harness = createHarness();
     const root = { ...sessionRow(0), hasArchiveDescendants: true };
     prepareArchiveTree(harness, [
-      { ...root, kind: "direct" },
-      { ...sessionRow(1), kind: "direct", parentSessionKey: root.key, hasActiveRun: true },
+      gatewayRow(0),
+      gatewayRow(1, { parentSessionKey: root.key, hasActiveRun: true }),
     ]);
     try {
       const pending = modal.track(archiveSessionWithUndo(harness.host, root, harness.scope));
@@ -135,7 +140,7 @@ describe("session organizer nested archive choice", () => {
     async (hint) => {
       const harness = createHarness();
       const root = { ...sessionRow(0), hasArchiveDescendants: hint };
-      const reads = prepareArchiveTree(harness, [{ ...root, kind: "direct" }]);
+      const reads = prepareArchiveTree(harness, [gatewayRow(0)]);
       await archiveSessionWithUndo(harness.host, root, harness.scope);
       expect(harness.patch).toHaveBeenCalledOnce();
       expect(harness.request).not.toHaveBeenCalled();
