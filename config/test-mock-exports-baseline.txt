@@ -6944,7 +6944,6 @@
 ["src/gateway/server-methods/chat-send-message-injection.test.ts","../../logging/diagnostic.js","567783054a8f238b0e9da57ec84cdaf52d8d84f9aa1857c82698badc0d57ac8b",1]
 ["src/gateway/server-methods/chat-send-message-injection.test.ts","../../plugins/hook-runner-global.js","4921145ae9e5f16c52314adc051bcd5b56c144582b58dd953ae41ee5a4c32286",1]
 ["src/gateway/server-methods/chat-send-message-injection.test.ts","./chat-broadcast.js","047134c5181f0ef28f0f09964c551a8aea3c47672b37620f979ce44f4b8f2f24",1]
-["src/gateway/server-methods/chat-send-reply-context.test.ts","../assistant-identity.js","3d35422d6f11e1b8b32b864d1f9dc80b484bde6f6f24a078e8de2b95e37a475a",1]
 ["src/gateway/server-methods/chat-send-reply-context.test.ts","../session-transcript-readers.js","a9bd5220ea4e03d1ae93666556ba9e532e25a9dcf7c07f6ea0e560a3298f807a",1]
 ["src/gateway/server-methods/chat-send-title-preparation.test.ts","../../auto-reply/reply/conversation-label-generator.js","4585822bc99337c2c0630dd7558c314dbdb713d9062e230f27402de4eab644a9",1]
 ["src/gateway/server-methods/chat-webchat-acp-lifecycle.test.ts","../../audit/audit-config.js","9e3049b935c61c0bf1055b49442ebf94c837d1517cc718ccd43f04d12c74b364",1]
