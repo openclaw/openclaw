@@ -8,7 +8,6 @@ export const UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME = "plugin-copy-plan.json";
 
 export const UpdateStateDatabaseOwnerSchema = z.discriminatedUnion("role", [
   z.object({ role: z.literal("global") }),
-  z.object({ role: z.literal("daemon") }),
   z.object({ role: z.literal("agent"), agentId: z.string().min(1) }),
 ]);
 export type UpdateStateDatabaseOwner = z.infer<typeof UpdateStateDatabaseOwnerSchema>;

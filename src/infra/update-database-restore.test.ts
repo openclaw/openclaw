@@ -132,7 +132,9 @@ it("captures and restores exact local daemon intent with its independent schema"
       const fixture = await createRestoreFixture(state);
       try {
         const pathname = resolveDaemonRuntimePinStorePath(state.env);
-        expect(fixture.backup.databaseOwners).toContainEqual({ path: pathname, role: "daemon" });
+        expect(fixture.backup.databaseOwners).not.toContainEqual(
+          expect.objectContaining({ path: pathname }),
+        );
         expect(fixture.backup.databases).toContainEqual(
           expect.objectContaining({ path: pathname, userVersion: 1 }),
         );

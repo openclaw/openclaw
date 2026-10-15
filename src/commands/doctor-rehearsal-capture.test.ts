@@ -157,7 +157,7 @@ it("keeps config and declared plugin resources while excluding disposable core i
           const manifest = parseUpdateRecoveryBackupManifest(
             await fs.readFile(path.join(directory, "manifest.json"), "utf8"),
           );
-          expect(manifest.databases).toEqual([{ path: serviceIntent, role: "daemon" }]);
+          expect(manifest.databases).toEqual([]);
           expect(manifest.entries).toContainEqual({
             kind: "missing",
             sourcePath: serviceIntent,

@@ -13,7 +13,6 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
-/** Move raw intent before retiring its source; exact duplicates resume an interrupted copy. */
 export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<MigrationMessages> {
   const sourceState = resolveOpenClawStateSqlitePath(env);
   const receipt = (db: DatabaseSync, phase: "copied" | "complete") => {

@@ -27,27 +27,15 @@ const testSuites = new Set([
 const reviewed = new Map([
   [
     "src/daemon/runtime-pin-store.ts",
-    {
-      tier: "T3",
-      evidence:
-        "Local daemon intent is read and written by CLI service install/status/update and Doctor one-shots through runtime-pin-state.ts; no Gateway or agent runtime caller. Shared-state migration uses the same local owner under exclusive maintenance custody.",
-    },
+    { tier: "T3", evidence: "CLI service owner / Doctor migration; no Gateway runtime." },
   ],
   [
     "src/daemon/runtime-pin-state.ts",
-    {
-      tier: "T3",
-      evidence:
-        "Pin CAS is called under service.ts native operation locks by CLI install/stage/uninstall, update recovery, and Doctor setup; status and service-audit are CLI/Doctor inspections. No Gateway or agent runtime caller opens this local store.",
-    },
+    { tier: "T3", evidence: "CLI service locks; CLI status and Doctor audits; no Gateway caller." },
   ],
   [
     "src/infra/state-migrations.daemon-runtime-pins.ts",
-    {
-      tier: "T3",
-      evidence:
-        "Called by the config-machine-state Doctor step and the daemon pin admission fence under withLegacyMigrationStateLock exclusive custody; never a runtime compatibility reader.",
-    },
+    { tier: "T3", evidence: "Doctor config-machine-state / pin fence; exclusive migration lock." },
   ],
   [
     "src/config/sessions/goals-operations.ts",

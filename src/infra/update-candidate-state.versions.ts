@@ -6,7 +6,6 @@ import {
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import type { UpdateStateSchemaVersion } from "./update-candidate-state.js";
 
-/** Older inspection workers report only the published version; agent stores never defer it. */
 export function resolveUpdateStateContentVersion(entry: UpdateStateSchemaVersion): number | null {
   return entry.contentVersion ?? entry.userVersion;
 }
@@ -16,19 +15,24 @@ export function updateStateSchemaVersionsMatch(
   after: readonly UpdateStateSchemaVersion[],
   params: { sharedPath: string; candidateSchemaVersions?: OpenClawSchemaVersions },
 ): boolean {
+  const daemonPath = resolveDaemonRuntimePinStorePath({
+    OPENCLAW_STATE_DIR: path.dirname(path.dirname(params.sharedPath)),
+  });
   const versions = new Map(
     after.map((entry) => [entry.path, resolveUpdateStateContentVersion(entry)]),
   );
-  const candidate = params.candidateSchemaVersions;
-  if (!candidate) {
-    return (
-      before.length === after.length &&
-      before.every((entry) => versions.get(entry.path) === resolveUpdateStateContentVersion(entry))
-    );
-  }
   const baseline = new Map(
     before.map((entry) => [entry.path, resolveUpdateStateContentVersion(entry)]),
   );
+  const candidate = params.candidateSchemaVersions;
+  if (!candidate) {
+    // An older baseline cannot name the new, still absent local store.
+    const legacyOmission = versions.get(daemonPath) === null && !baseline.has(daemonPath);
+    return (
+      before.length + Number(legacyOmission) === after.length &&
+      before.every((entry) => versions.get(entry.path) === resolveUpdateStateContentVersion(entry))
+    );
+  }
   return (
     before.every(
       (entry) =>
@@ -40,10 +44,6 @@ export function updateStateSchemaVersionsMatch(
       if (version === null || baseline.get(entry.path) === version) {
         return true;
       }
-      // Local service intent has a schema independent of the shared/agent engines.
-      const daemonPath = resolveDaemonRuntimePinStorePath({
-        OPENCLAW_STATE_DIR: path.dirname(path.dirname(params.sharedPath)),
-      });
       const supported =
         entry.path === params.sharedPath
           ? candidate.state

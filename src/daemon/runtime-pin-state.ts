@@ -1,4 +1,3 @@
-/** Explicit runtime intent, owned by a managed service in the local daemon store. */
 import { z } from "zod";
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";

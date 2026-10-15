@@ -184,7 +184,8 @@ export async function collectStateDatabasePaths(
     queueStateDatabaseSpelling(files, stateRoot, file, owner);
   };
   queue(shared, { role: "global" });
-  queue(resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: stateRoot }), { role: "daemon" });
+  // Published owners describe shared/agent schemas; local stores retain exact opaque contents.
+  queue(resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: stateRoot }));
   const directories =
     options.includeUnconfiguredAgents !== false
       ? (await listDefaultAgentDatabasePaths(input.stateDir)).map((entry) => entry.agentId)
@@ -380,7 +381,7 @@ export async function readUpdateStateSchemaVersionsInProcess(
       phase:
         file === shared
           ? "shared database inspection"
-          : discovery.owners?.some((owner) => owner.role === "daemon")
+          : file === resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: input.stateDir })
             ? "daemon schema inspection"
             : "agent schema inspection",
       path: file,

@@ -215,7 +215,11 @@ it.skipIf(process.platform !== "win32")(
     expect(inspected.map((entry) => entry.path)).toEqual(
       expect.arrayContaining([shared, canonical, namespaced]),
     );
-    expect(inspected).toHaveLength(3);
+    expect(inspected).toContainEqual({
+      path: path.join(source, "control", "services.sqlite"),
+      userVersion: null,
+    });
+    expect(inspected).toHaveLength(4);
     expect(
       updateStateSchemaVersionsMatch(releasedBaseline, inspected, { sharedPath: shared }),
     ).toBe(true);

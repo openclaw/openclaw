@@ -60,7 +60,6 @@ function createPrivateIfMissing(create: () => void): void {
   }
 }
 
-/** CLI/service one-shots and migration workers use the same local owner. */
 export function withDaemonRuntimePinStore<T>(
   env: NodeJS.ProcessEnv,
   writable: boolean,
