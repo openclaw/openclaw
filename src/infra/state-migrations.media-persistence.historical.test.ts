@@ -461,7 +461,11 @@ describe("legacy media persistence Doctor migration from historical schemas", ()
     try {
       const result = await scope.run(() => migrateLegacyMediaPersistence({ env }));
       expect(rejected).toBe(true);
-      expect(result.changes).toEqual([]);
+      expect(result.changes).toEqual([
+        expect.stringContaining(
+          `Saved pre-repair SQLite backup: ${path.join(path.dirname(databasePath), "openclaw-media-persistence-recovery-")}`,
+        ),
+      ]);
       expect(result.warnings).toEqual([
         expect.stringContaining("Recovery backup coverage is no longer current"),
       ]);

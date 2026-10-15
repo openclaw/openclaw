@@ -231,8 +231,8 @@ suite.define(() => {
       },
     ]);
     await emitRequested(gateway, request);
-    await expectQuestionAttention(page, request.questions[0]!.question);
     await page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first().tap();
+    await expectQuestionAttention(page, request.questions[0]!.question);
     const row = page.locator(`[data-session-key="${questionSessionKey}"]`).first();
     const shell = page.locator(".shell");
     const attention = row.locator('[data-session-attention="question"]');

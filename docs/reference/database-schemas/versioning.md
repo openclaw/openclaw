@@ -660,11 +660,11 @@ Older same-schema readers ignore the new tables but cannot provide managed-libra
 Recent version migrations are separate from same-version repair. Agent schema
 25 and later advances leave unrelated additive indexes to the writable repair
 owner. Missing startup columns required by current session readers are still
-installed before an upgraded store is exposed; their tables belong in the
-complete migration scope. Shared-state schema 20 and 21 advances run only their pending version
-steps and install indexes for those tables when the source needs no unrelated
-schema repair. Older sources and sources requiring repair retain the historical
-runner and full backup.
+installed by subsequent admission before an upgraded store is exposed. Declared
+version phases leave those additive repairs outside their checkpoint. Declared
+shared-state advances likewise run only their pending version steps and install
+indexes for those tables. Unrelated same-version repairs run afterward. Older
+sources without a complete declaration retain the historical runner and full backup.
 
 An agent version advance from the canonical media schema does not repeat media
 row or archive repair. The Doctor migration prelude also defers session-entry
@@ -680,7 +680,7 @@ Startup migrations default to a verified full-file backup. A migration owner may
 register the tables it rewrites in `src/state/schema-migration-backup-tables.ts`,
 keyed by database kind and destination schema version. Every pending version must
 have a declaration; one missing declaration keeps the whole pending set on full
-backups. Same-version repairs and plugin Doctor repairs also keep full backups.
+backups. General Doctor and updater rollback still use full backups.
 The backup owner adds `schema_meta`, the SQLite user version, and, for shared
 state, `config_machine_state` for deferred schema publication.
 
@@ -695,10 +695,32 @@ a helper-only test does not prove the owning migration's scope. Declare
 `sqlite_stat1` and `sqlite_stat4` together when rebuilding analyzed tables or
 indexes. No existing migration is implicitly declared by its read set.
 
+Agent schema 27 declares `context_engine_turn_outbox` and both planner-statistics
+tables. Doctor verifies source integrity before taking this checkpoint. If orphan
+history blocks admission, its recovery owner preserves the original before repair
+and checkpoint capture. Doctor then commits and validates the version phase before
+entering general maintenance; its recovery inventory is completed at that boundary.
+Startup columns, same-version index and memory repair, session normalization,
+transcript repairs, deletion recovery, and plugin hooks run afterward under their
+existing owners. Destructive recovery and retained-content rewrites preserve full
+originals only when actual repair work exists. Ordinary metadata repairs remain
+transactional. An eligible clean version bump therefore needs no full agent image.
+The version-phase fixture verifies that every undeclared table's schema and
+typed contents remain unchanged, including populated retained history.
+
+Shared-state schema 23 declares only `meeting_transcript_sessions`. Its version
+phase runs before agent maintenance leases can open or modify shared state. The
+scoped backup includes the two publication metadata tables, while unrelated
+repairs and planner statistics remain untouched. Restoration preserves live
+undeclared planner statistics with the archive’s byte-preserving row codec across
+its table rebuilds; explicitly declared
+statistics, such as agent schema 27's, are restored from the archive instead.
+
 For a fully declared migration, Doctor can write a sibling
 `<database>.pre-startup-migration-<id>.scoped.bak` containing the selected schema
 SQL, rows, and version metadata. Only this smaller archive gets the backup
-integrity scan. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
+integrity scan; the migration's source integrity admission still checks the full
+database once. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
 or sources outside the active state directory fall back to full backups.
 The shared database accompanying agent
 migrations retains its full backup for registry and receipt recovery.

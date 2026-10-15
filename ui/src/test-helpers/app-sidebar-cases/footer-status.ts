@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../../build-info.ts";
+import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
 import {
   createGateway,
   createGatewayHarness,
   createSessions,
+  createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
-import "../../components/app-sidebar.tsx";
+import { settleRoster } from "./roster.test-support.ts";
 
 type SidebarNativeGatewayTestSnapshot = {
   gateways: Array<{
@@ -63,6 +65,65 @@ describe("AppSidebar gateway footer subtitle", () => {
     ],
     currentId: "local",
   } satisfies SidebarNativeGatewayTestSnapshot;
+
+  it.each(["online", "contextual"] as const)(
+    "updates Home activity while the session list is hidden by %s",
+    async (surface) => {
+      const mainKey = "agent:main:main";
+      const otherKey = "agent:main:other";
+      const sessions = createSessionsHarness("main", [mainKey, otherKey]);
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        sessions.sessions,
+      );
+      sidebar.connected = true;
+      if (surface === "online") {
+        sidebar.navigationView = "online";
+      } else {
+        sidebar.contextualSidebar = {
+          key: "sessions",
+          data: null,
+          loaderPending: false,
+          render: () => null,
+        };
+      }
+      await settleRoster(sidebar);
+      const home = sidebar.querySelector(".sidebar-footer-bar__home")!;
+      expect(home).not.toBeNull();
+      expect(home.querySelector(".session-glyph__ring")).toBeNull();
+      const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
+      const current = sessions.sessions.state.result!;
+      sessions.publish({
+        result: Object.assign({}, current, {
+          sessions: current.sessions.map((row) =>
+            row.key === otherKey ? Object.assign({}, row, { label: "Quiet latest title" }) : row,
+          ),
+        }),
+      });
+      await settleRoster(sidebar);
+      expect(prepare).not.toHaveBeenCalled();
+
+      for (const [index, activity] of (
+        [
+          { hasActiveRun: true, status: "running", unread: false },
+          { hasActiveRun: false, status: "done", unread: true },
+        ] as const
+      ).entries()) {
+        const latest = sessions.sessions.state.result!;
+        sessions.publish({
+          result: Object.assign({}, latest, {
+            sessions: latest.sessions.map((row) =>
+              row.key === mainKey ? Object.assign({}, row, activity) : row,
+            ),
+          }),
+        });
+        await settleRoster(sidebar);
+        expect(home.querySelector(".session-glyph__ring") !== null).toBe(activity.hasActiveRun);
+        expect(home.querySelector('[aria-label="Unread"]') !== null).toBe(activity.unread);
+        expect(prepare).toHaveBeenCalledTimes(index + 1);
+      }
+    },
+  );
 
   it("shows custom build provenance and hides official releases", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

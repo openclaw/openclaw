@@ -6,8 +6,6 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
@@ -164,15 +162,6 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
     active()
       ? routeDraft(props.options.data, props.options.consumedDraftData, props.sessionKey)
       : undefined;
-  const presentationTitle = () => {
-    const context = props.options.context;
-    const resolved =
-      resolveSessionKey(props.sessionKey, context?.gateway?.snapshot?.hello) || props.sessionKey;
-    const row = context?.sessions?.presentation.result?.sessions.find((candidate) =>
-      areUiSessionKeysEquivalent(candidate.key, resolved),
-    );
-    return row ? resolveSessionDisplayName(resolved, row) : undefined;
-  };
   const pending = () =>
     props.options.context &&
     (routeData()?.creation?.admitted === false ||
@@ -233,7 +222,6 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
         )}
         dashboardExpanded={retainedRoute()?.dashboardExpanded === true}
         routeFace={retainedRoute()?.face}
-        presentationTitle={presentationTitle()}
         narrow={props.options.narrow}
         mergedChrome={props.options.mergedChrome && active()}
         navDrawerOpen={props.options.navDrawerOpen && active()}

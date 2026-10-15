@@ -9,6 +9,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
@@ -297,6 +298,10 @@ describe("chat pane approval requester identity", () => {
         decideApproval,
       } as unknown as ApplicationContext["overlays"],
       sessions: createSessionCapabilityFixture({
+        presentation: {
+          result: sessionsResult([{ ...host, label: "Unrelated pane title" }], 1),
+          agentId: "main",
+        },
         state: {
           result: null,
           agentId: "main",
@@ -314,7 +319,6 @@ describe("chat pane approval requester identity", () => {
     };
     const state = pane.initialize(context);
     state.sessionKey = host.key;
-    pane.presentationTitle = "Unrelated pane title";
     const now = Date.now();
     state.chatSessionApprovalQueue = projectSessionApprovalReplay(
       {

@@ -98,6 +98,16 @@ function notify(directory: Directory, filename?: string) {
   }
 }
 
+// libuv aborts the process when a Windows directory watch was opened through an
+// 8.3 short path (e.g. C:\Users\RUNNER~1\...) and a child event resolves to its
+// long form (libuv/libuv#5010, fixed upstream by libuv/libuv#5152 but not yet in
+// shipped Node). Watch the long form; the short spelling stays the shared key.
+function watchPath(candidate: string): string {
+  return process.platform === "win32" && candidate.includes("~")
+    ? fs.realpathSync.native(candidate)
+    : candidate;
+}
+
 function attach(directory: Directory) {
   let candidate = directory.path;
   while (true) {
@@ -109,7 +119,7 @@ function attach(directory: Directory) {
     }
     try {
       const watcher = runInDetachedAsyncContext(() =>
-        fs.watch(candidate, { persistent: false }, (event, filename) => {
+        fs.watch(watchPath(candidate), { persistent: false }, (event, filename) => {
           const source = sources.get(candidate);
           if (!source || source.watcher !== watcher) {
             return;

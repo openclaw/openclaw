@@ -11,6 +11,7 @@ import { assignSessionOwnerInWorker } from "../config/sessions/session-metadata-
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type * as UserProfileEmail from "../state/user-profile-email.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
@@ -30,7 +31,10 @@ const getUserProfileDisplay = vi.hoisted(() =>
 );
 const setCanonicalUserProfileDisplayName = vi.hoisted(() => vi.fn());
 
-vi.mock("../state/user-profile-email.js", () => ({ ensureProfileIdForEmail }));
+vi.mock("../state/user-profile-email.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof UserProfileEmail>()),
+  ensureProfileIdForEmail,
+}));
 vi.mock("../state/user-channel-identity-operations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-channel-identity-operations.js")>()),
   prepareUserProfileRoleAuthority,
@@ -57,6 +61,57 @@ afterEach(() => {
 });
 
 describe("gateway method authorization", () => {
+  it.each(["operator.read", "operator.write", "operator.admin"])(
+    "requires admin authority for installed-runtime setup (%s)",
+    async (scope) => {
+      const respond = vi.fn();
+      const handler = vi.fn<GatewayRequestHandler>(({ respond: reply }) => reply(true, {}));
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "runtime-enable",
+          method: "openclaw.setup.runtime.start",
+          params: {
+            sessionId: "runtime-consent",
+            agentId: "research",
+            runtimeId: "fixture-native",
+            configPatch: { plugins: { entries: { fixture: { config: { enabled: true } } } } },
+          },
+        },
+        respond,
+        client: {
+          connId: "runtime-operator",
+          connect: {
+            role: "operator",
+            scopes: [scope],
+            client: { id: "test", version: "1", platform: "test", mode: "test" },
+            minProtocol: 1,
+            maxProtocol: 1,
+          },
+          // Authorization only needs the connection's declared identity and scopes.
+        } as Parameters<typeof handleGatewayRequest>[0]["client"],
+        isWebchatConnect: () => false,
+        context: {
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn: vi.fn() },
+          // The probe handler does not consume the remaining runtime services.
+        } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
+        extraHandlers: { "openclaw.setup.runtime.start": handler },
+      });
+      if (scope === "operator.admin") {
+        expect(handler).toHaveBeenCalledOnce();
+        expect(respond).toHaveBeenCalledWith(true, {});
+      } else {
+        expect(handler).not.toHaveBeenCalled();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "FORBIDDEN" }),
+        );
+      }
+    },
+  );
+
   async function dispatchProfileMutation(params: {
     authenticatedUserId?: string;
     profileId: string;

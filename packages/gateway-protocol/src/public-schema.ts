@@ -378,6 +378,8 @@ export {
   SystemAgentSetupActivateStartResultSchema,
   SystemAgentSetupAuthStartParamsSchema,
   SystemAgentSetupAuthStartResultSchema,
+  SystemAgentSetupRuntimeStartParamsSchema,
+  SystemAgentSetupRuntimeStartResultSchema,
   WizardStartParamsSchema,
   McpAuthLoginParamsSchema,
   WizardNextParamsSchema,

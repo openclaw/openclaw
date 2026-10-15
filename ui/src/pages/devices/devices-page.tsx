@@ -39,7 +39,6 @@ import { useGatewayPage, type GatewayPageChange } from "../../lib/reactive/gatew
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { DevicesDialogController } from "./devices-dialogs.ts";
 import { createPageRequest } from "./page-request.ts";
 import { DevicesView } from "./view.tsx";
@@ -609,45 +608,41 @@ class DevicesPageController {
   }
 }
 
-export const DevicesPage = defineSolidBridge<{ routeData?: DevicesRouteData }>(
-  "openclaw-devices-page",
-  (props) => {
-    const context = useApplication();
-    // This signal publishes changes from the synchronous page owner, including lifecycle effects.
-    const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-    const controller = new DevicesPageController(context, () => setRevision((value) => value + 1));
-    controller.bindPolling();
-    controller.bindGateway();
-    controller.bindEvents();
-    const config = projectRuntimeConfig(context.runtimeConfig);
-    createEffect(
-      () => props.routeData,
-      (data) => controller.setRouteData(data),
-    );
-    onCleanup(() => controller.dispose());
-    const view = createMemo(() => {
-      revision();
-      config.read();
-      void controller.gateway.snapshot;
-      return controller.viewProps();
-    });
-    return (
-      <>
-        <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-          <section class="content-header">
-            <div>
-              <div class="page-title">{titleForRoute("devices", t)}</div>
-              <div class="page-subtitle">
-                {subtitleForRoute("devices", t)} <LearnMoreLink url={DEVICES_DOCS_URL} />
-              </div>
+export function DevicesPage(props: { routeData?: DevicesRouteData }) {
+  const context = useApplication();
+  // This signal publishes changes from the synchronous page owner, including lifecycle effects.
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const controller = new DevicesPageController(context, () => setRevision((value) => value + 1));
+  controller.bindPolling();
+  controller.bindGateway();
+  controller.bindEvents();
+  const config = projectRuntimeConfig(context.runtimeConfig);
+  createEffect(
+    createMemo(() => props.routeData),
+    (data) => controller.setRouteData(data),
+  );
+  onCleanup(() => controller.dispose());
+  const view = createMemo(() => {
+    revision();
+    config.read();
+    void controller.gateway.snapshot;
+    return controller.viewProps();
+  });
+  return (
+    <openclaw-devices-page>
+      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
+        <section class="content-header">
+          <div>
+            <div class="page-title">{titleForRoute("devices", t)}</div>
+            <div class="page-subtitle">
+              {subtitleForRoute("devices", t)} <LearnMoreLink url={DEVICES_DOCS_URL} />
             </div>
-          </section>
-        </ShellLayoutBoundary>
-        <SettingsWorkspace>
-          <DevicesView {...view()} />
-        </SettingsWorkspace>
-      </>
-    );
-  },
-  { properties: { routeData: { default: undefined, attribute: false } } },
-);
+          </div>
+        </section>
+      </ShellLayoutBoundary>
+      <SettingsWorkspace>
+        <DevicesView {...view()} />
+      </SettingsWorkspace>
+    </openclaw-devices-page>
+  );
+}

@@ -12,6 +12,7 @@ import {
   createGateway,
   createGatewayHarness,
   createSessions,
+  createSessionsHarness,
   mountSidebar,
   mountSessionCatalogSidebar,
   type TestSessionMenu,
@@ -165,22 +166,18 @@ describe("AppSidebar session catalog pagination", () => {
   });
 
   it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const backingSessionKey = "agent:main:claude-bound";
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("main", ["agent:main:main", backingSessionKey]),
-      "panel",
-      {
-        defaultId: "main",
-        mainKey: "agent:main:main",
-        scope: "global",
-        agents: [
-          { id: "main", name: "Main" },
-          { id: "research", name: "Research" },
-        ],
-      },
-    );
+    const sessions = createSessionsHarness("main", ["agent:main:main", backingSessionKey]);
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions, "panel", {
+      defaultId: "main",
+      mainKey: "agent:main:main",
+      scope: "global",
+      agents: [
+        { id: "main", name: "Main" },
+        { id: "research", name: "Research" },
+      ],
+    });
     sidebar.connected = true;
     sidebar.sessionData.sessionCatalogs = [
       {
@@ -269,9 +266,7 @@ describe("AppSidebar session catalog pagination", () => {
       ...sidebar.sessionData.sessionsResult,
       sessions: runningRows,
     };
-    sidebar.sessionData.sessionsResult = runningResult;
-    sidebar.sessionData.sessionResultsByAgent = { main: runningResult };
-    sidebar.sessionData.requestSessionDataUpdate();
+    sessions.publish({ result: runningResult });
     await settleLitElement(sidebar);
 
     const runningCatalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
@@ -283,6 +278,33 @@ describe("AppSidebar session catalog pagination", () => {
     expect(
       runningCatalogSection?.querySelector(".sidebar-recent-sessions__head .session-run-spinner"),
     ).not.toBeNull();
+
+    for (const [phase, seq, expectedSignals] of [
+      ["finishing", 1, 0],
+      ["start", 2, 1],
+    ] as const) {
+      gateway.publishEvent("agent", {
+        sessionKey: backingSessionKey,
+        runId: "catalog-run",
+        seq,
+        stream: "lifecycle",
+        data: { phase },
+      });
+      await settleLitElement(sidebar);
+      expect(
+        sessions.sessions.state.result?.sessions.find((row) => row.key === backingSessionKey)
+          ?.hasActiveRun,
+      ).toBe(true);
+      const currentSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
+      expect(
+        currentSection?.querySelectorAll(
+          `[data-session-key="${backingSessionKey}"] .sidebar-session-indicator .session-glyph__ring`,
+        ),
+      ).toHaveLength(expectedSignals);
+      expect(
+        currentSection?.querySelectorAll(".sidebar-recent-sessions__head .session-run-spinner"),
+      ).toHaveLength(expectedSignals);
+    }
   });
 
   it("renders catalog groups inside the shared sessions scroller", async () => {

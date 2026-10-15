@@ -9,26 +9,13 @@ import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionIndicators } from "./app-sidebar-session-indicators.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
+import { visibleSessionChildren } from "./app-sidebar-session-types.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { rowDemandsVisibility } from "./app-sidebar-session-types.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 import "./elapsed-time.tsx";
 import "./tooltip.ts";
-const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
-export function visibleSessionChildren(params: {
-  session: SidebarRecentSession;
-  fullyShown: boolean;
-}): readonly SidebarRecentSession[] {
-  // Active, running, and attention-bearing branches must bypass the quiet-child cap.
-  return params.fullyShown
-    ? params.session.children
-    : params.session.children.filter(
-        (child, index) =>
-          index < SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT || rowDemandsVisibility(child),
-      );
-}
 
 /** Compose independently owned session state and context indicators. */
 

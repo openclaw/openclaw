@@ -119,7 +119,8 @@ export default definePluginEntry({
       return enabled ? livePluginConfig : undefined;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
-    const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;
+    const registrationConfig = readCodexPluginConfig(api.pluginConfig);
+    const appServerConfig = registrationConfig.appServer;
     api.registerService(
       createCodexDesktopGenerationService({
         onGenerationChange: retireSharedCodexAppServerClientsBeforeDesktopGeneration,
@@ -199,8 +200,7 @@ export default definePluginEntry({
           overflowPolicy: "reject-new",
         }),
     });
-    const sessionCatalogEnabled =
-      readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
+    const sessionCatalogEnabled = registrationConfig.sessionCatalog?.enabled !== false;
     api.registerService({
       id: "codex-session-catalog",
       start: () => (sessionCatalogEnabled ? sessionCatalogControlFactory.start() : undefined),
@@ -225,7 +225,7 @@ export default definePluginEntry({
     for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
       api.registerNodeInvokePolicy(policy);
     }
-    if (readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true) {
+    if (registrationConfig.supervision?.enabled === true) {
       const {
         resolveCodexAppServerAuthProfileIdForAgent,
         resolveCodexAppServerAuthProfileIdAtEffect,

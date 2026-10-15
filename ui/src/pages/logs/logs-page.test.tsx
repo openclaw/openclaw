@@ -190,6 +190,26 @@ describe("LogsPage lifecycle", () => {
     },
   );
 
+  it("resumes the loaded cursor after a same-gateway reconnect", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 100, file: "/tmp/gateway.log", lines: ["before"] })
+      .mockResolvedValueOnce({ cursor: 110, file: "/tmp/gateway.log", lines: ["after"] });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client, true);
+    const page = mountPage(context);
+    await settle();
+    expect(page.lines()).toEqual(["before"]);
+
+    context.gateway.publish({ client, phase: "reconnecting" } as ApplicationGatewaySnapshot);
+    context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
+    await settle();
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]![1]).toMatchObject({ cursor: 100 });
+    expect(page.lines()).toEqual(["before", "after"]);
+  });
+
   it("clears loaded rows, source, and cursor when the gateway provider changes", async () => {
     const request = vi
       .fn()
