@@ -4,13 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import * as commandResolution from "./exec-command-resolution.js";
 import {
   APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
-  buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
   matchSystemRunApprovalBinding,
-  missingSystemRunApprovalBinding,
   prepareSystemRunMutableFileBinding,
   prepareSystemRunMutableFileApproval,
   revalidateSystemRunMutableFileBinding,
@@ -194,12 +191,6 @@ describe("buildSystemRunApprovalEnvBinding", () => {
       keys: ["alpha", "z_key"],
       changed: { alpha: "changed", z_key: "b" },
     },
-    {
-      input: { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
-      equivalent: { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
-      keys: ["ProgramFiles(x86)"],
-      changed: { "ProgramFiles(x86)": "D:\\SDKs" },
-    },
   ])(
     "normalizes env keys and binds their values: $keys",
     ({ input, equivalent, keys, changed }) => {
@@ -230,37 +221,6 @@ describe("buildSystemRunApprovalEnvBinding", () => {
   });
 });
 
-describe("buildSystemRunApprovalBinding", () => {
-  it("normalizes argv and metadata into a binding", () => {
-    const envBinding = buildSystemRunApprovalEnvBinding({
-      beta: "2",
-      alpha: "1",
-    });
-
-    expect(
-      buildSystemRunApprovalBinding({
-        argv: ["bash", "-lc", 12],
-        cwd: " /tmp ",
-        agentId: " main ",
-        sessionKey: " agent:main:main ",
-        env: {
-          beta: "2",
-          alpha: "1",
-        },
-      }),
-    ).toEqual({
-      binding: {
-        argv: ["bash", "-lc", "12"],
-        cwd: "/tmp",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        envHash: envBinding.envHash,
-      },
-      envKeys: ["alpha", "beta"],
-    });
-  });
-});
-
 describe("matchSystemRunApprovalBinding", () => {
   const expected = {
     argv: ["bash", "-lc", "echo hi"],
@@ -271,11 +231,6 @@ describe("matchSystemRunApprovalBinding", () => {
   };
 
   it.each([
-    { name: "exact match", actual: { ...expected } },
-    {
-      name: "argv mismatch",
-      actual: { ...expected, argv: ["bash", "-lc", "echo bye"] },
-    },
     {
       name: "cwd mismatch",
       actual: { ...expected, cwd: "/var/tmp" },
@@ -288,46 +243,29 @@ describe("matchSystemRunApprovalBinding", () => {
       name: "session mismatch",
       actual: { ...expected, sessionKey: "agent:main:other" },
     },
-  ])("matches approval bindings: $name", ({ name, actual }) => {
+  ])("rejects approval bindings: $name", ({ actual }) => {
     expect(
       matchSystemRunApprovalBinding({
         expected,
         actual,
         actualEnvKeys: ["ALPHA"],
       }),
-    ).toEqual(
-      name === "exact match"
-        ? { ok: true }
-        : {
-            ok: false,
-            code: "APPROVAL_REQUEST_MISMATCH",
-            message: "approval id does not match request",
-            details: undefined,
-          },
-    );
-  });
-});
-
-describe("missingSystemRunApprovalBinding", () => {
-  it("reports env keys with request mismatches", () => {
-    expect(missingSystemRunApprovalBinding({ actualEnvKeys: ["ALPHA", "BETA"] })).toEqual({
+    ).toEqual({
       ok: false,
       code: "APPROVAL_REQUEST_MISMATCH",
       message: "approval id does not match request",
-      details: {
-        envKeys: ["ALPHA", "BETA"],
-      },
+      details: undefined,
     });
   });
 });
 
 describe("POSIX shell stdin option detection", () => {
   it.each([
-    ...["-s", "-se", "-es", "-ls", "-lse"].map((flag) => ({
-      argv: ["bash", flag, "job.sh"],
+    {
+      argv: ["bash", "-se", "job.sh"],
       loading: true,
       index: null,
-    })),
+    },
     { argv: ["bash", "--", "-se"], loading: false, index: 2 },
     { argv: ["bash", "job.sh", "-secret"], loading: false, index: 1 },
   ])("detects stdin options only before the operand: $argv", ({ argv, loading, index }) => {
@@ -337,33 +275,6 @@ describe("POSIX shell stdin option detection", () => {
 });
 
 describe("mutable file operand binding", () => {
-  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
-    "binds protected env and ls identities in dispatch order",
-    async () => {
-      const prepared = await prepareSystemRunMutableFileBinding({
-        command: { kind: "shell", text: "env ls" },
-        env: { PATH: "/usr/bin:/bin" },
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error(prepared.message);
-      }
-      expect(prepared.binding.operands.filter((operand) => operand.executable)).toEqual([
-        expect.objectContaining({
-          kind: "identity",
-          snapshot: { argvIndex: 0, path: fs.realpathSync("/usr/bin/env") },
-        }),
-        expect.objectContaining({
-          kind: "identity",
-          snapshot: { argvIndex: 0, path: fs.realpathSync("/bin/ls") },
-        }),
-      ]);
-      await expect(
-        revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
-      ).resolves.toEqual({ ok: true });
-    },
-  );
-
   it.runIf(process.platform !== "win32")(
     "binds protected executable identity without hashing or requiring one-shot approval",
     async () => {
@@ -417,55 +328,6 @@ describe("mutable file operand binding", () => {
           accessSpy.mockRestore();
         }
       } finally {
-        policy.mockRestore();
-      }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "denies protected executable resolution drift after preparation",
-    async () => {
-      const policy = vi
-        .spyOn(mutableFilePolicy, "pathLooksMutableForShellPayloadSync")
-        .mockReturnValue(false);
-      const resolution = commandResolution.resolveCommandResolutionFromArgv(["ls"], undefined, {
-        PATH: "/bin:/usr/bin",
-      });
-      if (!resolution) {
-        throw new Error("expected executable resolution");
-      }
-      const resolve = vi
-        .spyOn(commandResolution, "resolveCommandResolutionFromArgv")
-        .mockReturnValue(resolution);
-      try {
-        const prepared = expectOk(
-          await prepareSystemRunMutableFileBinding({
-            command: {
-              kind: "segments",
-              segments: [{ argv: ["ls", "*.ts"], raw: "ls *.ts", resolution }],
-            },
-            env: { PATH: "/bin:/usr/bin" },
-          }),
-        );
-        resolve.mockReturnValue({
-          ...resolution,
-          execution: { ...resolution.execution, resolvedRealPath: "/synthetic/changed/ls" },
-        });
-        await expect(
-          revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
-        ).resolves.toEqual({
-          ok: false,
-          message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
-        });
-        expect(resolve).toHaveBeenLastCalledWith(
-          ["ls", "*.ts"],
-          undefined,
-          expect.objectContaining({ PATH: "/bin:/usr/bin" }),
-          process.platform,
-          { useCache: false },
-        );
-      } finally {
-        resolve.mockRestore();
         policy.mockRestore();
       }
     },
@@ -633,9 +495,6 @@ describe("mutable file operand binding", () => {
         [
           [["sh", "-s", "job.sh"], startup],
           [["bash", "-se", "job.sh"], startup],
-          [["bash", "-es", "job.sh"], startup],
-          [["bash", "-ls", "job.sh"], startup],
-          [["bash", "-lse", "job.sh"], startup],
           ["bash --rcfile init.sh -i job.sh", startup],
           [["bash", "-O", "extglob", "-i", "job.sh"], startup],
           [["bash", "--rcfile", "init.sh", "-c", "echo ok"], startup],

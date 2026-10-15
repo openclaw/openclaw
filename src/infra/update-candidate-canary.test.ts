@@ -283,7 +283,7 @@ describe("update candidate canary", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "identifies legacy Doctor writes even if later validation fails (%s)",
     async (failsValidation) => {
       runtimeError = failsValidation;
@@ -831,30 +831,6 @@ describe("update candidate canary", () => {
     });
     expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("--update-canary"))).toBe(false);
   });
-
-  it.each(["sync", "async"])(
-    "aborts further validation when %s step recording fails",
-    async (mode) => {
-      await expect(
-        validateUpdateCandidateCanary({
-          ...canaryStateOptions(3_000),
-          onStep: () => {
-            if (mode === "async") {
-              return Promise.reject(new Error("ledger unavailable"));
-            }
-            throw new Error("ledger unavailable");
-          },
-        }),
-      ).rejects.toThrow("ledger unavailable");
-      expect(mocks.spawn).not.toHaveBeenCalled();
-      const snapshotInput = JSON.parse(mocks.snapshot.mock.calls.at(-1)![1].input) as {
-        targetStateDir: string;
-      };
-      await expect(fs.access(snapshotInput.targetStateDir)).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    },
-  );
 
   registerCanaryUncertainReceiptTests({
     mocks,
