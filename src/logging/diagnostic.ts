@@ -187,7 +187,12 @@ function getDiagnosticWorkSnapshot(now = Date.now()): DiagnosticWorkSnapshot {
   const queuedLabels: string[] = [];
 
   for (const state of diagnosticSessionStates.values()) {
-    if (state.state === "processing") {
+    // Message completion can leave an active owner behind an idle session.
+    // Keep heartbeat recovery running after the recent-activity window expires.
+    const idleOwner =
+      state.state === "idle" &&
+      getDiagnosticSessionActivitySnapshot(state, now).hasActiveEmbeddedRun;
+    if (state.state === "processing" || idleOwner) {
       activeCount += 1;
       pushLimitedDiagnosticLabel(activeLabels, state, now);
     } else if (state.state === "waiting") {
@@ -356,10 +361,7 @@ function isActiveAbortRecoveryEligible(params: {
 }
 
 function isIdleRecoverableSessionStall(params: {
-  state: {
-    state: SessionStateValue;
-    queueDepth: number;
-  };
+  state: Pick<SessionState, "state" | "queueDepth">;
   activity: DiagnosticSessionActivitySnapshot;
   staleMs: number;
 }): boolean {

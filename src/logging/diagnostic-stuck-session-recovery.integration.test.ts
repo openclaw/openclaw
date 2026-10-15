@@ -81,7 +81,7 @@ describe("stuck session recovery integration", () => {
       { diagnostics: { enabled: true } },
       {
         recoverStuckSession: recoverStuckDiagnosticSession,
-        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+        sampleLiveness: () => null,
       },
     );
     const admission = prepareSystemAgentRunAdmission(
@@ -165,14 +165,14 @@ describe("stuck session recovery integration", () => {
           ageMs: 120_000,
           queueDepth: mode === "queued" ? 1 : 0,
           expectedState: mode === "queued" ? "processing" : "idle",
-          staleActiveProgressAbortMs: 60_000,
+          staleActiveProgressAbortMs: 360_000,
         }),
       ).resolves.toMatchObject({ status: "skipped" });
       expect(abort).not.toHaveBeenCalled();
       expect(deliver).not.toHaveBeenCalled();
       expect(getQueueSize(lane)).toBe(mode === "queued" ? 2 : 1);
 
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(240_000);
       if (ownsLiveness) {
         // Native runtime waits retain authority even after the backend
         // silence deadline expires.
