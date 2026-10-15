@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJobsEnabledFilter, CronJob } from "../../api/types.ts";
+import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -269,7 +270,7 @@ function JobRow(
             <span class="cron-table__name-text">{displayName()}</span>
             {props.job.trigger ? <TriggerIndicator /> : undefined}
           </span>
-          {systemOwned() ? undefined : <openclaw-agent-row-chip prop:agentId={props.job.agentId} />}
+          {systemOwned() ? undefined : <AgentRowChip agentId={props.job.agentId} />}
           {description() || !props.job.enabled ? (
             <span class="cron-table__name-meta">
               {description() ? (

@@ -107,7 +107,7 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          await import("../components/agent-avatar.ts");
+          await import("../components/solid/agent-avatar.tsx");
           return document.createElement("openclaw-agent-avatar");
         },
         (element, next, current) => {
