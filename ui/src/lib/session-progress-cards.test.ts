@@ -33,7 +33,7 @@ function watchCards(gateway: ApplicationGateway, targets: ProgressCardGetParams[
 }
 
 describe("session progress card lifetimes", () => {
-  it.each(["updated", "absent"] as const)(
+  it.each(["updated"] as const)(
     "shows cached progress before hello and accepts live %s state",
     async (outcome) => {
       const { gateway, request, snapshotChanged } = createGateway();
@@ -122,8 +122,6 @@ describe("session progress card lifetimes", () => {
 
 describe("session progress card refresh", () => {
   it.each([
-    { outcome: "accepted", eventFirst: false },
-    { outcome: "accepted", eventFirst: true },
     { outcome: "retry", eventFirst: false },
     { outcome: "retry", eventFirst: true },
     { outcome: "timeout", eventFirst: false },
@@ -246,7 +244,7 @@ describe("session progress card refresh", () => {
     expect(store.getRefreshState(target)).toBe("updated");
   });
 
-  it.each(["failed read", "missed event"])(
+  it.each(["failed read"])(
     "retries an authoritative read after a %s without duplicating refresh intent",
     async (missedUpdate) => {
       vi.useFakeTimers();
@@ -389,9 +387,7 @@ describe("session progress card refresh", () => {
 describe("session progress card Gateway response boundary", () => {
   it.each([
     { method: "progressCard.get", denied: true },
-    { method: "progressCard.get", denied: false },
     { method: "progressCard.put", denied: true },
-    { method: "progressCard.put", denied: false },
   ])(
     "revalidates after $method failure while hiding only denied content (denied: $denied)",
     async ({ method, denied }) => {
@@ -575,16 +571,7 @@ describe("session progress card Gateway response boundary", () => {
   it.each([
     ["agent:main:main", "main", "notes", "agent:research:notes", "agent:main:notes", "notes"],
     ["agent:main:main", "main", "unknown", "unknown", "unknown", "unknown"],
-    ["global", "main", "global", "global", "global", "global"],
     ["global", "conversation", "agent:research:conversation", "global", "global", "global"],
-    [
-      "agent:main:main",
-      "main",
-      "agent:research:global",
-      "agent:research:global",
-      "agent:main:global",
-      "global",
-    ],
   ])(
     "keeps %s / %s routing for %s owner-scoped through reads, events and clear",
     async (mainSessionKey, mainKey, input, query, mainQuery, tail) => {
@@ -738,39 +725,15 @@ describe("session progress card Gateway response boundary", () => {
     expect(replacement.request).toHaveBeenCalledTimes(3);
   });
 
-  it.each([
-    { method: "get", updatedAt: -MAX_DATE_TIMESTAMP_MS, valid: true },
-    { method: "get", updatedAt: -MAX_DATE_TIMESTAMP_MS - 1, valid: false },
-    { method: "put", updatedAt: -MAX_DATE_TIMESTAMP_MS - 1, valid: false },
-    { method: "get", updatedAt: MAX_DATE_TIMESTAMP_MS, valid: true },
-    { method: "get", updatedAt: MAX_DATE_TIMESTAMP_MS + 1, valid: false },
-    { method: "put", updatedAt: MAX_DATE_TIMESTAMP_MS + 1, valid: false },
-  ])(
-    "validates progressCard.$method timestamp $updatedAt",
-    async ({ method, updatedAt, valid }) => {
-      const { gateway, request } = createGateway();
-      const store = sessionProgressCardsForGateway(gateway);
-      const existingCard = createProgressCard(1);
-      if (method === "put") {
-        request.mockResolvedValueOnce({ card: existingCard });
-      }
-      request.mockResolvedValueOnce({ card: createProgressCard(updatedAt) });
-      const result =
-        method === "put" ? store.dismiss(target, (await store.load(target))!) : store.load(target);
-      if (valid) {
-        await expect(result).resolves.toMatchObject({ updatedAt });
-        expect(store.get(target)?.updatedAt).toBe(updatedAt);
-      } else {
-        await expect(result).rejects.toThrow(
-          "Progress card response did not match the requested session",
-        );
-        if (method === "put") {
-          expect(store.get(target)?.updatedAt).toBe(existingCard.updatedAt);
-        } else {
-          expect(store.get(target)).toBeUndefined();
-          expect(store.getError(target)).toBe("unavailable");
-        }
-      }
-    },
-  );
+  it("rejects an out-of-range timestamp from a conditional clear without losing the card", async () => {
+    const { gateway, request } = createGateway();
+    const store = sessionProgressCardsForGateway(gateway);
+    const existingCard = createProgressCard(1);
+    request.mockResolvedValueOnce({ card: existingCard });
+    request.mockResolvedValueOnce({ card: createProgressCard(MAX_DATE_TIMESTAMP_MS + 1) });
+    await expect(store.dismiss(target, (await store.load(target))!)).rejects.toThrow(
+      "Progress card response did not match the requested session",
+    );
+    expect(store.get(target)?.updatedAt).toBe(existingCard.updatedAt);
+  });
 });

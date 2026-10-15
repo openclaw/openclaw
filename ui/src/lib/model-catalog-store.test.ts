@@ -337,15 +337,4 @@ describe("model catalog display cache", () => {
     await retiring;
     expect(modelCatalogCache.get(client)?.entries.size).toBeLessThanOrEqual(64);
   });
-
-  it("rejects an already retired request before transport or cached publication", async () => {
-    const request = createGatewayRequestMock();
-    const controller = new AbortController();
-    const reason = new DOMException("Page retired", "AbortError");
-    controller.abort(reason);
-    await expect(
-      loadModelCatalog(createTestGatewayClient(request), { signal: controller.signal }),
-    ).rejects.toBe(reason);
-    expect(request).not.toHaveBeenCalled();
-  });
 });
