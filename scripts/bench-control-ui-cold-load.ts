@@ -30,6 +30,7 @@ import {
   summarizeColdLoadTrace,
   summarizeCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
+import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 
 function summarizeResponseTasks(raw: unknown[]) {
   const events = raw.map(prepareColdLoadTraceEvent);
@@ -159,6 +160,9 @@ function summarizeSidebarWindows(
 
 const { values } = parseArgs({
   options: {
+    "warm-reload": { type: "boolean", default: false },
+    untraced: { type: "boolean", default: false },
+    "probe-dir": { type: "string" },
     "live-events": { type: "boolean", default: false },
     "streaming-reply": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
@@ -330,8 +334,18 @@ try {
       pins: fixture.sidebarEntries,
     },
   );
+  const warmProbes = values["warm-reload"]
+    ? (values["probe-dir"]
+        ? await Promise.all(
+            ["loaf-mutation.init.js", "ws-rpc-census.init.js"].map((file) =>
+              readFile(path.join(values["probe-dir"]!, file), "utf8"),
+            ),
+          )
+        : []
+      ).join("\n") + `\n(${warmReloadProbe.toString()})();`
+    : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")} })();`,
+    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
   const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
   async function settle() {
@@ -409,6 +423,28 @@ try {
   await settle();
   await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
   for (let run = 0; run < runs; run++) {
+    if (values["warm-reload"]) {
+      await page.locator(".chat-pane-cache__pane--active").evaluate(async (element) => {
+        const store = Reflect.get(element, "sessionSnapshotStore");
+        if (!store) throw new Error("Missing transcript snapshot owner");
+        await store.flush();
+        const request = indexedDB.open("openclaw-chat-snapshots");
+        const database = await new Promise<IDBDatabase>((resolve, reject) => {
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        try {
+          const read = database.transaction("snapshots").objectStore("snapshots").getAll();
+          const snapshots = await new Promise<unknown[]>((resolve, reject) => {
+            read.onsuccess = () => resolve(read.result);
+            read.onerror = () => reject(read.error);
+          });
+          if (!snapshots.length) throw new Error("Warm reload requires a persisted transcript");
+        } finally {
+          database.close();
+        }
+      });
+    }
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
         ? "delta"
@@ -417,27 +453,36 @@ try {
     const rawTrace: unknown[] = [];
     let collectedTrace = rawTrace;
     cdp.on("Tracing.dataCollected", (data) => collectedTrace.push(...data.value));
-    await cdp.send("Profiler.enable");
-    await cdp.send("Profiler.setSamplingInterval", { interval: 1000 });
-    await cdp.send("Profiler.start");
-    await cdp.send("Tracing.start", {
-      categories:
-        "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,disabled-by-default-devtools.screenshot,v8",
-      transferMode: "ReportEvents",
-    });
+    if (!values.untraced) {
+      await cdp.send("Profiler.enable");
+      await cdp.send("Profiler.setSamplingInterval", { interval: 1000 });
+      await cdp.send("Profiler.start");
+      await cdp.send("Tracing.start", {
+        categories:
+          "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,disabled-by-default-devtools.screenshot,v8",
+        transferMode: "ReportEvents",
+      });
+    }
     if (fixture.sidebarListChurn) {
       sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListChurn);
     }
     await page.reload({ waitUntil: "domcontentloaded" });
     await settle();
     const metrics = await page.evaluate(() => Reflect.get(window, "__coldLoad").read());
+    const warmReload = values["warm-reload"]
+      ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
+      : undefined;
     await writeFile(path.join(artifactDir, `run-${run + 1}.metrics.json`), JSON.stringify(metrics));
-    const profile = await cdp.send("Profiler.stop");
-    const complete = new Promise<void>((resolve) => {
-      cdp.once("Tracing.tracingComplete", () => resolve());
-    });
-    await cdp.send("Tracing.end");
-    await complete;
+    const profile = values.untraced
+      ? { profile: { nodes: [], samples: [], timeDeltas: [], startTime: 0, endTime: 0 } }
+      : await cdp.send("Profiler.stop");
+    if (!values.untraced) {
+      const complete = new Promise<void>((resolve) => {
+        cdp.once("Tracing.tracingComplete", () => resolve());
+      });
+      await cdp.send("Tracing.end");
+      await complete;
+    }
     await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.png`) });
     await writeFile(
       path.join(artifactDir, `run-${run + 1}.trace.json`),
@@ -453,6 +498,15 @@ try {
         ? [{ ts: event.ts, data: event.args.snapshot }]
         : [],
     );
+    if (values["warm-reload"] && screenshots.length) {
+      await mkdir(path.join(artifactDir, `run-${run + 1}.filmstrip`));
+      for (const [index, frame] of screenshots.entries()) {
+        await writeFile(
+          path.join(artifactDir, `run-${run + 1}.filmstrip`, `${index}-${frame.ts}.jpg`),
+          Buffer.from(frame.data, "base64"),
+        );
+      }
+    }
     const visual = await page.evaluate(async (frames) => {
       const canvas = document.createElement("canvas");
       canvas.width = 344;
@@ -742,14 +796,15 @@ try {
       head,
       sidebarRowTransfer: values["sidebar-list-churn"] ? runTransfer : undefined,
       ...metrics,
-      trace: summarizeColdLoadTrace(trace, metrics.at),
-      cpu: summarizeCpuProfile(mapped.profile),
+      trace: values.untraced ? undefined : summarizeColdLoadTrace(trace, metrics.at),
+      cpu: values.untraced ? undefined : summarizeCpuProfile(mapped.profile),
       mappedFrames: mapped.mappedFrames,
       unmappedFrames: mapped.unmappedFrames,
       harnessWarnings,
       visual,
       live,
       streaming,
+      warmReload,
     };
     results.push(result);
     console.log(JSON.stringify(result));
