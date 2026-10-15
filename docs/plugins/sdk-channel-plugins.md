@@ -424,8 +424,8 @@ when initialization must finish before the child runs.
       `replyOptions.onFollowupQueueDisposition` reports terminal queue-cap rejection
       (`queue-cap` or `queue-cap-new`) and eviction (`queue-cap-old`) for the original
       source. These messages will not run, so channels should finalize their status
-      without waiting for `onAgentRunTerminalOutcome`. Summarized overflow remains
-      pending and does not report a drop through this callback.
+      without waiting for `onAgentRunTerminalOutcome`. Overflow retained for a summary
+      remains pending; sources evicted from the summary cap report `queue-cap-old`.
 
       A `queuedDeliveryCorrelations` entry stays bound to its source through collect
       batching. Its `begin()` cleanup receives an optional settlement with
