@@ -54,9 +54,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   private readonly managerRegistry: MemoryManagerRegistry<MemoryIndexManager>;
   protected readonly createProvider: MemoryManagerProviderFactory = (adapter, create) =>
     this.managerRegistry.createProvider(this, adapter, create);
-  protected canPublishEmbeddingProbe(): boolean {
-    return this.managerRegistry.canPublishProbe(this);
-  }
   protected getEmbeddingProbeOwners() {
     return this.managerRegistry.getProbeOwners(this);
   }
@@ -500,7 +497,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       });
       return outcome;
     };
-    this.syncing = this.syncOutcomes.track(run, true).finally(() => {
+    this.syncing = this.syncOutcomes.track(run).finally(() => {
       this.syncing = null;
     });
     return this.syncing;

@@ -203,12 +203,6 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   display: none;
 }
 
-/* Native-nav hosts provide the expanded sidebar toggle in AppKit, while the
-   in-sidebar search remains the only pointer path to the palette. */
-html.openclaw-native-nav .sidebar-brand__collapse {
-  display: none;
-}
-
 html.openclaw-native-web-chrome .shell--mobile-nav .sidebar-brand__desktop-control {
   display: none;
 }
@@ -2272,13 +2266,6 @@ openclaw-settings-save-indicator:empty {
     opacity: 1;
     pointer-events: auto;
   }
-}
-
-.sidebar-online__facepile {
-  display: inline-flex;
-  min-width: 0;
-  margin-left: auto;
-  overflow: hidden;
 }
 
 .sidebar-online__row {

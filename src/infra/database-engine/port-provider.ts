@@ -9,12 +9,14 @@ import {
   type DatabasePortProvider,
   type PortDescriptor,
 } from "./port-descriptor.js";
+import { teamReportsPortProvider } from "./team-reports-port.js";
 import { workboardPortProvider } from "./workboard-port.js";
 
 /** The only registration point for portable database families. */
 export const databasePortProviders: readonly DatabasePortProvider[] = [
   workboardPortProvider,
   logbookPortProvider,
+  teamReportsPortProvider,
 ];
 
 export function requireDatabasePortProvider(id: string) {
@@ -97,6 +99,7 @@ export function withDatabasePortPostgres<T>(
     if (rows.length !== 1 || !row || row.store_id !== anchor.storeId) {
       throw new DatabasePortDataError("PostgreSQL anchor does not match its store metadata");
     }
-    return run(client, await requireDatabasePortProvider(row.store).loadDescriptor());
+    const { loadDatabasePortDescriptor } = await import("./port-provider-descriptor.js");
+    return run(client, await loadDatabasePortDescriptor(row.store, config));
   });
 }

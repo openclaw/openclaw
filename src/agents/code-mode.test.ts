@@ -621,7 +621,7 @@ it("returns missing implicitly optional daily memory through Code Mode", async (
         },
         readFile: async () => Buffer.from("unreachable"),
       },
-    }) as unknown as Parameters<typeof createOpenClawReadTool>[0],
+    }),
   );
   applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, read] });
   const result = await runUntilCompleted({

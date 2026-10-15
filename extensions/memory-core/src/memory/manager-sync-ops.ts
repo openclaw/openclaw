@@ -411,7 +411,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         }
         if (!this.provider && this.fts.enabled && isMemoryEmbeddingOperationError(err)) {
           this.requestSessionIndexRetry();
-          this.syncOutcomes.recordActiveFailure(err);
+          this.syncOutcomes.recordFailure(err);
           log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
           return;
         }
@@ -471,7 +471,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       sessionsFullRetryDirty || sessionsReconcileDirty || sessionsDirtyFiles.size > 0;
     if (failure) {
       this.requestSessionIndexRetry(true);
-      this.syncOutcomes.recordActiveFailure(failure.error);
+      this.syncOutcomes.recordFailure(failure.error);
     }
     return true;
   }

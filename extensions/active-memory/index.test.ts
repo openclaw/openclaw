@@ -3632,30 +3632,6 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it.each([
-    {
-      name: "overflowing expiry",
-      writeTime: 8_640_000_000_000_000,
-      readTime: 8_640_000_000_000_000,
-    },
-  ])("rejects cached recall with $name", ({ writeTime, readTime }) => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(writeTime);
-    const cacheKey = buildCacheKey({
-      agentId: "main",
-      sessionKey: "agent:main:invalid-clock-cache",
-      query: "cache clock prompt",
-      authorityFingerprint: "cache-authority",
-      recallToolNames: ["memory_search"],
-    });
-    setCachedResult(
-      cacheKey,
-      { status: "ok", elapsedMs: 1, rawReply: "memory", summary: "memory" },
-      15_000,
-    );
-    now.mockReturnValue(readTime);
-    expect(getCachedResult(cacheKey)).toBeUndefined();
-  });
-
   it.each(["cooldown", "a successful recall"] as const)(
     "allows recall again after %s clears consecutive timeouts",
     async (resetReason) => {

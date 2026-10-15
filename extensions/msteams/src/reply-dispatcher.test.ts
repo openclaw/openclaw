@@ -34,14 +34,10 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
   getGlobalHookRunner: getGlobalHookRunnerMock,
 }));
 
-vi.mock("./messenger.js", () => ({
-  buildConversationReference: vi.fn((ref) => ref),
+vi.mock("./messenger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./messenger.js")>()),
   renderReplyPayloadsToMessages: renderReplyPayloadsToMessagesMock,
   sendMSTeamsMessages: sendMSTeamsMessagesMock,
-}));
-
-vi.mock("./revoked-context.js", () => ({
-  withRevokedProxyFallback: async ({ run }: { run: () => Promise<unknown> }) => await run(),
 }));
 
 import { createMSTeamsReplyDispatcher } from "./reply-dispatcher.js";

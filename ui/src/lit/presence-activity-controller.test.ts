@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { createPresenceActivityController } from "./presence-activity-controller.ts";
+import type { SolidController, SolidControllerHost } from "./solid-controller-host.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -13,8 +13,8 @@ it("schedules only the next person expiry and clears hidden or disconnected work
   vi.setSystemTime(1_000_000);
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   const refresh = vi.fn();
-  let lifecycle: ReactiveController = {};
-  const host: ReactiveControllerHost = {
+  let lifecycle: SolidController = {};
+  const host: SolidControllerHost = {
     addController: (controller) => {
       lifecycle = controller;
     },

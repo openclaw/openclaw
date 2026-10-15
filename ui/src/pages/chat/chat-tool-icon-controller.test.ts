@@ -1,4 +1,3 @@
-import type { ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -82,7 +81,7 @@ function setup() {
       },
     },
   };
-  const host: ReactiveControllerHost = {
+  const host = {
     addController: vi.fn(),
     removeController: vi.fn(),
     requestUpdate: vi.fn(),

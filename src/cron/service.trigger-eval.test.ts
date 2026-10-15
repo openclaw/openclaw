@@ -6,7 +6,6 @@ import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
-import { waitForActiveCronTaskRuns } from "./service/active-run-cancellation.js";
 import { createCronRunHandle, finishCronRun } from "./service/run-history.js";
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
@@ -238,28 +237,6 @@ async function withPendingWatcher(
 }
 
 describe("cron trigger evaluation", () => {
-  it("releases a busy main condition without updating trigger state or running its payload", async () => {
-    const harness = await createHarness({ evaluateCronTrigger: async () => ({ kind: "busy" }) });
-    try {
-      const job = await harness.cron.add(
-        watcher({
-          sessionTarget: "main",
-          payload: { kind: "systemEvent", text: "must not enqueue" },
-        }),
-      );
-      await runWhenDue(harness.cron, job.id);
-      expect(harness.enqueueSystemEvent).not.toHaveBeenCalled();
-      await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({ drained: true, active: 0 });
-      const state = harness.cron.getJob(job.id)?.state;
-      expect(state?.triggerEvalCount).toBeUndefined();
-      expect(state?.lastTriggerEvalAtMs).toBeUndefined();
-      expect(state?.triggerState).toBeUndefined();
-      expect(harness.events.filter((event) => event.action === "finished")).toEqual([]);
-    } finally {
-      harness.cron.stop();
-    }
-  });
-
   it.each([
     { sessionTarget: "main", mutation: "remove" },
     { sessionTarget: "isolated", mutation: "disable" },

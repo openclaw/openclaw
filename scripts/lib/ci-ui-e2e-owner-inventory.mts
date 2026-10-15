@@ -285,10 +285,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/agent-model-fallback-ownership.e2e.test.ts",
     ["agents-home", "agents", "config"],
-    [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/components/multi-select-registration.ts",
-    ],
+    ["ui/src/components/agent-select-registration.ts", "ui/src/components/multi-select.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/agent-select-avatar-timeout.e2e.test.ts",
@@ -337,7 +334,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/avatar-initial-emoji.e2e.test.ts",
     ["agents-home", "agents", "config", "usage"],
-    ["ui/src/components/agent-emoji-picker.ts", "ui/src/components/agent-select-registration.ts"],
+    ["ui/src/components/agent-emoji-picker.tsx", "ui/src/components/agent-select-registration.ts"],
     ["ui/src/styles/agent-emoji-picker.css"],
   ),
   pageWatch(
@@ -1599,7 +1596,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/plugins-config-mutation.e2e.test.ts",
     ["agents-home", "agents", "config", "plugins", "workboard"],
-    ["ui/src/components/multi-select-registration.ts", "ui/src/lib/plugins/index.ts"],
+    ["ui/src/components/multi-select.tsx", "ui/src/lib/plugins/index.ts"],
   ),
   pageWatch(
     "ui/src/e2e/plugins-schema-controls.e2e.test.ts",

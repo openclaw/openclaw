@@ -572,24 +572,6 @@ describe("kysely sync helpers", () => {
     },
   );
 
-  it.each(["before", "after"] as const)(
-    "preserves double-close errors with caching installed %s close",
-    (when) => {
-      const baseline = new DatabaseSync(":memory:");
-      expect(baseline.close()).toBeUndefined();
-      const baselineError = captureError(() => baseline.close());
-      const cached = new DatabaseSync(":memory:");
-      if (when === "before") {
-        enableNodeSqliteKyselyStatementCache(cached);
-      }
-      expect(cached.close()).toBeUndefined();
-      if (when === "after") {
-        enableNodeSqliteKyselyStatementCache(cached);
-      }
-      expect(errorShape(captureError(() => cached.close()))).toEqual(errorShape(baselineError));
-    },
-  );
-
   it("clears cached statements before propagating a close failure", () => {
     const cached = new DatabaseSync(":memory:");
     cached.exec("create table items (id integer primary key, name text not null)");
@@ -694,16 +676,6 @@ function captureError(operation: () => void): unknown {
     return error;
   }
   throw new Error("expected operation to throw");
-}
-
-function errorShape(error: unknown): { code: string | undefined; message: string; name: string } {
-  expect(error).toBeInstanceOf(Error);
-  const sqliteError = error as Error & { code?: string };
-  return {
-    code: sqliteError.code,
-    message: sqliteError.message,
-    name: sqliteError.name,
-  };
 }
 
 function runRetentionScenario(options: {

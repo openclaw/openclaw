@@ -95,16 +95,7 @@ export function mergeUsageCacheStatus(
 }
 
 export async function loadUsageSessionSummaries(params: {
-  entries: Array<{
-    agentId: string;
-    sessionId?: string;
-    sessionFile?: string;
-    instances: Array<{
-      sessionId?: string;
-      sessionFile: string;
-      transcriptFile?: DiscoveredSession["transcriptFile"];
-    }>;
-  }>;
+  entries: UsageSessionSummaryTarget[];
   read: <T>(load: () => Promise<T>, partial: () => T) => Promise<T>;
   config: OpenClawConfig;
   startMs: number;
@@ -131,12 +122,7 @@ export async function loadUsageSessionSummaries(params: {
   // Batch all included instances by agent so cache reads do not scale with the row limit.
   const sessionsByAgent = new Map<
     string,
-    Array<{
-      entryIndex: number;
-      sessionId?: string;
-      sessionFile: string;
-      transcriptFile?: DiscoveredSession["transcriptFile"];
-    }>
+    Array<UsageSessionSummaryTarget["instances"][number] & { entryIndex: number }>
   >();
   for (const [entryIndex, merged] of mergedEntries.entries()) {
     for (const { sessionId, sessionFile, transcriptFile } of merged.instances) {
@@ -194,8 +180,8 @@ export async function loadUsageSessionSummaries(params: {
           if (summary) {
             const merged = expectDefined(mergedEntries[session.entryIndex], "usage entry");
             const identity = {
-              sessionId: merged.sessionId ?? merged.instances[0]?.sessionId,
-              sessionFile: merged.sessionFile ?? merged.instances[0]?.sessionFile,
+              sessionId: merged.sessionId,
+              sessionFile: merged.sessionFile,
             };
             if (merged.instances.length === 1) {
               usageByEntryIndex[session.entryIndex] = { ...summary, ...identity };

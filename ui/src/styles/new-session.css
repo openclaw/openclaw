@@ -371,11 +371,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   opacity: 0.6;
 }
 
-/* Keep the anchor focusable while Web Awesome finishes its hide animation. */
-.new-session-page__trigger--hiding {
-  pointer-events: none;
-}
-
 .new-session-page__runtime {
   color: var(--text);
   cursor: default;

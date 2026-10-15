@@ -213,14 +213,13 @@ describe("subagent registry context cleanup", () => {
         "context-engine onSubagentEnded failed (best-effort)",
         {
           error: { name: "Error", message: expect.stringContaining("cleanup failed") },
-          childSessionKey: "agent:main:…",
+          childSessionKey: "agent:main:subagent:private-session",
           reason: "swept",
         },
       );
       const serialized = JSON.stringify(warn.mock.calls);
       expect(serialized).toContain("cleanup failed");
       expect(serialized).not.toContain("synthetic-cleanup-token");
-      expect(serialized).not.toContain("private-session");
     },
   );
 

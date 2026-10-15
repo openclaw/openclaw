@@ -376,7 +376,11 @@ eligible sessions age out without further traffic. Reply preparation does not wa
 for unrelated retention cleanup. Writes that cannot change
 age or count maintenance outcomes skip candidate scans. Automatic planning reads
 only retention and protection metadata before entering the foreground write queue;
-cap selection retains only the required oldest eligible entries. The writer rechecks the selected rows and their protection before applying
+age candidates must reach their enabled retention phase's cutoff, and maintenance
+looks up only active-session ancestry unless runtime identities need the full
+session-key inventory. Cap selection retains only the required oldest eligible entries.
+Automatic capacity cleanup yields the writer between batches of up to 64 entries;
+explicit cleanup remains exhaustive. The writer rechecks the selected rows and their protection before applying
 changes, so concurrent updates are reconsidered instead of overwritten. Activity
 on unrelated sessions and protection that has ended do not invalidate the plan.
 When an over-cap pass finds only durably protected entries, ordinary activity does not

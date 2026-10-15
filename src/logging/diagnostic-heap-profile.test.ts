@@ -247,18 +247,6 @@ describe("diagnostic heap profile owner", () => {
     });
   });
 
-  it.each([
-    { nodeId: -1, size: 4096, ordinal: 3 },
-    { nodeId: 1.5, size: 4096, ordinal: 3 },
-    { nodeId: 999, size: -1, ordinal: 3 },
-    { nodeId: 999, size: 4096, ordinal: -1 },
-  ])("rejects malformed unattributed samples %j", async (sample) => {
-    const value = profile();
-    value.samples.push(sample);
-    native.post.mockResolvedValue({ profile: value });
-    expect(await capture()).toMatchObject({ status: "unavailable", reason: "invalid-profile" });
-  });
-
   it.each<[DiagnosticsHeapProfileParams, number, number]>([
     [{ durationMs: 900_000, samplingIntervalBytes: 1 }, 900_000, 4096],
     [

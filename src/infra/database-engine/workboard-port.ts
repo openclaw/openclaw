@@ -3,6 +3,7 @@ import type { DatabasePortProvider } from "./port-descriptor.js";
 
 export const workboardPortProvider: DatabasePortProvider = {
   id: "workboard",
+  minimumPostgresVersion: 16,
   async loadDescriptor() {
     const { loadDescriptor } = await import("./workboard-port-descriptor.js");
     return loadDescriptor();

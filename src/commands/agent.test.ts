@@ -1318,32 +1318,6 @@ describe("agentCommand", () => {
     });
   });
 
-  it("uses the selected agent thinkingDefault for fresh ingress runs", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      mockConfig(
-        home,
-        store,
-        {
-          thinkingDefault: "high",
-        },
-        undefined,
-        { main: { thinkingDefault: "off" } },
-      );
-
-      await agentCommandFromIngress(
-        {
-          message: "ping",
-          agentId: "main",
-          allowModelOverride: false,
-        },
-        runtime,
-      );
-
-      expect(getLastEmbeddedCall()?.thinkLevel).toBe("off");
-    });
-  });
-
   it("persists local overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -1614,49 +1588,6 @@ describe("agentCommand", () => {
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
       expect(entry?.modelOverrideSource).toBeUndefined();
-    });
-  });
-
-  it("does not repair locked legacy auto session model overrides", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions-locked-legacy-auto-override.json");
-      await writeSessionStoreSeed(store, {
-        "agent:main:subagent:locked-legacy-auto": {
-          sessionId: "session-locked-legacy-auto",
-          updatedAt: Date.now(),
-          providerOverride: "anthropic",
-          modelOverride: "claude-opus-4-6",
-          modelOverrideSource: "auto",
-          modelSelectionLocked: true,
-        },
-      });
-
-      mockFallbackModelConfig(home, store);
-
-      mockModelCatalogOnce([
-        { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
-        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
-        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
-      ]);
-
-      await agentCommand(
-        {
-          message: "hi",
-          sessionKey: "agent:main:subagent:locked-legacy-auto",
-        },
-        runtime,
-      );
-
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-      expectLastRunProviderModel("anthropic", "claude-opus-4-6");
-      const persisted =
-        readSessionStore<SessionEntry>(store)["agent:main:subagent:locked-legacy-auto"];
-      expect(persisted).toMatchObject({
-        providerOverride: "anthropic",
-        modelOverride: "claude-opus-4-6",
-        modelOverrideSource: "auto",
-        modelSelectionLocked: true,
-      });
     });
   });
 

@@ -602,7 +602,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readActivitySummarySource: SessionHistoryReader<"session-activity-summary-source", "source">;
     readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
     readProjectionStatus: CancellableSessionHistoryReader<"projection-status">;
-    readIdentityEvidence: SessionHistoryReader<"session-identity-evidence", "evidence">;
+    readIdentityEvidence: CancellableSessionHistoryReader<"session-identity-evidence", "evidence">;
     readExactEntries: (
       input: SessionExactEntriesWorkerRequest,
       signal?: AbortSignal,

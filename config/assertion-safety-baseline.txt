@@ -2,7 +2,6 @@
 # Ratchet: counts may only shrink. New non-const assertions need a SAFETY comment.
 # Format: repo-relative path, tab, positive count. Zero-count files are omitted.
 extensions/acpx/src/codex-auth-bridge.ts	7
-extensions/acpx/src/codex-trust-config.ts	1
 extensions/acpx/src/pi-session-catalog-runtime.ts	1
 extensions/acpx/src/process-lease.ts	1
 extensions/acpx/src/runtime.ts	2
@@ -14,7 +13,7 @@ extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.ts	3
 extensions/amazon-bedrock-mantle/register.sync.runtime.ts	2
 extensions/amazon-bedrock/config-compat.ts	5
 extensions/amazon-bedrock/embedding-provider.ts	1
-extensions/amazon-bedrock/register.sync.runtime.ts	13
+extensions/amazon-bedrock/register.sync.runtime.ts	10
 extensions/amazon-bedrock/stream.runtime.ts	8
 extensions/anthropic-vertex/region.ts	1
 extensions/anthropic-vertex/stream-runtime.ts	4
@@ -367,7 +366,7 @@ extensions/google/music-generation-provider.ts	1
 extensions/google/oauth-token-shared.ts	1
 extensions/google/provider-registration.ts	2
 extensions/google/realtime-voice-provider.ts	4
-extensions/google/transport-stream.ts	12
+extensions/google/transport-stream.ts	11
 extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
 extensions/googlechat/src/approval-card-actions.ts	1
@@ -647,9 +646,8 @@ extensions/policy/src/policy-state-tools.ts	1
 extensions/qa-channel/src/bus-client.ts	3
 extensions/qa-channel/src/channel-actions.ts	2
 extensions/qa-channel/src/channel-base.ts	6
-extensions/qa-channel/src/channel.ts	5
+extensions/qa-channel/src/channel.ts	3
 extensions/qa-channel/src/gateway.ts	2
-extensions/qa-channel/src/inbound.ts	1
 extensions/qa-channel/src/setup.ts	2
 extensions/qa-lab/src/auth-profile.fixture.ts	3
 extensions/qa-lab/src/browser-runtime.ts	2
@@ -970,7 +968,7 @@ extensions/xai/provider-models.ts	1
 extensions/xai/realtime-voice-bridge.ts	1
 extensions/xai/realtime-voice-config.ts	2
 extensions/xai/runtime-model-compat.ts	1
-extensions/xai/src/code-execution-config.ts	6
+extensions/xai/src/code-execution-config.ts	4
 extensions/xai/src/tool-auth-shared.ts	2
 extensions/xai/src/web-search-provider.runtime.ts	2
 extensions/xai/src/x-search-config.ts	3
@@ -1013,17 +1011,16 @@ packages/ai/src/providers/anthropic-model-contract.ts	1
 packages/ai/src/providers/anthropic-server-fallback.ts	3
 packages/ai/src/providers/anthropic-tool-projection.ts	2
 packages/ai/src/providers/anthropic-usage.ts	1
-packages/ai/src/providers/anthropic.ts	2
+packages/ai/src/providers/anthropic.ts	1
 packages/ai/src/providers/azure-openai-responses.ts	1
 packages/ai/src/providers/clean-for-gemini.ts	4
 packages/ai/src/providers/google-shared.ts	2
 packages/ai/src/providers/mistral.ts	1
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	17
-packages/ai/src/providers/openai-completions-tool-calls.ts	1
 packages/ai/src/providers/openai-completions.ts	1
 packages/ai/src/providers/openai-reasoning-effort.ts	6
-packages/ai/src/providers/openai-responses-shared.ts	5
+packages/ai/src/providers/openai-responses-shared.ts	4
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
 packages/ai/src/providers/openai-tool-schema-compat.ts	2
@@ -1035,13 +1032,13 @@ packages/ai/src/providers/tool-schema-json-projection.ts	2
 packages/ai/src/stream.ts	1
 packages/ai/src/transports/anthropic-compaction-replay.ts	2
 packages/ai/src/transports/anthropic-payload-policy.ts	4
-packages/ai/src/transports/anthropic-transport-stream.ts	4
+packages/ai/src/transports/anthropic-transport-stream.ts	3
 packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	2
 packages/ai/src/transports/openai-completions-params.ts	5
 packages/ai/src/transports/openai-completions-replay.ts	1
 packages/ai/src/transports/openai-completions-stream.ts	8
-packages/ai/src/transports/openai-completions-transport.ts	7
+packages/ai/src/transports/openai-completions-transport.ts	5
 packages/ai/src/transports/openai-responses-client.ts	8
 packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
@@ -1157,7 +1154,7 @@ src/agents/agent-tools.before-tool-call.wrapper.ts	3
 src/agents/agent-tools.execution-preparer.ts	2
 src/agents/agent-tools.params.ts	5
 src/agents/agent-tools.policy.ts	1
-src/agents/agent-tools.read.ts	8
+src/agents/agent-tools.read.ts	4
 src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/agent-tools.schema.ts	3
 src/agents/ai-transport-runtime-host.ts	9
@@ -1194,7 +1191,6 @@ src/agents/cli-runner/bundle-mcp-runtime.ts	1
 src/agents/cli-runner/bundle-mcp.ts	5
 src/agents/cli-runner/cli-backend-auth-policy.ts	1
 src/agents/cli-runner/cli-run-transcript.ts	1
-src/agents/cli-runner/delivery-evidence.ts	2
 src/agents/cli-runner/execute-node-claude.ts	5
 src/agents/cli-runner/execute.ts	2
 src/agents/cli-runner/prepare.ts	1
@@ -1495,7 +1491,6 @@ src/auto-reply/reply/commands-acp/diagnostics.ts	2
 src/auto-reply/reply/commands-allowlist.ts	6
 src/auto-reply/reply/commands-context-report.ts	1
 src/auto-reply/reply/commands-context.ts	1
-src/auto-reply/reply/commands-login.ts	1
 src/auto-reply/reply/commands-mcp.ts	2
 src/auto-reply/reply/commands-plugin.ts	1
 src/auto-reply/reply/commands-plugins.ts	1
@@ -1507,7 +1502,7 @@ src/auto-reply/reply/conversation-turn-capture.ts	1
 src/auto-reply/reply/directive-handling.levels.ts	9
 src/auto-reply/reply/directive-handling.parse.ts	2
 src/auto-reply/reply/directives.ts	2
-src/auto-reply/reply/dispatch-acp.ts	2
+src/auto-reply/reply/dispatch-acp.ts	1
 src/auto-reply/reply/dispatch-from-config.events.ts	1
 src/auto-reply/reply/dispatch-from-config.prepare-execution.ts	1
 src/auto-reply/reply/elevated-allowlist-matcher.ts	2
@@ -1519,10 +1514,8 @@ src/auto-reply/reply/get-reply-run-execute.ts	3
 src/auto-reply/reply/inbound-context.ts	8
 src/auto-reply/reply/mentions.ts	1
 src/auto-reply/reply/queue/drain.ts	1
-src/auto-reply/reply/queue/enqueue.ts	1
 src/auto-reply/reply/reply-config-runtime-mode.ts	2
 src/auto-reply/reply/reply-operation-run-state.ts	1
-src/auto-reply/reply/reply-run-registry.registry.ts	1
 src/auto-reply/reply/reply-threading.ts	2
 src/auto-reply/reply/reply-timing-tracker.ts	2
 src/auto-reply/reply/session-delivery.ts	1
@@ -1681,7 +1674,7 @@ src/cli/update-cli/update-command-config.ts	5
 src/cli/update-cli/update-command-plugins.ts	1
 src/cli/users-cli.ts	1
 src/commands/agent-exec.ts	1
-src/commands/agent-via-gateway.ts	5
+src/commands/agent-via-gateway.ts	2
 src/commands/agents.commands.identity.ts	1
 src/commands/agents.config.ts	1
 src/commands/agents.providers.ts	4
@@ -1722,7 +1715,6 @@ src/commands/doctor-session-transcripts.ts	1
 src/commands/doctor-skills.ts	1
 src/commands/doctor-sqlite-compact.ts	1
 src/commands/doctor-sqlite-maintenance-lock.ts	1
-src/commands/doctor-state-integrity.ts	1
 src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
 src/commands/doctor-workspace.ts	2
@@ -1731,7 +1723,6 @@ src/commands/doctor/cron/legacy-repair.ts	4
 src/commands/doctor/cron/store-migration.ts	2
 src/commands/doctor/cron/warnings.ts	1
 src/commands/doctor/shared/allowfrom-fallback-migration.ts	1
-src/commands/doctor/shared/channel-doctor.ts	2
 src/commands/doctor/shared/codex-native-assets.ts	1
 src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
@@ -1757,7 +1748,7 @@ src/commands/gateway-status/helpers.ts	11
 src/commands/message-format.ts	15
 src/commands/models/list.probe.ts	1
 src/commands/onboard-agent.ts	1
-src/commands/onboard-config.ts	3
+src/commands/onboard-config.ts	2
 src/commands/onboard-helpers.ts	2
 src/commands/onboard-non-interactive/local.ts	1
 src/commands/onboard-non-interactive/local/auth-choice-inference.ts	1
@@ -1986,7 +1977,6 @@ src/gateway/server-methods/sessions-create.ts	1
 src/gateway/server-methods/sessions-patch-engine.ts	1
 src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
-src/gateway/server-methods/task-suggestions.ts	5
 src/gateway/server-methods/web.ts	1
 src/gateway/server-node-events.ts	1
 src/gateway/server-plugin-in-process-dispatch.ts	3
@@ -2212,7 +2202,7 @@ src/logging/state.ts	6
 src/logging/subsystem.ts	1
 src/mcp/channel-bridge.ts	4
 src/mcp/channel-shared.ts	2
-src/mcp/codex-supervision-tools-serve.ts	6
+src/mcp/codex-supervision-tools-serve.ts	1
 src/mcp/openclaw-tools-serve-config.ts	1
 src/mcp/plugin-tools-handlers.ts	2
 src/media-generation/provider-registry.ts	1
@@ -2408,7 +2398,7 @@ src/plugins/runtime/runtime-llm-isolated.ts	2
 src/plugins/runtime/runtime-llm.runtime.ts	1
 src/plugins/schema-validator.ts	5
 src/plugins/session-catalog-history-import.ts	1
-src/plugins/setup-registry.ts	10
+src/plugins/setup-registry.ts	2
 src/plugins/slots.ts	1
 src/plugins/toggle-config.ts	2
 src/plugins/tools.ts	1

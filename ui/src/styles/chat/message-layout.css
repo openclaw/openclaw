@@ -715,6 +715,10 @@
   padding: 14px 16px;
 }
 
+.chat-assistant-attachment-card__original {
+  margin: 0 16px 12px;
+}
+
 .chat-assistant-attachment-card__header--preview {
   padding: 10px 14px;
 }
