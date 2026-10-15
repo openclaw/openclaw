@@ -114,6 +114,8 @@ let capturedTyping:
 type TestReplyDispatchKind = "tool" | "block" | "final";
 type TestReplyPayload = {
   text?: string;
+  replyToId?: string;
+  replyToCurrent?: boolean;
   isError?: boolean;
   isReasoning?: boolean;
   mediaUrl?: string;
@@ -868,6 +870,56 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   afterEach(() => resetPluginRuntimeStateForTest());
+
+  it.each([false, true])(
+    "delivers an explicit final reply target separately from the preview (native: %s)",
+    async (native) => {
+      mockedNativeStreaming = native;
+      const draft = useDraftStream();
+      finalizeSlackPreviewEditMock.mockResolvedValue(undefined);
+      deliverRepliesMock.mockResolvedValue(normalDeliveryResult);
+      mockedReplyOptionEvents = [{ kind: "partial", text: "Working on the answer" }];
+      mockedDispatchSequence = [
+        { kind: "final", payload: { text: FINAL_REPLY_TEXT, replyToId: "171234.222" } },
+      ];
+      if (native) {
+        mockedDispatchSequence.unshift({
+          kind: "block",
+          payload: { text: "Working on the answer" },
+        });
+      }
+
+      await dispatch();
+
+      expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+      expect(deliverRepliesMock).toHaveBeenCalledOnce();
+      expect(delivered().replies[0]).toMatchObject({ replyToId: "171234.222" });
+      if (!native) {
+        expect(draft.clear).toHaveBeenCalled();
+        expect(draft.clear.mock.invocationCallOrder[0]).toBeGreaterThan(
+          deliverRepliesMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+        );
+      }
+    },
+  );
+
+  it.each(["all", "off"] as const)(
+    "resolves the explicit target before starting a native stream (replyToMode: %s)",
+    async (replyToMode) => {
+      mockedNativeStreaming = true;
+      mockedDispatchSequence = [
+        { kind: "final", payload: { text: FINAL_REPLY_TEXT, replyToId: "171234.222" } },
+      ];
+
+      await dispatch({ replyToMode });
+
+      expectMockCallArgFields(startSlackStreamMock, 0, {
+        threadTs: replyToMode === "off" ? THREAD_TS : "171234.222",
+        text: FINAL_REPLY_TEXT,
+      });
+      expect(deliverRepliesMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { agents: ["alice", "bob"], withMedia: true },
