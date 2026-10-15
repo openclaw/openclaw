@@ -1,3 +1,4 @@
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -163,7 +164,7 @@ export function runSessionMaintenanceMetadataInTransaction(
 ): SessionMaintenanceMetadataResult {
   if (plan.kind === "maintenance-statistics") {
     const database = openOpenClawAgentDatabase(plan.databaseOptions);
-    runWithSqliteBusyTimeout(database.db, 0, () =>
+    const run = () =>
       runOpenClawAgentWriteTransaction(
         (current) => {
           callbacks.beforeMutation?.(current);
@@ -173,8 +174,12 @@ export function runSessionMaintenanceMetadataInTransaction(
         },
         plan.databaseOptions,
         { busyTimeoutMs: 0, operationLabel: "session.maintenance.statistics" },
-      ),
-    );
+      );
+    if (isPostgresSqlConnection(database.db)) {
+      run();
+    } else {
+      runWithSqliteBusyTimeout(database.db, 0, run);
+    }
     return { kind: plan.kind, value: true };
   }
   try {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { readSqliteFreePageCount } from "../../infra/sqlite-wal-reclamation.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -28,7 +29,7 @@ export function readSessionArchivePruningInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   limit = 1,
 ): SessionArchivePruningSnapshot {
-  const freePages = readSqliteFreePageCount(database.db);
+  const freePages = isPostgresSqlConnection(database.db) ? 0 : readSqliteFreePageCount(database.db);
   if (!tableExists(database.db, "session_transcript_archives")) {
     return { archives: [], freePages };
   }

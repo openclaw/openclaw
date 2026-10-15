@@ -8,12 +8,18 @@ import { safeParseJson } from "@openclaw/normalization-core";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
+import { assertEngineStoreExecutionAllowed } from "../../infra/database-engine/admission-scope.js";
+import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../../infra/node-sqlite.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import { agentDatabaseLifecycle } from "../../state/openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   assertExistingAgentSchemaOwner,
   readExistingAgentSchemaMeta,
@@ -192,6 +198,13 @@ function resolveAuthProfileDatabaseKind(
 /** Validate selected-agent ownership without requiring a current session schema. */
 export function assertAuthProfileStoreAgentOwner(agentDir: string, agentId: string): void {
   const pathname = resolveAuthProfileDatabasePath(agentDir);
+  if (getDatabaseEngineSelection()?.input) {
+    const opened = openOpenClawAgentDatabaseReadOnly({ agentId, path: pathname });
+    if (opened.found) {
+      opened.database.close();
+    }
+    return;
+  }
   const acquired = acquireAuthProfileReadDatabase(pathname, openSqliteReadOnlyDatabase);
   if (acquired.status === "missing") {
     return;
@@ -204,6 +217,33 @@ export function assertAuthProfileStoreAgentOwner(agentDir: string, agentId: stri
     normalizeAgentId(agentId),
     pathname,
   );
+}
+
+function readSelectedAgentAuthDatabase<T>(
+  target: { path: string; env?: NodeJS.ProcessEnv },
+  read: (db: EngineConnection) => T,
+): { value: T } | undefined {
+  assertEngineStoreExecutionAllowed();
+  if (isMissingDatabasePath(target.path)) {
+    return undefined;
+  }
+  const anchor = openNodeSqliteDatabase(resolveExistingSqliteFileUri(target.path));
+  let database: EngineConnection = anchor;
+  try {
+    database = openAgentEngineStore(anchor, undefined, target.path, true, (connection, error) => {
+      database = connection;
+      throw error;
+    });
+    return { value: read(database) };
+  } finally {
+    try {
+      database.close();
+    } finally {
+      if (database !== anchor && anchor.isOpen) {
+        anchor.close();
+      }
+    }
+  }
 }
 
 export function inspectAuthProfileJsonCellReadOnly(
@@ -224,6 +264,17 @@ export function inspectAuthProfileJsonCellReadOnly(
         : { status: "unreadable" };
     }
   }
+  if (getDatabaseEngineSelection()?.input) {
+    try {
+      return (
+        readSelectedAgentAuthDatabase(databaseTarget, (db) =>
+          inspectAuthProfileJsonCell(db, target, "agent"),
+        )?.value ?? { status: "missing", reason: "database" }
+      );
+    } catch {
+      return { status: "unreadable" };
+    }
+  }
   return inspectAgentAuthProfileJsonCellReadOnly(
     databaseTarget.path,
     target,
@@ -240,6 +291,15 @@ export function readAuthProfileStateJsonTextReadOnly(
       ({ db }) => readAuthProfileJsonCellText(db, "state", "shared-state"),
       { path: target.path, ...(target.env ? { env: target.env } : {}) },
     );
+  }
+  if (getDatabaseEngineSelection()?.input) {
+    const result = readSelectedAgentAuthDatabase(target, (db) =>
+      readAuthProfileJsonCellText(db, "state", "agent"),
+    );
+    if (!result) {
+      throw new Error("Auth profile rotation-state source is unavailable; retry Doctor.");
+    }
+    return result.value;
   }
   const acquired = acquireAuthProfileReadDatabase(target.path, openSqliteReadOnlyDatabase);
   if (acquired.status !== "readable") {

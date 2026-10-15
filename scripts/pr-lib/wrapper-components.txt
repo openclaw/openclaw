@@ -357,6 +357,7 @@ src/config/zod-schema.database.ts
 src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
 src/infra/database-engine/context.ts
+src/infra/database-engine/index-hint.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
 src/infra/database-engine/open.ts
@@ -367,12 +368,14 @@ src/infra/database-engine/postgres-schema.ts
 src/infra/database-engine/postgres-search-schema.ts
 src/infra/database-engine/postgres-search.ts
 src/infra/database-engine/postgres-vector.ts
+src/infra/database-engine/search-capabilities.ts
 src/infra/database-engine/search.ts
 src/infra/database-engine/sqlite-full-text.ts
 src/infra/database-engine/sqlite-search-schema.ts
 src/infra/database-engine/sqlite-vector-subprocess.ts
 src/infra/database-engine/sqlite-vector-types.ts
 src/infra/database-engine/sqlite-vector.ts
+src/infra/database-engine/text-bytes.ts
 src/infra/database-engine/vector-contract.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/protocol.ts

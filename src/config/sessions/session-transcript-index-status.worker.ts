@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { RawBuilder } from "kysely";
+import { DatabaseSearchCapabilityUnavailableError } from "../../infra/database-engine/search-capabilities.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   createSqliteQueryCache,
@@ -10,6 +11,7 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSetEntries,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import {
   readSqliteDatabaseSiblingWriteRevision,
   sqliteSessionIdWriteScope,
@@ -136,7 +138,10 @@ function installStatusTracking(db: DatabaseSync, schemaVersion: number): void {
 }
 
 /** Consume the writer's clean receipt without taking a write lock or host write grants. */
-export function isSessionTranscriptIndexStatusClean(db: DatabaseSync): boolean {
+export function isSessionTranscriptIndexStatusClean(db: EngineConnection): boolean {
+  if (isPostgresSqlConnection(db)) {
+    return false;
+  }
   const siblingWriteRevision = readSqliteDatabaseSiblingWriteRevision(db);
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (
@@ -169,13 +174,16 @@ export function isSessionTranscriptIndexStatusClean(db: DatabaseSync): boolean {
 }
 
 /** Advance bounded maintenance inside the canonical writer's transaction. */
-export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
+export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
   sessionIds: string[];
   hasMore: boolean;
   traversalComplete: boolean;
   /** Clean fast receipts need no traversal history. */
   traversal?: { schemaVersion: number; completedTraversals: number };
 } {
+  if (isPostgresSqlConnection(db)) {
+    throw new DatabaseSearchCapabilityUnavailableError("fullText");
+  }
   if (!db.isTransaction) {
     throw new Error("Transcript projection status requires its writer transaction");
   }

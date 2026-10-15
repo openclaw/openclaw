@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { on } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { MessagePort, parentPort, threadId, workerData } from "node:worker_threads";
@@ -14,6 +13,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database-admission.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
@@ -72,7 +72,7 @@ type TranscriptArchiveDatabase = Pick<
 const TRANSCRIPT_ARCHIVE_WRITE_BUFFER_BYTES = 64 * 1024;
 
 function stageTranscriptArchiveContent(
-  database: DatabaseSync,
+  database: EngineConnection,
   sessionId: string,
   stagedPath: string,
 ): number {

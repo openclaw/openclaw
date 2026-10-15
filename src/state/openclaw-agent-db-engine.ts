@@ -1,0 +1,98 @@
+import type { DatabaseSync } from "node:sqlite";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { openEngineStore } from "../infra/database-engine/open.js";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import type { PostgresSqlConnection } from "../infra/sql-connection.js";
+import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { VERSION } from "../version.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import {
+  publishAgentSchemaMetadata,
+  readExistingAgentSchemaMeta,
+} from "./openclaw-agent-db-metadata.js";
+import { assertCurrentAgentSchemaMetadata } from "./openclaw-agent-db-schema-read.js";
+import { agentPostgresRuntime } from "./postgres-schema.generated/agent-runtime.js";
+
+export function agentEngineInput() {
+  return getDatabaseEngineSelection()?.input;
+}
+
+const agentEngineSchema = {
+  id: "agent",
+  version: OPENCLAW_AGENT_SCHEMA_VERSION,
+  sqlite: "",
+  postgres: agentPostgresRuntime.sql,
+  // PostgreSQL agent storage is unshipped; only the current bootstrap is admitted.
+  postgresMigrations: [],
+};
+
+function admitAgentPostgres(
+  db: PostgresSqlConnection,
+  agentId: string | undefined,
+  pathname: string,
+  fresh: boolean,
+) {
+  if (fresh) {
+    if (agentId === undefined) {
+      throw new Error("Creating an agent database requires an agent owner");
+    }
+    const now = Date.now();
+    // sqlite-allow-raw: PostgreSQL schema bootstrap seeds the canonical singleton row.
+    db.exec("INSERT INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0)");
+    // sqlite-allow-raw: PostgreSQL schema bootstrap seeds the canonical singleton row.
+    db.exec("INSERT INTO memory_index_state (id, revision) VALUES (1, 0)");
+    // sqlite-allow-raw: PostgreSQL schema bootstrap records its initial owner and version.
+    db.prepare(`INSERT INTO schema_meta
+      (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+      VALUES ('primary', 'agent', ?, ?, ?, ?, ?)`).run(
+      OPENCLAW_AGENT_SCHEMA_VERSION,
+      agentId,
+      VERSION,
+      now,
+      now,
+    );
+    publishAgentSchemaMetadata(db, {
+      agentId,
+      role: "agent",
+      schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
+  }
+  const metadata = readExistingAgentSchemaMeta(db);
+  assertCurrentAgentSchemaMetadata(metadata, agentId ?? metadata?.agentId ?? "", pathname);
+  if (getPostgresPhysicalFacts(db)?.version !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+    throw new Error("Agent database has no current PostgreSQL schema admission");
+  }
+}
+
+/** The existing agent owner retains the anchor and all execution/close custody. */
+export function openAgentEngineStore(
+  anchor: DatabaseSync,
+  agentId: string | undefined,
+  pathname: string,
+  existingOnly = false,
+  closeOnFailure?: (db: PostgresSqlConnection, error: unknown) => never,
+) {
+  if (agentId === undefined && !existingOnly) {
+    throw new Error("Creating an agent database requires an agent owner");
+  }
+  return openEngineStore({
+    anchor,
+    schema: agentEngineSchema,
+    input: agentEngineInput(),
+    existingOnly,
+    closeOnFailure,
+    prepareAnchor: () => {},
+    openSqlite: () => {},
+    inspectSqlite: () => {
+      const facts = getAdmittedSqliteSchemaFacts(anchor) ?? captureSqliteSchemaFacts(anchor);
+      return {
+        hasEngineAnchor: facts.tables.has("openclaw_engine_anchor"),
+        hasExistingData: [...facts.tables, ...facts.views, ...facts.triggers.keys()].some(
+          (name) => name !== "openclaw_engine_anchor" && !name.startsWith("sqlite_"),
+        ),
+      };
+    },
+    admitPostgres: (db, fresh) => admitAgentPostgres(db, agentId, pathname, fresh),
+  });
+}

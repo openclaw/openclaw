@@ -81,9 +81,3 @@ export interface DatabaseEngineAdapter<Connection extends SqlConnection = SqlCon
   capabilities: { fullText: "fts5" | "tsvector" | null; vector: "sqlite-vec" | "pgvector" | null };
   /** @experimental Bind engine search operations to an already admitted store. */
   search?: (store: SearchStore, schema: SearchSchema) => StoreSearchCapabilities;
-  schema: {
-    bootstrap(store: AdmittedStore, connection: Connection): void;
-    migrate(store: AdmittedStore, from: number, connection: Connection): void;
-  };
-  classifyError(error: unknown): DatabaseErrorKind;
-}

@@ -215,6 +215,7 @@ describe("PostgreSQL schema generation", () => {
     expect((await generatePostgresSchemas(root)).files).toEqual(generated.files);
     expect(Object.keys(generated.files).toSorted()).toEqual(
       [
+        "agent-runtime.ts",
         "agent.postgres.sql",
         ...generated.report.fragments.map((fragment) => fragment.file),
         "manifest.json",
