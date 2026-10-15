@@ -792,10 +792,10 @@ suite.define(() => {
         sessionKey: "agent:main:main",
         state: "delta",
       });
-      // The working row stays attached with elapsed/token telemetry throughout streaming.
+      // Answer text ends visual activity; queue and Stop still belong to the active run.
       await expect.poll(() => page.getByText("Working on it.").first().isVisible()).toBe(true);
-      await expect.poll(() => spark.isVisible()).toBe(true);
-      await expect.poll(() => announcement.textContent()).toContain("Rosita is responding");
+      await expect.poll(() => spark.isVisible()).toBe(false);
+      await expect.poll(() => announcement.textContent()).toBe("");
       await expect.poll(() => layout.isVisible()).toBe(true);
       await expect.poll(() => model.isVisible()).toBe(true);
       await textarea.fill("Steer this queued follow-up");
