@@ -473,7 +473,7 @@ describe("Mistral provider", () => {
     ).toEqual(["alpha_tool", "zeta_tool"]);
   });
 
-  it("omits tools and automatic tool choice when every schema is unreadable", async () => {
+  it("reports unreadable tool parameters before sending a request", async () => {
     const result = await runMistralFixture(
       {
         ...context,
@@ -483,11 +483,9 @@ describe("Mistral provider", () => {
         toolChoice: "auto",
       },
     );
-    const payload = mistralMockState.payloads[0] as Record<string, unknown>;
-
     expect(result.stopReason).toBe("error");
-    expect(payload).not.toHaveProperty("tools");
-    expect(payload).not.toHaveProperty("toolChoice");
+    expect(result.errorMessage).toContain("fuzzplugin parameters getter exploded");
+    expect(mistralMockState.payloads).toHaveLength(0);
   });
 
   it("keeps omitted streamed tool ids stable within a response and unique across responses", async () => {
@@ -722,7 +720,7 @@ describe("Mistral provider", () => {
     ]);
   });
 
-  it("fails locally when a pinned Mistral tool choice is skipped", async () => {
+  it("reports unreadable parameters even when another tool is usable", async () => {
     const result = await runMistralFixture(
       {
         ...context,
@@ -734,9 +732,7 @@ describe("Mistral provider", () => {
     );
 
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain(
-      'Mistral tool_choice requested unavailable tool "broken_tool"',
-    );
+    expect(result.errorMessage).toContain("fuzzplugin parameters getter exploded");
     expect(mistralMockState.payloads).toHaveLength(0);
   });
 

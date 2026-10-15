@@ -33,6 +33,7 @@ import {
 } from "../gateway/operator-approval-standing-grants.worker.js";
 import {
   hasDueOperatorApprovalsInDatabase,
+  readOperatorApprovalReplayInDatabase,
   readPendingOperatorApprovalsInDatabase,
   listTerminalOperatorApprovalsInDatabase,
 } from "../gateway/operator-approval-store.kernel.worker.js";
@@ -325,6 +326,9 @@ export function readOpenClawStateDatabaseCommand(
   }
   if (command.type === "operatorApprovals.hasDue") {
     return { type: command.type, hasDue: hasDueOperatorApprovalsInDatabase(command.nowMs, db) };
+  }
+  if (command.type === "operatorApprovals.prepareReplay") {
+    return { type: command.type, replay: readOperatorApprovalReplayInDatabase(command.input, db) };
   }
   if (command.type === "operatorApprovals.history") {
     return {

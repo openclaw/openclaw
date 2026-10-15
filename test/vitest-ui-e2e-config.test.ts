@@ -44,6 +44,7 @@ const realGatewayFiles = [
   "chat-loading-performance.real-gateway",
   "chat-managed-media-order.real-gateway",
   "chat-project-media.real-gateway",
+  "chat-reconnect-continuity.real-gateway",
   "chat-session-diff-folding.real-gateway",
   "chat-stop-finished-run.real-gateway",
   "chat-stop-owned-exec.real-gateway",
@@ -548,7 +549,7 @@ describe("Control UI E2E resource ownership", () => {
         },
       ]);
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(27);
+      expect(parallel).toHaveLength(28);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {

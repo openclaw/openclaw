@@ -1365,9 +1365,9 @@ AFTER_CD
       const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
       expect(installStep.env, workflowPath).toMatchObject({
-        OPENGREP_VERSION: "v1.30.1",
+        OPENGREP_VERSION: "v1.30.2",
         OPENGREP_LINUX_X64_SHA256:
-          "d3195b9d8d5ae93179f6aa5f5daaba6a920a5a09d38c5d5ae5e60924050210c4",
+          "a66aa3278457f02b287b985a45b6762aebcaba5000f2689245fd1ed86d1456c7",
       });
       expect(run, workflowPath).toContain('binary="$(mktemp "${RUNNER_TEMP}/opengrep.XXXXXX")"');
       expect(run, workflowPath).toContain("trap 'rm -f \"$binary\"' EXIT");
@@ -2404,7 +2404,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(actionCheckoutIndex).toBeLessThan(setupIndex);
   });
 
-  it("keeps trusted hybrid controls on Blacksmith when optional hosted admission is closed", () => {
+  it("keeps tiny hybrid controls hosted without moving security or fork first attempts", () => {
     const workflow = readCiWorkflow();
     const context = {
       eventName: "pull_request",
@@ -2416,7 +2416,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       const expression = workflow.jobs[jobName]["runs-on"];
       for (const eventName of ["pull_request", "push"] as const) {
         expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
-          "blacksmith-4vcpu-ubuntu-2404",
+          jobName === "security-fast" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04",
         );
       }
       expect(
@@ -2426,7 +2426,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           headRepository: "contributor/openclaw",
         }),
         `${jobName}: untrusted fork first attempt`,
-      ).toBe(evaluateWorkflowExpression(expression, context));
+      ).toBe("blacksmith-4vcpu-ubuntu-2404");
       for (const override of [
         { runAttempt: 0 },
         { runAttempt: 2 },
@@ -2449,7 +2449,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       }
     }
     for (const [jobName, task, expected] of [
-      ["preflight", undefined, "blacksmith-4vcpu-ubuntu-2404"],
+      ["preflight", undefined, "ubuntu-24.04"],
       ["security-fast", undefined, "ubuntu-24.04"],
       ["checks-ui", undefined, "blacksmith-8vcpu-ubuntu-2404"],
       ["checks-ui-e2e", "browser-extension", "ubuntu-24.04"],
@@ -2484,7 +2484,11 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
               runnerBackend,
             }),
             `${runnerBackend}: ${authorAssociation}: ${headRepository}`,
-          ).toBe("blacksmith-4vcpu-ubuntu-2404");
+          ).toBe(
+            runnerBackend === "hybrid" && headRepository === "openclaw/openclaw"
+              ? "ubuntu-24.04"
+              : "blacksmith-4vcpu-ubuntu-2404",
+          );
         }
       }
     }
@@ -5875,12 +5879,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           .toSorted(),
       );
       if (releaseTier === false) {
-        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 12);
+        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 13);
         expect(selectedFiles).not.toContain(
           "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
         );
         expect(selectedFiles).not.toContain(
           "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
+        );
+        expect(selectedFiles).not.toContain(
+          "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
         );
         expect(selectedFiles).not.toContain(
           "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
