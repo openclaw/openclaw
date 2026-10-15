@@ -1,6 +1,6 @@
 // Covers question-button value resolution through a stubbed Gateway.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveQuestionOverGateway } from "./question-gateway-resolver.js";
+import { getQuestionOverGateway, resolveQuestionOverGateway } from "./question-gateway-resolver.js";
 
 const hoisted = vi.hoisted(() => ({ callGateway: vi.fn() }));
 
@@ -205,5 +205,34 @@ describe("resolveQuestionOverGateway", () => {
       resolveQuestionOverGateway({ cfg: {} as never, questionId: recordId, customInput: true }),
     ).resolves.toEqual({ status: "custom-input", questionId: "deploy_target" });
     expect(hoisted.callGateway).toHaveBeenCalledOnce();
+  });
+});
+
+describe("getQuestionOverGateway", () => {
+  beforeEach(() => {
+    hoisted.callGateway.mockReset();
+  });
+
+  it("reads records without their answers and treats dropped records as missing", async () => {
+    hoisted.callGateway
+      .mockResolvedValueOnce({
+        question: {
+          ...pendingRecord,
+          status: "answered",
+          answers: { answers: { deploy_target: ["Production"] } },
+          resolvedBy: "clickclack:usr_1",
+        },
+      })
+      .mockRejectedValueOnce(terminalError("QUESTION_NOT_FOUND"));
+
+    await expect(
+      getQuestionOverGateway({ cfg: {} as never, questionId: recordId }),
+    ).resolves.toEqual({ ...pendingRecord, status: "answered", resolvedBy: "clickclack:usr_1" });
+    await expect(
+      getQuestionOverGateway({ cfg: {} as never, questionId: recordId }),
+    ).resolves.toBeNull();
+    await expect(
+      getQuestionOverGateway({ cfg: {} as never, questionId: "ask_bad" }),
+    ).rejects.toThrow("valid question record id");
   });
 });

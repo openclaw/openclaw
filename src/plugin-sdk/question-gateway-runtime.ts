@@ -3,7 +3,12 @@ import { readAskUserQuestionId } from "../auto-reply/reply-payload.js";
 import { registerQuestionChannelDelivery } from "../infra/question-channel-runtime.js";
 // The pre-release named resolver exports were replaced wholesale by this
 // runtime object before any tagged release shipped them; no compat aliases.
-import { resolveQuestionOverGateway } from "../infra/question-gateway-resolver.js";
+import {
+  cancelQuestionOverGateway,
+  getQuestionOverGateway,
+  resolveQuestionAnswersOverGateway,
+  resolveQuestionOverGateway,
+} from "../infra/question-gateway-resolver.js";
 import {
   QUESTION_REACTION_EMOJIS,
   prepareQuestionReactionPayloadForDelivery,
@@ -148,6 +153,9 @@ export function createQuestionReactionTargetStore<TIdentity, TMetadata = undefin
 
 export const questionGatewayRuntime = {
   resolveOption: resolveQuestionOverGateway,
+  getQuestion: getQuestionOverGateway,
+  resolveAnswers: resolveQuestionAnswersOverGateway,
+  cancelQuestion: cancelQuestionOverGateway,
   reactionEmojis: QUESTION_REACTION_EMOJIS,
   prepareReactionPayloadForDelivery: prepareQuestionReactionPayloadForDelivery,
   readAskUserQuestionId,

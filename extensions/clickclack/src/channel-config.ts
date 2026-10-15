@@ -11,6 +11,13 @@ import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 export const CLICKCLACK_CHANNEL_ID = "clickclack" as const;
 export const clickClackMeta = { ...getChatChannelMeta(CLICKCLACK_CHANNEL_ID) };
 
+export const clickClackReload = {
+  configPrefixes: ["channels.clickclack"],
+  // Sender admission reads current config. Replacing the monitor would defer
+  // revocation until an ask_user turn waiting for that sender ends.
+  noopPrefixes: ["channels.clickclack.allowFrom", "channels.clickclack.accounts.*.allowFrom"],
+} satisfies ChannelPlugin<ResolvedClickClackAccount>["reload"];
+
 export const clickClackConfigAdapter = {
   listAccountIds: (cfg) => listClickClackAccountIds(cfg as CoreConfig),
   resolveAccount: (cfg, accountId) =>

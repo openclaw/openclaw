@@ -1,5 +1,5 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { clickClackConfigAdapter, clickClackMeta } from "./channel-config.js";
+import { clickClackConfigAdapter, clickClackMeta, clickClackReload } from "./channel-config.js";
 import { clickClackConfigSchema } from "./config-schema.js";
 import { clickClackSetupContract } from "./setup-core.js";
 import { clickClackSetupWizard } from "./setup-surface.js";
@@ -13,7 +13,7 @@ export const clickClackSetupPlugin: ChannelPlugin<ResolvedClickClackAccount> = {
     threads: true,
     blockStreaming: true,
   },
-  reload: { configPrefixes: ["channels.clickclack"] },
+  reload: clickClackReload,
   configSchema: clickClackConfigSchema,
   config: clickClackConfigAdapter,
   setupContract: clickClackSetupContract,

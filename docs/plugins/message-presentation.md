@@ -165,8 +165,17 @@ Button semantics:
   tap after the question ends receives a notice.
   LINE draws at most four controls on one card, matching its two-to-four option
   bound. WhatsApp, Signal, and iMessage render up to four single-select choices
-  as `1️⃣` through `4️⃣` reactions. Other question shapes degrade to label text,
-  and the user can answer with a plain-text reply.
+  as `1️⃣` through `4️⃣` reactions. ClickClack renders the whole record, including
+  several questions, multi-select, and free-text answers, as one native question
+  card and submits it through `questionGatewayRuntime.resolveAnswers`. Whole-map
+  answers and `cancelQuestion` require the owning in-process Gateway: their
+  authorizer prepares admission and returns a synchronous `isCurrent` function
+  (or `null` to deny). The host retains that assertion through awaited Gateway
+  preparation and checks it at the QuestionManager commit. A boolean authorizer
+  or remote transport cannot provide this authority. The legacy single-choice
+  operation retains its existing callback contract. Other
+  question shapes degrade to label text, and the user can answer with a
+  plain-text reply.
 - `intent: "custom-input"` switches a live question to its free-text answer
   path without resolving it. Producers must also state the free-text route in
   visible text. A channel can omit this one native control while keeping

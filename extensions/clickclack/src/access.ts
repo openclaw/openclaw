@@ -222,13 +222,11 @@ export async function resolveClickClackInboundAccess(params: {
     config: routeConfig,
     account: { ...params.account, agentId: routeAccountConfig.agentId },
   });
-  // Root lookup can outlive policy changes. Refresh through the config owner without
-  // replacing the running transport's identity or rereading its credentials.
+  // Route lookup can outlive sender policy changes. Refresh admission through
+  // the config owner without replacing the transport or rereading credentials.
   // SAFETY: The host validates ClickClack settings; the downstream readers remain read-only.
-  const cfg = rootPolicyConfigured ? (runtime.config.current() as CoreConfig) : params.config;
-  const accountPolicy = rootPolicyConfigured
-    ? resolveClickClackAccountConfig(cfg, params.account.accountId)
-    : params.account;
+  const cfg = runtime.config.current() as CoreConfig;
+  const accountPolicy = resolveClickClackAccountConfig(cfg, params.account.accountId);
   const effectiveGroupPolicy = resolveClickClackGroupPolicy({
     account: accountPolicy,
     channelId: params.message.channel_id,
@@ -256,6 +254,7 @@ export async function resolveClickClackInboundAccess(params: {
     return {
       shouldDispatch: false,
       isCurrent,
+      isSenderCurrent: () => false,
       commandAuthorized: false,
       requireMention: threadMentionPolicy.requireMention,
       mentionFacts,
@@ -282,6 +281,7 @@ export async function resolveClickClackInboundAccess(params: {
     return {
       shouldDispatch: false,
       isCurrent,
+      isSenderCurrent: () => false,
       commandAuthorized: false,
       requireMention: threadMentionPolicy.requireMention,
       mentionFacts,
@@ -354,7 +354,7 @@ export async function resolveClickClackInboundAccess(params: {
       : false,
   });
 
-  const isAdmissionCurrent = () => {
+  const isAdmissionCurrent = (checkMention = true) => {
     if (!isCurrent()) {
       return false;
     }
@@ -423,6 +423,11 @@ export async function resolveClickClackInboundAccess(params: {
     ) {
       return false;
     }
+    // A submitted card is an explicit response; it does not need the mention
+    // that activates an ordinary inbound message. Sender policy still applies.
+    if (!checkMention) {
+      return true;
+    }
     const currentThreadPolicy = resolveBotThreadMentionPolicy({
       isBotOwnedThread,
       requireMentionInBotThreads: currentGroupPolicy.requireMentionInBotThreads,
@@ -453,6 +458,7 @@ export async function resolveClickClackInboundAccess(params: {
     shouldDispatch:
       isAdmissionCurrent() && !preparedRoute.revoked && resolved.ingress.admission === "dispatch",
     isCurrent: isAdmissionCurrent,
+    isSenderCurrent: () => isAdmissionCurrent(false),
     commandAuthorized: resolved.commandAccess.requested
       ? resolved.commandAccess.authorized
       : resolved.senderAccess.allowed,
