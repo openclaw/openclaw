@@ -34,12 +34,12 @@ function message(id: string, content: string, role: "user" | "assistant" | "tool
   return { type: "message" as const, id, message: { role, content } };
 }
 
-function compaction(id: string, firstKeptEntryId: string) {
+function compaction(id: string, firstKeptEntryId: string, summary = `${id} summary`) {
   return {
     type: "compaction" as const,
     id,
     timestamp,
-    summary: `${id} summary`,
+    summary,
     firstKeptEntryId,
     tokensBefore: 100,
     tokensAfter: 25,
@@ -184,7 +184,7 @@ describe("session transcript reader marker projection", () => {
     async ({ stored, expected }) => {
       const scope = await writeTranscript("compaction-summary-cap", [
         message("before", "Original conversation"),
-        { ...compaction("bounded", "before"), summary: stored },
+        compaction("bounded", "before", stored),
       ]);
       const requestedRead = await readSessionMessageByIdAsync(scope, "bounded", {
         includeCompactionSummary: true,
