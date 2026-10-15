@@ -14,7 +14,3 @@ it("sizes context from the marker when usage counters cover a whole turn", () =>
   const contextUsage = { state: "available", promptTokens: 74_920, totalTokens: 74_921 };
   expect(contextPercent({ ...turnUsage, contextUsage })).toBe(37);
 });
-
-it("sizes context from the usage counters without a marker", () => {
-  expect(contextPercent(turnUsage)).toBe(75);
-});

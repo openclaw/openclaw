@@ -20,17 +20,11 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
-import { resolveCliTranscriptUsage } from "../cli-transcript-usage.js";
+import { resolveCliTranscriptUsage, type CliTranscriptUsage } from "../cli-transcript-usage.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
-import type { NormalizedUsage } from "../usage.js";
-
-type TranscriptUsage = Pick<
-  NormalizedUsage,
-  "input" | "output" | "cacheRead" | "cacheWrite" | "total" | "contextUsage"
->;
 
 type TextTurnTranscriptContext = {
   inputProvenance?: InputProvenance;
@@ -62,7 +56,7 @@ type PersistTextTurnTranscriptParams = TextTurnTranscriptContext & {
     provider: string;
     model: string;
     stopReason: StopReason;
-    usage?: TranscriptUsage;
+    usage?: CliTranscriptUsage;
   };
 };
 
