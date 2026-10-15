@@ -1,6 +1,7 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createQueryId, sql, SqliteQueryCompiler, type RootOperationNode } from "kysely";
+import { sqliteStringSetEntries } from "../kysely-sync.js";
 import { runVectorKnnInSubprocess } from "./sqlite-vector-subprocess.js";
 import {
   matchesVectorRow,
@@ -90,6 +91,11 @@ export function bindSqliteVectorCapability(
     }
   };
   return {
+    idSet(index, ids) {
+      own(index);
+      // Retain the caller's JSON bytes; the string-set encoder normalizes code points.
+      return sql<string>`SELECT value FROM ${sqliteStringSetEntries(JSON.stringify(ids))}`;
+    },
     prepareExists(index) {
       own(index);
       if (!db) {

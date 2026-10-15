@@ -46,6 +46,7 @@ export type VectorSearch<Row> = {
 
 /** @experimental Approximate L2 candidates with cosine reranking; feature owners retain exact fallback. */
 export interface VectorCapability {
+  idSet(index: VectorIndex, ids: readonly string[]): RawBuilder<string>;
   prepareExists(index: VectorIndex): (id: string) => boolean;
   nearest<Row>(request: VectorSearch<Row>): Promise<{
     rows: Row[];

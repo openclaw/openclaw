@@ -375,7 +375,7 @@ export class MemorySourceIndexKernel {
             this.search.index,
             ids === undefined
               ? sql`SELECT id FROM memory_index_chunks WHERE path = ${pathname} AND source = ${source}`
-              : sql`SELECT id FROM memory_index_chunks WHERE path = ${pathname} AND source = ${source} AND id IN (SELECT value FROM json_each(${JSON.stringify(ids)}))`,
+              : sql`SELECT id FROM memory_index_chunks WHERE path = ${pathname} AND source = ${source} AND id IN (${this.search.capability.idSet(this.search.index, ids)})`,
           );
           return;
         }
