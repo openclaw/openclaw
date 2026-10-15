@@ -399,6 +399,9 @@ export async function runCopilotExecution(context: {
     transcriptJournal = createAttemptTranscriptJournal({
       abortSession: () => session?.abort() ?? Promise.resolve(),
       attempt: input,
+      echoSuppressionInstruction: settledToolFinalization
+        ? readNonEmptyString(input.prompt)
+        : undefined,
       messages,
       onInitialSdkUserValidated: () => {
         initialSdkUserValidated = true;

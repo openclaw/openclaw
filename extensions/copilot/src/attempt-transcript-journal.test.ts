@@ -66,6 +66,9 @@ async function createInitializedFixture() {
   return fixture;
 }
 
+const FINALIZER_INSTRUCTION =
+  "Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+
 describe("Copilot attempt transcript journal", () => {
   it("prepares standalone media after hooks without claiming user or tool-group media", async () => {
     const sourceText = "Artifacts ready\nMEDIA:./artifact.json";
@@ -1102,5 +1105,23 @@ describe("Copilot attempt transcript journal", () => {
     expect(
       transcriptMessages(await readSessionTranscriptEvents(target)).map((row) => row.message.role),
     ).toEqual(["user"]);
+  });
+
+  it("refuses a tool-free finalizer echo before it reaches the transcript", async () => {
+    const fixture = await createFixture(undefined, undefined, FINALIZER_INSTRUCTION);
+    await fixture.journal.persistInitialUser();
+    fixture.session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
+    emitAssistant(fixture.session, "echoed-finalizer", { content: FINALIZER_INSTRUCTION });
+    emitAssistant(fixture.session, "accepted-finalizer", {
+      content: "settled-note.txt contains the settled trace marker.",
+    });
+    await fixture.journal.barrier("finalizer echo");
+
+    const persisted = transcriptMessages(await readSessionTranscriptEvents(fixture.target)).map(
+      (row) => row.message,
+    );
+    expect(persisted.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(JSON.stringify(persisted.at(-1))).toContain("settled trace marker");
+    expect(JSON.stringify(persisted)).not.toContain("Do not repeat completed tool calls");
   });
 });

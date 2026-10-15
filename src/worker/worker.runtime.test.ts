@@ -1018,6 +1018,18 @@ describe("worker runtime", () => {
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
     expect(gateway.inferenceRequests).toHaveLength(4);
     expect(gateway.inferenceRequests[3]?.context.tools ?? []).toEqual([]);
+    // The refused reply must not survive into the re-ask context: only the newly
+    // injected instruction may carry that wording, never an assistant turn.
+    const retryMessages = (gateway.inferenceRequests[3]?.context.messages ?? []) as Array<{
+      role?: string;
+    }>;
+    expect(
+      retryMessages.filter(
+        (message) =>
+          message.role === "assistant" &&
+          JSON.stringify(message).includes(SETTLED_TOOL_TERMINAL_CONTINUATION_BODY),
+      ),
+    ).toEqual([]);
     const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
     expect(messages.at(-1)).toMatchObject({
       role: "assistant",

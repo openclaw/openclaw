@@ -454,6 +454,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       });
       if (instruction && terminalAssistant?.stopReason === "stop") {
         session.agent.state.tools = [];
+        // A refused finalization attempt must not become retry context: the
+        // re-ask starts from the settled turn, so the rejected bytes never reach
+        // the next request even though the remote transcript never saw them.
+        const settledMessages = session.agent.state.messages.slice();
         // The finalizer's reply is published verbatim, so a turn that restates
         // the injected nudge is unanswered rather than delivered. Re-ask once
         // with tools still disabled, then let the failure propagate.
@@ -493,6 +497,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
             }
             liveRuntime.discardDeferredPreviews();
             transcriptRuntime.discardTranscriptHold();
+            session.agent.state.messages = settledMessages.slice();
             continue;
           }
           liveRuntime.commitDeferredPreviews();

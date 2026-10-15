@@ -27,6 +27,22 @@ function assistantContainsToolCall(
 }
 
 /**
+ * True when a tool-free finalizer reply only restates the instruction this
+ * attempt injected. Persistence owners check it at the write edge so refused
+ * bytes never reach the transcript or the next model call's context.
+ */
+export function isEchoedSettledTurnFinalizationAssistant(
+  assistant: AgentHarnessSettledTurnFinalizationResult["assistant"],
+  instruction?: string,
+): boolean {
+  if (instruction === undefined || instruction.trim().length === 0) {
+    return false;
+  }
+  const text = resolveFinalAssistantVisibleText(assistant);
+  return text !== undefined && isRecoveryInstructionEcho(text, instruction);
+}
+
+/**
  * Validates the deliberately narrow finalizer result before core turns it into
  * a terminal reply. Capability and delivery fields cannot cross this contract.
  */

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  isEchoedSettledTurnFinalizationAssistant,
   projectAgentHarnessTranscriptMessageForDisplay,
   restorePreparedUserTurnOperationalMetaForRuntime,
   runAgentHarnessBeforeMessageWriteHook,
@@ -86,6 +87,7 @@ export type AttemptTranscriptJournal = ReturnType<typeof createAttemptTranscript
 export function createAttemptTranscriptJournal(params: {
   abortSession: () => Promise<void>;
   attempt: AttemptParamsLike;
+  echoSuppressionInstruction?: string;
   messages: AgentMessage[];
   onInitialSdkUserValidated?: () => void;
   sdkSessionId: string;
@@ -537,6 +539,16 @@ export function createAttemptTranscriptJournal(params: {
       assistantTranscriptOwned = false;
       assistantTranscriptIdempotencyKey = undefined;
       terminalAnchor = undefined;
+      // A restricted finalization prompt is runner-injected, so a tool-free
+      // reply that restates it is not an answer. Refuse it before the
+      // append/publish boundary instead of persisting refused bytes and
+      // withdrawing them afterwards.
+      if (
+        input.toolCallIds.length === 0 &&
+        isEchoedSettledTurnFinalizationAssistant(message, params.echoSuppressionInstruction)
+      ) {
+        return;
+      }
       schedule(async () => {
         if (pendingTools) {
           throw new Error("Copilot emitted an assistant message before tool results settled");
