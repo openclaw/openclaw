@@ -78,6 +78,8 @@ Requesting Gateway control does not switch the selected model.
 Success returns `clientControl: { owner: "gateway" }`, a 60-second single-use
 `clientSecret`, and the relative offer URL `/plugins/openai/realtime/calls`.
 The client posts an audio-only SDP offer and opens no provider data channel.
+Browser clients send the broker token in `X-OpenClaw-Realtime-Token` instead of
+`Authorization`, so a proxy password and the reservation can travel together.
 The Gateway attaches the provider's server sideband and owns tools or native
 agent delegation, transcripts, steering, cancellation, and call cleanup while
 media continues directly between the client and OpenAI. Negotiated sessions

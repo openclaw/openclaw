@@ -7,6 +7,7 @@ import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { vi, type Mock } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
+import { REALTIME_OFFER_TOKEN_HEADER } from "./realtime-quicksilver-offer-http.js";
 import { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
 
 type MockLogger = {
@@ -54,6 +55,8 @@ export class FakeSocket extends EventEmitter {
 export function createRequest(params: {
   method?: string;
   token?: string;
+  offerToken?: string;
+  authorization?: string;
   origin?: string;
   host?: string;
   contentType?: string;
@@ -62,7 +65,14 @@ export function createRequest(params: {
   return Object.assign(createMockIncomingRequest([params.body ?? "v=offer\r\n"]), {
     method: params.method ?? "POST",
     headers: {
-      ...(params.token ? { authorization: `Bearer ${params.token}` } : {}),
+      ...(params.authorization
+        ? { authorization: params.authorization }
+        : params.token
+          ? { authorization: `Bearer ${params.token}` }
+          : {}),
+      ...(params.offerToken
+        ? { [REALTIME_OFFER_TOKEN_HEADER.toLowerCase()]: params.offerToken }
+        : {}),
       ...(params.contentType === undefined
         ? { "content-type": "application/sdp" }
         : params.contentType

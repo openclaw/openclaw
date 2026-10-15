@@ -50,11 +50,79 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
       "https://gateway.example.test/plugins/codex/realtime/calls",
       expect.objectContaining({
         method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer reservation-token",
-        }),
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/sdp",
+          "X-OpenClaw-Realtime-Token": "reservation-token",
+        },
       }),
     );
+  });
+
+  it("keeps Authorization free when a gateway offer also carries provider headers", async () => {
+    const fetchMock = vi.fn(async () => new Response("answer-sdp"));
+    vi.stubGlobal("fetch", fetchMock);
+    const exchange = new RealtimeTalkWebRtcOfferExchange();
+
+    await exchange.readAnswer({
+      session: {
+        provider: "openai",
+        transport: "webrtc",
+        clientSecret: "reservation-token",
+        offerUrl: "https://gateway.example.test/realtime/calls",
+        offerHeaders: {
+          Authorization: "Bearer should-not-be-sent",
+          "X-Trace": "1",
+        },
+      },
+      offer: { type: "offer", sdp: "offer-sdp" },
+      gatewayUrl: "wss://gateway.example.test/control",
+      isCurrent: () => true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://gateway.example.test/realtime/calls",
+      expect.objectContaining({
+        credentials: "include",
+        headers: {
+          "X-Trace": "1",
+          "Content-Type": "application/sdp",
+          "X-OpenClaw-Realtime-Token": "reservation-token",
+        },
+      }),
+    );
+  });
+
+  it("sends the provider bearer token on a direct realtime offer", async () => {
+    const fetchMock = vi.fn(async () => new Response("answer-sdp"));
+    vi.stubGlobal("fetch", fetchMock);
+    const exchange = new RealtimeTalkWebRtcOfferExchange();
+
+    await exchange.readAnswer({
+      session: {
+        provider: "openai",
+        transport: "webrtc",
+        clientSecret: "reservation-token",
+        offerUrl: "https://api.openai.com/v1/realtime/calls",
+        offerHeaders: { "OpenAI-Beta": "realtime=v1" },
+      },
+      offer: { type: "offer", sdp: "offer-sdp" },
+      gatewayUrl: "wss://gateway.example.test/control",
+      isCurrent: () => true,
+    });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(fetchMock).toHaveBeenCalledWith("https://api.openai.com/v1/realtime/calls", {
+      method: "POST",
+      body: "offer-sdp",
+      headers: {
+        "OpenAI-Beta": "realtime=v1",
+        "Content-Type": "application/sdp",
+        Authorization: "Bearer reservation-token",
+      },
+      signal: expect.any(AbortSignal),
+    });
+    expect(init.credentials).toBeUndefined();
   });
 
   it("accepts an SDP answer at the 256 KiB boundary", async () => {

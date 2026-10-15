@@ -508,6 +508,11 @@ describe("GPT-Live offer broker", () => {
         "https://control.example",
       );
       expect(accepted.setHeader).toHaveBeenCalledWith(
+        "Access-Control-Allow-Headers",
+        "Authorization, Content-Type, X-OpenClaw-Realtime-Token",
+      );
+      expect(accepted.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Credentials", "true");
+      expect(accepted.setHeader).toHaveBeenCalledWith(
         "Access-Control-Allow-Private-Network",
         "true",
       );
@@ -586,6 +591,45 @@ describe("GPT-Live offer broker", () => {
       const replay = createResponseHarness();
       await realtime.handler(createRequest({ token: reservation.clientSecret }), replay.res);
       expect(replay.res.statusCode).toBe(401);
+    } finally {
+      await realtime.cleanup();
+    }
+  });
+
+  it("accepts the reservation header while Authorization stays basic", async () => {
+    const { realtime } = createBroker();
+    try {
+      const reservation = await reserveLiveSession(realtime);
+      const proxied = createResponseHarness();
+      await realtime.handler(
+        createRequest({
+          authorization: "Basic bm90LXRoZS1yZXNlcnZhdGlvbg==",
+          offerToken: reservation.clientSecret,
+          origin: "https://control.example",
+        }),
+        proxied.res,
+      );
+      expect(proxied.res.statusCode).toBe(200);
+      expect(proxied.readBody()).toBe("v=answer\r\n");
+      expect(proxied.setHeader).not.toHaveBeenCalledWith(
+        expect.stringMatching(/^www-authenticate$/i),
+        expect.anything(),
+      );
+
+      const basicOnly = createResponseHarness();
+      await realtime.handler(
+        createRequest({
+          authorization: "Basic bm90LXRoZS1yZXNlcnZhdGlvbg==",
+          origin: "https://control.example",
+        }),
+        basicOnly.res,
+      );
+      expect(basicOnly.res.statusCode).toBe(401);
+      expect(basicOnly.readBody()).toBe("Invalid or expired realtime session token");
+      expect(basicOnly.setHeader).not.toHaveBeenCalledWith(
+        expect.stringMatching(/^www-authenticate$/i),
+        expect.anything(),
+      );
     } finally {
       await realtime.cleanup();
     }

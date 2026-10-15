@@ -21,6 +21,7 @@ import {
   applyRealtimeOfferCorsHeaders,
   createResponseDeliveryWaiter,
   readOfferBearerToken,
+  REALTIME_OFFER_TOKEN_HEADER,
   rejectOversizedOffer,
   respondRealtimeOffer,
 } from "./realtime-quicksilver-offer-http.js";
@@ -294,7 +295,10 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
       res.statusCode = 204;
       res.setHeader("cache-control", "no-store");
       res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        `Authorization, Content-Type, ${REALTIME_OFFER_TOKEN_HEADER}`,
+      );
       res.setHeader(
         "Vary",
         "Origin, Access-Control-Request-Method, Access-Control-Request-Headers",

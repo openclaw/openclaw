@@ -58,13 +58,40 @@ export function applyRealtimeOfferCorsHeaders(
     return false;
   }
   res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Vary", "Origin");
   return true;
 }
 
+/** Reservation for a Gateway-brokered realtime offer.
+ *
+ * Browser clients send the token here and leave `Authorization` unset. A
+ * reverse proxy in front of the Gateway can then keep using `Authorization`
+ * for HTTP basic auth. Direct provider calls still use `Authorization: Bearer`.
+ */
+export const REALTIME_OFFER_TOKEN_HEADER = "X-OpenClaw-Realtime-Token";
+
+function readSingleHeaderToken(value: string | string[] | undefined): string | undefined {
+  const header = Array.isArray(value) ? (value.length === 1 ? value[0] : undefined) : value;
+  if (typeof header !== "string") {
+    return undefined;
+  }
+  const token = header.trim();
+  // One token. A comma or whitespace is a combined header, not a reservation.
+  if (!token || /[\s,]/.test(token)) {
+    return undefined;
+  }
+  return token;
+}
+
 export function readOfferBearerToken(req: IncomingMessage): string | undefined {
-  const authorization = req.headers.authorization?.trim();
-  return authorization?.match(/^Bearer\s+([^\s]+)$/i)?.[1];
+  const dedicated = readSingleHeaderToken(req.headers[REALTIME_OFFER_TOKEN_HEADER.toLowerCase()]);
+  if (dedicated) {
+    return dedicated;
+  }
+  const authorization = req.headers.authorization;
+  const authorizationValue = Array.isArray(authorization) ? authorization[0] : authorization;
+  return authorizationValue?.trim().match(/^Bearer\s+([^\s]+)$/i)?.[1];
 }
 
 /**

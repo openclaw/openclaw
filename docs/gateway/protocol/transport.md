@@ -257,8 +257,13 @@ successful result includes
 token in `clientSecret`, and the relative
 `offerUrl: "/plugins/openai/realtime/calls"`.
 
-The client sends only `application/sdp` to that route with the broker token. It
-must not create a provider control data channel. The Gateway creates the call,
+The client posts an `application/sdp` body to that route and must not create a
+provider control data channel. Browser clients send the single-use broker token
+in `X-OpenClaw-Realtime-Token` and leave `Authorization` unset, so a reverse
+proxy can keep using `Authorization` for its own HTTP basic auth. The route
+still accepts `Authorization: Bearer <clientSecret>` from clients that do not
+share that header with a proxy. A failed reservation is `401` with no
+`WWW-Authenticate` challenge. The Gateway creates the call,
 attaches the provider sideband before returning the answer SDP, and owns tool,
 transcript, steering, cancellation, and close lifecycle. Clients that omit the
 capability retain the existing browser session behavior. A Gateway or

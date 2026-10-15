@@ -7,6 +7,9 @@ import type { RealtimeTalkVideoFrame } from "./video.ts";
 const REALTIME_WEBRTC_OFFER_TIMEOUT_MS = 30_000;
 const REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE = 64 * 1024;
 const OPENAI_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
+// Gateway offer route reads this header. Keep in step with
+// extensions/openai/realtime-quicksilver-offer-http.ts.
+const REALTIME_OFFER_TOKEN_HEADER = "X-OpenClaw-Realtime-Token";
 
 export type RealtimeServerEvent = {
   type?: string;
@@ -170,14 +173,7 @@ type PendingOfferRequest = {
   timeout: ReturnType<typeof globalThis.setTimeout>;
 };
 
-function resolveRealtimeTalkOfferUrl(offerUrl: string | undefined, gatewayUrl: string): string {
-  const target = offerUrl ?? OPENAI_REALTIME_CALLS_URL;
-  try {
-    return new URL(target).toString();
-  } catch {
-    // Relative broker routes belong to the connected Gateway, which may not
-    // share the Control UI document origin.
-  }
+function gatewayHttpBase(gatewayUrl: string): URL {
   const gateway = new URL(gatewayUrl, window.location.href);
   if (gateway.protocol === "ws:") {
     gateway.protocol = "http:";
@@ -187,7 +183,52 @@ function resolveRealtimeTalkOfferUrl(offerUrl: string | undefined, gatewayUrl: s
   gateway.pathname = "/";
   gateway.search = "";
   gateway.hash = "";
-  return new URL(target, gateway).toString();
+  return gateway;
+}
+
+function resolveRealtimeTalkOfferUrl(offerUrl: string | undefined, gatewayUrl: string): string {
+  const target = offerUrl ?? OPENAI_REALTIME_CALLS_URL;
+  try {
+    return new URL(target).toString();
+  } catch {
+    // Relative broker routes belong to the connected Gateway, which may not
+    // share the Control UI document origin.
+  }
+  return new URL(target, gatewayHttpBase(gatewayUrl)).toString();
+}
+
+function offerTargetsConnectedGateway(resolvedOfferUrl: string, gatewayUrl: string): boolean {
+  try {
+    return new URL(resolvedOfferUrl).origin === gatewayHttpBase(gatewayUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+function realtimeTalkOfferRequestHeaders(params: {
+  resolvedOfferUrl: string;
+  gatewayUrl: string;
+  clientSecret: string;
+  offerHeaders?: Record<string, string>;
+}): { headers: Record<string, string>; credentials?: RequestCredentials } {
+  const headers: Record<string, string> = {
+    ...params.offerHeaders,
+    "Content-Type": "application/sdp",
+  };
+  if (!offerTargetsConnectedGateway(params.resolvedOfferUrl, params.gatewayUrl)) {
+    headers.Authorization = `Bearer ${params.clientSecret}`;
+    return { headers };
+  }
+  // The proxy in front of the Gateway uses Authorization for HTTP basic auth.
+  // Leaving it unset lets the browser attach the cached password. The
+  // reservation travels in its own header.
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === "authorization") {
+      delete headers[key];
+    }
+  }
+  headers[REALTIME_OFFER_TOKEN_HEADER] = params.clientSecret;
+  return { headers, credentials: "include" };
 }
 
 export class RealtimeTalkWebRtcOfferExchange {
@@ -213,19 +254,23 @@ export class RealtimeTalkWebRtcOfferExchange {
     };
     this.pendingRequest = request;
     try {
-      const response = await fetch(
-        resolveRealtimeTalkOfferUrl(params.session.offerUrl, params.gatewayUrl),
-        {
-          method: "POST",
-          body: params.offer.sdp,
-          headers: {
-            ...params.session.offerHeaders,
-            Authorization: `Bearer ${params.session.clientSecret}`,
-            "Content-Type": "application/sdp",
-          },
-          signal: request.controller.signal,
-        },
+      const resolvedOfferUrl = resolveRealtimeTalkOfferUrl(
+        params.session.offerUrl,
+        params.gatewayUrl,
       );
+      const offerRequest = realtimeTalkOfferRequestHeaders({
+        resolvedOfferUrl,
+        gatewayUrl: params.gatewayUrl,
+        clientSecret: params.session.clientSecret,
+        offerHeaders: params.session.offerHeaders,
+      });
+      const response = await fetch(resolvedOfferUrl, {
+        method: "POST",
+        body: params.offer.sdp,
+        headers: offerRequest.headers,
+        ...(offerRequest.credentials ? { credentials: offerRequest.credentials } : {}),
+        signal: request.controller.signal,
+      });
       if (!params.isCurrent()) {
         void response.body?.cancel().catch(() => undefined);
         return undefined;
