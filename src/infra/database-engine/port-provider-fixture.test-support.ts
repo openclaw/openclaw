@@ -1,6 +1,5 @@
 import { catalog, portTables } from "../../../scripts/lib/postgres-schema-catalog.mts";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import type { DatabasePortProvider } from "./port-descriptor.js";
 import type { PortDescriptor } from "./port.worker.js";
 import { expectedPostgresCatalog } from "./postgres-catalog.js";
 
@@ -82,10 +81,3 @@ export function fixtureDescriptor(): PortDescriptor {
     },
   };
 }
-
-export const workboardPortProvider: DatabasePortProvider = {
-  id: "synthetic",
-  resolveRoots: () => [],
-  matchesSqlite: (tables) => tables.has("port_items"),
-  loadDescriptor: async () => fixtureDescriptor(),
-};
