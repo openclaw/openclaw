@@ -33,6 +33,10 @@ dashboard starts. In the native apps, **Open in browser** opens the current
 page in your default browser. Update the browser or operating system if that
 browser also shows the update screen.
 
+Older browsers that cannot run module scripts show a static "This browser is not
+supported" notice with a troubleshooting link instead of a blank page. Update the
+browser or system WebView, or open the page in a supported browser.
+
 In **Settings → Appearance → Browser tab icon**, choose **Agent avatar** to use
 the selected agent’s image. The **Shape** row offers **Square**, **Rounded corners**,
 and **Circle**. Square preserves the full image; rounded and circular icons use a
