@@ -168,19 +168,34 @@ export async function rollbackFailedUpdate(params: {
   const port = before?.stopped
     ? (before.servicePort ?? (await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env })))
     : undefined;
-  const failed = (reason: string) => ({
-    result: {
-      ...result,
-      status: "error" as const,
-      rollbackOutcome: result.rollbackOutcome ?? { status: "not-attempted" as const, reason },
-      reason:
-        result.recovery?.serviceRestartSafe === true && result.recovery.packageRollbackVerified
-          ? (params.result.reason ?? reason)
-          : reason,
-    },
-    rolledBack: false,
-    stoppedForRollback,
-  });
+  const failed = (reason: string, dataAtRisk?: string) => {
+    if (
+      dataAtRisk &&
+      !(result.recovery?.serviceRestartSafe === false && result.recovery.dataAtRisk)
+    ) {
+      result.recovery = {
+        serviceRestartSafe: false,
+        reason: "state-migration-started",
+        dataAtRisk,
+      };
+    }
+    return {
+      result: {
+        ...result,
+        status: "error" as const,
+        rollbackOutcome: result.rollbackOutcome ?? { status: "not-attempted" as const, reason },
+        // Keep the initiating failure when restoration or receipt verification is secondary.
+        reason:
+          (result.recovery?.serviceRestartSafe === true &&
+            result.recovery.packageRollbackVerified) ||
+          reason === "service-definition-rollback-unverified"
+            ? (params.result.reason ?? "update-failed")
+            : reason,
+      },
+      rolledBack: false,
+      stoppedForRollback,
+    };
+  };
   const stateUnchanged = async () => {
     assertCurrent();
     const baseline = params.schemaVersions;
@@ -230,6 +245,7 @@ export async function rollbackFailedUpdate(params: {
   };
   let stoppedForRollback: PreManagedServiceStop | undefined;
   let failureReason = "rollback-state-unverified";
+  let dataAtRisk: "rollback-state-unverified" | undefined = "rollback-state-unverified";
   const assertConfigUnchanged = async () => {
     assertCurrent();
     let unchanged = configFiles.every((file) => file.doctorOwned !== false);
@@ -332,19 +348,19 @@ export async function rollbackFailedUpdate(params: {
   try {
     assertCurrent();
     if (params.rollbackBlockedReason) {
-      return failed(params.rollbackBlockedReason);
+      return failed(params.rollbackBlockedReason, params.rollbackBlockedReason);
     }
     if (params.definitionRecovery.unverified) {
       return failed("service-definition-rollback-unverified");
     }
     if (!params.schemaVersions) {
-      return failed("rollback-state-unverified");
+      return failed("rollback-state-unverified", "rollback-state-unverified");
     }
     if (!(await stateUnchanged())) {
       // Compatible databases stay in place: update ledger writes alone must
       // not force snapshot restoration or prevent package-only rollback.
       if (!params.databaseBackup || !run || !packageTransaction) {
-        return failed("state-migrated-no-rollback");
+        return failed("state-migrated-no-rollback", "state-migrated-no-rollback");
       }
       let restored: boolean;
       try {
@@ -363,9 +379,10 @@ export async function rollbackFailedUpdate(params: {
         });
       }
       if (!restored || !(await stateUnchanged())) {
-        return failed("state-migrated-no-rollback");
+        return failed("state-migrated-no-rollback", "state-migrated-no-rollback");
       }
     }
+    dataAtRisk = undefined;
     await packageTransaction?.assertRollbackSafe?.();
     assertCurrent();
     const definitionBackup = params.definitionRecovery.backup;
@@ -400,9 +417,11 @@ export async function rollbackFailedUpdate(params: {
       const restore = async () => {
         // Recheck after stop so a final startup migration cannot race the first read.
         failureReason = "rollback-state-unverified";
+        dataAtRisk = "rollback-state-unverified";
         if (!(await stateUnchanged())) {
-          return failed("state-migrated-no-rollback");
+          return failed("state-migrated-no-rollback", "state-migrated-no-rollback");
         }
+        dataAtRisk = undefined;
         failureReason = "source-rollback-failed";
         if (!packageTransaction) {
           throw new Error("The retained package transaction is unavailable.");
@@ -717,6 +736,6 @@ export async function rollbackFailedUpdate(params: {
         recordUpdateRunStep(run.runId, { ...row, detail, endedAtMs }, { env: run.env });
       }
     }
-    return failed(failureReason);
+    return failed(failureReason, dataAtRisk);
   }
 }

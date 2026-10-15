@@ -1,3 +1,4 @@
+import { classifyDoctorMaintenanceRefusal } from "../commands/doctor-maintenance-inspection.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
@@ -256,6 +257,9 @@ export async function updateGitCheckout(params: {
       }
       // Doctor can migrate state before failing. Restoring code cannot undo that boundary.
       if (stateMigrationStarted) {
+        if (!recovery.serviceRestartSafe) {
+          recovery.dataAtRisk ??= "state-migrated-no-rollback";
+        }
         rollbackOutcome = {
           status: "not-attempted",
           reason: "State migration started; restoring code alone cannot restore operator state",
@@ -616,6 +620,10 @@ export async function updateGitCheckout(params: {
       try {
         doctorStep = await opts.runGitDoctor(gitRoot, doctorSteps);
       } catch (error) {
+        const refusal = classifyDoctorMaintenanceRefusal(error);
+        if (refusal.kind === "data-at-risk") {
+          recovery.dataAtRisk = refusal.reason;
+        }
         steps.push(...doctorSteps);
         throw error;
       }

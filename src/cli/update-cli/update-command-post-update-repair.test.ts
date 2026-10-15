@@ -832,10 +832,19 @@ describe("post-activation failure settlement without inference", () => {
             await convergence.beforeDoctor?.();
             if (receipt === "current-core-data-at-risk") {
               params.result.steps.push(...failureSteps);
-              throw new DoctorMaintenanceRefusalError("State is unreadable", {
-                kind: "data-at-risk",
-                reason: "unreadable-state",
-              });
+              throw new DoctorMaintenanceRefusalError(
+                "State is unreadable",
+                {
+                  kind: "data-at-risk",
+                  reason: "unreadable-state",
+                },
+                {
+                  failureFacts: Array.from({ length: 5 }, () => ({
+                    check: "doctor",
+                    code: "doctor-failed",
+                  })),
+                },
+              );
             }
             return {
               resultWithPostUpdate: {
@@ -904,7 +913,12 @@ describe("post-activation failure settlement without inference", () => {
                 service: "healthy",
                 version: mocks.version,
               }
-            : { serviceRestartSafe: false },
+            : {
+                serviceRestartSafe: false,
+                ...(receipt === "current-core-data-at-risk"
+                  ? { dataAtRisk: "unreadable-state" }
+                  : {}),
+              },
         );
       });
       expect(mocks.restartCommand).toHaveBeenCalledTimes(recovered ? 1 : 0);

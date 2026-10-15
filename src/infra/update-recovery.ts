@@ -11,6 +11,7 @@ export const updateRecoverySchema = z.discriminatedUnion("serviceRestartSafe", [
   }),
   z.strictObject({
     serviceRestartSafe: z.literal(false),
+    dataAtRisk: z.string().trim().min(1).optional(),
     packageRollbackVerified: z.boolean().optional(),
     reason: z.enum([
       "source-rollback-failed",

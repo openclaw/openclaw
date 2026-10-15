@@ -9,10 +9,7 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
-import {
-  shouldWaitForRecovery,
-  verifyUpdateFailureRecovery,
-} from "./update-command-failure-recovery.js";
+import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
@@ -77,20 +74,8 @@ export async function finishUpdate(
   { beforeFinalization, ...options }: FinishUpdateOptions = {},
 ): Promise<UpdateRunResult> {
   const captured = captureUpdateFinalization(params);
-  return await withUpdateProgressSettlement(
-    params,
-    beforeFinalization,
-    async (settled, failure) => {
-      try {
-        return await finishSettledUpdate(settled, options, captured, failure);
-      } catch (error) {
-        // Final recovery can settle the earlier failure before its caller unwinds.
-        if (error instanceof UpdateCommandFailure && error.result.status === "ok") {
-          return error.result;
-        }
-        throw error;
-      }
-    },
+  return await withUpdateProgressSettlement(params, beforeFinalization, (settled, failure) =>
+    finishSettledUpdate(settled, options, captured, failure),
   );
 }
 
@@ -127,7 +112,7 @@ async function finishSettledUpdate(
     ? false
     : await preparePostUpdateService(params, assertCurrent);
   assertCurrent();
-  const createFailure = bindUpdateFinalizationFailure(progressFailure);
+  const { createFailure, settleResult } = bindUpdateFinalizationFailure(progressFailure);
   let rollbackAttempted = false;
   let latestServiceStop = params.preManagedServiceStop;
   // Doctor parking and rollback replace this run's earlier service observation.
@@ -152,6 +137,7 @@ async function finishSettledUpdate(
   recordUpdateResultNextAction(params, params.result);
 
   let pendingResult = params.result;
+  let settledResult: UpdateRunResult | undefined;
   let terminalRecord: UpdateCommandTerminalRecord | undefined;
   let pendingNotify = true;
   const writeRestartSentinel = (result: UpdateRunResult) =>
@@ -389,7 +375,13 @@ async function finishSettledUpdate(
         serviceUpdateVerdict: gatewayStartAttempted
           ? undefined
           : currentServiceStop()?.serviceUpdateVerdict,
-        waitForStartup: shouldWaitForRecovery(params, currentServiceStop(), rollbackAttempted),
+        waitForStartup:
+          params.result.status !== "error" ||
+          params.mutationStarted ||
+          params.preManagedServiceStop?.stopped ||
+          currentServiceStop()?.stopped ||
+          Boolean(params.originalManagedServiceRuntime?.definition.rebound) ||
+          rollbackAttempted,
         assertCurrent,
       });
       assertCurrent();
@@ -419,6 +411,7 @@ async function finishSettledUpdate(
         : restoreFailure.cause;
       throw createFailure(reportedResult, detail, { cause });
     }
+    settledResult = reportedResult;
     return reportedResult;
   };
   const restoreWindowsAutoStart = (result: UpdateRunResult) =>
@@ -441,7 +434,7 @@ async function finishSettledUpdate(
           { ...params.result, status: "error" },
           params.result.recovery?.serviceRestartSafe === true,
         );
-        throw createFailure(reported, params.failure?.detail, params.failure);
+        return settleResult(reported, params.failure?.detail, params.failure);
       }
 
       if (params.result.status === "skipped" && !params.coreAlreadyCurrent) {
@@ -609,13 +602,16 @@ async function finishSettledUpdate(
             reason: recovered.result.reason ?? verificationFailure,
           });
           const reported = await reportResult(recovered.result, false, undefined, false);
-          throw createFailure(reported);
+          return settleResult(reported);
         }
         resultWithPostUpdate = recovered.result;
         return true;
       };
       if (!params.coreAlreadyCurrent) {
-        await restart();
+        const recovered = await restart();
+        if (typeof recovered !== "boolean") {
+          return recovered;
+        }
       }
       if (deferPluginConvergence) {
         ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins(async () => {
@@ -665,6 +661,9 @@ async function finishSettledUpdate(
           await notifyRestart();
           await restoreWindowsAutoStart(resultWithPostUpdate);
           const reconciled = await restart();
+          if (typeof reconciled !== "boolean") {
+            return reconciled;
+          }
           if (
             requiresInstallRootRefresh &&
             reconciled &&
@@ -729,5 +728,6 @@ async function finishSettledUpdate(
     }
   };
   // Reporting cannot revoke verified activation or authorize another native rollback.
-  return await reportResult(await runPostUpdate());
+  const result = await runPostUpdate();
+  return settledResult === result ? result : await reportResult(result);
 }

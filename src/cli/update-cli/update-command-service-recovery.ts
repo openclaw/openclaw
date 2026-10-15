@@ -62,37 +62,6 @@ import {
 
 const QUIET_SERVICE_STDOUT = createNullWriter();
 
-export function updateRecoveryDataAtRiskReason(result: UpdateRunResult): string | undefined {
-  if (
-    result.steps.some((step) => step.name === "doctor process settlement" && step.exitCode !== 0)
-  ) {
-    return "active-mutation: Doctor writers have not settled";
-  }
-  const reason =
-    result.recovery?.serviceRestartSafe === false ? result.recovery.reason : result.reason;
-  const dataRisk = [result.reason, reason].find(
-    (value) =>
-      value === "state-migrated-no-rollback" ||
-      value === "rollback-state-unverified" ||
-      value === "state-migration-started",
-  );
-  if (dataRisk) {
-    return dataRisk;
-  }
-  return result.steps
-    .flatMap((step) => step.failureFacts ?? [])
-    .find(
-      (fact) =>
-        fact.check === "doctor-maintenance" &&
-        [
-          "active-mutation",
-          "unreadable-state",
-          "incomplete-migration",
-          "gateway-state-unverified",
-        ].includes(fact.code),
-    )?.code;
-}
-
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   onGatewayStartAttempted?: () => void;
   updateRun?: UpdateCommandOptions["run"];
@@ -229,7 +198,11 @@ export function refuseUnsettledDoctorRecovery(
       settlement.cwd !== root)
   ) {
     assertCurrent();
-    result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+    result.recovery = {
+      serviceRestartSafe: false,
+      reason: "runtime-verification-failed",
+      dataAtRisk: "active-mutation",
+    };
     return true;
   }
   return false;
@@ -269,6 +242,9 @@ export async function admitInstalledGatewayRecovery(
   if (
     (!currentCore && result.reason !== "state-migrated-no-rollback") ||
     (params.coreAlreadyCurrent && result.recovery?.serviceRestartSafe === false) ||
+    (result.recovery?.serviceRestartSafe === false &&
+      result.recovery.dataAtRisk &&
+      result.recovery.dataAtRisk !== "state-migrated-no-rollback") ||
     params.originalManagedServiceRuntime ||
     !params.shouldRestart ||
     !params.preManagedServiceStop?.stopped ||
@@ -372,7 +348,11 @@ export async function admitInstalledGatewayRecovery(
       }
       assertCurrent();
       const message = `Run \`${formatCliCommand("openclaw doctor --fix", env)}\`, then \`${formatCliCommand("openclaw gateway start", env)}\`. Gateway migration recovery did not finish: ${formatErrorMessage(error)}.`;
-      result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+      result.recovery = {
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+        dataAtRisk: "incomplete-migration",
+      };
       recordMigrationRecovery(1, message);
       defaultRuntime.error(message);
       return false;
@@ -393,7 +373,8 @@ export async function admitInstalledGatewayRecovery(
 
 export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   onGatewayStartAttempted?: () => void;
-  onFailure?: (message: string) => void;
+  /** Final recovery continues cold-start observation and records restart errors itself. */
+  finalRecovery?: boolean;
   updateRun?: UpdateCommandOptions["run"];
   preManagedServiceStop: PreManagedServiceStop | undefined;
   recovery?: UpdateRunResult["recovery"];
@@ -535,13 +516,10 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
         },
         "restart",
       ).catch((error: unknown) => {
-        if (!(error instanceof GatewayRestartHealthError)) {
+        if (!params.finalRecovery || !(error instanceof GatewayRestartHealthError)) {
           throw error;
         }
-        // Native activation succeeded; observe its cold start within the update budget.
-        defaultRuntime.error(
-          "Gateway recovery is still starting; continuing readiness verification.",
-        );
+        // Native restart waits 60s; final recovery owns the longer update budget.
       });
     }
     assertCurrent();
@@ -607,7 +585,9 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       throw err;
     }
     const message = `Failed to restart managed gateway service after failed update: ${String(err)}. Run \`openclaw update repair\` and \`openclaw gateway status --deep\`.`;
-    params.onFailure?.(message);
+    if (params.finalRecovery) {
+      throw new Error(message, { cause: err });
+    }
     defaultRuntime.error(message);
     return "failed";
   }

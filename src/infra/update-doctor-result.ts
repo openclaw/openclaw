@@ -141,23 +141,11 @@ export class DoctorMaintenanceRefusalError extends UpdateDoctorError {
 }
 
 export function collectUpdateDoctorFailureFacts(error: unknown): UpdateFailureFact[] {
-  const facts: UpdateFailureFact[] = [];
-  for (const candidate of collectNestedErrorCandidates(error)) {
-    if (candidate instanceof UpdateDoctorError) {
-      facts.push(...candidate.failureFacts);
-      if (
-        candidate instanceof DoctorMaintenanceRefusalError &&
-        candidate.refusal.kind === "data-at-risk"
-      ) {
-        facts.unshift({
-          check: "doctor-maintenance",
-          code: candidate.refusal.reason,
-          message: candidate.message,
-        });
-      }
-    }
-  }
-  return normalizeUpdateFailureFacts(facts);
+  return normalizeUpdateFailureFacts(
+    collectNestedErrorCandidates(error).flatMap((candidate) =>
+      candidate instanceof UpdateDoctorError ? candidate.failureFacts : [],
+    ),
+  );
 }
 
 /** Keep optional health diagnostics bounded across Doctor and its update parent. */

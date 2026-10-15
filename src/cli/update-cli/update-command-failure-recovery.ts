@@ -11,7 +11,6 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import type {
@@ -22,30 +21,11 @@ import {
   readManagedGatewayServiceForUpdate,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
-import {
-  maybeRestartServiceAfterFailedMutableUpdate,
-  updateRecoveryDataAtRiskReason,
-} from "./update-command-service-recovery.js";
+import { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service-recovery.js";
 import {
   readFailedUpdateGatewayState,
   verifyUpdatedGateway,
 } from "./update-command-verification.js";
-
-/** Preserve startup observation after activation, stop, rebind, or rollback. */
-export function shouldWaitForRecovery(
-  params: FinishUpdateParams,
-  service: PreManagedServiceStop | undefined,
-  rollbackAttempted: boolean,
-): boolean {
-  return (
-    params.result.status !== "error" ||
-    params.mutationStarted ||
-    params.preManagedServiceStop?.stopped === true ||
-    service?.stopped === true ||
-    Boolean(params.originalManagedServiceRuntime?.definition.rebound) ||
-    rollbackAttempted
-  );
-}
 
 /** Restore an owned stopped service after writers settle, then verify its installed runtime. */
 export async function verifyUpdateFailureRecovery(params: {
@@ -100,10 +80,14 @@ export async function verifyUpdateFailureRecovery(params: {
     warnRecording(`Could not read update recovery history: ${formatErrorMessage(error)}`);
   }
   const constraint = recorded?.verification.recovery;
+  const dataAtRisk = [constraint, result.recovery].find(
+    (recovery) => recovery?.serviceRestartSafe === false && recovery.dataAtRisk,
+  );
   const previousRecovery =
-    constraint?.serviceRestartSafe === false
+    dataAtRisk ??
+    (constraint?.serviceRestartSafe === false
       ? constraint
-      : (result.recovery ?? constraint ?? undefined);
+      : (result.recovery ?? constraint ?? undefined));
   result.recovery = previousRecovery;
   result.rollbackOutcome ??= recorded?.verification.rollbackOutcome ?? undefined;
   result.verification = {};
@@ -183,30 +167,18 @@ export async function verifyUpdateFailureRecovery(params: {
         params.preManagedServiceStop.serviceMutationAllowed !== false &&
         params.preManagedServiceStop.serviceUpdateVerdict?.kind === "owned" &&
         result.verification?.serviceRunning === false &&
-        !updateRecoveryDataAtRiskReason(result)
+        !(previousRecovery?.serviceRestartSafe === false && previousRecovery.dataAtRisk)
       ) {
-        restartAttempted = true;
-        let restartFailure: string | undefined;
-        const restarted = await maybeRestartServiceAfterFailedMutableUpdate({
-          preManagedServiceStop: params.preManagedServiceStop,
-          updateRun: run,
-          recovery: { serviceRestartSafe: true, version, ...(buildId ? { buildId } : {}) },
-          jsonMode: Boolean(params.opts.json),
-          timeoutMs: params.timeoutMs,
-          nodeRunner: params.nodeRunner,
-          invocationCwd: params.invocationCwd,
-          onGatewayStartAttempted: params.onGatewayStartAttempted,
-          onFailure: (message) => {
-            restartFailure = message;
-          },
-        });
+        restartAttempted =
+          (await maybeRestartServiceAfterFailedMutableUpdate({
+            ...params,
+            preManagedServiceStop: params.preManagedServiceStop,
+            updateRun: run,
+            recovery: { serviceRestartSafe: true, version, ...(buildId ? { buildId } : {}) },
+            jsonMode: Boolean(params.opts.json),
+            finalRecovery: true,
+          })) === "healthy";
         params.assertCurrent?.();
-        if (restarted !== "healthy") {
-          throw new Error(
-            restartFailure ??
-              "Managed Gateway restart did not verify readiness; run openclaw update repair and openclaw gateway status --deep.",
-          );
-        }
       }
       const validation = await verifyUpdatedGateway({
         result,

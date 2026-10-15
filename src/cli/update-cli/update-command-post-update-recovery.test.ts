@@ -605,6 +605,7 @@ describe("failed update recovery restart", () => {
       expect(recorded.origin.nextAction).not.toContain("remains stopped");
       expect(recorded.origin.nextAction).toContain("triage");
       expect(recorded.origin.nextAction).toContain("update repair");
+      expect(recorded.origin.nextAction).toContain("gateway status --deep");
       expect(recorded.verification).toMatchObject({ serviceRunning: true, pid });
       expect(recorded.verification.runningVersion).toBe(version);
       expect(mocks.printResult.mock.lastCall?.[2]).toEqual({
