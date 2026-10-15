@@ -39,6 +39,15 @@ on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#app
 
 Choose your plan type and follow the setup steps.
 
+If you supply only `QWEN_API_KEY` (or `MODELSTUDIO_API_KEY` / `DASHSCOPE_API_KEY`),
+without `models.providers.qwen.baseUrl`, OpenClaw uses the Global Coding Plan
+endpoint: `https://coding-intl.dashscope.aliyuncs.com/v1`. The environment variable
+name does not select a plan or region. For a Standard pay-as-you-go key, run
+`openclaw onboard --auth-choice qwen-standard-api-key` or set
+`models.providers.qwen.baseUrl` to
+`https://dashscope-intl.aliyuncs.com/compatible-mode/v1`. Explicit endpoint
+configuration takes precedence; use the matching plan and regional key.
+
 <Tabs>
   <Tab title="Coding Plan (subscription)">
     **Best for:** subscription-based access through the Qwen Coding Plan.

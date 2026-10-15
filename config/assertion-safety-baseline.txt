@@ -1054,7 +1054,7 @@ packages/ai/src/transports/openai-responses-replay-internal.ts	10
 packages/ai/src/transports/openai-responses-replay-messages-internal.ts	7
 packages/ai/src/transports/openai-responses-stream-observer-internal.ts	1
 packages/ai/src/transports/openai-responses-stream-slots-internal.ts	2
-packages/ai/src/transports/openai-responses-stream-terminal-internal.ts	2
+packages/ai/src/transports/openai-responses-stream-terminal-internal.ts	1
 packages/ai/src/transports/openai-responses-websocket.ts	3
 packages/ai/src/transports/openai-transport-params.ts	2
 packages/ai/src/transports/openai-transport-shared.ts	2
@@ -1812,7 +1812,7 @@ src/config/redact-snapshot.ts	4
 src/config/runtime-overrides.ts	1
 src/config/runtime-source-projection.ts	4
 src/config/schema.ts	1
-src/config/sessions/legacy-main-session-migration.ts	4
+src/config/sessions/legacy-main-session-migration.ts	3
 src/config/sessions/session-accessor.entry-mutation.ts	2
 src/config/sessions/session-accessor.entry.ts	1
 src/config/sessions/session-accessor.sqlite-archive-store.ts	1

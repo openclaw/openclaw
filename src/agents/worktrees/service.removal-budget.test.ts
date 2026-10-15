@@ -208,6 +208,7 @@ it.each(["promised", "promised-retry", "unpromised", "checksum", "byte-limited"]
     }
     const directory = path.join(repo, ".git", "objects", "pack");
     const objects: string[] = [];
+    const payloadPacks: string[] = [];
     for (let index = 0; index < 16; index++) {
       const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], {
         input: `partial-payload-${index}`,
@@ -216,14 +217,12 @@ it.each(["promised", "promised-retry", "unpromised", "checksum", "byte-limited"]
       const hash = await requireGit(repo, ["pack-objects", path.join(directory, "pack")], {
         input: `${object}\n`,
       });
+      payloadPacks.push(path.join(directory, `pack-${hash}.pack`));
       await fs.writeFile(path.join(directory, `pack-${hash}.promisor`), "");
     }
     await requireGit(repo, ["prune-packed"]);
     if (damage === "checksum") {
-      const pack = path.join(
-        directory,
-        (await fs.readdir(directory)).find((name) => name.endsWith(".pack"))!,
-      );
+      const pack = payloadPacks[0]!;
       const bytes = await fs.readFile(pack);
       bytes.writeUInt8(bytes.readUInt8(bytes.length - 1) ^ 1, bytes.length - 1);
       await fs.chmod(pack, 0o600);

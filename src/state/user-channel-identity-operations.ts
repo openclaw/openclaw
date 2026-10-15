@@ -120,13 +120,23 @@ async function changeIdentity(
           context.admission.assertCurrent();
           assertCurrent?.();
           if (request.stage === "commit" && captured.action !== "authorize") {
-            fence ??= fenceUserProfileMutationAuthority(context.admission, {
-              profiles: request.facts.profiles,
-              identities: [],
-              channels: request.facts.channels,
-            });
+            const { profiles, channels } = request.facts;
+            if (
+              !grant(() => {
+                fence = fenceUserProfileMutationAuthority(context.admission, {
+                  profiles,
+                  identities: [],
+                  channels,
+                });
+              })
+            ) {
+              // An expired grant cannot commit; release its fence before another attempt.
+              fence?.settle(true);
+              fence = undefined;
+            }
+          } else {
+            grant();
           }
-          grant();
         });
         void operation.settled.then((settlement) => {
           const committed = admission.committed;
@@ -267,7 +277,7 @@ export async function prepareUserProfileRolePolicyAuthority(
 ) {
   return prepareUserProfileAuthorityRead(profileId, options, "authority", async (context) => {
     const source = { path: context.admission.databasePath };
-    if (isUserProfileCatalogReady(source)) {
+    if (isUserProfileCatalogReady(source.path)) {
       const profile = readResidentUserProfileIdentity(profileId, source);
       return (
         profile && {
@@ -308,7 +318,7 @@ async function prepareUserProfileAuthority(
       context,
     ): Promise<(UserProfileAuthority & { listItem?: UserProfileListItem }) | undefined> => {
       const source = { path: context.admission.databasePath };
-      if (!includeProfile && isUserProfileCatalogReady(source)) {
+      if (!includeProfile && isUserProfileCatalogReady(source.path)) {
         const profile = readResidentUserProfileIdentity(profileId, source);
         return (
           profile && {

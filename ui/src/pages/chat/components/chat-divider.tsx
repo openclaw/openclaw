@@ -95,7 +95,7 @@ export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }
 
 export type ChatNoticeRecovery = Pick<
   ChatThreadProps,
-  "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onChangeFailureModel"
+  "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun"
 >;
 
 type ChatNoticeProps = {
@@ -119,9 +119,6 @@ function FailureNotice(props: ChatNoticeProps) {
     }
     return {
       onRetry: recovery.onRetryRun ? () => recovery.onRetryRun?.(runId) : undefined,
-      onChangeModel: recovery.onChangeFailureModel
-        ? () => recovery.onChangeFailureModel?.(runId)
-        : undefined,
     };
   });
   return (
@@ -133,7 +130,6 @@ function FailureNotice(props: ChatNoticeProps) {
       <openclaw-chat-run-failure-notice
         prop:summary={failure().summary}
         prop:onRetry={actions()?.onRetry}
-        prop:onChangeModel={actions()?.onChangeModel}
       />
     </div>
   );

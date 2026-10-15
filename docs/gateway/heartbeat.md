@@ -159,6 +159,11 @@ completed. Resetting or deleting the target session cancels the retained event
 rather than moving it into the replacement session. A `NO_REPLY` result remains
 silent.
 
+Rejected events retain the session admission reason. Durable restart deliveries
+retry temporary refusals, such as session initialization, but settle permanent
+refusals, such as an archived session or exhausted restart recovery, as failed
+without repeating the same admission attempt.
+
 ## Response contract
 
 - If nothing needs attention, reply with **`NO_REPLY`**.

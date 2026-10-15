@@ -4,6 +4,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
+import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { modelKey, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import {
@@ -249,6 +250,11 @@ export async function applySessionModelSelectionInternal(
   if (prepared.status === "rejected") {
     return prepared;
   }
+  const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  const pinnedProfile = !request.profileOverride && startingEntry.authProfileOverride?.trim();
+  const recordedProvider = pinnedProfile
+    ? await prepareAuthProfileProvider({ agentDir, profileId: pinnedProfile })
+    : undefined;
   const validateSelection = () =>
     validateOperatorSelection() ??
     params.validateAuthProfileSelection?.() ??
@@ -263,12 +269,13 @@ export async function applySessionModelSelectionInternal(
   const nextEntry = { ...startingEntry };
   const modelChange = applyModelOverrideWithAuthProfileCompatibility({
     cfg: params.cfg,
-    agentDir: resolveAgentDir(params.cfg, params.agentId),
+    agentDir,
     entry: nextEntry,
     currentProvider: params.currentProvider,
     selection: request,
     explicitDefaultSelection: request.isDefault,
     profileOverride: request.profileOverride,
+    recordedProvider,
     markLiveSwitchPending: params.markLiveSwitchPending,
   });
   const runtimeChange = applyModelRuntimeDirective(nextEntry, runtime);

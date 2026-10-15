@@ -251,6 +251,7 @@ final class GatewayProcessManager {
     }
 
     func ensureLaunchAgentEnabledIfNeeded() async -> Bool {
+        guard !self.hostingChangeInProgress else { return false }
         guard self.gatewayHosting == .service else { return false }
         guard !CommandResolver.connectionModeIsRemote() || self.hostsLocalGatewayWithRemotePrimary else { return false }
         guard self.desiredActive else { return false }
@@ -423,6 +424,7 @@ final class GatewayProcessManager {
         // status read cannot look reusable, so the ownership guard preserves it instead of forcing
         // an install; a reusable PID from this same snapshot receives its readiness cycle below.
         let listener = await PortGuardian.shared.describe(port: request.port)
+        guard !self.hostingChangeInProgress else { return .skipped }
         // Stop waits for the admitted install before disabling; it only discards queued requests.
         guard request.allowUnconfigured == self.hostsLocalGatewayWithRemotePrimary
         else { return .skipped }

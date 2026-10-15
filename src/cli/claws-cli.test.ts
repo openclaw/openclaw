@@ -961,22 +961,47 @@ describe("claws cli", () => {
     expect(mocks.applyClawRemovePlan).not.toHaveBeenCalled();
   });
 
-  it("rejects ambiguous referenced cleanup modes", async () => {
-    await runCli([
-      "claws",
-      "remove",
-      "demo-agent",
-      "--dry-run",
-      "--remove-unused",
-      "--remove-referenced",
-      "plugin:@acme/audit@1.0.0",
-      "--json",
-    ]);
+  it.each([
+    {
+      name: "ambiguous referenced cleanup modes",
+      flags: ["--remove-unused", "--remove-referenced", "plugin:@acme/audit@1.0.0"],
+      message: "Choose either --remove-unused or --remove-referenced, not both.",
+    },
+    {
+      name: "a conflict override without a selected resource",
+      flags: ["--force-referenced"],
+      message: "--force-referenced requires at least one --remove-referenced selector.",
+    },
+  ])("rejects $name with text and JSON diagnostics", async ({ flags, message }) => {
+    for (const json of [false, true]) {
+      mocks.logs.length = 0;
+      mocks.errors.length = 0;
+      await runCli([
+        "claws",
+        "remove",
+        "demo-agent",
+        "--dry-run",
+        ...flags,
+        ...(json ? ["--json"] : []),
+      ]);
 
-    expect(mocks.buildClawRemovePlan).not.toHaveBeenCalled();
-    expect(mocks.errors).toContain(
-      "Choose either --remove-unused or --remove-referenced, not both.",
-    );
+      expect(mocks.buildClawRemovePlan).not.toHaveBeenCalled();
+      expect(mocks.applyClawRemovePlan).not.toHaveBeenCalled();
+      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+      if (json) {
+        expect(mocks.logs).toHaveLength(1);
+        expect(JSON.parse(mocks.logs[0] ?? "{}")).toEqual({
+          schemaVersion: "openclaw.clawRemovePlan.v1",
+          stability: "experimental",
+          ok: false,
+          error: { code: "invalid_cleanup_options", message },
+        });
+        expect(mocks.errors).toEqual([]);
+      } else {
+        expect(mocks.logs).toEqual([]);
+        expect(mocks.errors).toEqual([message]);
+      }
+    }
   });
 
   it("fails closed when remove has neither preview nor consent", async () => {

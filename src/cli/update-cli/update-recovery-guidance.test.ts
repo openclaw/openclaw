@@ -185,10 +185,9 @@ describe("update recovery reporting", () => {
           staleGatewayPids: [],
           expectedVersion: "2026.9.6",
           gatewayVersion: "2026.9.6",
-          ...(healthy ? {} : { channelProbeErrors: [{ id: "discord", error: "not ready" }] }),
         },
         readyz: healthy,
-        http: undefined,
+        http: { healthz: 200, readyz: healthy ? 200 : 503 },
         launchAgentRecovery: null,
       });
       await verifyUpdatedGateway({
@@ -221,7 +220,7 @@ describe("update recovery reporting", () => {
           expect(output).not.toContain("did not pass verification");
         } else {
           expect(output).toContain("gateway is running 2026.9.6 but did not pass verification");
-          expect(output).toContain("channel-errors");
+          expect(output).toContain("readyz-unhealthy");
           expect(output).toContain(hostGuidance);
           expect(output).not.toContain("nothing to restore");
         }

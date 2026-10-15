@@ -338,9 +338,7 @@ export function BottleSvg(props: { opened: boolean }) {
               />
             </>
           ) : (
-            <>
-              <rect x="41" y="21.5" width="5" height="9" rx="1.8" fill="#8a5a2b" />
-            </>
+            <rect x="41" y="21.5" width="5" height="9" rx="1.8" fill="#8a5a2b" />
           )}
           <rect x="11" y="22" width="12" height="8" rx="1.5" fill="#f2e5c9" />
           <path d="M13 24.5 L21 24.5 M13 27 L19 27" stroke="#b6a071" stroke-width="1" />
