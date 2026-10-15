@@ -188,12 +188,13 @@ export async function deliverReplies(params: {
       textIsSlackMrkdwn?: boolean;
       textIsSlackPlainText?: boolean;
     }): Promise<SlackSendResult> => {
-      return await sendMessageSlack(params.target, input.text, {
-        ...input,
+      const { text, ...options } = input;
+      return await sendMessageSlack(params.target, text, {
+        ...options,
         cfg: params.cfg,
         token: params.token,
         accountId: params.accountId,
-        mediaLocalRoots,
+        ...(mediaLocalRoots ? { mediaLocalRoots } : {}),
         onDeliveryResult: (result) => {
           acceptedResults.push(result);
         },
