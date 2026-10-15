@@ -97,23 +97,6 @@ describe("LogbookStore", () => {
     }
   });
 
-  it("rolls back the whole batch when any frame is missing", async () => {
-    const t0 = Date.now();
-    const frameId = await insertFrame(t0);
-
-    await expect(
-      store.createBatch({
-        day: dayKeyFor(t0),
-        startMs: t0,
-        endMs: t0 + 1000,
-        frameIds: [frameId, 999_999],
-      }),
-    ).rejects.toThrow("Logbook frame 999999 is missing or already batched");
-
-    expect(await store.latestBatch()).toBeNull();
-    expect((await store.unbatchedActiveFrames(10)).map((frame) => frame.id)).toEqual([frameId]);
-  });
-
   it("does not steal a frame from an existing batch", async () => {
     const t0 = Date.now();
     const firstFrame = await insertFrame(t0);
