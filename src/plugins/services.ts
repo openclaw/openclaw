@@ -23,7 +23,7 @@ import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 import { createPluginServiceAutomationCapabilities } from "./service-automation-capabilities.js";
 import { createPluginServiceControlUiIngress } from "./service-control-ui-ingress.js";
-import { createPluginServiceCronGetter, type PluginServiceCronHost } from "./service-cron.js";
+import type { PluginServiceCronHost } from "./service-cron.js";
 import {
   createPluginServiceDiagnostics,
   type ObserveProviderUsage,
