@@ -849,7 +849,7 @@ it.each([
   ],
 ] satisfies [string, string, string, Record<string, string>?][])(
   "keeps maintenance candidates live after a %s",
-  (_label, file, source, extra) => {
+  (_label, file, source, extra?: Record<string, string>) => {
     const result = inspectMaintenance({ [file]: source, ...extra });
     expect(result.violations).toEqual([]);
     expect(result.nonRuntimeOperations.has(maintenanceFile)).toBe(false);
