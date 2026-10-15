@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
@@ -42,11 +43,12 @@ function formatGlobalPluginDiagnostics(diagnostics: readonly PluginDiagnostic[])
       ({ level, message }) =>
         `${formatConsoleDiagnosticLine({
           level,
-          message: shortenHomeInString(`${level.toUpperCase()}: ${message}`),
+          message: sanitizeTerminalText(shortenHomeInString(`${level.toUpperCase()}: ${message}`)),
         })}\n`,
     )
     .join("");
 }
+
 
 export async function runPluginsInspectCommand(
   id: string | undefined,
@@ -109,22 +111,31 @@ export async function runPluginsInspectCommand(
       }
       const tableWidth = getTerminalTableWidth();
       const rows = inspectAll.map((inspect) => ({
-        Name: inspect.plugin.name || inspect.plugin.id,
+        Name: sanitizeTerminalText(inspect.plugin.name || inspect.plugin.id),
         ID:
-          inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id ? inspect.plugin.id : "",
+          inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id
+            ? sanitizeTerminalText(inspect.plugin.id)
+            : "",
         Status: formatPluginStatus(inspect.plugin, runtimeInspect),
         Shape: inspect.shape,
         Capabilities:
           inspect.capabilities.length > 0
-            ? inspect.capabilities.map((entry) => entry.kind).join(", ")
+            ? inspect.capabilities.map((entry) => sanitizeTerminalText(entry.kind)).join(", ")
             : "-",
         Compatibility:
           inspect.compatibility.length > 0
             ? inspect.compatibility
-                .map((entry) => (entry.severity === "warn" ? `warn:${entry.code}` : entry.code))
+                .map((entry) =>
+                  sanitizeTerminalText(
+                    entry.severity === "warn" ? `warn:${entry.code}` : entry.code,
+                  ),
+                )
                 .join(", ")
             : "none",
-        Bundle: inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
+        Bundle:
+          inspect.bundleCapabilities.length > 0
+            ? inspect.bundleCapabilities.map(sanitizeTerminalText).join(", ")
+            : "-",
         Hooks:
           [
             inspect.typedHooks.length > 0 ? `${inspect.typedHooks.length} typed` : "",
@@ -407,3 +418,4 @@ export async function runPluginsInspectCommand(
     defaultRuntime.log(output);
   }
 }
+
