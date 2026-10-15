@@ -1,13 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DatabaseSync } from "node:sqlite";
+import type { WorkboardDatabasePortApi } from "@openclaw/workboard-contract";
 import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
-import { resolveDatabaseEngineInput } from "./config.js";
-import type { PortDescriptor } from "./port.worker.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
+import type { DatabaseEngineInput } from "./config.js";
+import type { DatabasePortProvider } from "./port-provider.js";
+import { DatabasePortDataError, type PortDescriptor } from "./port.worker.js";
 import { expectedPostgresCatalog } from "./postgres-catalog.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
-export async function loadWorkboardPortDescriptor(): Promise<PortDescriptor> {
+async function loadDescriptor(): Promise<PortDescriptor> {
   const plugins = resolveBundledPluginsDir();
   if (!plugins) {
     throw new Error("Bundled workboard port descriptor is unavailable.");
@@ -21,25 +24,38 @@ export async function loadWorkboardPortDescriptor(): Promise<PortDescriptor> {
     preData: postgres.slice(metadata.preData[0], metadata.preData[1]),
     postData: postgres.slice(metadata.postData[0], metadata.postData[1]),
     expectedCatalog: expectedPostgresCatalog(metadata),
+    inspectSqliteSource(db) {
+      try {
+        return api().inspectWorkboardPortSource(db);
+      } catch (error) {
+        if (error instanceof api().WorkboardPortSchemaError) {
+          throw new DatabasePortDataError(error.message);
+        }
+        throw error;
+      }
+    },
+    migrateSqliteSource: (file) => api().admitWorkboardPort(file),
+    admit: (file, input) => api().admitWorkboardPort(file, input),
   };
 }
 
-export async function withWorkboardPostgres<T>(
-  config: OpenClawConfig,
-  run: (client: import("pg").Client, descriptor: PortDescriptor) => Promise<T>,
-): Promise<T> {
-  const input = await resolveDatabaseEngineInput(config);
-  if (!input) {
-    throw new Error("PostgreSQL requires database.engine=postgres and a resolvable connection.");
-  }
-  const { Client } = await import("pg");
-  const client = new Client({ connectionString: input.connection });
-  // Query promises report failures; the error event must not abort offline recovery.
-  client.on("error", () => undefined);
-  await client.connect();
-  try {
-    return await run(client, await loadWorkboardPortDescriptor());
-  } finally {
-    await client.end();
-  }
+function api() {
+  return loadBundledPluginPublicArtifactModuleSync<{
+    workboardDatabasePortApi: WorkboardDatabasePortApi<DatabaseSync, DatabaseEngineInput>;
+  }>({ dirName: "workboard", artifactBasename: "database-port-api.js" }).workboardDatabasePortApi;
 }
+
+export const workboardPortProvider: DatabasePortProvider = {
+  id: "workboard",
+  loadDescriptor,
+  matchesSqlite: (tables) => tables.has("workboard_schema_migrations"),
+  resolveRoots(context) {
+    return context.plugins.plugins
+      .filter((plugin) => plugin.id === "workboard")
+      .flatMap((plugin) =>
+        (plugin.backupResources ?? [])
+          .filter((resource) => resource.scope === "state" && resource.disposition === "include")
+          .map((resource) => path.join(context.stateDir, resource.relativePath)),
+      );
+  },
+};

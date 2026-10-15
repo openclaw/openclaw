@@ -7,10 +7,15 @@ import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readEngineAnchor } from "../infra/database-engine/open.js";
 import {
+  withDatabasePortPostgres,
+  withDatabasePortConnection,
+  requireDatabasePortProvider,
+} from "../infra/database-engine/port-provider.js";
+import {
+  admitDatabasePortDescriptor,
   inspectDatabasePort,
   materializeDatabasePort,
 } from "../infra/database-engine/port.worker.js";
-import { withWorkboardPostgres as withPostgres } from "../infra/database-engine/workboard-port.js";
 import { requireDirectorySync, syncDirectory, sha256File } from "../infra/directory-durability.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
@@ -148,7 +153,11 @@ async function capturePostgresBackupInWorker(params: {
   }
   await fs.mkdir(params.directory, { mode: 0o700 });
   await fs.writeFile(path.join(params.directory, ".pending"), "", { flag: "wx", mode: 0o600 });
-  return await withPostgres(params.config, async (client, descriptor) => {
+  return await withDatabasePortPostgres(params.config, anchor, async (client, baseDescriptor) => {
+    const descriptor = await admitDatabasePortDescriptor(
+      { engine: "postgres", db: client, namespace: anchor.namespace },
+      baseDescriptor,
+    );
     const raw = path.join(params.directory, ".export.sqlite");
     const image = path.join(params.directory, "database.sqlite");
     const anchorPath = path.join(params.directory, "anchor.sqlite");
@@ -211,7 +220,7 @@ async function capturePostgresBackupInWorker(params: {
       profile: params.profile,
       source: { ...anchor, owner: descriptor.id, schemaVersion: descriptor.version },
       exportSchemaVersion: descriptor.version,
-      activeFragments: [],
+      activeFragments: [...descriptor.activeFragments!],
       verification,
       artifacts: {
         "database.sqlite": await artifact(image),
@@ -254,7 +263,14 @@ async function preparePostgresRestoreInWorker(params: {
   ) {
     throw new Error("PostgreSQL rollback capture belongs to a different store.");
   }
-  return await withPostgres(params.config, async (client, descriptor) => {
+  return await withDatabasePortConnection(params.config, async (client) => {
+    const descriptor = await requireDatabasePortProvider(manifest.source.owner).loadDescriptor();
+    if (
+      descriptor.version !== manifest.exportSchemaVersion ||
+      descriptor.version !== manifest.source.schemaVersion
+    ) {
+      throw new Error("PostgreSQL backup requires its matching family schema version.");
+    }
     const namespace = `restore_${randomUUID().replaceAll("-", "")}`;
     using image = openNodeSqliteDatabase(path.join(params.directory, "database.sqlite"), {
       readOnly: true,
@@ -267,6 +283,7 @@ async function preparePostgresRestoreInWorker(params: {
       descriptor,
       storeId: manifest.source.storeId,
       sourceAllocations: manifest.verification.allocations,
+      activeFragments: manifest.activeFragments,
       assertCurrent: params.assertCurrent,
     });
     if (params.profile === "exact" && !isDeepStrictEqual(verified, manifest.verification)) {
@@ -392,7 +409,7 @@ if (parentPort && workerData?.openclawDatabaseBackup === true) {
       if (anchor.engine !== "postgres") {
         throw new Error("PostgreSQL anchor disappeared.");
       }
-      return withPostgres(task.params.config, async (db, descriptor) =>
+      return withDatabasePortPostgres(task.params.config, anchor, async (db, descriptor) =>
         createHash("sha256")
           .update(
             JSON.stringify({
