@@ -1845,18 +1845,14 @@ describe("openclaw state database", () => {
       warnings: [],
     });
     const migrated = openOpenClawStateDatabase(options);
-
-    expect(readSqliteNumberPragma(requireNativeSqliteDatabase(migrated.db), "user_version")).toBe(
-      OPENCLAW_STATE_SCHEMA_VERSION,
-    );
+    const native = requireNativeSqliteDatabase(migrated.db);
+    expect(readSqliteNumberPragma(native, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(
       migrated.db
         .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
         .get(),
     ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-    expect(migrated.db.prepare("PRAGMA integrity_check").all()).toEqual([
-      { integrity_check: "ok" },
-    ]);
+    expect(native.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     // The shipped v2026.7.1-2 database really carried these curator projections.
     for (const tableName of ["skill_lifecycle", "skill_workshop_proposal_origin_runs"]) {
@@ -1868,11 +1864,9 @@ describe("openclaw state database", () => {
     }
     // Published v1 state has no deletion history to lose; migration initializes its journal.
     const expected = createInitialStateSchemaShape();
-    expect(
-      normalizeSqliteSchemaShapeSql(
-        collectSqliteSchemaShape(requireNativeSqliteDatabase(migrated.db)),
-      ),
-    ).toEqual(normalizeSqliteSchemaShapeSql(expected));
+    expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(native))).toEqual(
+      normalizeSqliteSchemaShapeSql(expected),
+    );
     expect(readRetainedAgentDeletionsFromDatabase(migrated.db, fixture.databasePath)).toEqual({
       status: "empty",
     });
@@ -2143,6 +2137,7 @@ describe("openclaw state database", () => {
       { kind: "creator-namespace-v14", path: seeded.databasePath },
       { kind: "predicate-columns-v21", path: seeded.databasePath },
       { kind: "portable-identity-columns-v22", path: seeded.databasePath },
+      { kind: "meeting-transcript-start-time", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
