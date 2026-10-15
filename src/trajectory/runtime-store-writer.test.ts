@@ -15,6 +15,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSqliteTrajectoryRuntimeSink } from "./runtime-store-writer.js";
 import {
@@ -281,18 +282,24 @@ it("rolls back the successful attempt's diagnostic prefix with its terminal even
       state: { terminal: { kind: "ok" }, beforeAgentRunBlockedBy: undefined },
       transcriptLifecycle: { beginCleanup: async () => {}, dispose: async () => {} },
     });
-    const database = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
-    database.db.exec(`CREATE TRIGGER reject_trajectory_terminal
-      BEFORE INSERT ON trajectory_runtime_events
-      WHEN NEW.event_json LIKE '%"type":"session.ended"%'
-      BEGIN SELECT RAISE(ABORT, 'synthetic terminal append failure'); END`);
+    const databaseOptions = { agentId: target.agentId, path: target.storePath };
+    const database = await runOpenClawAgentWriteAdmission(databaseOptions, () => {
+      const admittedDatabase = openOpenClawAgentDatabase(databaseOptions);
+      admittedDatabase.db.exec(`CREATE TRIGGER reject_trajectory_terminal
+        BEFORE INSERT ON trajectory_runtime_events
+        WHEN NEW.event_json LIKE '%"type":"session.ended"%'
+        BEGIN SELECT RAISE(ABORT, 'synthetic terminal append failure'); END`);
+      return admittedDatabase;
+    });
     try {
       await owner.complete();
       expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([]);
       expect(loadSessionEntry(target)).toMatchObject(original);
       expect(recorder.describeFlushState()).toContain("pendingRows=3");
     } finally {
-      database.db.exec("DROP TRIGGER reject_trajectory_terminal");
+      await runOpenClawAgentWriteAdmission(databaseOptions, () => {
+        database.db.exec("DROP TRIGGER reject_trajectory_terminal");
+      });
     }
     await recorder.flush();
     expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
