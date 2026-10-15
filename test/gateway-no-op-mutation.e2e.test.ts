@@ -1,11 +1,15 @@
 // E2E: a Gateway agent turn continues after a real no-op write tool call.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import {
+  createOpenAiResponsesModelConfig,
+  startOpenAiResponsesModelServer,
+  type OpenAiResponsesModelServer,
+} from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
@@ -13,16 +17,13 @@ import {
 } from "./helpers/openclaw-test-instance.js";
 
 const TEST_TIMEOUT_MS = 180_000;
-const MODEL_REF = "no-op-proof/no-op-proof";
 const SESSION_KEY = "agent:main:no-op-proof";
 const VISIBLE_MARKER = "NO_OP_WRITE_VISIBLE_ANSWER";
 
 type CapturedRequest = { input?: unknown[] };
 
-type MockModelServer = {
-  baseUrl: string;
+type MockModelServer = OpenAiResponsesModelServer & {
   requests: CapturedRequest[];
-  close: () => Promise<void>;
 };
 
 const instances: OpenClawTestInstance[] = [];
@@ -42,7 +43,13 @@ describe("Gateway no-op mutation continuation", () => {
       modelServers.push(modelServer);
       const instance = await createOpenClawTestInstance({
         name: "gateway-no-op-mutation",
-        config: createTestConfig(modelServer.baseUrl),
+        config: createOpenAiResponsesModelConfig({
+          baseUrl: modelServer.baseUrl,
+          providerId: "no-op-proof",
+          modelId: "no-op-proof",
+          reasoning: false,
+          toolProfile: "coding",
+        }),
         env: {
           OPENCLAW_SKIP_PROVIDERS: undefined,
           OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
@@ -93,71 +100,14 @@ describe("Gateway no-op mutation continuation", () => {
   );
 });
 
-function createTestConfig(baseUrl: string): OpenClawConfig {
-  return {
-    plugins: { slots: { memory: "none" } },
-    agents: {
-      defaults: {
-        heartbeat: { every: "0m" },
-        model: { primary: MODEL_REF },
-        models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
-        skipBootstrap: true,
-        skills: [],
-      },
-    },
-    tools: { profile: "coding" },
-    models: {
-      mode: "replace",
-      providers: {
-        "no-op-proof": {
-          baseUrl: `${baseUrl}/v1`,
-          apiKey: "test-token-placeholder",
-          api: "openai-responses",
-          request: { allowPrivateNetwork: true },
-          models: [
-            {
-              id: "no-op-proof",
-              name: "no-op-proof",
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128_000,
-              maxTokens: 4_096,
-            },
-          ],
-        },
-      },
-    },
-  };
-}
-
 async function startMockModelServer(): Promise<MockModelServer> {
   const requests: CapturedRequest[] = [];
-  const server = createServer((request, response) => {
-    void handleRequest(request, response, requests).catch((error: unknown) => {
-      response.writeHead(500, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message: String(error) } }));
-    });
+  const server = await startOpenAiResponsesModelServer({
+    modelId: "no-op-proof",
+    bindError: "no-op proof model server did not bind",
+    onRequest: (request, response) => handleRequest(request, response, requests),
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("no-op proof model server did not bind");
-  }
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    requests,
-    close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    },
-  };
+  return { ...server, requests };
 }
 
 async function handleRequest(
@@ -165,16 +115,6 @@ async function handleRequest(
   response: ServerResponse,
   requests: CapturedRequest[],
 ): Promise<void> {
-  const url = new URL(request.url ?? "/", "http://127.0.0.1");
-  if (request.method === "GET" && url.pathname === "/v1/models") {
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ data: [{ id: "no-op-proof", object: "model" }] }));
-    return;
-  }
-  if (request.method !== "POST" || url.pathname !== "/v1/responses") {
-    response.writeHead(404).end();
-    return;
-  }
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
