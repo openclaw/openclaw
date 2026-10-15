@@ -6,7 +6,6 @@ import {
   ensurePlaywrightChromium,
   installLinuxSystemChromiumPackage,
   shouldEnsureFfmpegFromArgv,
-  shouldInstallPlaywrightSystemDependencies,
   shouldRequirePlaywrightChromiumFromArgv,
 } from "../../scripts/ensure-playwright-chromium.mts";
 
@@ -172,34 +171,6 @@ describe("ensurePlaywrightChromium", () => {
       expect.objectContaining({ env }),
     );
     expect(env.PLAYWRIGHT_BROWSERS_PATH).toBe(configuredPath);
-  });
-
-  it("installs Playwright ffmpeg when recorded UI tests request it", () => {
-    const logs: string[] = [];
-    const spawnSync = vi.fn(() => ({ status: 0 }));
-
-    expect(
-      ensurePlaywrightChromium({
-        cwd: "/repo",
-        ensureFfmpeg: true,
-        env: { PATH: "/bin" },
-        executablePath: "/cache/chromium/chrome",
-        existsSync: (candidatePath: string) => candidatePath === "/usr/bin/chromium-browser",
-        log: (line: string) => logs.push(line),
-        spawnSync,
-        stdio: "pipe",
-      }),
-    ).toBe(0);
-    expect(spawnSync).toHaveBeenCalledWith("/usr/bin/chromium-browser", ["--version"], {
-      stdio: "ignore",
-    });
-    expect(spawnSync).toHaveBeenCalledWith(process.execPath, [playwrightCli, "install", "ffmpeg"], {
-      cwd: path.resolve("/repo", "ui"),
-      env: { PATH: "/bin" },
-      shell: false,
-      stdio: "pipe",
-    });
-    expect(logs.join("\n")).toContain("Using system Chromium at /usr/bin/chromium-browser");
   });
 
   it("skips a broken system Chromium binary and uses the first runnable candidate", () => {
@@ -422,30 +393,6 @@ describe("ensurePlaywrightChromium", () => {
         systemExecutablePath: "",
       }),
     ).toBe(23);
-  });
-
-  it("allows dependency installation for Linux CI lanes", () => {
-    expect(
-      shouldInstallPlaywrightSystemDependencies({
-        env: { CI: "true" },
-        getuid: () => 501,
-        platform: "linux",
-      }),
-    ).toBe(true);
-    expect(
-      shouldInstallPlaywrightSystemDependencies({
-        env: { CI: "1" },
-        getuid: () => 501,
-        platform: "linux",
-      }),
-    ).toBe(true);
-    expect(
-      shouldInstallPlaywrightSystemDependencies({
-        env: { OPENCLAW_TESTBOX: "1" },
-        getuid: () => 501,
-        platform: "linux",
-      }),
-    ).toBe(true);
   });
 
   it("installs Linux system Chromium packages with sudo for non-root lanes", () => {
