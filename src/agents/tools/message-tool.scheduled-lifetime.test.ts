@@ -304,7 +304,11 @@ it.each([
       }
       const prepareAdmission = () =>
         prepareCronRunAdmission({
-          deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+          deliveryAttemptFence: {
+            occurrenceAtMs: 0,
+            beforeAttempt: async () => {},
+            assertCurrent: () => {},
+          },
           cfg: config,
           agentId: "main",
           runId,

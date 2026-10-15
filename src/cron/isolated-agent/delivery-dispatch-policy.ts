@@ -264,14 +264,15 @@ export async function maybeApplyTtsToCronPayloads(params: {
   );
 }
 
+/** `atMs` is the scheduled occurrence the send belongs to, or the run start for a run's own send. */
 export function buildDirectCronDeliveryIdempotencyKey(params: {
   jobId: string;
-  runStartedAt: number;
+  atMs: number;
   delivery: Pick<SuccessfulCronDeliveryTarget, "channel" | "to" | "accountId" | "threadId">;
 }): string {
   // Include route identity, not just the cron execution id, because one run can
   // target different channels/accounts/threads across retry and fallback paths.
-  const executionId = createCronExecutionId(params.jobId, params.runStartedAt);
+  const executionId = createCronExecutionId(params.jobId, params.atMs);
   const threadId =
     params.delivery.threadId == null || params.delivery.threadId === ""
       ? ""
