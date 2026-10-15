@@ -113,6 +113,7 @@ export default definePluginEntry({
         const result = await api.session.workflow.steerActiveRun({
           sessionKey,
           text,
+          displayText: finding,
           idempotencyKey,
         });
         if (result.steered) {

@@ -1,5 +1,5 @@
+import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
 import type { SolidController } from "../lit/solid-controller-host.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
 

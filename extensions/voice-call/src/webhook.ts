@@ -23,7 +23,6 @@ import {
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
 import {
-  normalizeVoiceCallConfig,
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKeyForCall,
   type VoiceCallConfig,
@@ -131,7 +130,7 @@ export class VoiceCallWebhookServer {
     private readonly agentRuntime?: OpenClawPluginApi["runtime"]["agent"],
     logger?: PluginLogger,
   ) {
-    this.config = normalizeVoiceCallConfig(config);
+    this.config = config;
     const rawLogger = logger ?? {
       info: console.log,
       warn: console.warn,

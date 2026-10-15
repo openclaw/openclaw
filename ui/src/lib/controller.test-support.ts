@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { SolidController, SolidControllerHost } from "./solid-controller-host.ts";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 
 export class TestHost implements SolidControllerHost {
   readonly controllers: SolidController[] = [];

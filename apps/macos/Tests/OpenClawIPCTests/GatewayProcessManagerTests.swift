@@ -1924,13 +1924,18 @@ struct GatewayProcessManagerTests {
                         return (url: url, token: nil, password: nil)
                     },
                     sessionBox: WebSocketSessionBox(session: session))
-                let manager = GatewayProcessManager()
+                let clock = ManualTestClock()
+                let manager = GatewayProcessManager(readinessClock: clock)
                 manager.setTestingConnection(connection)
                 manager.setTestingSkipControlChannelRefresh(true)
                 manager.desiredActive = true
                 defer { manager.desiredActive = false }
 
                 manager.startIfNeeded()
+                if outcome == "unresolved" {
+                    await clock.waitForSleep(until: clock.now.advanced(by: .milliseconds(300)))
+                    clock.advance(by: .seconds(GatewayLaunchAgentManager.reusedLaunchdColdStartTolerance))
+                }
                 await manager.waitForStartupAttempt()
                 await connection.shutdown()
 

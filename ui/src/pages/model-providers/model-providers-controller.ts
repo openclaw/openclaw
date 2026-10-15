@@ -10,7 +10,7 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import * as modelCatalog from "../../lib/model-catalog-store.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { SubscriptionsController } from "../../lib/subscriptions-controller.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import type { ModelAccountUsageElement } from "./account-usage.tsx";
 import {

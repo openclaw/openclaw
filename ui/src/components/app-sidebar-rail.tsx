@@ -89,7 +89,7 @@ export function renderSidebarRail(
             get agentId() {
               return host.expandedAgentId();
             },
-            className: "sidebar-rail__button sidebar-new-session",
+            class: "sidebar-rail__button sidebar-new-session",
             get label() {
               return t("agentChip.newConversation");
             },

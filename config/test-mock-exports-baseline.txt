@@ -404,7 +404,6 @@
 ["extensions/codex/src/app-server/transport-stdio.test.ts","./transport-process-registration.js","5afee5b5c13e9f2c170805d484094fbc077d172ef983ed0e483773e6a279170a",1]
 ["extensions/codex/src/app-server/transport-websocket-startup.test.ts","openclaw/plugin-sdk/websocket-runtime","b8317c68e546b97d2010ce991536c0c063d9d27b1218ac41537ffbd68147ea4e",1]
 ["extensions/codex/src/app-server/turn-router.mcp-app.test.ts","./event-projector-diagnostics.js","ea5cc2a508d192b7a329c88e1c0520dd557bf9dc5d1bb3f8b5fb04a25e59437f",1]
-["extensions/codex/src/app-server/turn-router.mcp-app.test.ts","./protocol-validators.js","179c97d5d976dacea55cb1994ace0d7af200608a224466b9e57daa260410890f",1]
 ["extensions/codex/src/app-server/turn-router.mcp-app.test.ts","openclaw/plugin-sdk/agent-harness-runtime","19fe8a48c99ff4a3936ffe8a19e85d8e1f7a1f973287b927d924eacbd90cba26",1]
 ["extensions/codex/src/app-server/turn-router.mcp-app.test.ts","openclaw/plugin-sdk/extension-shared","323bb2752602831ad2c6dff91f7b63741eead81a1e825da49ddb743873fd6ca1",1]
 ["extensions/codex/src/app-server/upstream-fork-boundary.test.ts","openclaw/plugin-sdk/session-transcript-runtime","55dd4b99874ab35292c5c9eb12355df2bc41ff558d9154bb5687631014f8b1e0",1]

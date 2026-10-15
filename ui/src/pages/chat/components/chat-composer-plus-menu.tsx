@@ -1,6 +1,5 @@
 import { createMemo, createUniqueId, Show, untrack } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
-import { icons } from "../../../components/icons.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
   Menu,
@@ -128,7 +127,7 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
           : !menu.webSearchBaseEnabled
             ? t("chat.composer.menu.webSearchGloballyDisabled")
             : ""),
-      icon: icons.globe,
+      icon: "globe",
       checkbox: true,
     }),
     menuDivider("manage-divider"),

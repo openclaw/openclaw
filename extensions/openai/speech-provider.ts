@@ -1,11 +1,9 @@
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import type {
-  SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
-  SpeechProviderPlugin,
-  SpeechSynthesisRequest,
-} from "openclaw/plugin-sdk/speech-core";
-import { parseSpeechDirectiveNumberOverride } from "openclaw/plugin-sdk/speech-provider";
+import type { SpeechProviderPlugin, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
+import {
+  createSpeechDirectiveParser,
+  parseSpeechDirectiveNumberOverride,
+} from "openclaw/plugin-sdk/speech-provider";
 import {
   asFiniteNumber,
   asOptionalRecord,
@@ -119,49 +117,48 @@ function normalizeOpenAIProviderConfig(
   };
 }
 
-function parseDirectiveToken(
-  ctx: SpeechDirectiveTokenParseContext,
-): SpeechDirectiveTokenParseResult {
-  const baseUrl = normalizeOptionalString(asOptionalRecord(ctx.providerConfig)?.baseUrl);
-  switch (ctx.key) {
-    case "voice":
-    case "openai_voice":
-    case "openaivoice":
-      if (!ctx.policy.allowVoice) {
-        return { handled: true };
-      }
-      if (!isValidOpenAIVoice(ctx.value, baseUrl)) {
-        return { handled: true, warnings: [`invalid OpenAI voice "${ctx.value}"`] };
-      }
-      return { handled: true, overrides: { voice: ctx.value } };
-    case "model":
-    case "openai_model":
-    case "openaimodel":
-      if (!ctx.policy.allowModelId) {
-        return { handled: true };
-      }
-      if (!isValidOpenAIModel(ctx.value, baseUrl)) {
-        return { handled: false };
-      }
-      return { handled: true, overrides: { model: ctx.value } };
-    case "speed":
-    case "openai_speed":
-    case "openaispeed": {
-      const customBaseUrl = isCustomOpenAITtsBaseUrl(baseUrl);
-      return parseSpeechDirectiveNumberOverride({
-        ctx,
-        overrideKey: "speed",
-        range: customBaseUrl ? {} : { min: 0.25, max: 4 },
-        warning: (value) =>
-          customBaseUrl
-            ? `invalid OpenAI-compatible speed "${value}"`
-            : `invalid OpenAI speed "${value}" (0.25-4.0)`,
-      });
-    }
-    default:
-      return { handled: false };
-  }
-}
+const parseDirectiveToken = createSpeechDirectiveParser({
+  voice: [
+    "allowVoice",
+    ["voice", "openai_voice", "openaivoice"],
+    {
+      parse: (ctx) =>
+        isValidOpenAIVoice(ctx.value, normalizeOptionalString(ctx.providerConfig?.baseUrl))
+          ? { handled: true, overrides: { voice: ctx.value } }
+          : { handled: true, warnings: [`invalid OpenAI voice "${ctx.value}"`] },
+    },
+  ],
+  model: [
+    "allowModelId",
+    ["model", "openai_model", "openaimodel"],
+    {
+      parse: (ctx) =>
+        isValidOpenAIModel(ctx.value, normalizeOptionalString(ctx.providerConfig?.baseUrl))
+          ? { handled: true, overrides: { model: ctx.value } }
+          : { handled: false },
+    },
+  ],
+  speed: [
+    "allowVoiceSettings",
+    ["speed", "openai_speed", "openaispeed"],
+    {
+      parse: (ctx) => {
+        const customBaseUrl = isCustomOpenAITtsBaseUrl(
+          normalizeOptionalString(ctx.providerConfig?.baseUrl),
+        );
+        return parseSpeechDirectiveNumberOverride({
+          ctx,
+          overrideKey: "speed",
+          range: customBaseUrl ? {} : { min: 0.25, max: 4 },
+          warning: (value) =>
+            customBaseUrl
+              ? `invalid OpenAI-compatible speed "${value}"`
+              : `invalid OpenAI speed "${value}" (0.25-4.0)`,
+        });
+      },
+    },
+  ],
+});
 
 async function resolveOpenAITtsRequest(
   req: SpeechSynthesisRequest,

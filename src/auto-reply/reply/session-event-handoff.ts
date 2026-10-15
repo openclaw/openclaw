@@ -7,10 +7,6 @@ import type { SessionEntryCreationOperation } from "../../config/sessions/sessio
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import {
-  assertAgentRunLifecycleGenerationCurrent,
-  getAgentEventLifecycleGeneration,
-} from "../../infra/agent-events.js";
-import {
   execRequestAbortSignal,
   readExecRequestOwners,
   withExecRequestOwners,
@@ -108,22 +104,22 @@ export function enqueueSessionEventForHost(
   const env = options.expectedTarget
     ? readSessionEventTargetEnvironment(options.expectedTarget)
     : undefined;
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId, env });
+  // Keep the captured destination across config remapping; live policy still gates effects.
+  const storePath =
+    options.expectedTarget?.storePath ??
+    resolveSessionStorePathCore(cfg.session?.store, { agentId, env });
   let target = options.expectedTarget;
   let generationLease: Awaited<ReturnType<typeof prepareSessionEventTargetForHost>> | undefined;
   let preparedBinding: { sessionId: string; lifecycleRevision?: string } | undefined;
-  const generation = options.expectedTarget?.generation ?? getAgentEventLifecycleGeneration();
   if (
     options.expectedTarget &&
-    ((options.expectedTarget.storePath && options.expectedTarget.storePath !== storePath) ||
-      (options.expectedTarget.agentId && options.expectedTarget.agentId !== agentId) ||
+    ((options.expectedTarget.agentId && options.expectedTarget.agentId !== agentId) ||
       (options.expectedTarget.sessionKey && options.expectedTarget.sessionKey !== sessionKey))
   ) {
     throw new Error(
       "Session event destination was reset or replaced while its producer was running",
     );
   }
-  assertAgentRunLifecycleGenerationCurrent(generation);
   let route = structuredClone(options.deliveryContext ?? options.expectedTarget?.deliveryContext);
   const controller = new AbortController();
   const execRequestOwners = options.occurrences
@@ -215,15 +211,8 @@ export function enqueueSessionEventForHost(
     }
     options.assertCurrent?.();
     options.expectedTarget?.assertCurrent?.();
-    assertAgentRunLifecycleGenerationCurrent(generation);
     const currentConfig = getSessionEventRuntimeConfig();
-    if (currentConfig !== cfg || getRuntimeConfigSnapshotMetadata() !== configPublication) {
-      throw new Error("Session event configuration changed; retry under the current policy");
-    }
     resolveConfiguredAgentId(currentConfig, agentId);
-    if (resolveSessionStorePathCore(currentConfig.session?.store, { agentId, env }) !== storePath) {
-      throw new Error("Session event destination store changed before settlement");
-    }
     if (isAgentDeletionBlocked(agentId)) {
       throw new Error("Session event agent is being deleted");
     }
@@ -239,6 +228,15 @@ export function enqueueSessionEventForHost(
     generationLease?.assertCurrent();
     if (settingsAdmitted && generationLease) {
       assertSessionEventSettingsCurrent(settings, generationLease.readSessionSettings());
+    }
+  };
+  const assertEffectCurrent = () => {
+    assertCurrent();
+    if (
+      getSessionEventRuntimeConfig() !== cfg ||
+      getRuntimeConfigSnapshotMetadata() !== configPublication
+    ) {
+      throw new Error("Session event configuration changed; retry under the current policy");
     }
   };
   const accept = () => {
@@ -357,12 +355,6 @@ export function enqueueSessionEventForHost(
     }
     deliveryAttempted = true;
     const deliveryConfig = getSessionEventRuntimeConfig();
-    const assertDeliveryCurrent = () => {
-      assertCurrent();
-      if (getSessionEventRuntimeConfig() !== deliveryConfig) {
-        throw new Error("Session event delivery policy changed before send");
-      }
-    };
     const result = await routeReply({
       cfg: deliveryConfig,
       agentId,
@@ -375,8 +367,8 @@ export function enqueueSessionEventForHost(
       replyKind: kind,
       abortSignal: signal,
       mirror: false,
-      beforeDeliver: async () => assertDeliveryCurrent(),
-      assertCurrent: assertDeliveryCurrent,
+      beforeDeliver: async () => assertEffectCurrent(),
+      assertCurrent: assertEffectCurrent,
     });
     delivered ||= result.delivered;
     deliveryAmbiguous ||= result.ambiguous === true;
@@ -473,7 +465,7 @@ export function enqueueSessionEventForHost(
           internalEventExecution: {
             execRequestOwners,
             deliver: options.deliver === false || target.deliver === false ? false : undefined,
-            assertCurrent,
+            assertCurrent: assertEffectCurrent,
             ...(target.sessionId === "" && options.createIfMissing
               ? {
                   bindSessionCreation: (creation: SessionEntryCreationOperation) => {

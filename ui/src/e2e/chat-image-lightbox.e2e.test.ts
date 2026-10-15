@@ -258,11 +258,62 @@ suite.define(() => {
           ]),
         );
       }
-      await page.getByRole("button", { name: "Close image preview" }).click();
-      await expect.poll(() => sidebarDialog.count()).toBe(0);
-      await expect
-        .poll(() => sidebarTrigger.evaluate((element) => element.matches(":focus")))
-        .toBe(true);
+      const closeProbe = await page.evaluateHandle(() => {
+        const controller = new AbortController();
+        const events: { type: string; capture: boolean; target: string; prevented: boolean }[] = [];
+        for (const type of ["click", "image-lightbox-close"]) {
+          for (const capture of [true, false]) {
+            document.addEventListener(
+              type,
+              (event) => {
+                const target = event.target;
+                if (target instanceof Element && target.closest("openclaw-image-lightbox")) {
+                  events.push({
+                    type,
+                    capture,
+                    target: target.localName,
+                    prevented: event.defaultPrevented,
+                  });
+                }
+              },
+              { capture, signal: controller.signal },
+            );
+          }
+        }
+        return { events, dispose: () => controller.abort() };
+      });
+      try {
+        await page.getByRole("button", { name: "Close image preview" }).click();
+        await expect.poll(() => sidebarDialog.count()).toBe(0);
+        await expect
+          .poll(() => sidebarTrigger.evaluate((element) => element.matches(":focus")))
+          .toBe(true);
+      } catch (error) {
+        console.error(
+          "Sidebar lightbox Close diagnostic",
+          await closeProbe.evaluate(({ events }) => ({
+            events,
+            visibility: document.visibilityState,
+            lightboxes: Array.from(document.querySelectorAll("openclaw-image-lightbox")).map(
+              (host) => ({
+                connected: host.isConnected,
+                dialogs: Array.from(host.querySelectorAll("dialog")).map((nativeDialog) => ({
+                  connected: nativeDialog.isConnected,
+                  open: nativeDialog.open,
+                })),
+              }),
+            ),
+            focus: {
+              tag: document.activeElement?.localName,
+              class: document.activeElement?.getAttribute("class"),
+            },
+          })),
+        );
+        throw error;
+      } finally {
+        await closeProbe.evaluate(({ dispose }) => dispose());
+        await closeProbe.dispose();
+      }
 
       await page.setViewportSize({ height: 844, width: 390 });
       await sidebarTrigger.click();

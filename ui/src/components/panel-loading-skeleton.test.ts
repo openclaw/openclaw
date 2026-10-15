@@ -1,7 +1,7 @@
 import { cleanup, getByRole, render as renderSolid } from "@solidjs/testing-library";
-import { html, nothing, render, svg, type TemplateResult } from "lit";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderLegacyTemplate } from "../lit/solid-content.tsx";
 import {
   renderPanelLoadingSkeleton,
   type PanelLoadingSkeletonVariant,
@@ -10,17 +10,18 @@ import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "./solid/panel-loading-skeleton.tsx";
 
 const owners: HTMLElement[] = [];
-function mountLit(template: TemplateResult) {
+function mountLegacy(template: unknown) {
   const owner = document.body.appendChild(document.createElement("div"));
   owners.push(owner);
-  render(template, owner);
+  renderLegacyTemplate(template, owner);
+  flush();
   return owner;
 }
 
 afterEach(async () => {
   cleanup();
   for (const owner of owners.splice(0)) {
-    render(nothing, owner);
+    renderLegacyTemplate(undefined, owner);
     owner.remove();
   }
   await Promise.resolve();
@@ -40,7 +41,7 @@ describe("panel presentation bridges", () => {
   ] satisfies PanelLoadingSkeletonVariant[])(
     "renders an accessible light-DOM %s placeholder for Lit callers",
     async (variant) => {
-      const owner = mountLit(renderPanelLoadingSkeleton(variant, `Loading ${variant}`));
+      const owner = mountLegacy(renderPanelLoadingSkeleton(variant, `Loading ${variant}`));
       const skeleton = owner.querySelector("openclaw-panel-loading-skeleton")!;
       await skeleton.updateComplete;
       expect(skeleton.shadowRoot).toBeNull();
@@ -53,11 +54,12 @@ describe("panel presentation bridges", () => {
   );
 
   it("updates Lit properties and compact/overlay attributes without replacing unchanged contents", async () => {
-    const owner = mountLit(renderPanelLoadingSkeleton("browser", "Loading browser"));
+    const owner = mountLegacy(renderPanelLoadingSkeleton("browser", "Loading browser"));
     const skeleton = owner.querySelector("openclaw-panel-loading-skeleton")!;
     await skeleton.updateComplete;
     const viewport = skeleton.querySelector(".viewport");
-    render(renderPanelLoadingSkeleton("browser", "Reconnecting", true, true), owner);
+    renderLegacyTemplate(renderPanelLoadingSkeleton("browser", "Reconnecting", true, true), owner);
+    flush();
     await skeleton.updateComplete;
     expect(skeleton.querySelector(".viewport")).toBe(viewport);
     expect(skeleton.compact).toBe(true);
@@ -65,7 +67,8 @@ describe("panel presentation bridges", () => {
     expect(skeleton.hasAttribute("compact")).toBe(true);
     expect(skeleton.hasAttribute("overlay")).toBe(true);
     expect(skeleton.getAttribute("aria-label")).toBe("Reconnecting");
-    render(renderPanelLoadingSkeleton("desktop", "Connecting"), owner);
+    renderLegacyTemplate(renderPanelLoadingSkeleton("desktop", "Connecting"), owner);
+    flush();
     await skeleton.updateComplete;
     expect(skeleton.compact).toBe(false);
     expect(skeleton.overlay).toBe(false);
@@ -101,31 +104,42 @@ describe("panel presentation bridges", () => {
     expect(skeleton.querySelector(".desktop-loading")?.textContent).toContain("Authenticating");
   });
 
-  it("retains Lit default/named content through replacement and reconnect without hiding actions", async () => {
+  it("retains custom-element default/named content through updates and reconnect without hiding actions", async () => {
     const action = vi.fn();
-    const view = (label: string, path: string) =>
-      html`<openclaw-panel-empty-state
-        .heading=${label}
-        .description=${"Choose a file to continue."}
-      >
-        ${svg`<svg viewBox="0 0 24 24"><path d=${path}></path></svg>`}
-        <span slot="action"><button type="button" @click=${action}>${label}</button></span>
-      </openclaw-panel-empty-state>`;
-    const owner = mountLit(view("Add file", "M1 1h10"));
-    const host = owner.querySelector("openclaw-panel-empty-state")!;
+    const owner = document.body.appendChild(document.createElement("div"));
+    owners.push(owner);
+    const host = new PanelEmptyState.Element();
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    icon.append(path);
+    const slot = document.createElement("span");
+    slot.slot = "action";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.addEventListener("click", action);
+    slot.append(button);
+    host.append(icon, slot);
+    const update = (label: string, data: string) => {
+      host.heading = label;
+      host.description = "Choose a file to continue.";
+      button.textContent = label;
+      path.setAttribute("d", data);
+    };
+    update("Add file", "M1 1h10");
+    owner.append(host);
     await host.updateComplete;
     const content = host.querySelector(".empty-state");
-    const icon = host.querySelector("svg");
-    expect(icon?.getAttribute("aria-hidden")).toBe("true");
+    expect(icon.getAttribute("aria-hidden")).toBe("true");
     expect(host.shadowRoot).toBeNull();
-    const button = getByRole(host, "button", { name: "Add file" });
+    expect(getByRole(host, "button", { name: "Add file" })).toBe(button);
     expect(button.closest('[aria-hidden="true"]')).toBeNull();
     button.click();
-    render(view("Add another file", "M2 2v10"), owner);
+    update("Add another file", "M2 2v10");
     await host.updateComplete;
     expect(host.querySelector(".empty-state")).toBe(content);
     expect(host.querySelector("svg")).toBe(icon);
-    expect(icon?.querySelector("path")?.getAttribute("d")).toBe("M2 2v10");
+    expect(path.getAttribute("d")).toBe("M2 2v10");
     expect(host.querySelector(".empty-state__title")?.textContent).toBe("Add another file");
     expect(getByRole(host, "button", { name: "Add another file" })).toBe(button);
     host.remove();
@@ -135,11 +149,11 @@ describe("panel presentation bridges", () => {
     expect(owner.querySelectorAll("openclaw-panel-empty-state")).toHaveLength(1);
     expect(host.querySelectorAll(".empty-state")).toHaveLength(1);
     expect(host.querySelector("svg")).toBe(icon);
-    expect(icon?.getAttribute("aria-hidden")).toBe("true");
+    expect(icon.getAttribute("aria-hidden")).toBe("true");
     getByRole(host, "button", { name: "Add another file" }).click();
-    render(view("Choose again", "M3 3h9"), owner);
+    update("Choose again", "M3 3h9");
     await host.updateComplete;
-    expect(host.querySelector("path")?.getAttribute("d")).toBe("M3 3h9");
+    expect(path.getAttribute("d")).toBe("M3 3h9");
     getByRole(host, "button", { name: "Choose again" }).click();
     expect(action).toHaveBeenCalledTimes(3);
   });

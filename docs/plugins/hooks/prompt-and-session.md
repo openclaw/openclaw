@@ -366,7 +366,7 @@ legacy and qualified identity prevents the drain from consuming another
 conversation's queue. Reading or consuming a legacy alias does not rename its
 stored session key.
 
-Use `api.session.workflow.steerActiveRun({ sessionKey, text, idempotencyKey? })`
+Use `api.session.workflow.steerActiveRun({ sessionKey, text, displayText?, idempotencyKey? })`
 to deliver guidance to the session's active run without starting a new turn.
 It returns `{ steered: true, runId? }` when the run accepts the text, or
 `{ steered: false, reason }` when no run is active, the run is not accepting
@@ -394,9 +394,22 @@ injection returns `steered: false`; an expired plugin instance cannot dispatch.
 The host and guarded runtime recheck the plugin instance before dispatch,
 including after transcript persistence. Disabling or disposing the plugin while
 guidance is pending rejects the steer rather than silently dropping it.
-The input is hidden, plugin-authored internal context, with provenance
+The input remains hidden, plugin-authored internal context, with provenance
 `{ kind: "internal_system", sourceTool: "plugin:<id>" }`. It carries no sender or
-owner authority and never answers a pending user question.
+owner authority and never answers a pending user question. The Control UI alone
+shows it as a collapsed **Plugin name guidance** notice with its timestamp;
+expanding the notice reveals the guidance without starting a new chat turn.
+The notice confirms recorded guidance, not delivery: a runtime can reject steering
+after its transcript row has been persisted.
+Steering notes are not sent to chat channels or shown in native clients or the TUI.
+
+Use optional `displayText` for an operator-facing note when `text` includes
+model-only delivery instructions. The model still receives the original `text`;
+only the Control UI notice uses `displayText`. Omit it to display `text` unchanged.
+The host records the plugin's display name with the note. Next-turn injections
+remain part of the next user message's model prompt, not separate steering notices.
+Their captured `modelPromptProjection` is private replay state and is omitted from
+all display history and message events; the visible user message stays unchanged.
 
 If the guidance should survive until another turn, fall back to the durable
 injection queue when steering is unavailable:
