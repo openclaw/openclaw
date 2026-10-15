@@ -820,6 +820,23 @@ describe("plugin registry runtime config scope", () => {
     );
   });
 
+  it("limits ACP session creation to the calling plugin namespace", async () => {
+    const fixture = sessionFixture("opencode");
+    const initialEntry = {
+      acpBackendId: "acpx",
+      acpSessionBinding: {
+        acpAgentId: "opencode",
+        agentSessionId: "source",
+      },
+    };
+
+    await expectSessionNamespace(fixture, "plugin:opencode:catalog-adopt:source", initialEntry, {
+      cfg: {},
+      key: "plugin:opencode:catalog-adopt:source",
+      initialEntry: { ...initialEntry, cliBackendId: "opencode" } as never,
+    });
+  });
+
   it.each(["patchSessionEntry", "updateSessionStoreEntry"] as const)(
     "rejects %s writes resumed after their plugin is replaced",
     async (method) => {

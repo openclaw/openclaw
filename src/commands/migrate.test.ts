@@ -567,6 +567,7 @@ describe("migrateApplyCommand", () => {
   });
 
   it.each([
+    { label: "skills", command: migrateDefaultCommand, acceptSkills: false },
     { label: "plugins after skills (apply)", command: migrateApplyCommand, acceptSkills: true },
   ])(
     "stops before confirmation and apply when cancelling $label",
@@ -753,6 +754,31 @@ describe("migrateApplyCommand", () => {
     expect(mocks.promptYesNo).toHaveBeenCalledWith("Apply this migration now?", false);
     expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
     expect(mocks.provider.apply).not.toHaveBeenCalled();
+  });
+
+  it("does not apply archive-only Codex migration work after Toggle all off", async () => {
+    setInteractive();
+    const planned = codexSkillPlan();
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.multiselect.mockResolvedValue([MIGRATION_SELECTION_TOGGLE_ALL_OFF]);
+
+    const result = await migrateDefaultCommand(runtime, { provider: "codex" });
+
+    expect(mocks.promptYesNo).not.toHaveBeenCalled();
+    expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "No Codex skills or native Codex plugins selected for migration.",
+    );
+    expect(result.summary.planned).toBe(1);
+    expect(result.summary.skipped).toBe(2);
+    expect(result.summary.conflicts).toBe(0);
+    const itemsById = new Map(result.items.map((item) => [item.id, item]));
+    expect(itemsById.get("skill:alpha")?.status).toBe("skipped");
+    expect(itemsById.get("skill:alpha")?.reason).toBe("not selected for migration");
+    expect(itemsById.get("skill:beta")?.status).toBe("skipped");
+    expect(itemsById.get("skill:beta")?.reason).toBe("not selected for migration");
+    expect(itemsById.get("archive:config.toml")?.status).toBe("planned");
   });
 
   it("prints a JSON plan without applying when interactive apply uses --json without --yes", async () => {
@@ -982,4 +1008,27 @@ describe("migrateApplyCommand", () => {
       expect(String(logPayload.reportDir)).toContain("/migration/hermes/");
     },
   );
+
+  it("prints the dry-run plan in JSON mode even when --yes is set", async () => {
+    const planned = plan();
+    const { logs, jsonRuntime } = captureRuntime();
+    mocks.provider.plan.mockResolvedValue(planned);
+
+    await migrateDefaultCommand(jsonRuntime, {
+      provider: "hermes",
+      yes: true,
+      dryRun: true,
+      json: true,
+    });
+
+    expect(logs).toHaveLength(1);
+    const logPayload = JSON.parse(logs[0] ?? "{}") as {
+      providerId?: unknown;
+      summary?: { planned?: unknown };
+    };
+    expect(logPayload.providerId).toBe("hermes");
+    expect(logPayload.summary?.planned).toBe(1);
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+    expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
+  });
 });

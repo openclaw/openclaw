@@ -25,7 +25,9 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
 
   it.each([
     ["partial", ""],
+    ["block", ""],
     ["partial", "[bot] "],
+    ["block", "[bot] "],
   ] as const)(
     "appends explicit chunks and replaces each final in %s mode with prefix %s",
     async (mode, prefix) => {
@@ -711,8 +713,13 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   );
 
   it.each([
+    { verbose: "on", mode: "progress", toolProgress: undefined, visible: true, preamble: true },
     { verbose: "full", mode: "progress", toolProgress: undefined, visible: true, preamble: true },
+    { verbose: "off", mode: "progress", toolProgress: undefined, visible: false, preamble: true },
+    { verbose: "on", mode: "progress", toolProgress: false, visible: false, preamble: true },
+    { verbose: "full", mode: "progress", toolProgress: true, visible: true, preamble: true },
     { verbose: "on", mode: "partial", toolProgress: undefined, visible: true, preamble: true },
+    { verbose: "on", mode: "off", toolProgress: undefined, visible: false, preamble: true },
     { verbose: "on", mode: "progress", toolProgress: undefined, visible: true, preamble: false },
   ] as const)(
     "keeps verbose $verbose diagnostics separate from $mode drafts (toolProgress=$toolProgress, preamble=$preamble)",

@@ -70,6 +70,17 @@ function createOutputBuffer() {
   };
 }
 
+function runCli(...args: string[]) {
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/run-additional-boundary-checks.mts", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -196,6 +207,26 @@ describe("run-additional-boundary-checks", () => {
     expect(() => parseCliArgs(["--shard"], {})).toThrow("--shard requires a value");
     expect(() => parseCliArgs(["--shard", "-h"], {})).toThrow("--shard requires a value");
     expect(() => parseCliArgs(["--wat"], {})).toThrow("Unknown argument: --wat");
+  });
+
+  it("does not start checks for CLI help or invalid arguments", () => {
+    const help = runCli("--help");
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain(
+      "Usage: node --import tsx scripts/run-additional-boundary-checks.mts",
+    );
+    expect(help.stdout).not.toContain("::group::");
+    expect(help.stderr).toBe("");
+
+    const unknown = runCli("--wat");
+    expect(unknown.status).toBe(1);
+    expect(unknown.stdout).toBe("");
+    expect(unknown.stderr).toContain("Unknown argument: --wat");
+    expect(unknown.stderr).toContain(
+      "Usage: node --import tsx scripts/run-additional-boundary-checks.mts",
+    );
+    expect(unknown.stderr).not.toContain("::group::");
+    expect(unknown.stderr).not.toContain("pnpm");
   });
 
   it("keeps the Docker E2E package guard in CI boundary checks", () => {

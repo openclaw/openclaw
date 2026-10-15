@@ -60,6 +60,27 @@ describe("FaceTime runtime asynchronous persistence", () => {
     mocks.helper.findOutgoingCall.mockResolvedValue(pendingDialCarrierResult());
   });
 
+  it.each(["open", "lookup"] as const)(
+    "propagates a V2 %s failure before starting the helper",
+    async (stage) => {
+      const state = emptyState();
+      const failure = new Error("worker state unavailable");
+      const openKeyedStoreV2 = vi.fn(() => {
+        if (stage === "open") {
+          throw failure;
+        }
+        return state;
+      });
+      if (stage === "lookup") {
+        vi.spyOn(state, "lookup").mockRejectedValueOnce(failure);
+      }
+
+      await expect(createRuntime(state, undefined, { openKeyedStoreV2 })).rejects.toBe(failure);
+      expect(openKeyedStoreV2).toHaveBeenCalledOnce();
+      expect(mocks.helper.start).not.toHaveBeenCalled();
+    },
+  );
+
   it("never dispatches a helper dial when its initial persistence fails", async () => {
     const state = emptyState();
     const runtime = await createRuntime(state);
@@ -75,7 +96,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
     }
   });
 
-  it.each([1])(
+  it.each([4, 1])(
     "reserves outbound admission until durable publication while incoming status %s arrives",
     async (callStatus) => {
       const state = emptyState();

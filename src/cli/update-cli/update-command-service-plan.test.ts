@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { satisfies } from "semver";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nodeRuntimeFailure } from "../../../node-sqlite.mjs";
+import { isSupportedOpenClawNodeVersion } from "../../../node-version.mjs";
 import {
   resolveBunRuntimeInfo,
   resolveNodeRuntimeInfo,
@@ -13,6 +16,7 @@ import { resolveTargetNodeRuntime } from "./update-command-node-runtime-resoluti
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import {
   expectedPlainRecovery,
+  expectedRuntimeSelectionCommand,
   unsupportedServiceRuntimeFixture,
 } from "./update-command-runtime-recovery.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
@@ -95,13 +99,15 @@ describe("package runtime compatibility guidance", () => {
 
   it.each([
     "implicit current",
-
+    "explicit current",
     "service library",
     "service failure",
+    "service Homebrew",
   ] as const)(
     "validates the selected Bun and retains only its runtime environment: %s",
     async (selection) => {
       const current = selection.endsWith("current");
+      const homebrew = selection === "service Homebrew";
       const supported = selection !== "service failure";
       const executable = current ? "/fixture/app-runtime" : "/service/bin/bun";
       const nodeRunner = selection === "implicit current" ? undefined : executable;
@@ -111,7 +117,9 @@ describe("package runtime compatibility guidance", () => {
       };
       const runtimeEnv = current
         ? processEnv
-        : { OPENCLAW_SQLITE_LIBRARY: "/service/sqlite.dylib" };
+        : homebrew
+          ? { HOMEBREW_PREFIX: "/service/custom-homebrew" }
+          : { OPENCLAW_SQLITE_LIBRARY: "/service/sqlite.dylib" };
       const serviceEnv = {
         ...runtimeEnv,
         OPENCLAW_GATEWAY_TOKEN: "synthetic-unrelated-secret",
@@ -123,7 +131,7 @@ describe("package runtime compatibility guidance", () => {
         execPath: path.resolve("/fixture/app-runtime"),
         versions: { ...process.versions, bun: "1.4.3", node: "24.3.0" },
       });
-      if (!current) {
+      if (!current && !homebrew) {
         vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue({
           status: "supported",
           version: "24.3.0",
@@ -142,8 +150,9 @@ describe("package runtime compatibility guidance", () => {
         target: { version: "2027.1.0", nodeEngine: ">=90.0.0" },
         nodeRunner,
         service: { ...refreshableService, ...(current ? {} : { serviceEnv }) },
-        shouldRestart: true,
-        runtimeRecovery: { env: {}, installCommand: vi.fn() },
+        ...(!homebrew
+          ? { shouldRestart: true, runtimeRecovery: { env: {}, installCommand: vi.fn() } }
+          : {}),
       });
       expect(result).toEqual(
         supported
@@ -165,6 +174,10 @@ describe("package runtime compatibility guidance", () => {
       expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(executable, undefined, runtimeEnv);
       expect(resolveNodeRuntimeInfo).not.toHaveBeenCalled();
       expect(resolveTargetNodeRuntime).not.toHaveBeenCalled();
+      if (homebrew) {
+        serviceEnv.HOMEBREW_PREFIX = "/changed/after-preflight";
+        expect(result.ok && result.value.activationRuntime?.env).toEqual(runtimeEnv);
+      }
     },
   );
 
@@ -203,8 +216,10 @@ describe("package runtime compatibility guidance", () => {
   });
 
   it.each([
+    [">=24.16.0 <25 || >=26.1.0", "24.16.0", "2026.9.4", "2026.9.4"],
     [null, "unspecified", "2026.9.4", "2026.9.4"],
-
+    ["invalid", "unspecified", "2026.9.4", "2026.9.4"],
+    [">=24.16.0", "24.16.0", "2026.9.4-beta.1", "2026.9.4-beta.1"],
     [">=24.16.0", "24.16.0", "2026.9.4-private-customer", "[redacted-version]"],
   ] as const)(
     "records inspected runtime facts for public refusal reports: %s / %s / %s",
@@ -258,13 +273,30 @@ describe("package runtime compatibility guidance", () => {
       expect(report.body).not.toContain("private-customer");
       expect(report.body).toContain(`Target package: openclaw@${publicVersion}`);
       expect(report.body).toContain(
-        `Required runtime: ${nodeEngine ? `Node ${nodeEngine}` : "a working Node runtime"}`,
+        `Required runtime: ${nodeEngine === "invalid" ? "[redacted-requirement]" : nodeEngine ? `Node ${nodeEngine}` : "a working Node runtime"}`,
       );
       expect(report.body).not.toContain("/fixture/private");
     },
   );
 
-  it.each([["/source/node", null, "/fixture"]])(
+  it.each([
+    [
+      "/home/operator/.nvm/versions/node/v22.23.2/bin/node",
+      "nvm install 24.16.0 && nvm use 24.16.0",
+    ],
+    ["/usr/bin/node", null],
+    ["/source/node", null, "/fixture"],
+    ["/home/operator/.nvm/../system/bin/node", null],
+    [
+      "/home/operator/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "fnm install 24.16.0 && fnm use 24.16.0",
+    ],
+    ["/home/operator/.volta/tools/image/node/22.23.2/bin/node", "volta install node@24.16.0"],
+    [
+      "/custom/node-manager/versions/node/v22.23.2/bin/node",
+      "nvm install 24.16.0 && nvm use 24.16.0",
+    ],
+  ])(
     "keeps the CLI and owned service reachable after switching %s",
     async (nodeRunner, command, sourceRoot?: string) => {
       vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue({
@@ -306,11 +338,20 @@ describe("package runtime compatibility guidance", () => {
             command:
               "export OPENCLAW_PROFILE=work; unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR",
           },
-          {
-            kind: "select-runtime",
-            instruction:
-              "Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.",
-          },
+          command
+            ? {
+                kind: "select-runtime",
+                command: command.startsWith("nvm")
+                  ? expectedRuntimeSelectionCommand("nvm", "24.16.0")
+                  : command.startsWith("fnm")
+                    ? expectedRuntimeSelectionCommand("fnm", "24.16.0")
+                    : command,
+              }
+            : {
+                kind: "select-runtime",
+                instruction:
+                  "Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.",
+              },
           {
             kind: "continue-update",
             command: `${prefix}${cli} --profile work update${sourceRoot ? "" : " --tag 2026.9.4"}`,
@@ -360,7 +401,51 @@ describe("package runtime compatibility guidance", () => {
     },
   );
 
-  it.each(["nvm"] as const)(
+  it("detects a version manager behind the selected runtime symlink", async () => {
+    await withTempDir("openclaw-node-manager-", async (root) => {
+      const node = path.join(root, ".fnm", "node-versions", "v22.18.0", "bin", "node");
+      await fs.mkdir(path.dirname(node), { recursive: true });
+      await fs.writeFile(node, "fixture");
+      const alias = path.join(root, "node-alias");
+      await fs.symlink(
+        path.dirname(node),
+        alias,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const launcher = path.join(alias, "node");
+      vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(unsupportedServiceRuntimeFixture);
+      const result = await resolvePackageRuntimePreflight({
+        target: { version: "2026.9.4", nodeEngine: ">=24.16.0" },
+        nodeRunner: launcher,
+      });
+      expect(result.recoverySteps?.[1]).toEqual({
+        kind: "select-runtime",
+        command: expectedRuntimeSelectionCommand("fnm", "24.16.0"),
+      });
+    });
+  });
+
+  it("keeps container recovery on the image owner", async () => {
+    probeState.container = true;
+    const result = await resolvePackageRuntimePreflight({
+      target: { version: "2026.9.4", nodeEngine: ">=90.0.0" },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      failureFacts: expect.arrayContaining([
+        expect.objectContaining({ code: "node-runtime-preflight" }),
+      ]),
+      recoverySteps: [
+        {
+          kind: "deployment",
+          instruction:
+            "Pull or build an OpenClaw image with version 2026.9.4 and Node 90.0.0, then recreate or redeploy the container with the same state/config mounts. In-container package changes are not durable.",
+        },
+      ],
+    });
+  });
+
+  it.each(["nvm", "fnm"] as const)(
     "renders %s recovery for PowerShell 5.1 without shell interpolation",
     async (manager) => {
       vi.stubGlobal("process", { ...process, platform: "win32" });
@@ -391,10 +476,34 @@ describe("package runtime compatibility guidance", () => {
   it.each([
     {
       version: "26.8.1",
+      restart: false,
+      oldNode: "22.23.1",
+      runner: "/old/node",
+      target: "2027.1.0",
+      error: "detected: Node 22.23.1 at /old/node",
+    },
+    {
+      version: "26.8.1",
       restart: true,
       oldNode: "22.23.1",
       runner: "/old/node",
       target: "2027.1.0",
+      error: null,
+    },
+    {
+      version: "24.15.0+vendor.1",
+      restart: true,
+      oldNode: "24.16.0",
+      runner: "/fixture/old/node",
+      target: "2026.9.3",
+      error: "Node >=24.16.0 <25 || >=26.1.0",
+    },
+    {
+      version: "24.19.0",
+      restart: true,
+      oldNode: "24.16.0",
+      runner: "/fixture/old/node",
+      target: "2026.9.3",
       error: null,
     },
   ])(
@@ -519,10 +628,60 @@ describe("package runtime compatibility guidance", () => {
     });
   });
 
+  it.each([
+    [">=22.19.0", "24.16.0"],
+    [">=24.18.0 <25", "24.18.0"],
+    ["^22 || >=25 <27", "26.1.0"],
+    [">=26.2.0-rc.1 <27", "26.2.0"],
+  ])("recommends a release usable by the updater and candidate %s", async (engine, minimum) => {
+    const node = "22.23.2";
+    vi.stubGlobal("process", {
+      ...process,
+      execPath: path.resolve("/fixture/node"),
+      versions: { ...process.versions, node },
+    });
+    const result = await resolvePackageRuntimePreflight({
+      target: { version: "2027.1.0", nodeEngine: engine },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      failureFacts: expect.arrayContaining([
+        expect.objectContaining({ check: "node-runtime", code: "node-runtime-preflight" }),
+      ]),
+      error: expect.stringContaining(
+        [
+          `Node ${node}: openclaw requires Node >=24.16.0 <25, or >=26.1.0.`,
+          expectedPlainRecovery("2027.1.0", minimum),
+        ].join("\n"),
+      ),
+    });
+    expect(satisfies(minimum, engine)).toBe(true);
+    expect(isSupportedOpenClawNodeVersion(minimum)).toBe(true);
+    expect(
+      nodeRuntimeFailure(minimum, {
+        available: true,
+        version: "3.51.3",
+        text: true,
+        blob: true,
+        json: true,
+      }),
+    ).toBeNull();
+  });
+
   for (const { name, engine, minimum } of [
+    {
+      name: "reports the full target range when Node is below its minimum",
+      engine: ">=90.2.0 <91 || >=92.5.0",
+      minimum: "90.2.0",
+    },
     {
       name: "reports incompatibility when Node exceeds an exclusive upper bound",
       engine: ">=22.22.3 <23",
+      minimum: null,
+    },
+    {
+      name: "reports an unsupported release line with no common version",
+      engine: ">=25.0.0 <26",
       minimum: null,
     },
   ]) {
@@ -548,6 +707,27 @@ describe("package runtime compatibility guidance", () => {
     });
   }
 
+  it.each([
+    ["24.16.0", false, "nodejs/node#61954"],
+    ["24.15.0+vendor.1", true, "Node >=24.16.0 <25 || >=26.1.0"],
+  ] as const)(
+    "requires target engines and SQLite capabilities for Node %s",
+    async (node, text, error) => {
+      probeState.text = text;
+      vi.stubGlobal("process", { ...process, versions: { ...process.versions, node } });
+      const result = await resolvePackageRuntimePreflight({
+        target: {
+          version: "2026.9.3",
+          nodeEngine: ">=24.16.0 <25 || >=26.1.0",
+        },
+      });
+      expect(result.ok).toBe(error === null);
+      if (!result.ok) {
+        expect(result.error).toContain(error);
+      }
+    },
+  );
+
   it.each([true, false])("preserves the selected target (present=%s)", async (present) => {
     const target = { version: "2027.1.0", nodeEngine: ">=20.0.0" };
     await expect(resolvePackageRuntimePreflight(present ? { target } : {})).resolves.toEqual({
@@ -564,4 +744,64 @@ describe("package runtime compatibility guidance", () => {
         : {},
     });
   });
+
+  it.each([
+    { timeoutMs: undefined, startupMs: 11_000, admitted: true },
+    { timeoutMs: 1_500_000, startupMs: 1_300_000, admitted: true },
+    { timeoutMs: 50, startupMs: 100, admitted: false },
+  ])(
+    "allows a slow selected Node within its owner budget $timeoutMs",
+    async ({ timeoutMs, startupMs, admitted }) => {
+      vi.useFakeTimers();
+      vi.mocked(resolveNodeRuntimeInfo).mockImplementation(async (_node, _env, allowance) => {
+        if (allowance === undefined) {
+          throw new Error("Runtime probe requires a finite allowance");
+        }
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, Math.min(startupMs, allowance));
+        });
+        return allowance < startupMs
+          ? { status: "probe-failed", error: new Error("runtime startup timed out") }
+          : {
+              status: "supported",
+              version: "24.19.0",
+              sqliteVersion: "3.51.3",
+              nodeSharedSqlite: false,
+              sqliteProbe: {
+                available: true,
+                version: "3.51.3",
+                text: true,
+                blob: true,
+                json: true,
+              },
+            };
+      });
+      const pending = resolvePackageRuntimePreflight({
+        target: { version: "2026.9.4", nodeEngine: ">=24.16.0" },
+        nodeRunner: "/fixture/bin/node",
+        timeoutMs,
+      });
+      await vi.advanceTimersByTimeAsync(startupMs);
+      const result = await pending;
+      if (admitted) {
+        expect(result).toEqual({
+          ok: true,
+          value: {
+            nodeRunner: "/fixture/bin/node",
+            targetVersion: "2026.9.4",
+            activationRuntime: {
+              kind: "node",
+              path: "/fixture/bin/node",
+              identity: "fixture:/fixture/bin/node",
+            },
+          },
+        });
+      } else {
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringContaining("runtime startup timed out"),
+        });
+      }
+    },
+  );
 });

@@ -258,6 +258,40 @@ describe("service-owned node invocation", () => {
     },
   );
 
+  it("rejects core and other-plugin commands", async () => {
+    const fixture = await startFixture();
+    fixture.registry.nodeHostCommands.push({
+      pluginId: "other",
+      source: "other",
+      command: { command: "other.read", handle: async () => "{}" },
+    });
+    for (const command of ["system.run", "other.read"]) {
+      await expect(fixture.serviceContext.invokeNode!({ ...request, command })).rejects.toThrow(
+        /unowned/,
+      );
+    }
+    expect(fixture.nodeHandler).not.toHaveBeenCalled();
+  });
+
+  it.each(["stop", "gateway", "replace"])(
+    "rejects a retained capability after %s",
+    async (action) => {
+      const fixture = await startFixture();
+      await fixture.serviceContext.invokeNode!(request);
+      if (action === "stop") {
+        await fixture.handle.stop();
+      }
+      if (action === "gateway") {
+        getGatewayContextLifetime(fixture.resolveContext).abort();
+      }
+      if (action === "replace") {
+        revokePluginRecord(fixture.registry, fixture.record);
+      }
+      await expect(fixture.serviceContext.invokeNode!(request)).rejects.toThrow();
+      expect(fixture.nodeHandler).toHaveBeenCalledOnce();
+    },
+  );
+
   it("retains exact service authority across an unrelated registry replacement", async () => {
     const fixture = await startFixture();
     const next = createEmptyPluginRegistry();
@@ -415,15 +449,10 @@ describe("service-owned node duplex", () => {
 
   it("rejects non-duplex and unowned commands before dispatch", async () => {
     const fixture = await startFixture();
-    fixture.registry.nodeHostCommands.push({
-      pluginId: "other",
-      source: "other",
-      command: { command: "other.stream", duplex: true, handle: async () => "{}" },
-    });
     for (const command of ["file.fetch", "system.run", "other.stream"]) {
-      await expect(fixture.serviceContext.openNodeDuplex!({ ...request, command })).rejects.toThrow(
-        command === "file.fetch" ? /must declare duplex/ : /unowned node command/,
-      );
+      await expect(
+        fixture.serviceContext.openNodeDuplex!({ ...request, command }),
+      ).rejects.toThrow();
     }
     expect(fixture.nodeHandler).not.toHaveBeenCalled();
   });

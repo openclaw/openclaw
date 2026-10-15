@@ -121,13 +121,29 @@ describe("sendClickClackText routing", () => {
     await sendClickClackText({
       cfg,
       to: "channel:general",
-      text: '<tool_call>{"name":"exec"}</tool_call>Done.\n⚠️ 🛠️ `search repos (agent)` failed',
+      text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
       threadId: "msg_thread_root",
       replyToId: "msg_root",
     });
 
     expect(createThreadReply).toHaveBeenCalledWith("msg_thread_root", "Done.", expect.anything());
     expect(createChannelMessage).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes leaked tool XML in a DM quote-reply", async () => {
+    await sendClickClackText({
+      cfg,
+      to: "dm:usr_1",
+      text: '<tool_call>{"name":"exec"}</tool_call>Deploy finished.',
+      replyToId: "msg_root",
+    });
+
+    expect(createDirectMessage).toHaveBeenCalledWith(
+      "dm_1",
+      "Deploy finished.",
+      expect.objectContaining({ quotedMessageId: "msg_root" }),
+    );
+    expect(createThreadReply).not.toHaveBeenCalled();
   });
 
   it("suppresses replies containing only internal scaffolding", async () => {

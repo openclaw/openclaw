@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
 import { legacyCodexProviderIdentityKey } from "../shared/codex-route-model-ref.js";
 import { TASK_SUGGESTION_TOOL_NAME_MIGRATION } from "../shared/legacy-tool-name-migration.js";
@@ -306,6 +307,68 @@ describe("normalizeStoredCronJobs", () => {
     expect((job.payload as Record<string, unknown>).model).toBe("openai/gpt-5.6-sol");
   });
 
+  it.each<{
+    name: string;
+    agents: NonNullable<OpenClawConfigWithLegacyRoster["agents"]>;
+    agentId?: string;
+    expectedAgentId: string;
+  }>([
+    {
+      name: "sole configured agent",
+      agents: { entries: { ops: {} } },
+      expectedAgentId: "ops",
+    },
+    {
+      name: "configured system agent under explicit ownership",
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { main: {}, ops: {} },
+      },
+      expectedAgentId: "ops",
+    },
+    {
+      name: "explicit job owner before the configured system agent",
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { main: {}, ops: {} },
+      },
+      agentId: "main",
+      expectedAgentId: "main",
+    },
+  ])("writes policy only to the $name", ({ agents, agentId, expectedAgentId }) => {
+    const jobs = [
+      makeLegacyJob({
+        id: "implicit-default-codex-model",
+        agentId,
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          model: "codex/gpt-5.6-sol",
+        },
+      }),
+    ];
+    const policyRepair = repairCronCodexRuntimePolicies({
+      cfg: { agents },
+      targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
+    });
+
+    expect(jobs[0]?.agentId).toBe(agentId);
+    expect(policyRepair.config.agents?.entries?.[expectedAgentId]?.models).toEqual({
+      "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+    });
+    for (const [entryId, entry] of Object.entries(policyRepair.config.agents?.entries ?? {})) {
+      if (entryId !== expectedAgentId) {
+        expect(entry.models).toBeUndefined();
+      }
+    }
+    expect(policyRepair.config.agents?.defaults?.models).toBeUndefined();
+    expect(policyRepair.warnings).toEqual([]);
+    expect(policyRepair.blockedTargets).toEqual([]);
+  });
+
   it("retains a post-snapshot Codex ref until its runtime policy is persisted", () => {
     const jobs = [
       makeLegacyJob({
@@ -601,16 +664,46 @@ describe("normalizeStoredCronJobs", () => {
     expect(schedule.atMs).toBeUndefined();
   });
 
-  it.each([{ kind: "at", at: "2026-04-01T11:00:00.000Z", atMs: 1_775_037_600_000 }])(
-    "repairs a noncanonical one-shot schedule once: %j",
-    (schedule) => {
-      const jobs = [makeLegacyJob({ description: undefined, schedule: { ...schedule } })];
+  it.each([
+    { kind: "at", at: "2026-04-01T12:00:00+02:00" },
+    { kind: "at", at: "2026-04-01T10:00:00.000Z", atMs: undefined },
+    { kind: "at", at: "2026-04-01T11:00:00.000Z", atMs: 1_775_037_600_000 },
+  ])("repairs a noncanonical one-shot schedule once: %j", (schedule) => {
+    const jobs = [makeLegacyJob({ description: undefined, schedule: { ...schedule } })];
 
-      expect(normalizeStoredCronJobs(jobs).mutated).toBe(true);
-      expect(jobs[0]?.schedule).toEqual({ kind: "at", at: "2026-04-01T10:00:00.000Z" });
-      expect(normalizeStoredCronJobs(jobs).mutated).toBe(false);
-    },
-  );
+    expect(normalizeStoredCronJobs(jobs).mutated).toBe(true);
+    expect(jobs[0]?.schedule).toEqual({ kind: "at", at: "2026-04-01T10:00:00.000Z" });
+    expect(normalizeStoredCronJobs(jobs).mutated).toBe(false);
+  });
+
+  it("leaves Date-invalid legacy atMs for persisted shape validation", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "job-invalid-at",
+        schedule: { kind: "at", atMs: 8_700_000_000_000_000 },
+      }),
+    );
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.invalidSchedule).toBe(1);
+    expect(job).toBeUndefined();
+  });
+
+  it("drops Date-invalid legacy atMs when canonical at is valid", () => {
+    const at = "2026-04-01T10:00:00.000Z";
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "job-valid-at-invalid-at-ms",
+        schedule: { kind: "at", at, atMs: 8_700_000_000_000_000 },
+      }),
+    );
+
+    const schedule = expectDefined(job, "job test invariant").schedule as Record<string, unknown>;
+    expect(result.mutated).toBe(true);
+    expect(result.issues.invalidSchedule).toBeUndefined();
+    expect(schedule.at).toBe(at);
+    expect(schedule.atMs).toBeUndefined();
+  });
 
   it("removes invalid legacy staggerMs from non top-of-hour cron schedules", () => {
     const { job } = normalizeOneJob(
@@ -736,7 +829,13 @@ describe("normalizeStoredCronJobs", () => {
 
   const sourceSessionKey = "agent:main:dashboard:source";
   it.each([
+    ["current", undefined, "isolated", undefined],
+    ["current", " \t ", "isolated", undefined],
+    ["current", 42, "isolated", undefined],
+    [" CURRENT ", sourceSessionKey, "current", sourceSessionKey],
+    [" ISOLATED ", sourceSessionKey, "isolated", sourceSessionKey],
     [" SESSION: ProjectAlpha ", sourceSessionKey, "session:ProjectAlpha", sourceSessionKey],
+    [undefined, sourceSessionKey, "isolated", sourceSessionKey],
   ])(
     "normalizes target %s with binding %s without changing the rest of the job",
     (sessionTarget, sessionKey, target, binding) => {

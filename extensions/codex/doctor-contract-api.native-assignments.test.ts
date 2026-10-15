@@ -226,7 +226,7 @@ async function createFixture() {
 }
 
 describe("Codex native Task assignment upgrade", () => {
-  it.each(["succeeded"] as const)(
+  it.each(["succeeded", "failed", "cancelled"] as const)(
     "settles an unbindable %s delivery as retained history and converges",
     async (status) => {
       const fixture = await createFixture();
@@ -334,6 +334,29 @@ describe("Codex native Task assignment upgrade", () => {
     expect(fixture.rows()).toEqual(original);
     await expect(fixture.store.lookup(bindingKey)).resolves.toEqual(fixture.stored);
   });
+
+  it.each(["queued", "running"] as const)(
+    "keeps an unbindable %s task pending for recovery",
+    async (status) => {
+      const fixture = await createFixture();
+      fixture.seed({
+        id: "active-task",
+        runId: "codex-thread:active",
+        owner: fixture.owner,
+        status,
+      });
+      await fixture.store.delete(bindingKey);
+      const original = fixture.rows();
+      const migration = registeredMigration();
+
+      const result = await migration.migrateLegacyState(fixture.params);
+
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("original requester binding is unavailable");
+      expect(fixture.rows()).toEqual(original);
+      expect(await migration.detectLegacyState(fixture.params)).not.toBeNull();
+    },
+  );
 
   it("imports released initial and promoted follow-up work once across native rotation and clear", async () => {
     const fixture = await createFixture();

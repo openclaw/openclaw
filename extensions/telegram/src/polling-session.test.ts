@@ -411,6 +411,36 @@ describe("TelegramPollingSession", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it("does not start an isolated ingress worker when durable queue acquisition fails", async () => {
+    await withTempSpool(async (stateDir) => {
+      const abort = new AbortController();
+      const queueOpenError = new Error("Telegram ingress queue could not be opened");
+      const transport = makeTelegramTransport();
+      const bot = makeIsolatedBot();
+      createTelegramBotMock.mockReturnValueOnce(bot);
+      installTelegramIngressQueueRuntime(() => stateDir, queueOpenError);
+
+      const { createWorker } = createIdleIngressWorker();
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        telegramTransport: transport,
+        ingress: {
+          stateDir,
+          createWorker,
+        },
+      });
+
+      try {
+        await expect(session.runUntilAbort()).rejects.toBe(queueOpenError);
+        expect(bot.api.deleteWebhook).toHaveBeenCalledTimes(1);
+        expect(transport.close).toHaveBeenCalledTimes(1);
+        expect(createWorker).not.toHaveBeenCalled();
+      } finally {
+        abort.abort();
+      }
+    });
+  });
+
   it("shares the installed grammY bot capability snapshot: initializes an uncached bot with exactly one getMe request", async (context) => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
@@ -480,6 +510,52 @@ describe("TelegramPollingSession", () => {
         expect(rows).toMatchObject([{ lane_key: "telegram:1234:topic:42", status: "claimed" }]);
         expect(getMe).toHaveBeenCalledTimes(1);
         expect(bot.botInfo).toBe(botInfo);
+      } finally {
+        await lifetime.close();
+      }
+    });
+  });
+
+  it("spools, persists the actual update id, then acknowledges", async (context) => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const persistUpdateId = vi.fn(async (updateId: number) => {
+        expect(updateId).toBe(42);
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]);
+      });
+      const worker = createListeningIngressWorker();
+      const { runPromise } = startIsolatedIngressSession({
+        abort,
+        stateDir: tempDir,
+        handleUpdate: vi.fn(async () => undefined),
+        createWorker: worker.createWorker,
+        drainIntervalMs: 60_000,
+        getCommittedUpdateId: () => 40,
+        persistUpdateId,
+      });
+      const lifetime = createTestLifetime(context, async () => {
+        abort.abort();
+        await runPromise;
+      });
+      try {
+        await lifetime.wait(worker.listening);
+        const update = directUpdate(42, 123, "hello");
+        worker.emit({
+          type: "update",
+          requestId: "offset-gap",
+          update,
+          queued: 1,
+        });
+        await lifetime.wait(worker.firstAck);
+        expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-gap", {
+          ok: true,
+          updateId: 42,
+        });
+        expect(
+          expectDefined(persistUpdateId.mock.invocationCallOrder[0], "offset persistence order"),
+        ).toBeLessThan(
+          expectDefined(worker.ackSpooledUpdate.mock.invocationCallOrder[0], "worker ack order"),
+        );
       } finally {
         await lifetime.close();
       }
@@ -1044,91 +1120,96 @@ describe("TelegramPollingSession", () => {
     }
   });
 
-  it("restarts isolated ingress when worker liveness stalls with the same transport", async () => {
-    const abort = new AbortController();
-    const log = vi.fn();
-    const setStatus = vi.fn();
-    const transport = makeTelegramTransport();
-    const replacement = transport;
-    const releaseClose = createDeferred<void>();
-    replacement.close.mockImplementation(async () => await releaseClose.promise);
-    const createTelegramTransport = vi.fn(() => replacement);
-    createTelegramBotMock.mockReturnValue(makeIsolatedBot());
+  it.each(["same", "different"] as const)(
+    "restarts isolated ingress when worker liveness stalls with a %s transport",
+    async (replacementKind) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const setStatus = vi.fn();
+      const transport = makeTelegramTransport();
+      const replacement = replacementKind === "same" ? transport : makeTelegramTransport();
+      const releaseClose = createDeferred<void>();
+      replacement.close.mockImplementation(async () => await releaseClose.promise);
+      const createTelegramTransport = vi.fn(() => replacement);
+      createTelegramBotMock.mockReturnValue(makeIsolatedBot());
 
-    let firstWorkerDone: (() => void) | undefined;
-    const firstWorkerTask = new Promise<void>((resolve) => {
-      firstWorkerDone = resolve;
-    });
-    const firstWorkerStop = vi.fn(async () => {
-      firstWorkerDone?.();
-    });
-    let workerCycle = 0;
-    const createWorker = vi.fn(() => {
-      workerCycle += 1;
-      if (workerCycle === 1) {
+      let firstWorkerDone: (() => void) | undefined;
+      const firstWorkerTask = new Promise<void>((resolve) => {
+        firstWorkerDone = resolve;
+      });
+      const firstWorkerStop = vi.fn(async () => {
+        firstWorkerDone?.();
+      });
+      let workerCycle = 0;
+      const createWorker = vi.fn(() => {
+        workerCycle += 1;
+        if (workerCycle === 1) {
+          return {
+            onMessage: vi.fn(() => () => undefined),
+            stop: firstWorkerStop,
+            task: vi.fn(async () => {
+              await firstWorkerTask;
+            }),
+          };
+        }
         return {
           onMessage: vi.fn(() => () => undefined),
-          stop: firstWorkerStop,
+          stop: vi.fn(async () => undefined),
           task: vi.fn(async () => {
-            await firstWorkerTask;
+            expect(replacement.close).not.toHaveBeenCalled();
+            abort.abort();
           }),
         };
+      });
+      const watchdogHarness = installPollingStallWatchdogHarness();
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        setStatus,
+        telegramTransport: transport,
+        createTelegramTransport,
+        stallThresholdMs: 30_000,
+        ingress: {
+          createWorker,
+          drainIntervalMs: 500,
+        },
+      });
+
+      try {
+        let stopped = false;
+        const runPromise = session.runUntilAbort().then(() => {
+          stopped = true;
+        });
+        const watchdog = await watchdogHarness.waitForWatchdog();
+        watchdogHarness.setNow(31_000);
+        watchdog?.();
+
+        await waitForTelegramTestState(() => expect(firstWorkerStop).toHaveBeenCalledTimes(1));
+        await waitForTelegramTestState(() => expect(createWorker).toHaveBeenCalledTimes(2));
+        await waitForTelegramTestState(() => expect(replacement.close).toHaveBeenCalledOnce());
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(stopped).toBe(false);
+        releaseClose.resolve();
+        await runPromise;
+        expectTelegramBotTransportSequence(transport, replacement);
+        expect(transport.close).toHaveBeenCalledOnce();
+        expect(replacement.close).toHaveBeenCalledOnce();
+        expect(statusPatches(setStatus).some((patch) => patch.lifecycle === "recovering")).toBe(
+          true,
+        );
+
+        expectLogIncludes(log, "Polling stall detected");
+        expectLogIncludes(log, "isolated polling ingress finished reason=polling stall detected");
+        expectLogExcludes(log, "Isolated polling ingress stop timed out");
+      } finally {
+        releaseClose.resolve();
+        watchdogHarness.restore();
+        abort.abort();
       }
-      return {
-        onMessage: vi.fn(() => () => undefined),
-        stop: vi.fn(async () => undefined),
-        task: vi.fn(async () => {
-          expect(replacement.close).not.toHaveBeenCalled();
-          abort.abort();
-        }),
-      };
-    });
-    const watchdogHarness = installPollingStallWatchdogHarness();
-    const session = createPollingSession({
-      abortSignal: abort.signal,
-      log,
-      setStatus,
-      telegramTransport: transport,
-      createTelegramTransport,
-      stallThresholdMs: 30_000,
-      ingress: {
-        createWorker,
-        drainIntervalMs: 500,
-      },
-    });
-
-    try {
-      let stopped = false;
-      const runPromise = session.runUntilAbort().then(() => {
-        stopped = true;
-      });
-      const watchdog = await watchdogHarness.waitForWatchdog();
-      watchdogHarness.setNow(31_000);
-      watchdog?.();
-
-      await waitForTelegramTestState(() => expect(firstWorkerStop).toHaveBeenCalledTimes(1));
-      await waitForTelegramTestState(() => expect(createWorker).toHaveBeenCalledTimes(2));
-      await waitForTelegramTestState(() => expect(replacement.close).toHaveBeenCalledOnce());
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(stopped).toBe(false);
-      releaseClose.resolve();
-      await runPromise;
-      expectTelegramBotTransportSequence(transport, replacement);
-      expect(transport.close).toHaveBeenCalledOnce();
-      expect(replacement.close).toHaveBeenCalledOnce();
-      expect(statusPatches(setStatus).some((patch) => patch.lifecycle === "recovering")).toBe(true);
-
-      expectLogIncludes(log, "Polling stall detected");
-      expectLogIncludes(log, "isolated polling ingress finished reason=polling stall detected");
-      expectLogExcludes(log, "Isolated polling ingress stop timed out");
-    } finally {
-      releaseClose.resolve();
-      watchdogHarness.restore();
-      abort.abort();
-    }
-  });
+    },
+  );
 
   it("applies stop-timeout cooldown to isolated ingress forced restarts", async () => {
     const abort = new AbortController();
@@ -1886,6 +1967,73 @@ describe("TelegramPollingSession", () => {
       ).toBe(true);
     } finally {
       abort.abort();
+      await closeOpenClawStateDatabaseAsync();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries a timed-out spooled handler before later same-lane updates without restart", async () => {
+    // Core drain releases 42 for retry before 43 on the same bot.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    const events: string[] = [];
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async (update: { update_id?: number }) => {
+        events.push(`bot:${update.update_id}`);
+        if (update.update_id === 42 && events.filter((event) => event === "bot:42").length === 1) {
+          // Hang until the core watchdog aborts the drain lifecycle.
+          await new Promise<void>(() => {});
+        }
+        if (update.update_id === 43) {
+          abort.abort();
+        }
+      }),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValue(bot);
+    await writeSpooledTestUpdates(tempDir, [
+      topicUpdate(42, 10, "wedged topic 10 turn"),
+      topicUpdate(43, 10, "later topic 10 turn"),
+    ]);
+
+    const worker = createIdleIngressWorker();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+      ingress: {
+        stateDir: tempDir,
+        createWorker: worker.createWorker,
+        drainIntervalMs: 10,
+        spooledUpdateHandlerTimeoutMs: 100,
+      },
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      await waitForTelegramTestState(() => expect(events).toEqual(["bot:42"]));
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitForTelegramTestState(() => expect(events).toEqual(["bot:42", "bot:42", "bot:43"]));
+      await vi.advanceTimersByTimeAsync(15_000);
+      await runPromise;
+
+      // No private-drain session restart for handler timeout.
+      expect(worker.createWorker).toHaveBeenCalledTimes(1);
+      expect(createTelegramBotMock).toHaveBeenCalledTimes(1);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
+      expectLogIncludes(log, "handler-timeout");
+    } finally {
+      abort.abort();
+      worker.stop();
+      vi.useRealTimers();
       await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }

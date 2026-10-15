@@ -592,6 +592,23 @@ describe("bundled channel ingress runtime ownership", () => {
     ).toMatchObject({ ingressState: "present", invoker: { state: "present" } });
   });
 
+  it("does not mint for untrusted plugins, only the exact active bundled record", async () => {
+    const audit = createAudit();
+    const external = createRuntimeBuilder({ origin: "workspace", audit });
+    const bundled = createRuntimeBuilder({ origin: "bundled", audit });
+    const ingress = await bundled.resolveIngress("person-a");
+
+    expect(inspect(external.buildContext(contextParams({ ingress })))).toMatchObject({
+      ingressState: "unknown",
+      invoker: { state: "unknown" },
+    });
+    expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
+      ingressState: "present",
+      invoker: { state: "present", kind: "person" },
+      decisionCoverage: "enforced",
+    });
+  });
+
   it.each(["accepted", "mismatched", "builder failure"] as const)(
     "consumes the handoff after its first %s attempt",
     async (outcome) => {

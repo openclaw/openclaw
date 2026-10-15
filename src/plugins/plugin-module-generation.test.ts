@@ -177,6 +177,79 @@ describe("plugin module generations", () => {
     },
   );
 
+  it.each(["ts", "mts", "mtsx"])(
+    "preserves synchronous %s import.meta and native createRequire behavior",
+    (extension) => {
+      const root = temp.make("plugin-source-import-meta-");
+      fs.mkdirSync(path.join(root, "nested"));
+      fs.writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          type: "module",
+          imports: { "#helper": "./nested/helper.mjs" },
+          dependencies: { "conditional-dependency": "1.0.0" },
+        }),
+      );
+      fs.writeFileSync(path.join(root, "nested/helper.mjs"), "export const value = 1;");
+      const dependency = path.join(root, "node_modules/conditional-dependency");
+      fs.mkdirSync(dependency, { recursive: true });
+      fs.writeFileSync(
+        path.join(dependency, "package.json"),
+        JSON.stringify({
+          exports: { import: "./import.mjs", require: "./require.cjs" },
+        }),
+      );
+      fs.writeFileSync(path.join(dependency, "import.mjs"), "export const value = 'import';");
+      fs.writeFileSync(
+        path.join(dependency, "require.cjs"),
+        "module.exports = { value: 'require' };",
+      );
+      const entry = `nested/index.${extension}`;
+      const source = path.join(root, entry);
+      fs.writeFileSync(
+        source,
+        `
+        import { createRequire } from 'node:module';
+        import { fileURLToPath } from 'node:url';
+        import path from 'node:path';
+        const require = createRequire(import.meta.url);
+        const module = 'local-module', exports = 'local-exports';
+        const __filename = 'local-file', __dirname = 'local-directory';
+        const locals = { module, exports, __filename, __dirname };
+        export const read = () => [
+          path.normalize(fileURLToPath(import.meta.url)) === path.normalize(import.meta.filename),
+          path.dirname(import.meta.filename) === import.meta.dirname,
+          import.meta.resolve('./helper.mjs') === import.meta.resolve('#helper'),
+          import.meta.resolve('conditional-dependency').endsWith('/import.mjs'),
+          require('conditional-dependency').value,
+          import.meta.env === process.env,
+          locals,
+        ];
+      `,
+      );
+      const legacy = createJiti(source, { tryNative: false, fsCache: false, moduleCache: false })(
+        source,
+      ) as { read(): unknown[] };
+      const expected = [
+        true,
+        true,
+        true,
+        true,
+        "require",
+        true,
+        {
+          module: "local-module",
+          exports: "local-exports",
+          __filename: "local-file",
+          __dirname: "local-directory",
+        },
+      ];
+      expect(legacy.read()).toEqual(expected);
+      const current = load(root, entry).value as typeof legacy;
+      expect(current.read()).toEqual(expected);
+    },
+  );
+
   it.each(["ts", "mjs"])("awaits first-demand %s top-level await", async (extension) => {
     const root = temp.make("plugin-async-source-demand-");
     const source = path.join(root, "index.ts");
@@ -730,6 +803,34 @@ describe("plugin module generations", () => {
     },
   );
 
+  it("resolves deferred TypeScript without acquiring its source transformers until execution", () => {
+    const root = temp.make("plugin-resolve-only-typescript-");
+    fs.writeFileSync(
+      path.join(root, "index.cjs"),
+      "exports.resolve = () => require.resolve('./deferred.ts'); exports.read = () => require('./deferred.ts').value;",
+    );
+    fs.writeFileSync(path.join(root, "deferred.ts"), "exports.value = 42 as number;");
+    // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted module receiver.
+    const originalRequire = Module.prototype.require;
+    const compilerGuard = vi.spyOn(Module.prototype, "require").mockImplementation(function (
+      this: NodeJS.Module,
+      id: string,
+    ) {
+      if (["@babel/parser", "@babel/traverse", "@babel/generator", "esbuild"].includes(id)) {
+        throw new Error("Resolution must not acquire source transformers");
+      }
+      return originalRequire.call(this, id);
+    });
+    let plugin: { resolve(): string; read(): number };
+    try {
+      plugin = load(root, "index.cjs").value as typeof plugin;
+      expect(fs.existsSync(plugin.resolve())).toBe(true);
+    } finally {
+      compilerGuard.mockRestore();
+    }
+    expect(plugin.read()).toBe(42);
+  });
+
   it("defers unused TypeScript syntax errors until their module is loaded", async () => {
     const root = temp.make("plugin-lazy-source-error-");
     fs.writeFileSync(
@@ -791,6 +892,79 @@ describe("plugin module generations", () => {
       ]);
     },
   );
+
+  it("emits standard Node shims without changing lexical bindings", () => {
+    const root = temp.make("plugin-source-bindings-");
+    fs.writeFileSync(
+      path.join(root, "index.ts"),
+      `import path from 'node:path';
+       declare const require: NodeRequire;
+       declare const __filename: string;
+       declare const __dirname: string;
+       function local(require: (name: string) => number) { return require('local'); }
+       const object = { require: () => 5 };
+       export const read = () => [typeof require('node:fs').readFileSync,
+         local(() => 3), object.require(), path.dirname(__filename) === __dirname,
+         new URL(import.meta.url).pathname.endsWith('/index.ts')];`,
+    );
+    const source = path.join(root, "index.ts");
+    const legacy = createJiti(source, { tryNative: false, fsCache: false, moduleCache: false })(
+      source,
+    ) as { read(): unknown[] };
+    const expected = ["function", 3, 5, true, true];
+    expect(legacy.read()).toEqual(expected);
+    expect((load(root, "index.ts").value as typeof legacy).read()).toEqual(expected);
+  });
+
+  it("keeps declared source package imports and self exports in one emitted graph", async () => {
+    const root = temp.make("plugin-source-exports-");
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "fixture-source",
+        type: "module",
+        exports: { "./state": "./state.ts" },
+        imports: { "#state": "./state.ts" },
+      }),
+    );
+    fs.writeFileSync(path.join(root, "state.ts"), "export const state = { count: 0 };");
+    fs.writeFileSync(
+      path.join(root, "index.ts"),
+      `import { state } from '#state';
+      export async function read() {
+        const later = await import('fixture-source/state');
+        state.count++; return [state === later.state, later.state.count];
+      }`,
+    );
+    const first = load(root, "index.ts").value as { read(): Promise<unknown[]> };
+    expect(await first.read()).toEqual([true, 1]);
+    expect(await first.read()).toEqual([true, 2]);
+    expect(await (load(root, "index.ts").value as typeof first).read()).toEqual([true, 1]);
+  });
+
+  it("preserves native custom loader startup without replaying registration", async () => {
+    const root = temp.make("plugin-native-hooks-");
+    fs.writeFileSync(
+      path.join(root, "index.cjs"),
+      `const { registerHooks } = require('node:module');
+       const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
+         return specifier === 'fixture:answer'
+           ? { url: 'data:text/javascript,export default 42', shortCircuit: true }
+           : nextResolve(specifier, context);
+       }});
+       exports.read = async () => (await import('fixture:answer')).default;
+       exports.close = () => hooks.deregister();`,
+    );
+    const { instance, value } = load(root, "index.cjs");
+    const plugin = value as { read(): Promise<number>; close(): void };
+    try {
+      expect(await plugin.read()).toBe(42);
+    } finally {
+      plugin.close();
+      await instance.dispose();
+    }
+    expect(() => plugin.read()).toThrow("reloaded or disabled");
+  });
 
   it.each(["cjs", "ts"])("does not reevaluate a failing module through a %s entry", (extension) => {
     const root = temp.make("plugin-failed-native-");

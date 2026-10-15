@@ -79,7 +79,7 @@ function displayParser(handlers: ReturnType<typeof createCliEventHandlers>) {
 }
 
 describe("cli tool result events", () => {
-  it.each([undefined] as const)(
+  it.each([undefined, "side-question"] as const)(
     "keeps input progress separate from execution in %s mode",
     (executionMode) => {
       const context = buildContext(`input-${executionMode ?? "normal"}`);
@@ -114,6 +114,57 @@ describe("cli tool result events", () => {
         );
       } finally {
         dispose();
+      }
+    },
+  );
+
+  it.each([
+    ["poll", "kill", false],
+    ["kill", "poll", true],
+  ] as const)(
+    "uses correlated executed arguments for %s to %s without changing raw arguments",
+    (requested, executed, quiet) => {
+      const context = buildContext(`rewrite-${requested}`);
+      const tracking = createCliToolTracking(context);
+      tracking.beginGatewayCapture(context.params.runId, () => {});
+      const { handlers, events, dispose } = eventFixture(context, tracking);
+      const args = { action: requested, sessionId: "job" };
+      try {
+        handlers.emitParsedToolUseStart({
+          toolCallId: "call",
+          name: "mcp__openclaw__process",
+          kind: "mcp_tool_use",
+          args,
+        });
+        const capture = markMcpLoopbackToolCallStarted({
+          captureKey: context.params.runId,
+          toolName: "process",
+          args,
+        });
+        if (!capture) {
+          throw new Error("Expected loopback capture");
+        }
+        updateMcpLoopbackToolCallCapture(capture, {
+          toolName: "process",
+          args: { ...args, action: executed },
+        });
+        handlers.emitParsedToolResult({
+          toolCallId: "call",
+          name: "mcp__openclaw__process",
+          isError: false,
+          result: "result",
+        });
+        const terminal = events.find(
+          (event) => event.stream === "item" && event.data.phase === "end",
+        );
+        expect(Boolean(terminal?.data.hideFromChannelProgress)).toBe(quiet);
+        expect(
+          events.find((event) => event.stream === "tool" && event.data.phase === "result")?.data
+            .args,
+        ).toEqual(args);
+      } finally {
+        dispose();
+        tracking.finalizeCapture(() => {});
       }
     },
   );
@@ -359,7 +410,7 @@ describe("cli tool result events", () => {
 });
 
 describe("CLI progress-card plan projection", () => {
-  it.each(["replacement", "ambiguous"] as const)(
+  it.each(["replacement", "clear", "ambiguous"] as const)(
     "projects only unambiguous executed progress-card arguments: %s",
     (mode) => {
       const runId = `executed-plan-${mode}`;
@@ -370,7 +421,7 @@ describe("CLI progress-card plan projection", () => {
       const { handlers, events, dispose } = eventFixture(context, tracking);
       const plan = { plan: [{ step: "Prepared checklist", status: "in_progress" }] };
       const requested = mode === "replacement" ? {} : plan;
-      const executed = plan;
+      const executed = mode === "clear" ? {} : plan;
       const name = "mcp__openclaw__progress_card";
       try {
         handlers.emitParsedToolUseStart({
@@ -423,7 +474,7 @@ describe("CLI progress-card plan projection", () => {
           expect(plans).toEqual([]);
         } else {
           expect(plans).toHaveLength(1);
-          expect(plans[0]?.data.steps).toEqual(plan.plan);
+          expect(plans[0]?.data.steps).toEqual(mode === "clear" ? [] : plan.plan);
         }
         expect(
           events.find((event) => event.stream === "tool" && event.data.phase === "result")?.data
@@ -483,12 +534,78 @@ describe("CLI progress-card plan projection", () => {
       }
     },
   );
+
+  it.each([
+    {
+      label: "failed",
+      name: "progress_card",
+      args: { plan: [{ step: "Inspect", status: "pending" }] },
+      failed: true,
+    },
+    { label: "malformed", name: "progress_card", args: { plan: "not a plan" } },
+    {
+      label: "other MCP server",
+      name: "mcp__other__progress_card",
+      args: { plan: [{ step: "Inspect", status: "pending" }] },
+    },
+    {
+      label: "uncorrelated",
+      name: "progress_card",
+      args: { plan: [{ step: "Inspect", status: "pending" }] },
+      skipStart: true,
+    },
+    {
+      label: "side question",
+      name: "progress_card",
+      args: { plan: [{ step: "Inspect", status: "pending" }] },
+      sideQuestion: true,
+    },
+    {
+      label: "display only",
+      name: "progress_card",
+      args: { plan: [{ step: "Inspect", status: "pending" }] },
+      displayOnly: true,
+    },
+  ])(
+    "does not fabricate plan state for $label results",
+    ({ name, args, failed, skipStart, sideQuestion, displayOnly }) => {
+      const runId = "no-plan";
+      const context = buildContext(runId);
+      if (sideQuestion) {
+        context.params.executionMode = "side-question";
+      }
+      const { handlers, events, dispose } = eventFixture(context);
+      try {
+        const start = { toolCallId: "card", name, kind: "mcp_tool_use" as const, args };
+        if (!skipStart) {
+          if (displayOnly) {
+            handlers.emitCliDisplayToolUseStart(start);
+          } else {
+            handlers.emitParsedToolUseStart(start);
+          }
+        }
+        const result = { toolCallId: "card", name, isError: failed === true, result: "receipt" };
+        if (displayOnly) {
+          handlers.emitCliDisplayToolResult(result);
+        } else {
+          handlers.emitParsedToolResult(result);
+        }
+        expect(events.filter((event) => event.stream === "plan")).toEqual([]);
+        if (sideQuestion) {
+          expect(events).toEqual([]);
+        }
+      } finally {
+        dispose();
+      }
+    },
+  );
 });
 
 describe("CLI plan channel bridge", () => {
   it.each([
     { name: "progress_card", suppressed: false, clearCard: false },
     { name: "mcp__openclaw__update_plan", suppressed: false, clearCard: true },
+    { name: "mcp__openclaw__progress_card", suppressed: true, clearCard: true },
   ])(
     "bridges $name with suppression=$suppressed and clear=$clearCard without completing the run",
     async ({ name, suppressed, clearCard }) => {

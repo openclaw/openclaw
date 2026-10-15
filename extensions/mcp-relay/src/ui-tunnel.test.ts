@@ -166,6 +166,9 @@ describe("Control UI relay tunnel", () => {
   });
 
   it.each<[GatewayControlUiIngressErrorCode, string]>([
+    ["unsupported-auth", "unavailable"],
+    ["unavailable", "unavailable"],
+    ["closed", "unavailable"],
     ["invalid-options", "invalid"],
     ["forbidden", "forbidden"],
     ["limit-exceeded", "limit_exceeded"],
@@ -181,6 +184,12 @@ describe("Control UI relay tunnel", () => {
       code: expected,
       message: "Configure token or password authentication.",
     });
+    if (code === "unsupported-auth") {
+      vi.mocked(f.open).mockResolvedValue(f.handle);
+      await f.receive({ ...HTTP, sid: "http0002" });
+      expect((await response(f)).head.status).toBe(200);
+      expect(f.open).toHaveBeenCalledTimes(2);
+    }
   });
 
   it("bridges fragmented text and binary messages, drains final core messages, and publishes close", async () => {
@@ -282,6 +291,16 @@ describe("Control UI relay tunnel", () => {
     expect(await f.sockets[1]!.sent.next()).toEqual({ kind: "binary", bytes: Buffer.from([3]) });
   });
 
+  it("assembles complete Unicode and empty fragments without exposing spare capacity", async () => {
+    const f = setup();
+    const socket = await opened(f);
+    for (const text of ["", "😀", "é", "", "z"]) {
+      await f.receive({ type: "ui.ws.msg", sid: WS.sid, text, more: true });
+    }
+    await f.receive({ type: "ui.ws.msg", sid: WS.sid, text: "", more: false });
+    expect(await socket.sent.next()).toEqual({ kind: "text", text: "😀éz" });
+  });
+
   it.each([{ b64: "AQ==" }, { text: "\ud800" }])(
     "rejects invalid text continuation %j and leaves other streams available",
     async (fragment) => {
@@ -319,7 +338,7 @@ describe("Control UI relay tunnel", () => {
     expect(received).toBe(text);
   });
 
-  it.each(["text"] as const)(
+  it.each(["text", "binary"] as const)(
     "bounds assembled %s messages at 25 MiB and closes only the oversized socket",
     async (kind) => {
       const f = setup();

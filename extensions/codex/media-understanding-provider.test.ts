@@ -257,6 +257,19 @@ describe("codex media understanding provider", () => {
     sharedClientMocks.createIsolatedCodexAppServerClient.mockReset();
   });
 
+  it("does not start a bounded turn for an already-aborted media request", async () => {
+    const clientFactory = vi.fn();
+    const provider = buildCodexMediaUnderstandingProvider({ clientFactory });
+    const controller = new AbortController();
+    controller.abort(new Error("caller cancelled Codex media request"));
+
+    await expect(
+      provider.describeImage?.(imageRequest({ signal: controller.signal })),
+    ).rejects.toThrow("caller cancelled Codex media request");
+
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
   it("abandons app-server startup when the media request aborts", async () => {
     const startupReady = createDeferred<void>();
     const clientFactory = vi.fn<CodexAppServerClientFactory>(
@@ -285,6 +298,81 @@ describe("codex media understanding provider", () => {
     expect(clientFactory.mock.calls[0]?.[0]?.abandonSignal).toBe(controller.signal);
   });
 
+  it("runs image understanding through a bounded Codex app-server turn", async () => {
+    const { client, requests } = createFakeClient();
+    const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => client);
+    const provider = buildCodexMediaUnderstandingProvider({
+      clientFactory,
+    });
+    const cfg = {
+      auth: {
+        order: {
+          openai: ["openai:work"],
+        },
+      },
+    };
+
+    const result = await provider.describeImage?.(
+      imageRequest({ prompt: "Describe briefly.", cfg }),
+    );
+
+    expect(result).toEqual({ text: "A red square.", model: "gpt-5.4" });
+    expect(requests.map((entry) => entry.method)).toEqual([
+      "model/list",
+      "thread/start",
+      "turn/start",
+    ]);
+    const factoryOptions = clientFactory.mock.calls[0]?.[0];
+    expect(factoryOptions).toEqual(
+      expect.objectContaining({
+        startOptions: expect.any(Object),
+        authProfileId: undefined,
+        agentDir: "/tmp/openclaw-agent",
+        config: cfg,
+      }),
+    );
+    expect(factoryOptions?.timeoutMs).toBeGreaterThan(0);
+    expect(factoryOptions?.timeoutMs).toBeLessThanOrEqual(30_000);
+    expect(requests[1]?.params).toEqual({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      cwd: "/tmp/openclaw-agent",
+      approvalPolicy: "on-request",
+      sandbox: "read-only",
+      serviceName: "OpenClaw",
+      developerInstructions:
+        "You are OpenClaw's bounded image-understanding worker. Describe only the provided image content. Do not call tools, edit files, or ask follow-up questions.",
+      config: {
+        "agents.enabled": false,
+        "features.apps": false,
+        "features.goals": false,
+        "features.code_mode": false,
+        "features.code_mode_only": false,
+        "features.image_generation": false,
+        "features.multi_agent": false,
+        "features.multi_agent_v2": false,
+        "features.plugins": false,
+        "features.standalone_web_search": false,
+        project_doc_max_bytes: 131_072,
+        "tools.update_plan.enabled": false,
+        web_search: "disabled",
+      },
+      environments: [],
+      dynamicTools: [],
+      experimentalRawEvents: true,
+      ephemeral: true,
+    });
+    expect(requests[2]?.params).toEqual({
+      threadId: "thread-1",
+      input: [
+        { type: "text", text: "Describe briefly.", text_elements: [] },
+        { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" },
+      ],
+      approvalPolicy: "on-request",
+      effort: "low",
+    });
+  });
+
   it("treats a blank agent directory as absent when starting the app-server", async () => {
     const { client, requests } = createFakeClient();
     const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => client);
@@ -305,6 +393,39 @@ describe("codex media understanding provider", () => {
     expect(factoryOptions?.timeoutMs).toBeGreaterThan(0);
     expect(factoryOptions?.timeoutMs).toBeLessThanOrEqual(30_000);
     expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
+    expect(requests[2]?.params).not.toHaveProperty("cwd");
+  });
+
+  it("preserves configured WebSocket transport for media turns", async () => {
+    const { client, requests } = createFakeClient();
+    const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => client);
+    const provider = buildCodexMediaUnderstandingProvider({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:4501",
+        },
+      },
+      clientFactory,
+    });
+
+    await provider.describeImage?.(imageRequest());
+
+    const factoryOptions = clientFactory.mock.calls[0]?.[0];
+    expect(factoryOptions).toEqual(
+      expect.objectContaining({
+        startOptions: expect.objectContaining({
+          transport: "websocket",
+          url: "ws://127.0.0.1:4501",
+        }),
+        authProfileId: undefined,
+        agentDir: "/tmp/openclaw-agent",
+        config: {},
+      }),
+    );
+    expect(factoryOptions?.timeoutMs).toBeGreaterThan(0);
+    expect(factoryOptions?.timeoutMs).toBeLessThanOrEqual(30_000);
+    expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
     expect(requests[2]?.params).not.toHaveProperty("cwd");
   });
 

@@ -301,6 +301,29 @@ describe("root memory repair", () => {
     );
   });
 
+  it("does not archive or remove a valid legacy memory file when canonical is oversized", async () => {
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n".repeat(1_000_000), "utf8");
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n", "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
+
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Workspace memory root repair skipped (a file exceeded the safe read limit):",
+      ),
+      "Doctor changes",
+    );
+    await expectPathMissing(path.join(tmpDir, ".openclaw-repair"));
+    await expect(fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8")).resolves.toBe(
+      "# Canonical\n".repeat(1_000_000),
+    );
+    await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toContain(
+      "# Legacy",
+    );
+  });
+
   it("reports a skipped repair when a root memory file cannot be read", async () => {
     const targetFile = path.join(tmpDir, "canonical-target.md");
     await fs.writeFile(targetFile, "# Canonical\n", "utf8");
@@ -322,6 +345,33 @@ describe("root memory repair", () => {
     expect(repairNote?.[1]).toBe("Doctor changes");
     await expect(fs.readFile(targetFile, "utf8")).resolves.toBe("# Canonical\n");
     await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toBe("# Legacy\n");
+  });
+
+  it("reports a skipped repair when a root memory file is oversized", async () => {
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n".repeat(1_000_000), "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
+
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const repairNote = note.mock.calls[0];
+    const repairMessage = String(repairNote?.[0] ?? "");
+    const repairLines = repairMessage.split("\n");
+    expect(repairLines[0]).toBe(
+      "Workspace memory root repair skipped (a file exceeded the safe read limit):",
+    );
+    expect(repairLines).toContain(`- current: ${path.join(tmpDir, "MEMORY.md")}`);
+    expect(repairLines).toContain(`- legacy: ${path.join(tmpDir, "memory.md")}`);
+    expect(repairNote?.[1]).toBe("Doctor changes");
+    await expect(fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8")).resolves.toBe(
+      "# Canonical\n",
+    );
+    await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toBe(
+      "# Legacy\n".repeat(1_000_000),
+    );
   });
 
   it("skips without mutation when legacy memory cannot be archived atomically", async () => {

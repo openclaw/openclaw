@@ -253,6 +253,14 @@ describe("microsoft foundry image generation provider", () => {
     expect(result.images[0]?.buffer.byteLength).toBe(imageBytes.byteLength);
   });
 
+  it("rejects oversized MAI image JSON responses", async () => {
+    postJsonRequestMock.mockResolvedValue(imageResponse("x".repeat(10 * 1024 * 1024)));
+
+    await expect(generateImage()).rejects.toThrow(
+      "microsoft-foundry.image-generation: JSON response exceeds",
+    );
+  });
+
   it("uses AZURE_OPENAI_ENDPOINT when env API-key auth has no configured base URL", async () => {
     vi.stubEnv("AZURE_OPENAI_ENDPOINT", "https://env.services.ai.azure.com");
     postJsonRequestMock.mockResolvedValue(imageResponse());

@@ -244,6 +244,54 @@ describe("codex plugin", () => {
     }
   });
 
+  it("registers request-scoped surfaces with explicit multi-agent ownership", () => {
+    const registerAgentHarness = vi.fn();
+    const registerNodeHostCommand = vi.fn();
+    const registerNodeInvokePolicy = vi.fn();
+    const registerSessionCatalog = vi.fn();
+
+    expect(() =>
+      plugin.register(
+        createCodexTestApi({
+          config: explicitAgentConfig,
+          runtime: createCodexTestRuntime(() => explicitAgentConfig),
+          registerAgentHarness,
+          registerNodeHostCommand,
+          registerNodeInvokePolicy,
+          registerSessionCatalog,
+        }),
+      ),
+    ).not.toThrow();
+
+    expect(registerAgentHarness).toHaveBeenCalledOnce();
+    expect(registerSessionCatalog).toHaveBeenCalledOnce();
+    expect(registerNodeHostCommand.mock.calls.map(([command]) => command.command)).toEqual(
+      expect.arrayContaining([
+        "codex.appServer.threads.list.v1",
+        "codex.appServer.thread.turns.list.v1",
+        "codex.terminal.resume.v1",
+        "codex.exec-server.stdio.v1",
+      ]),
+    );
+    const nodeExecServerCommand = registerNodeHostCommand.mock.calls
+      .map(([command]) => command)
+      .find((command) => command.command === "codex.exec-server.stdio.v1");
+    expect(nodeExecServerCommand).toMatchObject({
+      command: "codex.exec-server.stdio.v1",
+      cap: "codex.exec-server",
+      dangerous: true,
+      duplex: true,
+    });
+    const nodeExecServerPolicy = registerNodeInvokePolicy.mock.calls
+      .map(([policy]) => policy)
+      .find((policy) => policy.commands.includes("codex.exec-server.stdio.v1"));
+    expect(nodeExecServerPolicy).toMatchObject({
+      commands: ["codex.exec-server.stdio.v1"],
+      dangerous: true,
+    });
+    expect(nodeExecServerPolicy.defaultPlatforms).toBeUndefined();
+  });
+
   it("lets native session discovery be disabled without disabling the Codex plugin", () => {
     const registerAgentHarness = vi.fn();
     const registerNodeHostCommand = vi.fn();
@@ -299,32 +347,39 @@ describe("codex plugin", () => {
     expect(registration.create()).toEqual([]);
   });
 
-  it("keeps live user-home appServer config for an auto-enabled Codex entry without supervision", () => {
-    const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
-    plugin.register(
-      createCodexTestApi({
-        // No explicit plugins.entries.codex.enabled: core auto-enables the
-        // plugin from this config block, so the harness must keep honoring it.
-        runtime: createCodexTestRuntime(() => ({
-          plugins: {
-            entries: {
-              codex: {
-                config: {
-                  appServer: { homeScope: "user" },
+  it.each([
+    ["supervision is absent", undefined],
+    ["supervision is enabled", { enabled: true }],
+  ] as const)(
+    "keeps live user-home appServer config for an auto-enabled Codex entry when %s",
+    (_label, supervision) => {
+      const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
+      plugin.register(
+        createCodexTestApi({
+          // No explicit plugins.entries.codex.enabled: core auto-enables the
+          // plugin from this config block, so the harness must keep honoring it.
+          runtime: createCodexTestRuntime(() => ({
+            plugins: {
+              entries: {
+                codex: {
+                  config: {
+                    appServer: { homeScope: "user" },
+                    ...(supervision ? { supervision } : {}),
+                  },
                 },
               },
             },
-          },
-        })),
-        registerTool,
-      }),
-    );
+          })),
+          registerTool,
+        }),
+      );
 
-    const registration = registeredCodexTools(registerTool, "codex_threads");
-    // codex_threads exists only while user-home scope or supervision is live,
-    // so it proves the plugin config survived the enable-state resolution.
-    expect(registration.create({ senderIsOwner: true })[0]?.name).toBe("codex_threads");
-  });
+      const registration = registeredCodexTools(registerTool, "codex_threads");
+      // codex_threads exists only while user-home scope or supervision is live,
+      // so it proves the plugin config survived the enable-state resolution.
+      expect(registration.create({ senderIsOwner: true })[0]?.name).toBe("codex_threads");
+    },
+  );
 
   it("drops live plugin config when the Codex entry is explicitly disabled", () => {
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
@@ -351,6 +406,50 @@ describe("codex plugin", () => {
   });
 
   it.each([
+    ["plugin entry is removed", { plugins: { entries: {} } }],
+    [
+      "plugin entry is disabled",
+      {
+        plugins: {
+          entries: {
+            codex: { enabled: false, config: { supervision: { enabled: true } } },
+          },
+        },
+      },
+    ],
+    [
+      "global plugin loading is disabled",
+      {
+        plugins: {
+          enabled: false,
+          entries: {
+            codex: { enabled: true, config: { supervision: { enabled: true } } },
+          },
+        },
+      },
+    ],
+    [
+      "a restrictive allowlist omits Codex",
+      {
+        plugins: {
+          allow: ["other-plugin"],
+          entries: {
+            codex: { enabled: true, config: { supervision: { enabled: true } } },
+          },
+        },
+      },
+    ],
+    [
+      "the denylist blocks Codex",
+      {
+        plugins: {
+          deny: ["codex"],
+          entries: {
+            codex: { enabled: true, config: { supervision: { enabled: true } } },
+          },
+        },
+      },
+    ],
     [
       "supervision is explicitly disabled",
       {

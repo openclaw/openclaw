@@ -270,12 +270,18 @@ describe("plugin-owned CLI execution host boundary", () => {
     },
   );
 
-  it.each(["admission"] as const)(
+  it.each(["caller", "admission"] as const)(
     "rejects %s revocation before restart or plugin execution",
-    async () => {
+    async (authority) => {
       const { context, admission } = await createExecution();
       const session = registerOwnerSession(context, "dispatch-owner");
-      admission.close();
+      if (authority === "caller") {
+        context.params.assertCurrent = () => {
+          throw new Error("caller revoked");
+        };
+      } else {
+        admission.close();
+      }
       const execute = vi.fn(async function* () {
         yield SUCCESS_RESULT;
       });
@@ -426,6 +432,36 @@ describe("plugin-owned CLI execution host boundary", () => {
     });
   });
 
+  it("does not replay an invalidated resume while native approval is pending", async () => {
+    const { context } = await createExecution({
+      config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+      nativeTools: ["WebFetch"],
+    });
+    const session = registerOwnerSession(context, "required-generation");
+    const approval = createDeferred<{ id: string; decision: "deny" }>();
+    mockCallGatewayTool.mockReturnValueOnce(approval.promise);
+    const streamError = new Error("SDK stream failed during approval");
+    let pending: Promise<CliBackendToolPermissionResult> | undefined;
+
+    const run = runPlugin(
+      context,
+      async function* (execution) {
+        pending = requestNativeTool(execution, "WebFetch", { url: "https://example.com" });
+        await vi.waitFor(() => expect(mockCallGatewayTool).toHaveBeenCalledOnce());
+        yield { type: "system", subtype: "init", session_id: "sdk-session" };
+        session.handle.close("abort");
+        throw streamError;
+      },
+      {
+        requiredGeneration: "required-generation",
+      },
+    );
+
+    await expect(run).rejects.toBe(streamError);
+    approval.resolve({ id: "approval-pending", decision: "deny" });
+    await pending;
+  });
+
   it("does not replay an invalidated resume while operator input is pending", async () => {
     const { context } = await createExecution({ nativeTools: ["AskUserQuestion"] });
     const session = registerOwnerSession(context, "required-generation");
@@ -463,6 +499,61 @@ describe("plugin-owned CLI execution host boundary", () => {
     await expect(run).rejects.toBe(streamError);
     answer.resolve({ status: "cancelled" });
     await pending;
+  });
+
+  it("claims prepared resources only for the original process and cleans after its exit", async () => {
+    const first = await createExecution({ runId: "plugin-prepared-resource-owner" });
+    const cleanup = vi.fn(async () => {});
+    first.context.preparedBackend.claimLiveSessionResources = vi.fn(() => cleanup);
+    const exited = createDeferred();
+    let handle: CliBackendLiveSessionHandle | undefined;
+
+    await runPlugin(
+      first.context,
+      async function* (execution) {
+        const capability = execution.liveSession;
+        if (!capability) {
+          throw new Error("Expected a reusable plugin execution capability.");
+        }
+        const session: CliBackendLiveSessionHandle = {
+          generation: "prepared-resource-process",
+          fingerprint: capability.fingerprint,
+          isIdle: () => true,
+          close: vi.fn(() => capability.remove(session)),
+          waitForExit: () => exited.promise,
+        };
+        handle = session;
+        capability.register(session);
+        activeSessions.add(session);
+        yield SUCCESS_RESULT;
+      },
+      { liveSession: true },
+    );
+
+    expect(first.context.preparedBackend.claimLiveSessionResources).toHaveBeenCalledOnce();
+    expect(cleanup).not.toHaveBeenCalled();
+
+    const resumed = await createExecution({ runId: "plugin-prepared-resource-reuse" });
+    const unusedResourceClaim = vi.fn(() => vi.fn(async () => {}));
+    resumed.context.preparedBackend.claimLiveSessionResources = unusedResourceClaim;
+
+    await runPlugin(
+      resumed.context,
+      async function* (execution) {
+        expect(execution.liveSession?.current()).toBe(handle);
+        yield SUCCESS_RESULT;
+      },
+      { liveSession: true },
+    );
+
+    expect(unusedResourceClaim).not.toHaveBeenCalled();
+    const closing = closeCliLiveSession(first.context, "restart");
+    await Promise.resolve();
+    expect(cleanup).not.toHaveBeenCalled();
+
+    exited.resolve();
+    await closing;
+    expect(cleanup).toHaveBeenCalledOnce();
   });
 
   it("never silently prompts or grants under allowlist policy", async () => {
@@ -575,15 +666,25 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(mockCallGatewayTool).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["admission"] as const)(
+  it.each(["admission", "caller"] as const)(
     "denies approval when %s authority closes during the awaited decision",
-    async () => {
+    async (authority) => {
       const { admission, context } = await createExecution({
         config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
         nativeTools: ["WebFetch"],
       });
+      let callerCurrent = true;
+      context.params.assertCurrent = () => {
+        if (!callerCurrent) {
+          throw new Error("caller revoked");
+        }
+      };
       mockCallGatewayTool.mockImplementationOnce(async () => {
-        admission.close();
+        if (authority === "caller") {
+          callerCurrent = false;
+        } else {
+          admission.close();
+        }
         return { id: "approval-closed", decision: "allow-once" };
       });
       let decision: CliBackendToolPermissionResult | undefined;
@@ -682,6 +783,16 @@ describe("plugin-owned CLI execution host boundary", () => {
     ).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
 
     expect(output.map((line) => JSON.parse(line))).toEqual([terminal, SUCCESS_RESULT]);
+  });
+
+  it("rejects an interim result without its continuation final", async () => {
+    const { context } = await createExecution();
+
+    await expect(
+      runPlugin(context, async function* () {
+        yield { ...SUCCESS_RESULT, openclaw_interim_result: true };
+      }),
+    ).rejects.toThrow("without a terminal result");
   });
 
   it("never replays substantive assistant output after a no-output timeout", async () => {
@@ -844,6 +955,27 @@ describe("plugin-owned CLI ask_user timeout", () => {
     await expect(run).resolves.toMatchObject({
       reason: "no-output-timeout",
       timedOut: true,
+      noOutputTimedOut: true,
+    });
+  });
+
+  it("does not let a short question shrink the blocked-tool watchdog floor", async () => {
+    vi.useFakeTimers();
+    const deadline = Date.now() + 40_000;
+    const { run } = await startBlockedRun({
+      timeoutMs: 2_000_000,
+      getDeadline: () => deadline,
+    });
+    let completed = false;
+    void run.then(() => {
+      completed = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(899_999);
+    expect(completed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(run).resolves.toMatchObject({
+      reason: "no-output-timeout",
       noOutputTimedOut: true,
     });
   });

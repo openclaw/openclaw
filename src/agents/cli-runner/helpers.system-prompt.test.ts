@@ -77,22 +77,25 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(buildCliAgentSystemPrompt(params)).not.toContain("## Model Aliases");
   });
 
-  it.each([true])("gates ClawHub guidance on the CLI tool schema (available=%s)", (available) => {
-    const message = createStubTool("message");
-    message.parameters = Type.Object(
-      available ? { clawhub: Type.Object({ query: Type.String() }) } : {},
-    );
-    const prompt = buildCliAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      tools: [message],
-      runtimeChannel: "webchat",
-      modelDisplay: "test/model",
-    });
+  it.each([true, false])(
+    "gates ClawHub guidance on the CLI tool schema (available=%s)",
+    (available) => {
+      const message = createStubTool("message");
+      message.parameters = Type.Object(
+        available ? { clawhub: Type.Object({ query: Type.String() }) } : {},
+      );
+      const prompt = buildCliAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        tools: [message],
+        runtimeChannel: "webchat",
+        modelDisplay: "test/model",
+      });
 
-    expect(prompt.includes("For explicit plugin/skill search/install or missing capability")).toBe(
-      available,
-    );
-  });
+      expect(
+        prompt.includes("For explicit plugin/skill search/install or missing capability"),
+      ).toBe(available);
+    },
+  );
 
   it("uses config-backed sub-agent delegation mode", () => {
     const prompt = buildCliAgentSystemPrompt({
@@ -112,6 +115,62 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Delegation");
+  });
+
+  it("uses CLI backend tool fallback instead of OpenClaw tool assumptions", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      docsPath: "/tmp/openclaw/docs",
+      tools: [],
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain("No OpenClaw tool list is injected");
+    expect(prompt).not.toContain("exec approval-pending");
+  });
+
+  it("distinguishes the CLI working directory from the agent workspace", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw-agent",
+      cwd: "/tmp/task-repo",
+      tools: [],
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain("Working directory: /tmp/task-repo");
+    expect(prompt).toContain("Agent workspace: /tmp/openclaw-agent");
+    expect(prompt).not.toContain("Working directory: /tmp/openclaw-agent");
+  });
+
+  it("renders the Bootstrap Pending gate for full bootstrap mode", () => {
+    // CLI-backend runs must gate the first reply on a pending BOOTSTRAP.md the
+    // same way the embedded runner does, not just inject the file as context.
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      contextFiles: [
+        {
+          path: "/tmp/openclaw/BOOTSTRAP.md",
+          content: "Figure out who you are, then delete this file.",
+        },
+      ],
+      bootstrapMode: "full",
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("Can finish BOOTSTRAP.md here: do it.");
+  });
+
+  it("renders limited bootstrap guidance when the run cannot complete bootstrap", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      bootstrapMode: "limited",
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain("this run cannot safely finish full BOOTSTRAP.md");
   });
 
   it("includes CLI-scoped plugin command guidance", () => {
@@ -143,7 +202,43 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("OpenClaw-only command guidance.");
   });
 
-  it.each(["slack"])("preserves %s channel-owned button guidance", (channel) => {
+  it("includes session identity in runtime when provided", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      config: {
+        agents: {
+          entries: {
+            "Team Ops": { identity: { name: "Ops Navigator" } },
+          },
+        },
+      },
+      tools: [],
+      modelDisplay: "test/model",
+      agentId: "team-ops",
+      sessionKey: "agent:team-ops:telegram:direct:peer",
+      sessionId: "session-123",
+    });
+
+    expect(prompt).toContain(
+      "Runtime: name=Ops Navigator | agent=team-ops | session=agent:team-ops:telegram:direct:peer",
+    );
+  });
+
+  it("includes Telegram channel context for CLI final replies without core rich guidance", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      modelDisplay: "anthropic/claude-opus-4-8",
+      runtimeChannel: "telegram",
+      runtimeChatType: "direct",
+    });
+
+    expect(prompt).toContain("channel=telegram");
+    expect(prompt).not.toContain("Telegram rich ON");
+    expect(prompt).not.toContain("### message tool");
+  });
+
+  it.each(["mattermost", "slack"])("preserves %s channel-owned button guidance", (channel) => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       tools: [createStubTool("message")],
@@ -157,5 +252,18 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("- Use the channel's supported button shape.");
     expect(prompt).not.toContain('"action":{"type":"callback"');
     expect(prompt).not.toContain("Inline buttons OFF");
+  });
+
+  it("requires an explicit message target when the CLI turn policy requires one", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [{ name: "message" } as never],
+      modelDisplay: "test/model",
+      sourceReplyDeliveryMode: "message_tool_only",
+      requireExplicitMessageTarget: true,
+    });
+
+    expect(prompt).toContain("`send`: `target` + `message`; target required this turn");
+    expect(prompt).not.toContain("current source is default target");
   });
 });

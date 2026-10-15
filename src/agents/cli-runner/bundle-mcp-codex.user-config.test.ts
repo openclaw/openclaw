@@ -241,6 +241,34 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     expect(apoloPatch!.mcp_servers.apolo).toMatchObject({ url: "https://apolo.example.com/mcp" });
   });
 
+  it("omits disabled user MCP servers from Codex app-server projection", async () => {
+    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
+      mcp: {
+        servers: {
+          disabled: {
+            enabled: false,
+            transport: "streamable-http",
+            url: "https://disabled.example.com/mcp",
+          },
+          enabled: {
+            transport: "stdio",
+            command: "node",
+            args: ["enabled-mcp.js"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(patch).toStrictEqual({
+      mcp_servers: {
+        enabled: {
+          command: "node",
+          args: ["enabled-mcp.js"],
+        },
+      },
+    });
+  });
+
   it("fails closed for empty or invalid Codex agent scopes", async () => {
     const cfg = {
       mcp: {

@@ -82,7 +82,7 @@ function probeDeps(found: Record<string, boolean>) {
 }
 
 describe("detectInferenceBackends", () => {
-  it.each([true])(
+  it.each([false, true])(
     "keeps native detection passive with stored Codex credentials: %s",
     async (stored) => {
       const calls: Array<{ command: string; args: string[] }> = [];
@@ -113,44 +113,58 @@ describe("detectInferenceBackends", () => {
     },
   );
 
-  it("detects the selected home login file without reading credential values", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-passive-login-"));
-    try {
-      const processHome = path.join(root, "process");
-      const selectedHome = path.join(root, "selected");
-      const codexHome = path.join(selectedHome, ".codex");
-      await fs.mkdir(processHome, { recursive: true });
-      await fs.mkdir(codexHome, { recursive: true });
-      const authPath = path.join(codexHome, "auth.json");
-      const raw = JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: "synthetic-access",
-          refresh_token: "synthetic-refresh",
-        },
-      });
-      await fs.writeFile(authPath, raw);
-      vi.stubEnv("HOME", processHome);
-      vi.stubEnv("CODEX_HOME", "");
-      const candidates = await detectInferenceBackends({
-        env: { HOME: selectedHome },
-        platform: "darwin",
-        deps: { probeLocalCommand: probeDeps({ codex: true }) },
-      });
-      expect(candidates).toMatchObject([
-        {
-          kind: "codex-cli",
-          detail: "installed; stored credentials found; login status unverified",
-        },
-      ]);
-      expect(candidates[0]?.credentials).toBe(true);
-      expect(await fs.readFile(authPath, "utf8")).toBe(raw);
-      expect(JSON.stringify(candidates)).not.toContain("synthetic-");
-      expect(facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule).not.toHaveBeenCalled();
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
+  it.each([
+    ["home", "chatgpt"],
+    ["codex-home", "chatgpt"],
+    ["codex-home", "apikey"],
+  ] as const)(
+    "detects the %s login file for %s without reading credential values",
+    async (selection, authMode) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-passive-login-"));
+      try {
+        const processHome = path.join(root, "process");
+        const selectedHome = path.join(root, "selected");
+        const codexHome =
+          selection === "home" ? path.join(selectedHome, ".codex") : path.join(root, "override");
+        await fs.mkdir(processHome, { recursive: true });
+        await fs.mkdir(codexHome, { recursive: true });
+        const authPath = path.join(codexHome, "auth.json");
+        const raw = JSON.stringify({
+          auth_mode: authMode,
+          ...(authMode === "apikey" ? { OPENAI_API_KEY: "synthetic-api-key" } : {}),
+          tokens: {
+            access_token: "synthetic-access",
+            refresh_token: "synthetic-refresh",
+          },
+        });
+        await fs.writeFile(authPath, raw);
+        vi.stubEnv("HOME", processHome);
+        vi.stubEnv("CODEX_HOME", "");
+        const candidates = await detectInferenceBackends({
+          env: {
+            HOME: selectedHome,
+            ...(selection === "codex-home" ? { CODEX_HOME: codexHome } : {}),
+          },
+          platform: "darwin",
+          deps: { probeLocalCommand: probeDeps({ codex: true }) },
+        });
+        expect(candidates).toMatchObject([
+          {
+            kind: "codex-cli",
+            detail: "installed; stored credentials found; login status unverified",
+          },
+        ]);
+        expect(candidates[0]?.credentials).toBe(true);
+        expect(await fs.readFile(authPath, "utf8")).toBe(raw);
+        expect(JSON.stringify(candidates)).not.toContain("synthetic-");
+        expect(
+          facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule,
+        ).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("does not offer external CLIs whose version probes time out", async () => {
     const candidates = await detectInferenceBackends({

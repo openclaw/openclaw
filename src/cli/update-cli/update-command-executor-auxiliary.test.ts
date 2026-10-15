@@ -167,13 +167,13 @@ it.for([
   },
 );
 
-it.each(["timeout", "unsettled", "candidate-busy"] as const)(
+it.each(["nonzero", "timeout", "unsettled", "operation", "candidate-busy"] as const)(
   "caught auxiliary failure never restores handoff eligibility: %s",
   async (failure) => {
     const runId = randomUUID();
     const work = withUpdateCommandExecutor(runId, async (executor) => {
       const fence = await executor.enter(root, { serviceRoot, preflight: true });
-      if (failure === "timeout" || failure === "unsettled") {
+      if (failure === "nonzero" || failure === "timeout" || failure === "unsettled") {
         const recovery = createPackageRuntimeRecovery({
           root,
           opts: { run: { runId, env: process.env, executorFence: fence } },
@@ -186,7 +186,14 @@ it.each(["timeout", "unsettled", "candidate-busy"] as const)(
         await expect(
           recovery.installCommand(
             process.execPath,
-            ["-e", failure === "unsettled" ? unsettled : "setInterval(()=>{},1000)"],
+            [
+              "-e",
+              failure === "nonzero"
+                ? "process.exit(2)"
+                : failure === "unsettled"
+                  ? unsettled
+                  : "setInterval(()=>{},1000)",
+            ],
             process.env,
           ),
         ).rejects.toThrow("did not complete");
@@ -411,6 +418,36 @@ it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] 
   },
 );
 
+it.each([undefined, ""])("preserves absent or empty native payload options: %s", async (value) => {
+  const effect = path.join(root, "native-options");
+  const gate = prepareUpdateCommandNativeGate(randomUUID(), [
+    { ...process.env, NODE_OPTIONS: value },
+  ]);
+  const result = await runUtf8CommandWithTimeout(
+    [
+      process.execPath,
+      "--input-type=module",
+      "-e",
+      gate.source,
+      "--",
+      nodeExecPath,
+      "-e",
+      `require('node:fs').writeFileSync(${JSON.stringify(effect)},JSON.stringify(process.env.NODE_OPTIONS ?? null));`,
+    ],
+    {
+      baseEnv: {},
+      env: gate.env,
+      input: gate.input,
+      timeoutMs: 10000,
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+    },
+  );
+  expect(result.code, result.stderr).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(fs.readFileSync(effect, "utf8"))).toBe(value ?? null);
+});
+
 it.skipIf(process.platform === "win32").each([false, true])(
   "keeps retained native preloads behind admission, released=%s",
   async (released) => {
@@ -461,6 +498,12 @@ it.skipIf(process.platform === "win32").each([false, true])(
 );
 
 it.each([
+  {
+    platform: "linux",
+    sources: [{ NODE_OPTIONS: "private", node_options: "case-distinct", KEEP: "yes" }],
+    env: { node_options: "case-distinct", KEEP: "yes" },
+    entry: ["NODE_OPTIONS", "private"],
+  },
   {
     platform: "win32",
     sources: [{ NODE_OPTIONS: "base", KEEP: "yes" }, { node_options: "override" }],

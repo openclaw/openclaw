@@ -163,7 +163,11 @@ function pairFixture(existing = true) {
 }
 
 describe("publish model catalog v2", () => {
-  it.each([{ existing: true, linked: true }])(
+  it.each([
+    { existing: true, linked: false },
+    { existing: true, linked: true },
+    { existing: false, linked: true },
+  ])(
     "publishes the pair and cleans only owned recovery (existing=$existing linked=$linked)",
     async ({ existing, linked }) => {
       const fixture = pairFixture(existing);
@@ -208,7 +212,7 @@ describe("publish model catalog v2", () => {
     },
   );
 
-  it.each([true])("rejects two links to one target (existing=%s)", async (existing) => {
+  it.each([true, false])("rejects two links to one target (existing=%s)", async (existing) => {
     const fixture = pairFixture(false);
     const target = path.join(path.dirname(fixture.outputs[0]), "target.json");
     if (existing) {
@@ -226,47 +230,48 @@ describe("publish model catalog v2", () => {
     });
   });
 
-  it.each([{ phase: "prepare", error: "fixture second prepare ENOSPC" }])(
-    "preserves outputs and recovery on second-output $phase failure",
-    async ({ phase, error }) => {
-      const fixture = pairFixture();
-      if (phase === "parent") {
-        fs.unlinkSync(fixture.outputs[1]);
-        fs.rmdirSync(path.dirname(fixture.outputs[1]));
-        fs.writeFileSync(path.dirname(fixture.outputs[1]), "not a directory");
-      } else {
-        const write = fs.writeFileSync;
-        vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
-          if (
-            typeof file === (phase === "prepare" ? "number" : "string") &&
-            typeof data === "string" &&
-            data.includes('"schemaVersion": 2')
-          ) {
-            write(file, "partial", options);
-            throw new Error(error);
-          }
-          return write(file, data, options);
-        });
-      }
-      await expect(fixture.run()).rejects.toThrow(error);
-      if (phase === "publish") {
-        expect(JSON.parse(fs.readFileSync(fixture.outputs[0], "utf8")).schemaVersion).toBe(1);
-        expect(fixture.recovery(0)).toHaveLength(1);
-        expect(fixture.recovery(1)).toHaveLength(1);
-      } else {
-        expect(fs.readFileSync(fixture.outputs[0], "utf8")).toBe("previous v1");
-        expect(fixture.recovery(0)).toEqual([]);
-        if (phase === "prepare") {
-          expect(fixture.recovery(1)).toEqual([]);
+  it.each([
+    { phase: "parent", error: /EEXIST|ENOTDIR/u },
+    { phase: "prepare", error: "fixture second prepare ENOSPC" },
+    { phase: "publish", error: "fixture publication write ENOSPC" },
+  ])("preserves outputs and recovery on second-output $phase failure", async ({ phase, error }) => {
+    const fixture = pairFixture();
+    if (phase === "parent") {
+      fs.unlinkSync(fixture.outputs[1]);
+      fs.rmdirSync(path.dirname(fixture.outputs[1]));
+      fs.writeFileSync(path.dirname(fixture.outputs[1]), "not a directory");
+    } else {
+      const write = fs.writeFileSync;
+      vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
+        if (
+          typeof file === (phase === "prepare" ? "number" : "string") &&
+          typeof data === "string" &&
+          data.includes('"schemaVersion": 2')
+        ) {
+          write(file, "partial", options);
+          throw new Error(String(error));
         }
+        return write(file, data, options);
+      });
+    }
+    await expect(fixture.run()).rejects.toThrow(error);
+    if (phase === "publish") {
+      expect(JSON.parse(fs.readFileSync(fixture.outputs[0], "utf8")).schemaVersion).toBe(1);
+      expect(fixture.recovery(0)).toHaveLength(1);
+      expect(fixture.recovery(1)).toHaveLength(1);
+    } else {
+      expect(fs.readFileSync(fixture.outputs[0], "utf8")).toBe("previous v1");
+      expect(fixture.recovery(0)).toEqual([]);
+      if (phase === "prepare") {
+        expect(fixture.recovery(1)).toEqual([]);
       }
-      if (phase !== "parent") {
-        expect(fs.readFileSync(fixture.outputs[1], "utf8")).toBe("previous v2");
-      }
-    },
-  );
+    }
+    if (phase !== "parent") {
+      expect(fs.readFileSync(fixture.outputs[1], "utf8")).toBe("previous v2");
+    }
+  });
 
-  it.each([true])(
+  it.each([false, true])(
     "retains old/new recovery on a second rename failure (existing=%s)",
     async (existing) => {
       const fixture = pairFixture(existing);

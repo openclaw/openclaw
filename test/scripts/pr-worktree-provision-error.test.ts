@@ -2,6 +2,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { formatProvisionError } from "../../scripts/pr-lib/worktree-provision-error.mjs";
+import { GatewayStateOwnerContentionError } from "../../src/infra/gateway-state-owner.js";
+import { markSqliteNativeOpenFailure } from "../../src/infra/sqlite-error-diagnostics.js";
+import { markOpenClawStateDatabaseFailure } from "../../src/state/openclaw-state-db-failure.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../src/state/openclaw-state-lease-error.js";
 import {
   hydrateOpenClawStateWorkerError,
@@ -24,6 +27,71 @@ const storage = (
 const render = (error: unknown) => JSON.parse(formatProvisionError(error));
 
 describe("native PR provisioning diagnostics", () => {
+  it("preserves SQLite extended codes, errno, native-open provenance and database path", () => {
+    const leaf = Object.assign(new Error("synthetic I/O refusal"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 266,
+      errno: -5,
+    });
+    markSqliteNativeOpenFailure(leaf);
+    markOpenClawStateDatabaseFailure(leaf, "/fixture/refused.sqlite");
+    const out = render(storage(leaf));
+    expect(out.outcome).toEqual({ kind: "store-unavailable", reason: "storage-error" });
+    const root = out.error.nodes[out.error.root];
+    expect(root.leaseCode).toBe("OPENCLAW_STATE_LEASE_STORAGE_FAILED");
+    expect(out.error.nodes[root.cause.ref]).toMatchObject({
+      code: "ERR_SQLITE_ERROR",
+      errcode: 266,
+      errno: -5,
+      nativeOpen: true,
+      stateDatabasePath: "/fixture/refused.sqlite",
+    });
+  });
+
+  it("preserves distinct busy, lifecycle and worker failures without guessing a classification", () => {
+    const busy = render(
+      storage(
+        Object.assign(new Error("synthetic busy"), { code: "SQLITE_BUSY", errcode: 5 }),
+        "sqlite-busy",
+      ),
+    );
+    expect(busy.outcome.reason).toBe("sqlite-busy");
+    expect(busy.error.nodes[1]).toMatchObject({ code: "SQLITE_BUSY", errcode: 5 });
+    const lifecycle = render(
+      storage(new GatewayStateOwnerContentionError("/fixture/state.sqlite"), "lifecycle-busy"),
+    );
+    expect(lifecycle.outcome.reason).toBe("lifecycle-busy");
+    expect(lifecycle.error.nodes[1]).toMatchObject({
+      type: "state-owner-contention",
+      databasePath: "/fixture/state.sqlite",
+    });
+    const worker = render(
+      storage(Object.assign(new Error("synthetic worker unavailable"), { code: "unavailable" })),
+    );
+    expect(worker.outcome.reason).toBe("storage-error");
+    expect(worker.error.nodes[1].code).toBe("unavailable");
+  });
+
+  it("retains shared and cyclic causes as a hydratable graph without changing the original", () => {
+    const leaf = new Error("shared synthetic cause");
+    const aggregate = new AggregateError([leaf, leaf], "aggregate", { cause: leaf });
+    leaf.cause = aggregate;
+    const error = storage(aggregate);
+    const out = render(error);
+    const carrier = new Error("wire carrier");
+    retainOpenClawStateWorkerErrorPayload(carrier, out.error);
+    const restored = hydrateOpenClawStateWorkerError(carrier);
+    expect(restored).not.toBe(carrier);
+    expect(restored.cause).toBeInstanceOf(AggregateError);
+    const restoredAggregate = restored.cause as AggregateError;
+    expect(restoredAggregate.errors[0]).toBe(restoredAggregate.errors[1]);
+    expect(restoredAggregate.cause).toBe(restoredAggregate.errors[0]);
+    expect(restoredAggregate.errors[0].cause).toBe(restoredAggregate);
+    expect(error.cause).toBe(aggregate);
+    expect(leaf.cause).toBe(aggregate);
+    expect(aggregate.errors).toEqual([leaf, leaf]);
+  });
+
   it("retains held and caller-aborted acquisition outcomes", () => {
     const held = render(
       new OpenClawStateLeaseAcquisitionError("lease", {
@@ -85,8 +153,8 @@ describe("native PR provisioning diagnostics", () => {
   });
 
   it.each([
-    ...["cause", "outcome"].map((field) => ({ field, getter: true })),
-    { field: "outcome", getter: false },
+    ...["cause", "message", "name", "outcome"].map((field) => ({ field, getter: true })),
+    ...["message", "name", "outcome"].map((field) => ({ field, getter: false })),
   ])("safely rejects $field diagnostics (getter=$getter)", ({ field, getter }) => {
     let calls = 0;
     const opaque = {
@@ -114,6 +182,7 @@ describe("native PR provisioning diagnostics", () => {
   });
 
   it.each([
+    "plain failure",
     "state lease heartbeat is not responsive (phase=verify, trigger=deadline, requestId=2, elapsedMs=1000, responseRemainingMs=0, operationRemainingMs=59000, leaseRemainingMs=59000, status=1, renewalProgress=2, completedRequestId=1)",
   ])("reports ordinary errors without fabricating storage facts: %s", (message) => {
     const out = render(new Error(message));
@@ -124,6 +193,13 @@ describe("native PR provisioning diagnostics", () => {
     expect(hydrateOpenClawStateWorkerError(carrier, { includeOrdinary: true }).message).toBe(
       message,
     );
+  });
+
+  it("safely handles primitives", () => {
+    expect(formatProvisionError("plain failure")).toBe("plain failure");
+    for (const value of [undefined, null, 0, true, Symbol("failure"), 1n]) {
+      expect(formatProvisionError(value)).toBe(unavailable);
+    }
   });
 
   it.skipIf(process.platform === "win32")(

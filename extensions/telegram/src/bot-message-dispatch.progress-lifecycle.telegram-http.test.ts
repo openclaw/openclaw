@@ -264,6 +264,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   });
 
   it.each([
+    { accept: true, toolProgress: true },
     { accept: false, toolProgress: true },
     { accept: true, toolProgress: false },
   ])(

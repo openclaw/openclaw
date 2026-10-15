@@ -133,6 +133,15 @@ describe("live update executor", () => {
     });
   });
 
+  it("closes preflight release on mutable admission without revoking its current owner", async () => {
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root, { preflight: true });
+      expect(await executor.enter(root)).toBe(fence);
+      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+      expect(fence.assertCurrent).not.toThrow();
+    });
+  });
+
   it("reclaims a dead direct executor through the existing process-liveness owner", async () => {
     const { runtimeEntry, options } = prepareStagedLeaseFixture();
     const result = spawnSync(
@@ -156,7 +165,7 @@ describe("live update executor", () => {
     expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
   });
 
-  it.each(["candidate", "unrelated"] as const)(
+  it.each(["original", "candidate", "unrelated"] as const)(
     "borrows the exact helper package owner with a separate service root and %s child metadata",
     async (childMetadataRoot) => {
       const { runtimeEntry, options } = prepareStagedLeaseFixture();
@@ -206,8 +215,11 @@ describe("live update executor", () => {
         const store = createManagedHandoffLeaseStore();
         const serviceRoot = path.join(root, "service-A");
         fs.mkdirSync(serviceRoot);
-        const candidateRoot = path.join(root, "candidate");
-        fs.mkdirSync(candidateRoot);
+        const candidateRoot =
+          childMetadataRoot === "original" ? root : path.join(root, "candidate");
+        if (candidateRoot !== root) {
+          fs.mkdirSync(candidateRoot);
+        }
         const unrelatedRoot = path.join(root, "unrelated");
         if (childMetadataRoot === "unrelated") {
           fs.mkdirSync(unrelatedRoot);
@@ -330,6 +342,12 @@ describe("live update executor", () => {
     await expect(running).resolves.toBe("completed");
     expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
     expect(() => retained!.assertCurrent()).toThrow("no longer current");
+  });
+
+  it("closes saved admission methods without minting a later owner", async () => {
+    const saved = await withUpdateCommandExecutor(randomUUID(), async (executor) => executor);
+    await expect(saved.enter(root)).rejects.toThrow("admission is closed");
+    expect(fs.readdirSync(temporary)).toEqual([]);
   });
 
   it("pins the originally admitted installation for the full invocation", async () => {

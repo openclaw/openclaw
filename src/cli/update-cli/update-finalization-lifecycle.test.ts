@@ -431,7 +431,7 @@ it("continues finalization after heartbeat errors and warns once for the run", a
   expect(warning).toHaveBeenCalledWith(expect.stringContaining("SQLITE_BUSY"));
 });
 
-it.each([true])(
+it.each([false, true])(
   "expires Doctor work at its deadline after custody and despite progress=%s",
   async (progress) => {
     vi.useFakeTimers({

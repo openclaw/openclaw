@@ -21,7 +21,10 @@ import {
   resolveOwnedManagedUpdateEnv,
   resolveUpdatedInstallCommandEnv,
 } from "./update-command-service-env.js";
-import { recoverLaunchAgentAndRecheckGatewayHealth } from "./update-command-service-recovery.js";
+import {
+  formatPostUpdateGatewayRecoveryInstructions,
+  recoverLaunchAgentAndRecheckGatewayHealth,
+} from "./update-command-service-recovery.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 
@@ -173,6 +176,22 @@ describe("resolveUpdatedInstallCommandEnv", () => {
   });
 });
 
+describe("formatPostUpdateGatewayRecoveryInstructions", () => {
+  const result: UpdateRunResult = {
+    status: "error",
+    mode: "git",
+    steps: [],
+    durationMs: 0,
+  };
+
+  it("keeps LaunchAgent recovery wording on macOS", () => {
+    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "darwin");
+
+    expect(line).toContain("the LaunchAgent is installed but not loaded");
+    expect(line).toContain("logged-in macOS user session");
+  });
+});
+
 describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   beforeEach(() => mockProcessPlatform("darwin"));
   afterEach(() => vi.restoreAllMocks());
@@ -313,7 +332,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       expect(start).not.toHaveBeenCalled();
     },
   );
-  it.each(["recovered"] as const)(
+  it.each(["recovered", "failed"] as const)(
     "records only attempted native repair before rechecking update health (%s)",
     async (outcome) => {
       const env = {

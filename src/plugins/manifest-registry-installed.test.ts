@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import {
+  loadPluginManifestRegistryForInstalledIndex,
+  resolveInstalledManifestRegistryIndexFingerprint,
+} from "./manifest-registry-installed.js";
 import { createIndex } from "./manifest-registry-installed.test-helpers.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -60,6 +63,21 @@ function createIndexWithFileSignatures(rootDir: string): InstalledPluginIndex {
       return record;
     }),
   };
+}
+
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const object = value as object;
+  if (seen.has(object)) {
+    return value;
+  }
+  seen.add(object);
+  for (const child of Object.values(value)) {
+    deepFreeze(child, seen);
+  }
+  return Object.freeze(value);
 }
 
 function writePackageManifest(rootDir: string, channelLabel: string, selectionDocsPrefix?: string) {
@@ -181,6 +199,55 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       },
       includeDisabled: true,
     });
+
+  it("keeps frozen installed-index fingerprints process-stable without file signatures", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = deepFreeze(createIndex(rootDir));
+    const first = resolveInstalledManifestRegistryIndexFingerprint(index);
+
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+    const nextMtime = new Date(Date.now() + 5000);
+    fs.utimesSync(manifestPath, nextMtime, nextMtime);
+    const second = resolveInstalledManifestRegistryIndexFingerprint(index);
+
+    expect(second).toBe(first);
+  });
+
+  it("reuses installed package metadata until plugin metadata caches are cleared", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithPackageJson(rootDir);
+    const env = {
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    const first = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    writePackageManifest(rootDir, "Updated");
+    const second = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    clearPluginMetadataLifecycleCaches();
+    const third = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+
+    expect(first.plugins[0]?.packageChannel?.label).toBe("Installed");
+    expect(second.plugins[0]?.packageChannel?.label).toBe("Installed");
+    expect(third.plugins[0]?.packageChannel?.label).toBe("Updated");
+    expect(third.plugins[0]?.packageDependencies).toEqual({
+      "runtime-dep": "1.0.0",
+    });
+  });
 
   it("preserves empty docs prefixes from package channel metadata", () => {
     const rootDir = makeTempDir();
@@ -331,6 +398,54 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
           },
         },
       ],
+    });
+  });
+
+  it("hydrates package metadata from dot-prefixed package directories", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    fs.mkdirSync(path.join(rootDir, "..meta"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, "..meta", "package.json"),
+      JSON.stringify({
+        openclaw: {
+          channel: {
+            id: "installed",
+            label: "Installed",
+            commands: {
+              nativeCommandsAutoEnabled: true,
+              nativeSkillsAutoEnabled: false,
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const index = createIndex(rootDir);
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
+            packageJson: {
+              path: "..meta/package.json",
+              hash: "old-index-hash",
+            },
+          },
+        ],
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins[0]?.channelCatalogMeta?.commands).toEqual({
+      nativeCommandsAutoEnabled: true,
+      nativeSkillsAutoEnabled: false,
     });
   });
 

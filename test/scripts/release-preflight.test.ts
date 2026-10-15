@@ -205,6 +205,18 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.stdout).toContain("[release-preflight] macOS app version metadata OK");
   });
 
+  it("reports stale macOS metadata without node_modules", () => {
+    const result = runIsolatedPreflight(["--macos-versions-only"], {
+      shortVersion: "2026.6.10",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'CFBundleShortVersionString is "2026.6.10"; expected "2026.7.1" from package.json base version',
+    );
+    expect(result.stderr.trimEnd().split("\n").at(-1)).toBe("[release-preflight] FAILED (exit 1)");
+  });
+
   it("keeps multi-argument invocations on the tsx shim", () => {
     const result = runIsolatedPreflight(["--macos-versions-only", "--check"]);
 
@@ -213,6 +225,32 @@ describe("scripts/release-preflight.mjs", () => {
       "Run pnpm install --frozen-lockfile in an independently owned checkout.",
     );
     expect(result.stderr).toContain("[release-preflight] FAILED (exit 1)");
+  });
+
+  it("rejects unknown arguments before running release checks", () => {
+    const result = runPreflight(["--fiix"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Unknown release preflight argument: --fiix");
+    expect(result.stderr).toContain(
+      "Usage: node scripts/release-preflight.mjs [--check|--fix] [--scope name] [--jobs count]",
+    );
+    expect(result.stdout).toBe("");
+  });
+
+  it("runs every check command and reports all failed release artifact checks", () => {
+    const fakePnpm = makeFakePnpm();
+    const result = runPreflight(["--check"], fakePnpm, {
+      OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS:
+        "node --import tsx scripts/sync-plugin-versions.ts --check;pnpm config:docs:check",
+    });
+
+    expect(result.status).toBe(1);
+    expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(CHECK_COMMANDS.toSorted());
+    expect(result.stderr).toContain(
+      "- plugin versions: exit 7 (node --import tsx scripts/sync-plugin-versions.ts --check)",
+    );
+    expect(result.stderr).toContain("- config docs baseline: exit 7 (pnpm config:docs:check)");
   });
 
   it("serializes the root package writer before generated-artifact readers", () => {
@@ -327,6 +365,74 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.stderr).toContain("skipped because plugin-versions failed");
   });
 
+  it("runs only version-owned generators and checks for version prep", () => {
+    const fakePnpm = makeFakePnpm();
+    const root = makeReleaseFixture();
+    const result = runPreflight(["--fix", "--scope", "version"], fakePnpm, {}, root);
+
+    expect(result.status).toBe(0);
+    expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
+      [
+        "node --import tsx scripts/sync-plugin-versions.ts",
+        "pnpm channels:catalog:gen",
+        "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
+        "pnpm ui:i18n:sync",
+        "node --import tsx scripts/sync-plugin-versions.ts --check",
+        "pnpm channels:catalog:check",
+        "node scripts/generate-npm-package-lock.mjs --all",
+        "node --import tsx scripts/generate-plugin-inventory-doc.mts --check",
+        "pnpm ui:i18n:check",
+        "pnpm native:i18n:check",
+      ].toSorted(),
+    );
+    expect(result.stdout).toContain("(version, jobs=4)");
+  });
+
+  it("validates plugin npm locks during plugin-only prep", () => {
+    const fakePnpm = makeFakePnpm();
+    const root = makeReleaseFixture();
+    const result = runPreflight(["--fix", "--scope", "plugins"], fakePnpm, {}, root);
+
+    expect(result.status).toBe(0);
+    expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
+      [
+        "node --import tsx scripts/sync-plugin-versions.ts",
+        "pnpm channels:catalog:gen",
+        "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
+        "node --import tsx scripts/sync-plugin-versions.ts --check",
+        "pnpm channels:catalog:check",
+        "node scripts/generate-npm-package-lock.mjs --all",
+        "node --import tsx scripts/generate-plugin-inventory-doc.mts --check",
+      ].toSorted(),
+    );
+    expect(result.stdout).toContain("(plugins, jobs=4)");
+  });
+
+  it("checks non-version scopes without requiring macOS source metadata", () => {
+    const fakePnpm = makeFakePnpm();
+    const root = makeTempDir(tempDirs, "openclaw-release-preflight-config-");
+    const result = runPreflight(["--scope", "config"], fakePnpm, {}, root);
+
+    expect(result.status).toBe(0);
+    expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
+      [
+        "pnpm config:schema:check",
+        "pnpm config:channels:check",
+        "pnpm config:docs:check",
+      ].toSorted(),
+    );
+    expect(result.stdout).not.toContain("macOS app version metadata");
+  });
+
+  it("rejects invalid concurrency before running commands", () => {
+    const result = runPreflight(["--jobs", "0"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Invalid release preflight jobs value: 0; expected 1 through 16.",
+    );
+  });
+
   it.each([1, 2, 3])("uses bounded parallelism for independent checks with jobs=%i", (jobs) => {
     const fakePnpm = makeFakePnpm();
     const root = makeReleaseFixture();
@@ -386,6 +492,25 @@ process.once("exit", () => {
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(commands.toSorted());
   });
 
+  it("reports stale macOS version and build metadata after running all checks", () => {
+    const fakePnpm = makeFakePnpm();
+    const root = makeReleaseFixture({
+      buildVersion: "2026061000",
+      shortVersion: "2026.6.10",
+    });
+    const result = runPreflight(["--check"], fakePnpm, {}, root);
+
+    expect(result.status).toBe(1);
+    expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(CHECK_COMMANDS.toSorted());
+    expect(result.stderr).toContain(
+      'CFBundleShortVersionString is "2026.6.10"; expected "2026.7.1" from package.json base version',
+    );
+    expect(result.stderr).toContain(
+      'CFBundleVersion is "2026061000"; expected "2026070100" for 2026.7.1',
+    );
+    expect(result.stderr).toContain("Correct manual version metadata first.");
+  });
+
   it("fails closed when required macOS plist values are missing", () => {
     const fakePnpm = makeFakePnpm();
     const root = makeReleaseFixture();
@@ -417,12 +542,6 @@ process.once("exit", () => {
 
     expect(result.status).toBe(1);
     expect(readFileSync(plistPath, "utf8")).toBe(before);
-    expect(result.stderr).toContain(
-      'CFBundleShortVersionString is "2026.6.10"; expected "2026.7.1" from package.json base version',
-    );
-    expect(result.stderr).toContain(
-      'CFBundleVersion is "2026061000"; expected "2026070100" for 2026.7.1',
-    );
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
       [...FIX_COMMANDS, ...CHECK_COMMANDS].toSorted(),
     );
