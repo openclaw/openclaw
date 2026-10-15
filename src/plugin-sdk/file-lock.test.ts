@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   acquireFileLock,
   drainFileLockStateForTest,
@@ -117,28 +118,28 @@ describe("acquireFileLock", () => {
     },
   );
 
-  it.each([["different", "test-operation:second"]] as const)(
-    "makes a %s logical owner contend normally",
-    async (_label, reentrantOwner) => {
-      const filePath = path.join(tempDir, "owner-isolation.json");
-      const first = await acquireFileLock(filePath, {
-        retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-        stale: 60_000,
-        reentrantOwner: "test-operation:first",
-      });
-      try {
-        await expect(
-          acquireFileLock(filePath, {
-            retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-            stale: 60_000,
-            reentrantOwner,
-          }),
-        ).rejects.toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
-      } finally {
-        await first.release();
-      }
-    },
-  );
+  it.each([
+    ["different", "test-operation:second"],
+    ["absent", undefined],
+  ] as const)("makes a %s logical owner contend normally", async (_label, reentrantOwner) => {
+    const filePath = path.join(tempDir, "owner-isolation.json");
+    const first = await acquireFileLock(filePath, {
+      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+      stale: 60_000,
+      reentrantOwner: "test-operation:first",
+    });
+    try {
+      await expect(
+        acquireFileLock(filePath, {
+          retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+          stale: 60_000,
+          reentrantOwner,
+        }),
+      ).rejects.toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
+    } finally {
+      await first.release();
+    }
+  });
 
   it("fails closed for a security-sensitive stale lock", async () => {
     const filePath = path.join(tempDir, "exec-approvals.json");
@@ -263,6 +264,45 @@ describe("acquireFileLock", () => {
     await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
     const next = await acquireFileLock(filePath, options);
     await next.release();
+  });
+
+  it("closes an opened lock handle when writing the owner payload fails", async () => {
+    const filePath = path.join(tempDir, "write-fails");
+    const writeError = new Error("owner write failed");
+    const open = fs.open;
+    const opened: Awaited<ReturnType<typeof fs.open>>[] = [];
+    const closes: ReturnType<typeof vi.spyOn>[] = [];
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[1] === "wx") {
+        opened.push(handle);
+        vi.spyOn(handle, "writeFile").mockRejectedValue(writeError);
+        closes.push(vi.spyOn(handle, "close"));
+      }
+      return handle;
+    });
+
+    // Inject the failure at the real JavaScript FileHandle write boundary.
+    await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, async () => {
+      await expect(
+        acquireFileLock(filePath, {
+          retries: {
+            retries: 0,
+            factor: 1,
+            minTimeout: 1,
+            maxTimeout: 1,
+          },
+          stale: 100,
+        }),
+      ).rejects.toThrow(writeError);
+    });
+
+    expect(opened).toHaveLength(1);
+    expect(closes[0]).toHaveBeenCalledTimes(1);
+    for (const handle of opened) {
+      await expect(handle.stat()).rejects.toMatchObject({ code: "EBADF" });
+    }
+    await expect(fs.stat(`${filePath}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reclaims a definitely stale retired lock sidecar", async () => {

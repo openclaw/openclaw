@@ -4,8 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { replacePatternBounded } from "./redact-bounded.js";
+import * as prefilters from "./redact-prefilter.js";
 import {
   getDefaultRedactPatterns,
+  redactLogRecordForTransport,
   redactSecrets,
   redactSensitiveFieldValue,
   redactSensitiveLines,
@@ -70,6 +72,21 @@ describe("bounded replacement output", () => {
     expect(replacePatternBounded(firstChunk + remainingChunks, pattern, () => replacement)).toBe(
       expected,
     );
+  });
+
+  it("keeps calling a stateful replacer after unchanged results", () => {
+    const calls: Array<{ match: string; offset: number; input: string }> = [];
+    const chunk = "red" + " ".repeat(16_384 - 3);
+    const output = replacePatternBounded(chunk + chunk + "red", /red/g, (match, offset, input) => {
+      calls.push({ match, offset, input });
+      return calls.length === 3 ? "blue" : match;
+    });
+    expect(output).toBe(chunk + chunk + "blue");
+    expect(calls).toEqual([
+      { match: "red", offset: 0, input: chunk },
+      { match: "red", offset: 0, input: chunk },
+      { match: "red", offset: 0, input: "red" },
+    ]);
   });
 });
 
@@ -353,6 +370,25 @@ describe("redactSensitiveText", () => {
       ],
     ]);
   });
+  it("masks complete URL query credentials while preserving safe fields", () => {
+    expectTextRedactions([
+      [
+        "GET /cb?token=abc)def&safe=1 /cb?client%5Fsecret=abc]def&safe=1 /cb?code=short#frag",
+        "GET /cb?token=***&safe=1 /cb?client%5Fsecret=***&safe=1 /cb?code=***#frag",
+        ["abc)def", "abc]def"],
+        ["#frag"],
+      ],
+      [
+        'GET /cb?token="opaque-token-secret"&safe=1 /cb?client%5Fsecret="oauth-secret"',
+        "GET /cb?token=opaque…cret&safe=1 /cb?client%5Fsecret=***",
+        ["opaque-token-secret", "oauth-secret"],
+      ],
+      [
+        "callback https://example.test/oauth?code=oauth-code-abc123&state=visible&x-amz-signature=abc123xyz&x-amz-security-token=aws-session-token-123&authorization=authz-secret-123&private_key=pk-secret-123&app_secret=app-secret-123&credential=credential-secret-123",
+        "callback https://example.test/oauth?code=***&state=visible&x-amz-signature=***&x-amz-security-token=aws-se…-123&authorization=***&private_key=***&app_secret=***&credential=creden…-123",
+      ],
+    ]);
+  });
   it("masks complete standalone diagnostic assignments", () => {
     expectTextRedactions([
       ["matrix access_token=abcdef1234567890ghij next", "matrix access_token=abcdef…ghij next"],
@@ -365,6 +401,42 @@ describe("redactSensitiveText", () => {
         "password=*** token=*** client_secret=*** pass=***",
         ["abc,def", "abc;def", "abc]def", "abc)def"],
       ],
+    ]);
+  });
+  it("masks authorization parameters without consuming diagnostics", () => {
+    expectTextRedactions([
+      [
+        [
+          'Authorization: Digest username="digest-user-example", 2fa="digest-extension-1234567890abcdef", response="digest-response-1234567890abcdef", extension="digest-tail-1234567890abcdef", cnonce="tail-nonce"; request_id=digest-example',
+          "Authorization: AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE1234567890/20260717/eu-west-1/s3/aws4_request, SignedHeaders=:authority;x_custom;x.custom, Signature=aws-signature-1234567890abcdef; status=403",
+          'Proxy-Authorization: Digest username="digest-user-example", response="digest-response-1234567890abcdef"; request_id=proxy-example',
+        ].join("\n"),
+        [
+          "Authorization: Digest ***; request_id=digest-example",
+          "Authorization: AWS4-HMAC-SHA256 ***; status=403",
+          "Proxy-Authorization: Digest ***; request_id=proxy-example",
+        ].join("\n"),
+      ],
+      [
+        [
+          'Authorization: Digest username="sample",,response="later-response-value-1234567890"; status=401',
+          'Authorization: Digest damaged,,response="later-response-value-1234567890"; status=403',
+          'Authorization: Digest username="sample",\r\n response="later-response-value-1234567890"; status=408',
+          "Authorization:\\nBasic Zm9sZGVkOnNlY3JldA==",
+        ].join("\n"),
+        [
+          "Authorization: Digest ***; status=401",
+          "Authorization: Digest ***; status=403",
+          "Authorization: Digest ***; status=408",
+          "Authorization:\\nBasic Zm9sZG…dA==",
+        ].join("\n"),
+      ],
+      [
+        `Authorization: Digest realm=\\"Example \\\\\\"Realm\\\\\\"\\", response=\\"${["escaped", "quoted", "response", "1234567890abcdef"].join("-")}\\"; status=401`,
+        "Authorization: Digest ***; status=401",
+        [["escaped", "quoted", "response", "1234567890abcdef"].join("-")],
+      ],
+      ["Authorization: Basic dXNlcg==, status=401", "Authorization: Basic ***, status=401"],
     ]);
   });
 
@@ -449,6 +521,32 @@ describe("redactSensitiveText", () => {
     );
   });
 
+  it("masks punctuated auth schemes and nested token credentials", () => {
+    const token = "extension-token-1234567890abcdef";
+    const nested = (Authorization: string) => JSON.stringify(JSON.stringify({ Authorization }));
+    expect(redactSensitiveText(`Authorization: Foo+Bar ${token}; status=401`)).toBe(
+      "Authorization: Foo+Bar extens…cdef; status=401",
+    );
+    expect(redactSensitiveText(nested("Basic dXNlcjpwYXNz"))).toBe(nested("Basic ***"));
+    expect(redactSensitiveText(nested("Bearer /opaque-~bearer-1234567890abcdef"))).toBe(
+      nested("Bearer /opaqu…cdef"),
+    );
+    const opaque = JSON.stringify(
+      JSON.stringify({
+        Authorization: "opaque-credential-1234567890abcdef",
+        "Proxy-Authorization": "opaque-credential-1234567890abcdef",
+      }),
+    );
+    expect(redactSensitiveText(opaque)).toBe(
+      JSON.stringify(
+        JSON.stringify({
+          Authorization: "opaque…cdef",
+          "Proxy-Authorization": "opaque…cdef",
+        }),
+      ),
+    );
+  });
+
   it("redacts form values after empty values and Unicode line prefixes", () => {
     const input = '😀safe\r\nbody: code=&safe=1\rclient%5Fsecret="abc";&safe=2';
 
@@ -483,6 +581,7 @@ describe("redactSensitiveText", () => {
 
   it.each([
     ["an unmatched group", String.raw`(unused)?project_value=([^&]+)&confirm=\2`],
+    ["an empty last group", String.raw`project_value=([^&]+)()&confirm=\1`],
     ["a named backreference", String.raw`project_value=(?<secret>[^&]+)&confirm=\k<secret>`],
   ])("redactSensitiveText locates the custom capture with %s", (_name, pattern) => {
     const input = "project_value=abc123456789012345&confirm=abc123456789012345";
@@ -727,6 +826,21 @@ describe("redactSensitiveLines", () => {
     expect(joined).toContain("…redacted…");
     expect(joined).not.toContain("ABCDEF1234567890");
   });
+});
+
+it("reuses scalar probes only within the current log record", () => {
+  const text = "ordinary repeated log fixture 🦞";
+  const record = { detail: text, nested: { detail: text } };
+  const probe = vi.spyOn(prefilters, "couldMatchDefaultFullContextPatterns");
+  const count = () => probe.mock.calls.filter(([input]) => input === text).length;
+  try {
+    expect(redactLogRecordForTransport(record)).toEqual(record);
+    expect(count()).toBe(1);
+    expect(redactLogRecordForTransport(record)).toEqual(record);
+    expect(count()).toBe(2);
+  } finally {
+    probe.mockRestore();
+  }
 });
 
 describe("structured diagnostic properties", () => {

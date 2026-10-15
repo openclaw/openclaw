@@ -410,6 +410,57 @@ describe("plugin session extension SessionEntry projection", () => {
     ]);
   });
 
+  it("clears promoted SessionEntry slots with plugin-owned session state", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "cleanup-promoted-plugin", name: "Cleanup" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "promoted workflow",
+          sessionEntrySlotKey: "approvalSnapshot",
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+        } as unknown as SessionEntry;
+      });
+      await expectOkResult(
+        patchPluginSessionExtension({
+          cfg: tempConfig as never,
+          sessionKey: "agent:main:main",
+          pluginId: "cleanup-promoted-plugin",
+          namespace: "workflow",
+          value: { state: "waiting" },
+        }),
+        "cleanup patch result",
+      );
+
+      await expectNoCleanupFailures(
+        runPluginHostCleanup({
+          cfg: tempConfig as never,
+          registry: registry.registry,
+          pluginId: "cleanup-promoted-plugin",
+          reason: "delete",
+        }),
+        "cleanup result",
+      );
+
+      const stored = loadSessionStore(storePath, { skipCache: true });
+      const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+      expect(entry.pluginExtensions).toBeUndefined();
+      expect(entry.approvalSnapshot).toBeUndefined();
+    });
+  });
+
   it("uses the active registry to clear promoted slots when cleanup omits registry", async () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
@@ -457,6 +508,73 @@ describe("plugin session extension SessionEntry projection", () => {
       const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
       expect(entry.pluginExtensions).toBeUndefined();
       expect(entry.approvalSnapshot).toBeUndefined();
+    });
+  });
+
+  it("clears stale promoted SessionEntry slots on plugin restart without deleting extension state", async () => {
+    const previousFixture = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: previousFixture.registry,
+      config: previousFixture.config,
+      record: createPluginRecord({ id: "restart-promoted-plugin", name: "Restart" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "promoted workflow",
+          sessionEntrySlotKey: "approvalSnapshot",
+        });
+      },
+    });
+    const nextFixture = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: nextFixture.registry,
+      config: nextFixture.config,
+      record: createPluginRecord({ id: "restart-promoted-plugin", name: "Restart" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "promoted workflow",
+        });
+      },
+    });
+    setActivePluginRegistry(previousFixture.registry.registry);
+
+    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+        } as unknown as SessionEntry;
+      });
+      await expectOkResult(
+        patchPluginSessionExtension({
+          cfg: tempConfig as never,
+          sessionKey: "agent:main:main",
+          pluginId: "restart-promoted-plugin",
+          namespace: "workflow",
+          value: { state: "waiting" },
+        }),
+        "restart patch result",
+      );
+
+      await expectNoCleanupFailures(
+        createPluginHostRegistryRetirement({
+          cfg: tempConfig as never,
+          previousRegistry: previousFixture.registry.registry,
+          nextRegistry: nextFixture.registry.registry,
+        })(),
+        "restart cleanup result",
+      );
+
+      const stored = loadSessionStore(storePath, { skipCache: true });
+      const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+      expect(entry.approvalSnapshot).toBeUndefined();
+      expect(entry.pluginExtensionSlotKeys).toBeUndefined();
+      expect(entry.pluginExtensions).toEqual({
+        "restart-promoted-plugin": {
+          workflow: { state: "waiting" },
+        },
+      });
     });
   });
 
@@ -550,6 +668,116 @@ describe("plugin session extension SessionEntry projection", () => {
           legacy: { state: "legacy" },
         },
       });
+    });
+  });
+
+  it("preserves promoted SessionEntry slots on plugin restart when the slot is still declared", async () => {
+    const previousFixture = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: previousFixture.registry,
+      config: previousFixture.config,
+      record: createPluginRecord({ id: "restart-preserved-plugin", name: "Restart" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "promoted workflow",
+          sessionEntrySlotKey: "approvalSnapshot",
+        });
+      },
+    });
+    const nextFixture = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: nextFixture.registry,
+      config: nextFixture.config,
+      record: createPluginRecord({ id: "restart-preserved-plugin", name: "Restart" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "promoted workflow",
+          sessionEntrySlotKey: "approvalSnapshot",
+        });
+      },
+    });
+    setActivePluginRegistry(previousFixture.registry.registry);
+
+    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+        } as unknown as SessionEntry;
+      });
+      await expectOkResult(
+        patchPluginSessionExtension({
+          cfg: tempConfig as never,
+          sessionKey: "agent:main:main",
+          pluginId: "restart-preserved-plugin",
+          namespace: "workflow",
+          value: { state: "waiting" },
+        }),
+        "preserved restart patch result",
+      );
+
+      await expectNoCleanupFailures(
+        createPluginHostRegistryRetirement({
+          cfg: tempConfig as never,
+          previousRegistry: previousFixture.registry.registry,
+          nextRegistry: nextFixture.registry.registry,
+        })(),
+        "preserved restart cleanup result",
+      );
+
+      const stored = loadSessionStore(storePath, { skipCache: true });
+      const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+      expect(entry.approvalSnapshot).toEqual({ state: "waiting" });
+      expect(entry.pluginExtensionSlotKeys).toEqual({
+        "restart-preserved-plugin": {
+          workflow: "approvalSnapshot",
+        },
+      });
+      expect(entry.pluginExtensions).toEqual({
+        "restart-preserved-plugin": {
+          workflow: { state: "waiting" },
+        },
+      });
+    });
+  });
+
+  it("clears persisted promoted slots when registry metadata is unavailable", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          pluginExtensions: {
+            "removed-promoted-plugin": {
+              workflow: { state: "stale" },
+            },
+          },
+          pluginExtensionSlotKeys: {
+            "removed-promoted-plugin": {
+              workflow: "approvalSnapshot",
+            },
+          },
+          approvalSnapshot: { state: "stale" },
+        } as unknown as SessionEntry;
+      });
+
+      await expectNoCleanupFailures(
+        runPluginHostCleanup({
+          cfg: tempConfig as never,
+          pluginId: "removed-promoted-plugin",
+          reason: "delete",
+        }),
+        "metadata cleanup result",
+      );
+
+      const stored = loadSessionStore(storePath, { skipCache: true });
+      const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+      expect(entry.approvalSnapshot).toBeUndefined();
+      expect(entry.pluginExtensionSlotKeys).toBeUndefined();
+      expect(entry.pluginExtensions).toBeUndefined();
     });
   });
 
@@ -648,5 +876,41 @@ describe("plugin session extension SessionEntry projection", () => {
       undefined,
     ]);
     expect(seenConfig).toEqual([undefined, undefined]);
+  });
+
+  it("does not touch top-level SessionEntry slots when sessionEntrySlotKey is omitted", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "non-promoted-plugin", name: "Non" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "non-promoted workflow",
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+        } as unknown as SessionEntry;
+      });
+      const result = await patchPluginSessionExtension({
+        cfg: tempConfig as never,
+        sessionKey: "agent:main:main",
+        pluginId: "non-promoted-plugin",
+        namespace: "workflow",
+        value: { state: "executing" },
+      });
+      expect(result.ok).toBe(true);
+      const stored = loadSessionStore(storePath, { skipCache: true });
+      const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+      expect(entry.approvalSnapshot).toBeUndefined();
+    });
   });
 });

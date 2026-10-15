@@ -2,6 +2,7 @@
 import { channel } from "node:diagnostics_channel";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
@@ -20,6 +21,10 @@ import {
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
+
+function flushDiagnosticEvents() {
+  return vi.runAllTimersAsync();
+}
 
 function memoryUsage(overrides: Partial<NodeJS.MemoryUsage>): NodeJS.MemoryUsage {
   return {

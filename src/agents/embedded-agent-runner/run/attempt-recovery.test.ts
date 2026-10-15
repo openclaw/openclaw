@@ -4,6 +4,7 @@ import { WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE } from "@openclaw/ai/diagnosti
 import { APIError } from "openai/core/error";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
@@ -186,7 +187,11 @@ describe("recoverEmbeddedRunAttempt", () => {
       );
     },
   );
-  it.each([{ scenario: emptyLengthScenario, noTools: false }])(
+  it.each(
+    outputLimitScenarios.flatMap((scenario) =>
+      [true, false].map((noTools) => ({ scenario, noTools })),
+    ),
+  )(
     "continues output-limited work without replay (no tools=$noTools)",
     async ({ scenario, noTools }) => {
       const {
@@ -240,7 +245,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     },
   );
 
-  it.each([outputLimitScenario])(
+  it.each(outputLimitScenarios)(
     "allows only one output-limit continuation even after successful model progress",
     async (scenario) => {
       const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
@@ -259,7 +264,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     },
   );
 
-  it.each([outputLimitScenario])(
+  it.each(outputLimitScenarios)(
     "continues slow output generation without consuming the transient outage window",
     async (scenario) => {
       const startedAt = Date.now();
@@ -289,10 +294,23 @@ describe("recoverEmbeddedRunAttempt", () => {
 
   it.each<{ label: string } & TransportDropScenario>([
     {
+      label: "partial answer",
+      assistant: buildEmbeddedRunnerAssistant({
+        stopReason: "length",
+        content: [{ type: "text", text: "The result so far" }],
+      }),
+    },
+    {
+      label: "completed answer before the empty stop",
+      assistantTexts: ["The result is verified."],
+    },
+    { label: "assistant media", preToolText: "MEDIA:https://example.com/result.png" },
+    {
       label: "snapshot-only assistant media",
       preToolText: "MEDIA:https://example.com/result.png",
       assistantTexts: [],
     },
+    { label: "voice output", preToolText: "[[audio_as_voice]]" },
     { label: "tool media", toolMediaUrls: ["https://example.com/result.png"] },
     { label: "source reply already delivered", sourceReplyDelivered: true },
     { label: "silent cron tool result", trigger: "cron", toolResultText: "NO_REPLY" },
@@ -305,7 +323,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
   });
 
-  it.each(["pending", "error"] as const)(
+  it.each(["pending", "delivered", "error"] as const)(
     "preserves %s source delivery after an empty length stop",
     async (state) => {
       const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
@@ -322,7 +340,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     },
   );
 
-  it.each(["[[reply_to_current]]"])(
+  it.each([undefined, "[[reply_to_current]]"])(
     "continues after an earlier answer was delivered (reply target: %s)",
     async (preToolText) => {
       const previousAssistant = buildEmbeddedRunnerAssistant({
@@ -396,20 +414,34 @@ describe("recoverEmbeddedRunAttempt", () => {
 
   it.each<[string, TransportDropScenario]>([
     [
-      "overflow followed by validation",
+      "output limit followed by success",
+      {
+        ...outputLimitScenario,
+        completedAssistant: buildEmbeddedRunnerAssistant({
+          stopReason: "stop",
+          content: [{ type: "text", text: "The result is verified." }],
+        }),
+      },
+    ],
+    ...["validation", "success"].map((completed): [string, TransportDropScenario] => [
+      `overflow followed by ${completed}`,
       {
         errorMessage: "400 context overflow",
         compactionEnabled: true,
         diagnostics: [],
         replaySafe: true,
-        completedAssistant: buildEmbeddedRunnerAssistant({
-          stopReason: "error",
-          errorMessage: "500 Unsupported parameter: context_length_exceeded",
-          errorType: "invalid_request_error",
-          errorCode: "unknown_parameter",
-        }),
+        completedAssistant: buildEmbeddedRunnerAssistant(
+          completed === "validation"
+            ? {
+                stopReason: "error",
+                errorMessage: "500 Unsupported parameter: context_length_exceeded",
+                errorType: "invalid_request_error",
+                errorCode: "unknown_parameter",
+              }
+            : { stopReason: "stop", content: [{ type: "text", text: "Done" }] },
+        ),
       },
-    ],
+    ]),
   ])("does not recover stale errors after %s", async (_label, scenario) => {
     const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
       await recoverAfterTransportDrop(scenario);
@@ -418,21 +450,59 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
   });
 
-  it.each([true])("recovers the completed overflow with replaySafe=%s", async (replaySafe) => {
-    await expect(
-      recoverAfterTransportDrop({
-        errorMessage: "500 Unsupported parameter: timeout",
-        errorType: "invalid_request_error",
-        errorCode: "unknown_parameter",
-        completedAssistant: buildEmbeddedRunnerAssistant({
-          stopReason: "error",
-          errorMessage: "400 Your input exceeds the context window of this model",
+  it.each([false, true])(
+    "recovers the completed overflow with replaySafe=%s",
+    async (replaySafe) => {
+      await expect(
+        recoverAfterTransportDrop({
+          errorMessage: "500 Unsupported parameter: timeout",
+          errorType: "invalid_request_error",
+          errorCode: "unknown_parameter",
+          completedAssistant: buildEmbeddedRunnerAssistant({
+            stopReason: "error",
+            errorMessage: "400 Your input exceeds the context window of this model",
+          }),
+          compactionEnabled: true,
+          diagnostics: [],
+          replaySafe,
         }),
-        compactionEnabled: true,
+      ).rejects.toThrow("overflow compaction requested");
+    },
+  );
+
+  it.each([
+    { errorMessage: "429 rate_limit_exceeded; Retry-After: 3600", delayMs: 3_600_000 },
+    {
+      errorMessage: "429 requests per minute exceeded. Please try again in 11.054s.",
+      delayMs: 11_054,
+    },
+    { headers: { "retry-after": "7", "retry-after-ms": "8500" }, delayMs: 8500 },
+    { headers: { "retry-after": "7", "retry-after-ms": "invalid" }, delayMs: 7000 },
+  ])("continues after respecting the provider floor of $delayMs ms", async (scenario) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    vi.mocked(sleepWithAbort).mockClear();
+    const { recovery, onAgentEvent, continueFromCurrentTranscript } =
+      await recoverAfterTransportDrop({
+        errorMessage: scenario.errorMessage ?? "429 provider rate limit",
+        errorBody: scenario.headers ? JSON.stringify({ headers: scenario.headers }) : undefined,
         diagnostics: [],
-        replaySafe,
+      });
+    expect(recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: "rate_limit" });
+    expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(scenario.delayMs, undefined);
+    expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
+    expect(onAgentEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        stream: "run_status",
+        data: expect.objectContaining({
+          phase: "retrying",
+          attempt: 2,
+          maxAttempts: 10,
+          reason: "rate_limit",
+          retryAt: 1_800_000_000_000 + scenario.delayMs,
+        }),
       }),
-    ).rejects.toThrow("overflow compaction requested");
+    );
+    now.mockRestore();
   });
 
   it.each([
@@ -442,10 +512,12 @@ describe("recoverEmbeddedRunAttempt", () => {
       delayMs: 8500,
     },
     { status: 503, headers: { "Retry-After": "7", "retry-after-ms": "335" }, delayMs: 7000 },
+    { status: 429, response: { headers: { "retry-after-ms": "8500" } }, delayMs: 8500 },
+    { status: 429, message: "Please try again in 11.054s.", delayMs: 11_054 },
     { status: 429, headers: { "retry-after": "7" }, message: "Retry-After: 12", delayMs: 12_000 },
   ])(
     "honors prompt-exception pacing for HTTP $status with floor $delayMs",
-    async ({ status, headers, message, delayMs }) => {
+    async ({ status, headers, response, message, delayMs }) => {
       vi.mocked(sleepWithAbort).mockClear();
       const error =
         headers instanceof Headers
@@ -458,6 +530,7 @@ describe("recoverEmbeddedRunAttempt", () => {
           : Object.assign(new Error(message ?? "provider temporarily unavailable"), {
               status,
               headers,
+              response,
             });
       const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
         terminal: { kind: "failed", source: "prompt", error },
@@ -507,6 +580,24 @@ describe("recoverEmbeddedRunAttempt", () => {
       expectedAction: "retry",
       expectedSleepMs: 9_897_000,
     },
+    {
+      label: "still sleeps the same floor with no fallback",
+      errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
+      fallbackConfigured: false,
+      replaySafe: true,
+      providerRetryMaxDelayMs: 30_000,
+      expectedAction: "retry",
+      expectedSleepMs: 9_897_000,
+    },
+    {
+      label: "keeps a floor inside the cap on the same model",
+      errorMessage: "429 rate_limit_exceeded; Retry-After: 20",
+      fallbackConfigured: true,
+      replaySafe: true,
+      providerRetryMaxDelayMs: 30_000,
+      expectedAction: "retry",
+      expectedSleepMs: 20_000,
+    },
   ])("$label", async (scenario) => {
     vi.mocked(sleepWithAbort).mockClear();
     const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
@@ -525,6 +616,21 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(scenario.expectedSleepMs, undefined);
       expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
     }
+  });
+
+  it("preserves the larger header floor after an SDK failure becomes an assistant message", async () => {
+    vi.mocked(sleepWithAbort).mockClear();
+    const projection = projectProviderError(
+      new APIError(
+        429,
+        { message: "Please try again in 1s." },
+        undefined,
+        new Headers({ "retry-after": "7", "retry-after-ms": "335" }),
+      ),
+    );
+    const { recovery } = await recoverAfterTransportDrop(projection);
+    expect(recovery.action).toBe("retry");
+    expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(7000, undefined);
   });
 
   it("exhausts ten rate-limited attempts before profile rotation and model failover", async () => {
@@ -554,11 +660,26 @@ describe("recoverEmbeddedRunAttempt", () => {
   });
 
   it.each<[string, TransportDropScenario]>([
+    ["WebSocket drop", {}],
+    ["overload before work", { noTools: true, errorMessage: "server_overloaded", diagnostics: [] }],
+    ["overload after settled tools", { errorMessage: "server_overloaded", diagnostics: [] }],
+    [
+      "WebSocket transport code",
+      {
+        errorMessage: "WebSocket closed: reason included ECONNRESET",
+        errorCode: "ERR_WEBSOCKET_TRANSPORT",
+        diagnostics: [],
+      },
+    ],
+    [
+      "unresolved stream",
+      { errorMessage: "Responses stream ended with unresolved tool calls", diagnostics: [] },
+    ],
     [
       "settled failed batch",
       { failedToolCallId: "call_2", lastToolError: { toolName: "exec", error: "command failed" } },
     ],
-    ...[false].map((toolFailed): [string, TransportDropScenario] => [
+    ...[false, true].map((toolFailed): [string, TransportDropScenario] => [
       `idle timeout, tool failed=${toolFailed}`,
       {
         terminal: { kind: "timeout", phase: "prompt", source: "idle", aborted: true },
@@ -570,6 +691,29 @@ describe("recoverEmbeddedRunAttempt", () => {
           : {}),
       },
     ]),
+    ...[0, 1].map((activeCount): [string, TransportDropScenario] => [
+      `parked Code Mode, active=${activeCount}`,
+      { codeModeSuspended: true, activeCount },
+    ]),
+    ["uncertain outcomes", { activeCount: 1 }],
+    [
+      "mismatched failed summary",
+      { failedToolCallId: "call_2", lastToolError: { toolName: "write", error: "write failed" } },
+    ],
+    [
+      "parked failed batch",
+      {
+        activeCount: 1,
+        codeModeSuspended: true,
+        failedToolCallId: "call_2",
+        lastToolError: { toolName: "exec", error: "command failed" },
+      },
+    ],
+    [
+      "rate limit",
+      { errorMessage: "429 rate limit exceeded; retry after 2 seconds", diagnostics: [] },
+    ],
+    ["visible partial response", { content: [{ type: "text", text: "Partial" }] }],
     [
       "terminal provider prompt error",
       {
@@ -614,21 +758,20 @@ describe("recoverEmbeddedRunAttempt", () => {
   });
 
   it.each([
-    ...recoveryCases("output limit", outputLimitScenario, [
-      ...unsettledBatches,
-      ["the attempt yielded", { yieldDetected: true }],
-      ["the retry budget is disabled", { retryAvailable: false }],
-      ["raw model runs cannot carry the continuation transcript", { modelRun: true }],
-      ["prompt-free runs cannot carry the continuation transcript", { promptMode: "none" }],
-      ["the run was cancelled", { terminal: { kind: "aborted", source: "external" } }],
-      [
-        "the run deadline expired",
-        { terminal: { kind: "timeout", phase: "prompt", source: "run_budget" } },
-      ],
-    ]),
-    ...recoveryCases("output limit", emptyLengthScenario, [
-      ["the run was cancelled", { terminal: { kind: "aborted", source: "external" } }],
-    ]),
+    ...outputLimitScenarios.flatMap((scenario) =>
+      recoveryCases("output limit", scenario, [
+        ...unsettledBatches,
+        ["the attempt yielded", { yieldDetected: true }],
+        ["the retry budget is disabled", { retryAvailable: false }],
+        ["raw model runs cannot carry the continuation transcript", { modelRun: true }],
+        ["prompt-free runs cannot carry the continuation transcript", { promptMode: "none" }],
+        ["the run was cancelled", { terminal: { kind: "aborted", source: "external" } }],
+        [
+          "the run deadline expired",
+          { terminal: { kind: "timeout", phase: "prompt", source: "run_budget" } },
+        ],
+      ]),
+    ),
     ...recoveryCases(
       "overflow",
       {
@@ -636,20 +779,32 @@ describe("recoverEmbeddedRunAttempt", () => {
         compactionEnabled: true,
         diagnostics: [],
       },
-      [["a tool intentionally ended the turn", { terminate: true }]],
+      unsettledBatches,
     ),
     ...recoveryCases(
       "idle timeout",
       { terminal: { kind: "timeout", phase: "prompt", source: "idle" } },
       [
+        ...unsettledBatches,
+        [
+          "compaction timed out",
+          { terminal: { kind: "timeout", phase: "compaction", source: "idle" } },
+        ],
         [
           "tool execution timed out",
           { terminal: { kind: "timeout", phase: "tool_execution", source: "idle" } },
+        ],
+        [
+          "the run deadline expired",
+          { terminal: { kind: "timeout", phase: "prompt", source: "run_budget" } },
         ],
       ],
     ),
     ...recoveryCases("transport", {}, [
       ["the run was externally aborted", { terminal: { kind: "aborted", source: "external" } }],
+      ["the run timed out", { terminal: { kind: "timeout", phase: "prompt", source: "runtime" } }],
+      ["the attempt yielded", { yieldDetected: true }],
+      ["the assistant error is not transient", { errorMessage: "invalid request: bad schema" }],
       [
         "a permanent WebSocket close has transient-looking reason text",
         {
@@ -658,11 +813,13 @@ describe("recoverEmbeddedRunAttempt", () => {
           diagnostics: [],
         },
       ],
+      ["Gateway storage is locked", { errorMessage: "database is locked", diagnostics: [] }],
       ["the provider requires authentication", { errorMessage: "401 unauthorized" }],
       [
         "the provider has exhausted its quota",
         { errorMessage: "429 insufficient_quota: current quota exhausted", diagnostics: [] },
       ],
+      ["the continuation budget is spent", { retryAvailable: false }],
     ]),
   ])("keeps the replay gate closed: %s", async (_label, scenario) => {
     const {

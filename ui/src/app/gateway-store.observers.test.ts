@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { loadCommandPaletteCatalogItems } from "../components/command-palette-catalog-search.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
@@ -278,6 +279,30 @@ describe("createApplicationGateway connection ownership", () => {
 
     gateway.connect({ token: "replacement-token" });
     expect(gateway.connectionRevision).toBe(1);
+  });
+
+  it("keeps reload-required ahead of retryable startup presentation", () => {
+    gateway.start();
+
+    current().opts.onClose?.(
+      unavailable(
+        "Control UI updated; reload this page to continue",
+        {
+          code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+          reason: "startup-sidecars",
+          gatewayBuildId: "replacement-build",
+          reloadRequired: true,
+        },
+        1008,
+      ),
+    );
+
+    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ buildId: "replacement-build" }),
+    );
+    expect(gateway.snapshot.phase).toBe("reload-required");
+    expect(gateway.snapshot.lastError).toContain("Control UI updated");
+    expect(gateway.snapshot.lastErrorCode).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
   });
 
   it.each([false, true])(

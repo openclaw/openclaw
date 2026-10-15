@@ -10,6 +10,7 @@ import {
 } from "../../lib/chat/outbox-recovery.ts";
 import { createStoredChatOutboxReader } from "../../lib/chat/outbox-store-projection.ts";
 import {
+  captureChatOutboxAdmission,
   storageTargetForComposer,
   storageTargetForGateway,
   subscribeStoredChatOutboxChanges,
@@ -30,6 +31,7 @@ import {
 } from "./composer-persistence.test-support.ts";
 import {
   type ChatComposerPersistence,
+  admitStoredChatComposerQueueItem,
   listStoredChatOutboxes,
   loadChatComposerState,
   persistChatComposerState as persist,
@@ -561,6 +563,38 @@ it("reviews full v1 main and global queues while consuming legacy tombstones", (
   expect(sessionStorage.getItem(legacyStorageKeyForGateway(state.settings?.gatewayUrl))).toBeNull();
 });
 
+it.each([
+  ["sending", "waiting-reconnect", undefined, undefined],
+  [
+    "waiting-model",
+    "failed",
+    "previous attempt failed",
+    "Chat settings update was interrupted. Review and retry when ready.",
+  ],
+] as const)(
+  "normalizes %s before durable replay",
+  (sendState, restoredState, sendError, restoredError) => {
+    const state = createState();
+    const item: ChatQueueItem = {
+      ...reconnectItem("interrupted", 1),
+      sendState,
+      ...(sendError ? { sendError } : {}),
+    };
+    expect(admitItem(state, item)).toBe(true);
+    expect(loadChatComposerState(state, state.sessionKey).snapshot?.queue).toEqual(
+      outbox(
+        {
+          ...item,
+          sendState: restoredState,
+          ...(restoredError ? { sendError: restoredError } : {}),
+        },
+        state.sessionKey,
+        "lily",
+      ).queue,
+    );
+  },
+);
+
 it("isolates long same-prefix gateways in owner-tagged v4 buckets", () => {
   const sharedPrefix = `wss://gateway.test/${"a".repeat(260)}`;
   const gateways = ["first", "second"].map((route, index) => {
@@ -798,6 +832,41 @@ it("retries a failed draft write when stopping", () => {
   expect(loadChatComposerState(state, state.sessionKey).snapshot?.draft).toBe("retry this write");
 });
 
+it("keeps failed attachment sends durable and retryable, including stack-overflow failures", () => {
+  const state = createState();
+  const failed: ChatQueueItem = {
+    id: "overflow-attachment",
+    text: "failed attachment send",
+    createdAt: 1,
+    sendState: "failed",
+    sendError: "RangeError: Maximum call stack size exceeded",
+    attachments: [
+      {
+        id: "att-overflow",
+        mimeType: "image/png",
+        fileName: "big.png",
+        dataUrl: "data:image/png;base64,AAA",
+      },
+    ],
+  };
+
+  expect(
+    admitStoredChatComposerQueueItem(
+      state,
+      captureChatOutboxAdmission(state, state.sessionKey),
+      failed,
+    ),
+  ).toBe(true);
+  expect(loadChatComposerState(state, state.sessionKey).snapshot?.queue).toMatchObject([
+    {
+      id: "overflow-attachment",
+      sendState: "failed",
+      sendError: "RangeError: Maximum call stack size exceeded",
+      attachments: [{ id: "att-overflow" }],
+    },
+  ]);
+});
+
 describe("Incognito composer persistence", () => {
   it.each(["canonical key", "arriving metadata"] as const)(
     "retires Incognito input identified by %s without clearing live input or queues",
@@ -965,4 +1034,51 @@ describe("Incognito composer persistence", () => {
       persistence.stop();
     },
   );
+});
+
+describe("chat composer draft presence notifications", () => {
+  it("notifies stored outbox subscribers on draft presence transitions and queue writes", () => {
+    const state = createState();
+    const original = reconnectItem("notify", 1);
+    const updated = { ...original, text: "updated message" };
+    const listener = vi.fn();
+    const unsubscribe = subscribeStoredChatOutboxChanges(listener);
+
+    try {
+      expect(persist({ ...state, chatMessage: "draft only" })).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(1);
+      // Content-only re-persists stay silent so projection subscribers cannot
+      // react by re-persisting a stale pane over the newer draft.
+      expect(persist({ ...state, chatMessage: "draft only, edited" })).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(persist({ ...state, chatMessage: "" })).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(2);
+      // Goal-only input badges the sidebar without text, so it is a presence transition too.
+      const goalOnly = {
+        ...state,
+        chatMessage: "",
+        chatGoalDraftMode: { action: "start" as const },
+      };
+      expect(persist(goalOnly)).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(3);
+      expect(persist({ ...goalOnly, chatGoalDraftMode: null })).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(4);
+      expect(admitItem(state, original)).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(5);
+      expect(
+        updateItems(
+          state,
+          state.sessionKey,
+          [{ expected: original, next: updated }],
+          original.agentId,
+        ),
+      ).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(6);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(removeItem(state, state.sessionKey, updated.id, updated, updated.agentId)).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(6);
+  });
 });

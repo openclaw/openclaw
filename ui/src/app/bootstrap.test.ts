@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { startModelSetupFirstRunRedirectAfterLocation } from "../pages/model-setup/first-run.ts";
+import { routeIdFromPath } from "../app-routes.ts";
+import {
+  isDefaultChatLanding,
+  startModelSetupFirstRunRedirectAfterLocation,
+} from "../pages/model-setup/first-run.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -147,7 +151,10 @@ describe("bootstrapApplication", () => {
     }
   });
 
-  it.each([{ pathname: "/approve/exec%3A1", routeId: "chat", warmed: false }] as const)(
+  it.each([
+    { pathname: "/chat/main/example-deadbeef", routeId: "chat", warmed: true },
+    { pathname: "/approve/exec%3A1", routeId: "chat", warmed: false },
+  ] as const)(
     "warms only explicit application routes at startup: $pathname",
     async ({ pathname, routeId, warmed }) => {
       window.history.replaceState({}, "", pathname);
@@ -290,6 +297,22 @@ describe("bootstrapApplication", () => {
     expect(request).not.toHaveBeenCalled();
     expect(replaceRoute).toHaveBeenCalledOnce();
     expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+  });
+
+  it("does not replace a user route with the deferred default chat location", async () => {
+    const currentLocation = { pathname: "/new", search: "", hash: "" };
+    const installLocation = vi.fn();
+
+    await startModelSetupFirstRunRedirectAfterLocation({
+      context: {} as ApplicationContext,
+      enabled: false,
+      history: { location: () => currentLocation, replace: vi.fn() },
+      initialLocationReady: Promise.resolve({ pathname: "/chat/main", search: "", hash: "" }),
+      installLocation,
+      shouldInstallLocation: () => isDefaultChatLanding(currentLocation, "", routeIdFromPath),
+    });
+
+    expect(installLocation).not.toHaveBeenCalled();
   });
 
   it.each([

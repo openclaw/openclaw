@@ -7,10 +7,17 @@ import {
   modelCostsEqual,
   NATIVE_ANTHROPIC_REPLAY_HOOKS,
   PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   resolveClaudeThinkingProfile,
   requiresClaudeDefaultSampling,
   selectPreferredLocalModelId,
+  supportsClaude1MContext,
   supportsClaudeAdaptiveThinking,
+  supportsClaudeFastMode,
+  supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "./provider-model-shared.js";
 
@@ -33,6 +40,52 @@ function readLevelIds(profile: unknown): string[] {
 }
 
 describe("Claude model contracts", () => {
+  it("recognizes Vertex date suffixes", () => {
+    expect(resolveClaudeFable5ModelIdentity({ id: "claude-fable-5@20260601" })).toBe(
+      "claude-fable-5@20260601",
+    );
+    expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-4-6@20260301" })).toBe(true);
+    expect(supportsClaudeNativeXhighEffort({ id: "claude-opus-4-8@20260401" })).toBe(true);
+    expect(resolveClaudeOpus5ModelIdentity({ id: "claude-opus-5@20260701" })).toBe(
+      "claude-opus-5@20260701",
+    );
+    expect(resolveClaudeSonnet5ModelIdentity({ id: "claude-sonnet-5@20260701" })).toBe(
+      "claude-sonnet-5@20260701",
+    );
+  });
+
+  it("recognizes Claude Mythos 5 as mandatory adaptive with native max effort", () => {
+    expect(resolveClaudeMythos5ModelIdentity({ id: "us.anthropic.claude-mythos-5-v1:0" })).toBe(
+      "claude-mythos-5-v1:0",
+    );
+    expect(supportsClaudeAdaptiveThinking({ id: "claude-mythos-5" })).toBe(true);
+    expect(supportsClaudeNativeMaxEffort({ id: "claude-mythos-5" })).toBe(true);
+    expect(supportsClaudeNativeXhighEffort({ id: "anthropic.claude-mythos-5" })).toBe(true);
+    expect(requiresClaudeDefaultSampling({ id: "claude-mythos-5" })).toBe(true);
+  });
+
+  it.each([["OpenRouter", { id: "anthropic/claude-opus-5" }, "claude-opus-5"]] as const)(
+    "recognizes the Claude Opus 5 contract through %s",
+    (_provider, ref, identity) => {
+      expect(resolveClaudeOpus5ModelIdentity(ref)).toBe(identity);
+      expect(supportsClaude1MContext(ref)).toBe(true);
+      expect(supportsClaudeAdaptiveThinking(ref)).toBe(true);
+      expect(supportsClaudeNativeMaxEffort(ref)).toBe(true);
+      expect(supportsClaudeNativeXhighEffort(ref)).toBe(true);
+      expect(requiresClaudeDefaultSampling(ref)).toBe(true);
+    },
+  );
+
+  it("recognizes native fast-mode Claude models", () => {
+    expect(supportsClaudeFastMode({ id: "claude-opus-5" })).toBe(true);
+    expect(supportsClaudeFastMode({ id: "opus" })).toBe(true);
+    expect(supportsClaudeFastMode({ id: "opus-5" })).toBe(true);
+    expect(supportsClaudeFastMode({ id: "global.anthropic.claude-opus-5" })).toBe(true);
+    expect(supportsClaudeFastMode({ id: "claude-opus-4.8" })).toBe(true);
+    expect(supportsClaudeFastMode({ id: "claude-opus-4-7" })).toBe(false);
+    expect(supportsClaudeFastMode({ id: "claude-opus-50" })).toBe(false);
+  });
+
   it("does not classify later numeric model versions as supported aliases", () => {
     expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-4-60" })).toBe(false);
     expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-50" })).toBe(false);

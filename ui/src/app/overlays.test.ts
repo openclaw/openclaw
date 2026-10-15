@@ -200,33 +200,33 @@ describe("application approval overlays", () => {
     overlays.dispose();
   });
 
-  it.each([{ name: "write-only", scopes: ["operator.write"] }])(
-    "does not request or expose approvals for a $name operator",
-    async ({ scopes }) => {
-      const request = vi.fn<RequestFn>(() => Promise.resolve([]));
-      const gatewayClient = client(request);
-      const harness = createGatewayHarness(null, false);
-      const overlays = createApplicationOverlays(harness.gateway);
+  it.each([
+    { name: "read-only", scopes: ["operator.read"] },
+    { name: "write-only", scopes: ["operator.write"] },
+  ])("does not request or expose approvals for a $name operator", async ({ scopes }) => {
+    const request = vi.fn<RequestFn>(() => Promise.resolve([]));
+    const gatewayClient = client(request);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
 
-      harness.update({
-        client: gatewayClient,
-        phase: "connected",
-        hello: {
-          server: { version: "1.0.0" },
-          auth: { role: "operator", scopes },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      await flushMicrotasks();
+    harness.update({
+      client: gatewayClient,
+      phase: "connected",
+      hello: {
+        server: { version: "1.0.0" },
+        auth: { role: "operator", scopes },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await flushMicrotasks();
 
-      expect(request).not.toHaveBeenCalledWith("exec.approval.list", {});
-      expect(request).not.toHaveBeenCalledWith("plugin.approval.list", {});
-      expect(request).not.toHaveBeenCalledWith("openclaw.approval.list", {});
+    expect(request).not.toHaveBeenCalledWith("exec.approval.list", {});
+    expect(request).not.toHaveBeenCalledWith("plugin.approval.list", {});
+    expect(request).not.toHaveBeenCalledWith("openclaw.approval.list", {});
 
-      harness.emitApproval("hidden-approval", 1_000);
-      expect(overlays.snapshot.approvalQueue).toEqual([]);
-      overlays.dispose();
-    },
-  );
+    harness.emitApproval("hidden-approval", 1_000);
+    expect(overlays.snapshot.approvalQueue).toEqual([]);
+    overlays.dispose();
+  });
 
   it("discards pending approvals when access changes on the same client", async () => {
     const firstList = deferred<unknown>();
@@ -479,6 +479,31 @@ describe("application approval overlays", () => {
     expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
       "approval-reconnected",
     ]);
+    overlays.dispose();
+  });
+
+  it("keeps a resolve failure attached to its older request", async () => {
+    const resolveAttempt = deferred<unknown>();
+    const request = vi.fn<RequestFn>((method) =>
+      method.endsWith(".list") ? Promise.resolve([]) : resolveAttempt.promise,
+    );
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.emitApproval("approval-active", 1_000);
+    const decision = overlays.decideApproval("allow-once");
+    harness.emitApproval("approval-newer", 2_000);
+    resolveAttempt.reject(new Error("gateway unavailable"));
+    await decision;
+
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+      "approval-active",
+      "approval-newer",
+    ]);
+    expect(overlays.snapshot.approvalErrors.get("approval-active")).toBe(
+      "Approval failed: gateway unavailable",
+    );
+    expect(overlays.snapshot.approvalBusy).toBe(false);
     overlays.dispose();
   });
 

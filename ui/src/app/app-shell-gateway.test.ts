@@ -296,50 +296,87 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     expect(ensureList).toHaveBeenCalledOnce();
   });
 
-  it("loads and caches profile appearance after resolving identity", async () => {
-    const {
-      completeProfileAppearance,
-      context,
-      owner,
-      refreshTheme,
-      requestUpdate,
-      request,
-      snapshot,
-    } = createProfileAppearanceGateway(null);
-    owner.synchronizeGateway(snapshot);
-    owner.handleGatewayEvent({
-      type: "event",
-      event: "users.prefs.changed",
-      payload: { profileId: "someone-else", keys: ["ui.accent"] },
-    });
-    expect(request).not.toHaveBeenCalled();
-    snapshot.selfUser = { id: "profile-owner" };
-    owner.synchronizeGateway(snapshot);
-    void owner.reconcileServerUiPrefs(context.runtimeConfig);
-    expect(refreshTheme).not.toHaveBeenCalled();
-    expect(loadSettings().accent).toBeUndefined();
-    await completeProfileAppearance();
-    await vi.dynamicImportSettled();
-    // Adoption publishes navigation, then hydration publishes profile/readiness.
-    expect(refreshTheme).toHaveBeenCalledTimes(2);
-    expect(requestUpdate).toHaveBeenCalledOnce();
-    expect(refreshTheme).toHaveBeenCalledWith({ notify: true });
-    expect(loadSettings().accent).toBe("#336699");
-    expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
-      keys: [
-        ...Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
-        ...Object.values(UI_NAVIGATION_PREFERENCE_KEYS),
-      ],
-    });
-    request.mockClear();
-    const configState = context.runtimeConfig.state as { configSnapshot: { config: unknown } };
-    configState.configSnapshot = {
-      config: { ui: { prefs: { accent: "#884422" } }, agents: { defaults: {} } },
-    };
-    await owner.reconcileServerUiPrefs(context.runtimeConfig);
-    expect(request).not.toHaveBeenCalled();
-    expect(loadSettings().accent).toBe("#336699");
-  });
+  it.each([false, true])(
+    "loads and caches profile appearance (matching browser mirror: %s)",
+    async (mirrored) => {
+      if (mirrored) {
+        patchSettings({ gatewayUrl: "ws://profile.test", accent: "#336699" });
+      }
+      const {
+        completeProfileAppearance,
+        context,
+        owner,
+        refreshTheme,
+        requestUpdate,
+        request,
+        snapshot,
+      } = createProfileAppearanceGateway(mirrored ? "profile-owner" : null);
+      owner.synchronizeGateway(snapshot);
+      if (!mirrored) {
+        owner.handleGatewayEvent({
+          type: "event",
+          event: "users.prefs.changed",
+          payload: { profileId: "someone-else", keys: ["ui.accent"] },
+        });
+        expect(request).not.toHaveBeenCalled();
+        snapshot.selfUser = { id: "profile-owner" };
+        owner.synchronizeGateway(snapshot);
+        void owner.reconcileServerUiPrefs(context.runtimeConfig);
+        expect(refreshTheme).not.toHaveBeenCalled();
+        expect(loadSettings().accent).toBeUndefined();
+      }
+      await completeProfileAppearance();
+      await vi.dynamicImportSettled();
+      // Adoption publishes navigation, then hydration publishes profile/readiness.
+      expect(refreshTheme).toHaveBeenCalledTimes(2);
+      expect(requestUpdate).toHaveBeenCalledOnce();
+      expect(refreshTheme).toHaveBeenCalledWith({ notify: true });
+      expect(loadSettings().accent).toBe("#336699");
+      expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
+        keys: [
+          ...Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
+          ...Object.values(UI_NAVIGATION_PREFERENCE_KEYS),
+        ],
+      });
+      request.mockClear();
+      const configState = context.runtimeConfig.state as { configSnapshot: { config: unknown } };
+      configState.configSnapshot = {
+        config: { ui: { prefs: { accent: "#884422" } }, agents: { defaults: {} } },
+      };
+      await owner.reconcileServerUiPrefs(context.runtimeConfig);
+      expect(request).not.toHaveBeenCalled();
+      expect(loadSettings().accent).toBe("#336699");
+    },
+  );
+
+  it.each(["profile-owner", "canonical-owner"])(
+    "refreshes current profile appearance for its routed %s invalidation",
+    async (eventProfileId) => {
+      const { completeProfileAppearance, owner, refreshTheme, request, snapshot } =
+        createProfileAppearanceGateway("profile-owner");
+      owner.synchronizeGateway(snapshot);
+      await completeProfileAppearance();
+      expect(loadSettings().accent).toBe("#336699");
+      request.mockClear();
+      refreshTheme.mockClear();
+
+      owner.handleGatewayEvent({
+        type: "event",
+        event: "users.prefs.changed",
+        payload: {
+          profileId: eventProfileId,
+          keys: ["ui.accent"],
+          entries: { "ui.accent": "#ffffff" },
+        },
+      });
+
+      expect(loadSettings().accent).toBe("#336699");
+      await completeProfileAppearance("#224466");
+      expect(loadSettings().accent).toBe("#224466");
+      expect(request).toHaveBeenCalledOnce();
+      expect(refreshTheme).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("ShellGatewayOwner config invalidation", () => {
@@ -433,6 +470,54 @@ describe("ShellGatewayOwner config invalidation", () => {
       runtimeConfig.dispose();
     }
   });
+
+  it.each(["confirmed", "unconfirmed"])(
+    "handles a persisted Apply whose runtime revision is %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const server = createConfigServerMock();
+      let applied = false;
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "config.apply") {
+          await server.request("config.set", params);
+          throw new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "configuration persisted but was not applied",
+          });
+        }
+        const response = await server.request(method, params);
+        if (method === "config.get" && applied) {
+          const snapshot = response as { configRevisionHash: string };
+          return { ...snapshot, appliedConfigHash: snapshot.configRevisionHash };
+        }
+        return response;
+      });
+      const { runtimeConfig } = createConfigCapabilityHarness(
+        request as GatewayBrowserClient["request"],
+      );
+      try {
+        await runtimeConfig.ensureLoaded();
+        await expect(runtimeConfig.apply()).resolves.toBe(false);
+        expect(runtimeConfig.state.lastError).toContain("was not applied");
+        if (outcome === "confirmed") {
+          applied = true;
+          await runtimeConfig.refresh({ background: true });
+          expect(runtimeConfig.state.configNeedsApply).toBe(false);
+          expect(runtimeConfig.state.lastError).toBeNull();
+        } else {
+          runtimeConfig.patchForm(["count"], 2);
+          await expect(runtimeConfig.discardFormValue(["count"])).resolves.toBe(false);
+          expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
+          expect(runtimeConfig.state.configNeedsApply).toBe(true);
+          expect(runtimeConfig.state.lastError).toBeTruthy();
+        }
+        expect(server.submissions).toHaveLength(1);
+      } finally {
+        runtimeConfig.setWritesSuspended(true);
+        runtimeConfig.dispose();
+      }
+    },
+  );
 
   it.each(["failed", "superseded"] as const)(
     "retains a reverted autosave through a %s reconnect read and successor refresh",
@@ -553,10 +638,12 @@ describe("ShellGatewayOwner config invalidation", () => {
         }
         return serverRequest(method, params);
       });
-      const { runtimeConfig, context, owner } = createShellConfig(
+      const { runtimeConfig } = createConfigCapabilityHarness(
         request as GatewayBrowserClient["request"],
       );
+      const { context, owner } = createProfileAppearanceGateway(null);
       Object.assign(context, {
+        runtimeConfig,
         agents: { state: { agentsList: null }, refreshList: vi.fn(async () => null) },
         agentSelection: { state: { selectedId: null } },
       });
@@ -876,10 +963,12 @@ describe("ShellGatewayOwner config invalidation", () => {
     async (rejected) => {
       vi.useFakeTimers();
       const { request, submissions, firstSet } = createDeferredSetServerMock();
-      const { runtimeConfig, context, owner } = createShellConfig(
+      const { runtimeConfig } = createConfigCapabilityHarness(
         request as GatewayBrowserClient["request"],
       );
+      const { context, owner } = createProfileAppearanceGateway(null);
       Object.assign(context, {
+        runtimeConfig,
         agents: { state: { agentsList: null }, refreshList: vi.fn(async () => null) },
         agentSelection: { state: { selectedId: null } },
       });

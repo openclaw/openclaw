@@ -807,6 +807,14 @@ describe("matrix client storage paths", () => {
     await expectCanonicalRootForNewDevice(stateDir);
   });
 
+  it("does not reuse a populated sibling storage root with ambiguous device metadata", async () => {
+    const stateDir = setupStateDir();
+    await seedExistingStorageRoot({
+      accessToken: "secret-token-old",
+    });
+    await expectCanonicalRootForNewDevice(stateDir);
+  });
+
   it("keeps the current-token storage root stable after deviceId backfill when startup claimed state there", async () => {
     const { stateDir, canonicalPaths } = await setupCurrentTokenBackfillScenario({
       currentRootState: "thread-bindings",

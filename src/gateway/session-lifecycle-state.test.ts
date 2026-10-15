@@ -43,6 +43,7 @@ vi.mock("../logging/subsystem.js", () => ({
 
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
+  isStaleLifecycleEventForSession,
   persistGatewaySessionLifecycleEvent,
 } from "./session-lifecycle-state.js";
 import {
@@ -141,9 +142,23 @@ describe("session lifecycle state", () => {
     expect(next.goal).toEqual(stopped.goal);
   });
 
-  it("preserves an already paused goal on run failure", async () => {
-    const entry: SessionEntry = { ...goalEntry, goal: { ...goalEntry.goal!, status: "paused" } };
-    expect((await persistLifecycle(entry, goalFailure)).goal).toEqual(entry.goal);
+  it.each(["paused", "blocked", "complete", "budget_limited", "usage_limited"] as const)(
+    "preserves an already %s goal on run failure",
+    async (status) => {
+      const entry = { ...goalEntry, goal: { ...goalEntry.goal!, status } };
+      expect((await persistLifecycle(entry, goalFailure)).goal).toEqual(entry.goal);
+    },
+  );
+
+  it.each([
+    { phase: "start", startedAt: 1_000 },
+    { phase: "end", endedAt: 2_000 },
+    { phase: "end", yielded: true, livenessState: "waiting", endedAt: 2_000 },
+    { phase: "error", aborted: true, stopReason: "restart", endedAt: 2_000 },
+  ])("keeps the goal active for non-failure lifecycle $phase / $stopReason", async (data) => {
+    expect((await persistLifecycle(goalEntry, { ...goalFailure, data })).goal).toEqual(
+      goalEntry.goal,
+    );
   });
 
   it("does not pause the goal for a stale run or session failure", async () => {
@@ -155,14 +170,58 @@ describe("session lifecycle state", () => {
     }
   });
 
-  it("preserves newer goal intent when a terminal write is delayed", async () => {
-    const entry = {
-      ...goalEntry,
-      lifecycleRunId: undefined,
-      goal: { ...goalEntry.goal!, updatedAt: 3_000 },
-    };
-    expect((await persistLifecycle(entry, goalFailure)).goal).toEqual(entry.goal);
+  it.each(["goal-1", "replacement-goal"])(
+    "preserves newer goal intent for %s when a terminal write is delayed",
+    async (id) => {
+      const entry = {
+        ...goalEntry,
+        lifecycleRunId: undefined,
+        goal: { ...goalEntry.goal!, id, updatedAt: 3_000 },
+      };
+      expect((await persistLifecycle(entry, goalFailure)).goal).toEqual(entry.goal);
+    },
+  );
+
+  it("treats a pre-reset run's lifecycle event as stale once the row's sessionId rotated (#88538)", () => {
+    expect(
+      isStaleLifecycleEventForSession({
+        owningSessionId: "old-id",
+        currentSessionId: "new-id",
+        eventRunId: "same-run",
+        currentRunId: "same-run",
+      }),
+    ).toBe(true);
   });
+
+  it("does not guard when the owning sessionId is unknown (preserves legacy behavior)", () => {
+    expect(
+      isStaleLifecycleEventForSession({ owningSessionId: undefined, currentSessionId: "new-id" }),
+    ).toBe(false);
+  });
+
+  it.each([
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: 100, stale: true },
+    { eventRunId: "run-a", currentRunId: undefined, eventStartedAt: 100, stale: true },
+    { eventRunId: undefined, currentRunId: "run-a", eventStartedAt: 100, stale: true },
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: 200, stale: false },
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: 300, stale: false },
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: undefined, stale: false },
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: Number.NaN, stale: false },
+  ])(
+    "correlates explicit same-session run start times",
+    ({ eventRunId, currentRunId, eventStartedAt, stale }) => {
+      expect(
+        isStaleLifecycleEventForSession({
+          owningSessionId: "session-id",
+          currentSessionId: "session-id",
+          eventRunId,
+          currentRunId,
+          eventStartedAt,
+          currentStartedAt: 200,
+        }),
+      ).toBe(stale);
+    },
+  );
 
   it.each(["end", "error"] as const)(
     "ignores an older overlapping run's late %s while preserving the newer owner",
@@ -321,6 +380,82 @@ describe("session lifecycle state", () => {
   });
 
   it.each([
+    {
+      name: "aborted",
+      data: { phase: "end", endedAt: 1_800, stopReason: "aborted" },
+      status: "killed",
+      abortedLastRun: true,
+    },
+    {
+      name: "signal-only cancellation",
+      data: { phase: "end", endedAt: 1_800, aborted: true },
+      status: "killed",
+      abortedLastRun: true,
+    },
+    {
+      name: "provider timeout",
+      data: {
+        phase: "error",
+        endedAt: 1_800,
+        error: "provider request timed out",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      status: "timeout",
+      abortedLastRun: false,
+    },
+    {
+      name: "abandoned",
+      data: { phase: "end", endedAt: 1_800, livenessState: "abandoned" },
+      status: "failed",
+      abortedLastRun: false,
+    },
+    {
+      name: "error with stale yield metadata",
+      data: {
+        phase: "error",
+        endedAt: 1_800,
+        error: "continuation setup failed",
+        yielded: true,
+        livenessState: "paused",
+        stopReason: "end_turn",
+      },
+      status: "failed",
+      abortedLastRun: false,
+    },
+    {
+      name: "aborted with stale yield metadata",
+      data: {
+        phase: "end",
+        endedAt: 1_800,
+        aborted: true,
+        yielded: true,
+        livenessState: "paused",
+        stopReason: "end_turn",
+      },
+      status: "failed",
+      abortedLastRun: false,
+    },
+  ] as const)("persists $name terminal state", async ({ data, status, abortedLastRun }) => {
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+      },
+      { ts: 2_000, sessionId: "session-id", data },
+    );
+
+    expect(persisted).toMatchObject({
+      status,
+      startedAt: 1_050,
+      endedAt: 1_800,
+      runtimeMs: 750,
+      abortedLastRun,
+    });
+  });
+
+  it.each([
     { name: "visible run", controlUiVisible: true, isHeartbeat: false, lastActivityAt: 1_800 },
     { name: "heartbeat", controlUiVisible: true, isHeartbeat: true, lastActivityAt: 1_000 },
     { name: "hidden run", controlUiVisible: false, isHeartbeat: false, lastActivityAt: 1_000 },
@@ -346,6 +481,38 @@ describe("session lifecycle state", () => {
       expect(persisted.lastActivityAt).toBe(lastActivityAt);
     },
   );
+
+  it("persists a compact failure reason and clears it when a new run starts", async () => {
+    const failed = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        data: {
+          phase: "error",
+          endedAt: 1_800,
+          error: `Provider credits exhausted\n${"details ".repeat(40)}`,
+        },
+      },
+    );
+
+    expect(failed.status).toBe("failed");
+    expect(failed.lastRunError).toMatch(/^Provider credits exhausted details/);
+    expect(failed.lastRunError?.length).toBeLessThanOrEqual(160);
+    expect(failed.lastRunError).not.toContain("\n");
+
+    const restarted = await persistLifecycle(failed, {
+      ts: 2_100,
+      sessionId: "session-id",
+      data: { phase: "start", startedAt: 2_100 },
+    });
+    expect(restarted.status).toBeUndefined();
+    expect(restarted.lastRunError).toBeUndefined();
+  });
 
   it("retains yielded continuation custody without recording a terminal outcome", async () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();

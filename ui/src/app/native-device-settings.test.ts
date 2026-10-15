@@ -11,6 +11,7 @@ import {
 import {
   createNativeDeviceSettingsCapability,
   type NativeDeviceSettingsCapability,
+  type NativeDeviceSettingsSnapshot,
 } from "./native-device-settings.ts";
 import { nativeSetupCapability } from "./native-setup.ts";
 
@@ -33,7 +34,7 @@ function publish(detail: unknown) {
 }
 
 describe("native device settings wire contract", () => {
-  it.each([undefined, true])(
+  it.each([undefined, false, true])(
     "advertises AI setup only with explicit host support (%s)",
     (available) => {
       const base = createIosNativeDeviceSettingsSnapshot();
@@ -74,7 +75,7 @@ describe("native device settings wire contract", () => {
     post.mockResolvedValueOnce(legacy);
     await expect(capability!.chromeExtensionStatus!()).rejects.toThrow("invalid result");
   });
-  it.each(["installChromeExtension", "setupChromeExtension"] as const)(
+  it.each(["installChromeExtension", "chromeExtensionStatus", "setupChromeExtension"] as const)(
     "rejects %s completion after document retirement",
     async (operation) => {
       const post = installBridge();
@@ -100,7 +101,13 @@ describe("native device settings wire contract", () => {
     },
   );
 
-  it.each([["macos", "verify"]] as const)(
+  it.each([
+    ["macos", "inspect"],
+    ["macos", "install"],
+    ["macos", "verify"],
+    ["linux", "inspect"],
+    ["windows", "inspect"],
+  ] as const)(
     "forwards %s %s setup without publishing a settings snapshot",
     async (platform, action) => {
       const snapshot =
@@ -151,6 +158,59 @@ describe("native device settings wire contract", () => {
     expect(capability?.snapshot).toEqual(createNativeDeviceSettingsSnapshot());
     expect(post.mock.calls).toEqual([[{ type: "status" }]]);
   });
+
+  it.each([
+    [
+      "without Dock icon selection",
+      () => {
+        const snapshot = createNativeDeviceSettingsSnapshot();
+        delete snapshot.app.iconStyle;
+        return snapshot;
+      },
+    ],
+    ["iOS", createIosNativeDeviceSettingsSnapshot],
+    [
+      "without optional families",
+      () => {
+        const { device, permissions } = createNativeDeviceSettingsSnapshot();
+        return {
+          contract: 1,
+          device,
+          permissions,
+          voice: { supported: false, wakeEnabled: false },
+        };
+      },
+    ],
+  ] satisfies [string, () => NativeDeviceSettingsSnapshot][])(
+    "accepts %s snapshots",
+    (_name, create) => {
+      const snapshot = create();
+      installBridge(snapshot);
+      expect(capability?.snapshot).toEqual(snapshot);
+    },
+  );
+
+  it.each(["linux", "windows", "macos"] as const)(
+    "accepts the %s companion's desktop setting without location access",
+    (platform) => {
+      const snapshot = createTauriDeviceSettingsSnapshot(platform);
+      installBridge(snapshot);
+      expect(capability?.snapshot).toEqual(snapshot);
+      const listener = vi.fn();
+      capability?.subscribe(listener);
+      const failed = {
+        ...snapshot,
+        revision: 2,
+        desktopSharing: {
+          state: "error",
+          detail: "Install the OpenClaw CLI to share this desktop.",
+        },
+      };
+      publish(failed);
+      expect(capability?.snapshot).toEqual(failed);
+      expect(listener).toHaveBeenCalledWith(failed);
+    },
+  );
 
   it("keeps a newer native event when an earlier edit reply settles", async () => {
     const initial = createTauriDeviceSettingsSnapshot("linux");
@@ -287,6 +347,186 @@ describe("native device settings wire contract", () => {
     expectTypeOf<
       Extract<Parameters<NativeDeviceSettingsCapability["openSystemSettings"]>[0], "automation">
     >().toBeNever();
+  });
+
+  it.each([
+    ...[
+      { state: "locked", enabled: true },
+      { state: "unlocked", enabled: false },
+      { state: "unknown", enabled: true },
+      { state: undefined, enabled: undefined },
+    ].map(({ state, enabled }) => ({
+      name: `desktop ${state}`,
+      change: {
+        desktopAvailability: state === undefined ? undefined : { state },
+        capabilities: {
+          ...createNativeDeviceSettingsSnapshot().capabilities,
+          unattendedDesktopEnabled: enabled,
+        },
+      },
+      accepted: true,
+    })),
+    ...[
+      { name: "empty", entries: [] },
+      { name: "single", entries: [{ id: "camera", status: "granted" }] },
+      {
+        name: "requestable macOS",
+        entries: [
+          { id: "screenRecording", status: "notDetermined" },
+          { id: "accessibility", status: "notDetermined" },
+        ],
+      },
+      {
+        name: "reordered",
+        entries: createNativeDeviceSettingsSnapshot().permissions.entries.toReversed(),
+      },
+    ].map(({ name, entries }) => ({
+      name: `${name} permissions`,
+      change: { permissions: { ...createNativeDeviceSettingsSnapshot().permissions, entries } },
+      accepted: true,
+    })),
+    ...(
+      [
+        ["contract", { contract: 2 }],
+        ["negative revision", { revision: -1 }],
+        ["fractional revision", { revision: 1.5 }],
+        ["non-numeric revision", { revision: "2" }],
+        ["device", { device: { platform: "macos" } }],
+        ["app", { app: { ...createNativeDeviceSettingsSnapshot().app, showDockIcon: "yes" } }],
+        ["absent family encoded as null", { app: null }],
+        ["appearance", { app: { appearance: "sepia" } }],
+        ["notifications", { app: { notificationsEnabled: "true" } }],
+        ["native experience", { app: { nativeExperienceEnabled: "true" } }],
+        ["Gateway hosting", { app: { keepGatewayRunning: "true" } }],
+        ["Gateway hosting availability", { app: { keepGatewayRunningAvailable: "true" } }],
+        ["iOS capability", { capabilities: { healthSummaryEnabled: "true" } }],
+        ["unattended desktop toggle", { capabilities: { unattendedDesktopEnabled: "true" } }],
+        ["desktop sharing toggle", { capabilities: { desktopSharingEnabled: "true" } }],
+        ...[null, {}, { state: "available" }, { state: true }].map(
+          (desktopAvailability) => ["desktop availability", { desktopAvailability }] as const,
+        ),
+        ...[
+          null,
+          { selectedId: 1, available: [] },
+          { selectedId: "paper", available: [{ id: "paper" }] },
+        ].map(
+          (iconStyle) =>
+            [
+              "Dock icon",
+              { app: { ...createNativeDeviceSettingsSnapshot().app, iconStyle } },
+            ] as const,
+        ),
+        [
+          "capabilities",
+          {
+            capabilities: {
+              ...createNativeDeviceSettingsSnapshot().capabilities,
+              computerControlProvider: "other",
+            },
+          },
+        ],
+        [
+          "browser",
+          {
+            browser: {
+              importAvailable: true,
+              cookieSync: {
+                ...createNativeDeviceSettingsSnapshot().browser.cookieSync,
+                domains: [42],
+              },
+            },
+          },
+        ],
+        [
+          "permissions",
+          { permissions: { ...createNativeDeviceSettingsSnapshot().permissions, entries: null } },
+        ],
+        [
+          "unknown permission id",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              entries: [{ id: "unknown", status: "granted" }],
+            },
+          },
+        ],
+        [
+          "duplicate permission id",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              entries: [
+                { id: "camera", status: "granted" },
+                { id: "camera", status: "denied" },
+              ],
+            },
+          },
+        ],
+        [
+          "duplicate additional permission id",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              additionalEntries: [{ id: "camera", status: "denied" }],
+            },
+          },
+        ],
+        [
+          "additional permission status",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              additionalEntries: [{ id: "eventPosting", status: "unknown" }],
+            },
+          },
+        ],
+        [
+          "precise editability",
+          {
+            permissions: {
+              ...createIosNativeDeviceSettingsSnapshot().permissions,
+              location: { mode: "whileUsing", precise: true, preciseEditable: "false" },
+            },
+          },
+        ],
+        ["missing voice wakeEnabled", { voice: { supported: true } }],
+        ["missing voice supported", { voice: { wakeEnabled: false } }],
+        ["Talk toggle", { voice: { supported: true, wakeEnabled: false, talkEnabled: "true" } }],
+        [
+          "location",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              location: { mode: ["off"], precise: false },
+            },
+          },
+        ],
+        [
+          "voice",
+          {
+            voice: {
+              ...createNativeDeviceSettingsSnapshot().voice,
+              microphone: { selectedId: null, devices: [{ id: "mic" }] },
+            },
+          },
+        ],
+        ["updates", { updates: { available: true, automatic: true } }],
+      ] as const
+    ).map(([name, change]) => ({ name: `malformed ${name}`, change, accepted: false })),
+  ])("admits $name snapshots only when valid", ({ change, accepted }) => {
+    const initial = createNativeDeviceSettingsSnapshot();
+    installBridge(initial);
+    const listener = vi.fn();
+    capability?.subscribe(listener);
+    const next = { ...initial, ...change };
+    publish(next);
+    if (accepted) {
+      expect(capability?.snapshot).toEqual(next);
+      expect(listener).toHaveBeenCalledWith(next);
+    } else {
+      expect(capability?.snapshot).toEqual(initial);
+      expect(listener).not.toHaveBeenCalled();
+    }
   });
 
   it("waits for a valid snapshot and stops notifications after unsubscribe/dispose", () => {

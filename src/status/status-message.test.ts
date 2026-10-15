@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 
 vi.mock("../version.js", async (importOriginal) => {
@@ -30,6 +32,10 @@ const displayParams: Partial<Parameters<typeof buildStatusMessage>[0]> = {
   modelAuth: "api-key",
 };
 
+afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
+});
+
 describe("buildStatusMessage current time", () => {
   it("surfaces a live current-time line so session_status returns the date/time", () => {
     // 2025-07-03T08:00:00Z; the Reference UTC line is timezone-independent.
@@ -47,6 +53,7 @@ describe("buildStatusMessage current time", () => {
     expect(text).toContain("Reference UTC: 2025-07-03 08:00 UTC");
   });
 });
+
 describe("buildStatusMessageParts presentation", () => {
   it("reports the loaded build commit", () => {
     const parts = buildStatusMessageParts({
@@ -306,6 +313,45 @@ describe("buildStatusMessage context window", () => {
     totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
   };
 
+  it("rejects a stale runtime window after a same-model harness change", () => {
+    const text = buildStatusMessage({
+      ...displayParams,
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-luna" }),
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.6-luna",
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [statusTestModel("gpt-5.6-luna", "GPT-5.6 Luna", 1_050_000)],
+            },
+          },
+        },
+      },
+      agent: { model: "openai/gpt-5.6-luna" },
+      runtimeContextTokens: 1_000_000,
+      resolvedHarness: "codex",
+      sessionEntry: {
+        sessionId: "same-model-runtime-change",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-5.6-luna",
+        agentHarnessId: "openclaw",
+        contextTokens: 272_000,
+        contextTokensSource: "runtime",
+        ...tokenUsage,
+      },
+      modelAuth: "oauth",
+    });
+
+    expect(text).toContain("Context: 11/1.0m");
+    expect(text).not.toContain("Context: 11/272k");
+  });
+
   it("replaces matching runtime telemetry with a newly authored effective cap", () => {
     const text = buildStatusMessage({
       ...displayParams,
@@ -394,6 +440,7 @@ describe("buildStatusMessage context window", () => {
     expect(text).toContain("Context: 11/272k");
     expect(text).not.toContain("Context: 11/1.0m");
   });
+
   it("ignores stale runtime context after a manual session model switch", () => {
     const text = buildStatusMessage({
       ...displayParams,
@@ -461,6 +508,68 @@ describe("buildStatusMessage context window", () => {
 
     expect(text).toContain("Model: openai/gpt-5.5");
     expect(text).toContain("⏳ live switch pending");
+  });
+
+  it("keeps trusted runtime context for config-backed runtime aliases", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            }
+          : undefined,
+      resolvePluginSetupRegistry: () => {
+        throw new Error("setup registry should not load for a targeted runtime alias");
+      },
+      resolveRuntimeCliBackends: () => [],
+    });
+
+    const text = buildStatusMessage({
+      ...displayParams,
+      modelRefs: statusModelRefs(
+        { provider: "anthropic", model: "claude-haiku-4-5" },
+        { provider: "claude-cli", model: "claude-haiku-4-5" },
+      ),
+      config: {
+        agents: {
+          defaults: {},
+        },
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [statusTestModel("claude-haiku-4-5", "Claude Haiku 4.5", 200_000)],
+            },
+          },
+        },
+      },
+      agent: {
+        model: "anthropic/claude-haiku-4-5",
+      },
+      runtimeContextTokens: 1_000_000,
+      sessionEntry: {
+        sessionId: "runtime-alias-context",
+        updatedAt: 0,
+        modelProvider: "claude-cli",
+        model: "claude-haiku-4-5",
+        totalTokens: 36_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "oauth",
+      activeModelAuth: "oauth",
+    });
+
+    expect(text).toContain("Model: anthropic/claude-haiku-4-5");
+    expect(text).toContain("Context: 36k/1.0m");
+    expect(text).not.toContain("Context: 36k/200k");
   });
 
   it("shows auto-fallback override label when model differs from configured default", () => {

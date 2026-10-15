@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   resetWorkingProgress,
   resolveTurnRecap,

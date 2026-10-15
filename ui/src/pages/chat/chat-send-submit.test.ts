@@ -171,7 +171,7 @@ describe("structured Goal admission", () => {
     );
   });
 
-  it.each(["/stop"])(
+  it.each(["/stop", "  /goal clear\nkeep   this literal  "])(
     "sends %j as an objective without command interpretation",
     async (objective) => {
       const host = makeChatHost({
@@ -339,6 +339,18 @@ describe("reply submission", () => {
       status: "started",
     },
     {
+      message: "continue",
+      target: {
+        messageId: "id:transcript-abc",
+        text: "quoted body",
+        senderLabel: "Molty",
+        sourceMessageId: "transcript-abc",
+      },
+      text: "continue",
+      replyToId: "transcript-abc",
+      status: "started",
+    },
+    {
       message: "retry this",
       target: { messageId: "reply-source-2", text: "quoted body", senderLabel: "User" },
       text: "> **User:** quoted body\n\nretry this",
@@ -374,42 +386,49 @@ describe("reply submission", () => {
 });
 
 describe("Home work context admission", () => {
-  it.each(["/stop", "stop", ""])(
-    "captures ambient context only for ordinary input (%j)",
-    async (mode) => {
-      const ordinary = ["queued", "included", "excluded"].includes(mode);
-      const context = { page: "chat", title: "Original work", sessionKey: "agent:main:parser" };
-      const getWorkContext = vi.fn(() => (mode === "excluded" ? undefined : context));
-      const message = ordinary ? "Explain this task" : mode;
-      const host = makeChatHost({
-        connected: mode !== "queued",
-        chatMessage: message,
-        getWorkContext,
-        createChatSession: vi.fn(async () => true),
-        requestHandlers: { "chat.send": { status: "started" } },
+  it.each([
+    "queued",
+    "included",
+    "excluded",
+    "/new",
+    "/stop",
+    "/review-this",
+    "!status",
+    "stop",
+    "",
+  ])("captures ambient context only for ordinary input (%j)", async (mode) => {
+    const ordinary = ["queued", "included", "excluded"].includes(mode);
+    const context = { page: "chat", title: "Original work", sessionKey: "agent:main:parser" };
+    const getWorkContext = vi.fn(() => (mode === "excluded" ? undefined : context));
+    const message = ordinary ? "Explain this task" : mode;
+    const host = makeChatHost({
+      connected: mode !== "queued",
+      chatMessage: message,
+      getWorkContext,
+      createChatSession: vi.fn(async () => true),
+      requestHandlers: { "chat.send": { status: "started" } },
+    });
+    await handleSendChat(host);
+    if (mode === "queued") {
+      context.title = "Later work";
+      expect(host.chatQueue).toHaveLength(1);
+      expect(host.chatQueue[0]).toMatchObject({
+        text: message,
+        workContext: { page: "chat", title: "Original work" },
       });
-      await handleSendChat(host);
-      if (mode === "queued") {
-        context.title = "Later work";
-        expect(host.chatQueue).toHaveLength(1);
-        expect(host.chatQueue[0]).toMatchObject({
-          text: message,
-          workContext: { page: "chat", title: "Original work" },
-        });
-      } else if (ordinary) {
+    } else if (ordinary) {
+      expect(findChatSendPayload(host).message).toBe(message);
+      expect(findChatSendPayload(host).workContext).toEqual(
+        mode === "included" ? context : undefined,
+      );
+      expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(message);
+    } else {
+      expect(getWorkContext).not.toHaveBeenCalled();
+      if (mode === "/review-this") {
         expect(findChatSendPayload(host).message).toBe(message);
-        expect(findChatSendPayload(host).workContext).toEqual(
-          mode === "included" ? context : undefined,
-        );
-        expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(message);
-      } else {
-        expect(getWorkContext).not.toHaveBeenCalled();
-        if (mode === "/review-this") {
-          expect(findChatSendPayload(host).message).toBe(message);
-        }
       }
-    },
-  );
+    }
+  });
 });
 
 describe("handleSendChat immediate local commands", () => {
@@ -439,7 +458,10 @@ describe("handleSendChat immediate local commands", () => {
     expect(host.request).not.toHaveBeenCalled();
   });
 
-  it.each([{ command: "/export-session", result: "empty" }] as const)(
+  it.each([
+    { command: "/export", result: "downloaded" },
+    { command: "/export-session", result: "empty" },
+  ] as const)(
     "corrects a rejected $command path and handles a $result export",
     async ({ command, result }) => {
       const draft = `${command} reports/conversation.html`;
@@ -527,7 +549,11 @@ describe("handleSendChat immediate local commands", () => {
 });
 
 describe("handleSendChat session ownership", () => {
-  it.each([{ pendingHistory: true, structured: true }])(
+  it.each(
+    [false, true].flatMap((pendingHistory) =>
+      [false, true].map((structured) => ({ pendingHistory, structured })),
+    ),
+  )(
     "retires the previous run error after local retry (pending history: $pendingHistory, structured: $structured)",
     async ({ pendingHistory, structured }) => {
       const failed: ChatHistoryResult = {
@@ -599,6 +625,7 @@ describe("handleSendChat session ownership", () => {
   it.each([
     { source: "live", previous: false, status: "failed" },
     { source: "history", previous: false, status: "failed" },
+    { source: "history", previous: true, status: "done" },
     { source: "history", previous: true, status: "failed" },
   ] as const)(
     "keeps a $source $status receipt scoped before ACK (previous run: $previous)",
