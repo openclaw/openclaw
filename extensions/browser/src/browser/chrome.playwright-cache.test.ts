@@ -151,7 +151,12 @@ it.each([
 );
 
 it.each([
-  ["linux", "Intel", "chrome-linux64/chrome", "chrome-headless-shell-linux64/chrome-headless-shell"],
+  [
+    "linux",
+    "Intel",
+    "chrome-linux64/chrome",
+    "chrome-headless-shell-linux64/chrome-headless-shell",
+  ],
   [
     "darwin",
     "Intel",
