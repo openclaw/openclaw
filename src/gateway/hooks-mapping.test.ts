@@ -197,6 +197,36 @@ describe("hooks mapping", () => {
     });
   });
 
+  it("carries wake agent and session routing from mappings", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          id: "targeted-wake",
+          match: { path: "gmail" },
+          action: "wake",
+          textTemplate: "Subject: {{messages[0].subject}}",
+          agentId: "hooks",
+          sessionKey: "hook:gmail:{{messages[0].subject}}",
+        },
+      ],
+    });
+    const result = await applySingleHookMapping(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "wake") {
+      expect(result.action).toMatchObject({
+        agentId: "hooks",
+        sessionKey: "hook:gmail:Hello",
+        sessionKeySource: "templated",
+      });
+    }
+  });
+
   it.each(["wake", "agent"] as const)(
     "rejects %s session key templates that render empty",
     async (action) => {

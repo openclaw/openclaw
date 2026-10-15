@@ -52,6 +52,7 @@ describe("launchd stop timeout reads the job launchd is stopping", () => {
     [SERVICE_ENV, 4241, 55, 55_000, timeoutSource],
     [{ ...LAUNCHD_ENV, OPENCLAW_NODE_UPDATE_RESPAWNED: "1" }, 4241, 55, 55_000, timeoutSource],
     [RESPAWNED_SERVICE_ENV, 4241, 5, 5_000, timeoutSource],
+    [RESPAWNED_SERVICE_ENV, 4242, 55, 55_000, timeoutSource],
     [{ ...LAUNCHD_ENV, OPENCLAW_LAUNCHD_LABEL: "com.example.gw" }, 4242, 45, 45_000, timeoutSource],
   ] as const)(
     "resolves the deadline for %j, pid %i, timeout %i",

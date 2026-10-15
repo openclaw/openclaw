@@ -181,6 +181,17 @@ describe.skipIf(process.platform === "win32")("durable port manifest lifecycle",
     ]);
   });
 
+  it("preserves the old revision on rename failure", () => {
+    write();
+    vi.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw new Error("rename failed");
+    });
+    expect(() => write(publishing())).toThrow("rename failed");
+    expect(JSON.parse(fs.readFileSync(databasePortManifestPath(stateDir), "utf8"))).toEqual(
+      manifest,
+    );
+  });
+
   it("retains startup exclusion if directory sync fails after rename", () => {
     write();
     const sync = fs.fsyncSync;

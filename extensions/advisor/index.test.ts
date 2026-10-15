@@ -764,6 +764,26 @@ describe("advisor", () => {
     },
   );
 
+  it("allows reserved words only as parts of longer body tokens", async () => {
+    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+    await run.startService();
+    await run.startRun();
+    await run.toolCompleted();
+    const review = await run.dispatchReview();
+    const nextFork = run.nextFork();
+    const done = run.finished();
+    const body = "Rename NO_CHANGELOG; CORRECTIONS were APPROVED, not REJECTED.";
+    review.resolve(`CORRECTION\n${body}`);
+    const verification = await nextFork;
+    verification.resolve(`APPROVE\n${body}`);
+    await done;
+    expect(run.steer).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: expect.stringContaining(body) }),
+    );
+    expect(run.warn).not.toHaveBeenCalled();
+    await run.stopService();
+  });
+
   it.each([
     { output: "", reason: "no decision" },
     { output: "Continue the current plan.\nNO_CHANGE", reason: "invalid decision header" },

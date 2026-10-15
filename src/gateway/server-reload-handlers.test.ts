@@ -2174,6 +2174,31 @@ describe("gateway hot reload model state", () => {
     );
   });
 
+  it("rejects an ownerless context cache reload before runtime commit", async () => {
+    const { applyHotReload, setState } = createReloadHandlersForTest(
+      undefined,
+      undefined,
+      undefined,
+      vi.fn(),
+      false,
+    );
+
+    await expect(
+      applyHotReload(
+        createHotTailPlan({
+          changedPaths: ["agents.defaults.workspace"],
+          hotReasons: ["agents.defaults.workspace"],
+        }),
+        { agents: { defaults: { workspace: "/tmp/next-workspace" } } } as OpenClawConfig,
+      ),
+    ).rejects.toThrow(
+      "config reload requires a managed gateway restart owner for irreversible hot reload",
+    );
+
+    expect(setState).not.toHaveBeenCalled();
+    expect(hoisted.refreshContextWindowCache).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       label: "adds the agents object",

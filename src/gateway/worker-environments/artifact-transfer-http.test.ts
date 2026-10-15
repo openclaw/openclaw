@@ -540,12 +540,18 @@ describe("artifact transfer interruption observations", () => {
       h.socket.destroy();
       h.owner.abort();
       expect(h.res.statusCode).toBe(status);
-      expect(h.res.getHeader("content-length")).toBe(range ? "4" : "6");
-      expect(h.res.getHeader("content-range")).toBe(range ? "bytes 2-5/6" : undefined);
-      expect(h.res.getHeader("x-openclaw-content-sha256")).toBe("b".repeat(64));
-      expect(h.res.getHeader("accept-ranges")).toBe("bytes");
       const wire = Buffer.concat(h.socket.chunks).toString("utf8");
-      expect(wire.slice(wire.indexOf("\r\n\r\n") + 4)).toBe(range ? "ndle" : "bundle");
+      const headerEnd = wire.indexOf("\r\n\r\n");
+      const headers = wire.slice(0, headerEnd).split("\r\n");
+      expect(headers).toContain(`content-length: ${range ? "4" : "6"}`);
+      if (range) {
+        expect(headers).toContain("content-range: bytes 2-5/6");
+      } else {
+        expect(headers.some((header) => header.startsWith("content-range:"))).toBe(false);
+      }
+      expect(headers).toContain(`x-openclaw-content-sha256: ${"b".repeat(64)}`);
+      expect(headers).toContain("accept-ranges: bytes");
+      expect(wire.slice(headerEnd + 4)).toBe(range ? "ndle" : "bundle");
       expect(h.progress.mock.calls.flat()).toEqual(progress);
       expect(h.res.writableFinished).toBe(true);
       expect(h.interrupted).not.toHaveBeenCalled();

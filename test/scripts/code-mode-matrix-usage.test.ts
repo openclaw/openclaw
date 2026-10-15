@@ -342,7 +342,9 @@ describe("matrix task billing", () => {
 
   it.each([
     "[responses] retrying streamed encrypted content provider=openai",
+    "[responses] retrying full history after rejected previous_response_id provider=openai",
     "[session-recovery] Anthropic thinking stream error; retrying once without thinking blocks: sessionId=fixture",
+    "[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=fixture",
   ])(
     "does not equate a final successful response with observed usage for an internal retry: %s",
     (runtimeLog) => {
@@ -494,15 +496,23 @@ describe("same-source mode comparisons", () => {
     });
   });
 
-  it.each(["permissions", "source"] as const)(
+  it.each(["thinking", "fast", "permissions", "seed", "source", "build"] as const)(
     "leaves mismatched %s observations unpaired",
     (field) => {
       const direct = modeRow("direct");
       const code = modeRow("code");
-      if (field === "permissions") {
+      if (field === "thinking") {
+        code.workload.settings.thinking = "high";
+      } else if (field === "fast") {
+        code.workload.settings.fast = true;
+      } else if (field === "permissions") {
         code.workload.settings.allowedTools = ["read"];
-      } else {
+      } else if (field === "seed") {
+        code.workload.fixtureSha256 = "different-seed";
+      } else if (field === "source") {
         code.gitSha = "different-source";
+      } else {
+        code.buildSha256 = "different-build";
       }
       const result = compareCodeModeMatrixModes([direct, code]);
       expect(result.incompletePairs).toHaveLength(2);
