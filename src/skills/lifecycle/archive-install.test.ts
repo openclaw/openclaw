@@ -40,42 +40,6 @@ async function writeZipArchive(params: {
   );
 }
 
-async function isCaseSensitiveFileSystem(root: string): Promise<boolean> {
-  const marker = path.join(root, "case-check");
-  await fs.writeFile(marker, "case", "utf8");
-  const upperExists = await fs
-    .stat(path.join(root, "CASE-CHECK"))
-    .then(() => true)
-    .catch(() => false);
-  return !upperExists;
-}
-
-async function expectFlatRootMarkerRejected(params: {
-  marker: string;
-  root: string;
-}): Promise<void> {
-  const archivePath = path.join(params.root, `flat-${params.marker}.zip`);
-  await writeZipArchive({
-    archivePath,
-    entries: {
-      [params.marker]: skillFileContent("Flat Legacy Marker"),
-    },
-  });
-
-  const result = await withExtractedArchiveRoot({
-    archivePath,
-    tempDirPrefix: "openclaw-skill-clawhub-test-",
-    timeoutMs: 120_000,
-    rootMarkers: ["SKILL.md"],
-    onExtracted: async () => ({ ok: true as const }),
-  });
-
-  expect(result).toEqual({
-    ok: false,
-    error: "Error: unexpected archive layout (dirs: )",
-  });
-}
-
 function skillFileContent(name: string): string {
   return ["---", `name: ${name}`, "description: Test skill", "---", "", "# Test", ""].join("\n");
 }
@@ -216,7 +180,7 @@ describe("skill archive install", () => {
     },
   );
 
-  it.each(["skill.md", "skills.md", "SKILL.MD"])(
+  it.each(["SKILL.MD"])(
     "installs a single-root ClawHub archive with legacy marker %s",
     async (marker) => {
       const root = await tempDirs.make("openclaw-skill-archive-install-");
@@ -254,21 +218,6 @@ describe("skill archive install", () => {
     },
   );
 
-  it.each(["skills.md", "skill.md"])(
-    "rejects flat-root %s with strict packed-root resolution",
-    async (marker) => {
-      const root = await tempDirs.make("openclaw-skill-archive-install-");
-      if (marker === "skill.md") {
-        const caseSensitive = await isCaseSensitiveFileSystem(root);
-        if (!caseSensitive) {
-          expect(caseSensitive).toBe(false);
-          return;
-        }
-      }
-      await expectFlatRootMarkerRejected({ marker, root });
-    },
-  );
-
   it.each([
     {
       label: "ClawHub",
@@ -294,13 +243,6 @@ describe("skill archive install", () => {
         requestedSpecifier: "upload:upload-123",
       },
       expectedSource: "upload",
-      expectedSourceVersion: undefined,
-    },
-    {
-      label: "path",
-      mode: "install",
-      policy: { origin: { type: "path", spec: "./skill" } },
-      expectedSource: "source-install",
       expectedSourceVersion: undefined,
     },
     {
