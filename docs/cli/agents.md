@@ -107,7 +107,7 @@ unfinished bootstrap cannot adopt a role. OpenClaw checks completion before
 adding role files; rejected adoption leaves workspace files and agent config
 unchanged. Complete its bootstrap or choose a new workspace.
 
-With the experimental Claws surface enabled, the equivalent source path is
+With Claws enabled, the equivalent source path is
 `openclaw claws add docs/reference/templates/roles/<role>` from a source
 checkout. Follow the [Claw preview and consent flow](/cli/claws#inspect-and-preview)
 to add it. Use `agents team create` to wire the agents into a team.

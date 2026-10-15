@@ -8,7 +8,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { resolveChatPaneDesktopTarget } from "../../pages/chat/chat-pane-placement.ts";
 import type { SolidPanelController } from "../solid-panel-controller.ts";
@@ -51,7 +50,7 @@ export class DesktopSessionController {
   private availabilitySnapshot: NodeAvailability | null = null;
   private startup: DesktopStartup | undefined;
   startupEnvironment: EnvironmentSummary | undefined;
-  private readonly startupPoll: PollController;
+  private startupTimer: ReturnType<typeof globalThis.setInterval> | undefined;
 
   constructor(
     private readonly host: DesktopSessionHost,
@@ -61,7 +60,6 @@ export class DesktopSessionController {
     private readonly requestedAvailabilityTarget: () => string | null,
     private readonly onTargetError: (error: unknown) => void,
   ) {
-    this.startupPoll = new PollController(host, 2_000, () => void this.refreshStartup(), false);
     new SubscriptionsController(host).effect(
       () => (host.available && host.suppliedEnvironments === null ? host.client : null),
       (client) =>
@@ -145,7 +143,8 @@ export class DesktopSessionController {
   }
 
   private stopStartup(): DesktopStartup | undefined {
-    this.startupPoll.stop();
+    globalThis.clearInterval(this.startupTimer);
+    this.startupTimer = undefined;
     const startup = this.startup;
     this.startup = undefined;
     if (this.startupEnvironment) {
@@ -204,7 +203,7 @@ export class DesktopSessionController {
       );
       this.host.requestUpdate();
       this.startup = { load, isCurrent, resolve, reject, busy: false };
-      this.startupPoll.start();
+      this.startupTimer = globalThis.setInterval(() => void this.refreshStartup(), 2_000);
     });
   }
 

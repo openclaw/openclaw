@@ -328,16 +328,13 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
           const beforeRecovery = provider.requests.length;
           let beforeRecoveryReply: ReturnType<typeof stats>;
           if (catalogHold) {
-            const heldCatalog = catalogHold;
             provider.observeNextSuccess(
               () => {
                 beforeRecoveryReply = stats();
                 observations.push({
-                  action: "catalog-release-at-recovery",
+                  action: "recovery-response-started",
                   state: beforeRecoveryReply,
                 });
-                // Publish after recovery without spending the catalog deadline on terminal delivery.
-                heldCatalog.release();
               },
               { model: "gpt-5.5", path: "/v1/responses" },
             );
@@ -381,6 +378,32 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
           if (catalogHold) {
             expect(beforeRecoveryReply, evidence()).toBeDefined();
             expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
+            // A cleared persisted block precedes publication of the replacement catalog owner.
+            // Keep the old response held until a prepared-only read observes that replacement.
+            let published: ModelsListResult | undefined;
+            await expect
+              .poll(async () => {
+                published = await client.request<ModelsListResult>("models.list", {
+                  agentId: "main",
+                  view: "configured",
+                  preparedOnly: true,
+                });
+                return {
+                  pending: published.pendingProviders?.includes("openai") ?? false,
+                  available: published.models.some(
+                    (model) =>
+                      model.provider === "openai" && model.id === "gpt-5.5" && model.available,
+                  ),
+                };
+              })
+              .toEqual({ pending: false, available: true });
+            observations.push({ action: "catalog-published-after-recovery", result: published });
+            expect
+              .soft(published?.models, evidence())
+              .toContainEqual(
+                expect.objectContaining({ provider: "openai", id: "gpt-5.5", available: true }),
+              );
+            catalogHold.release();
             const refreshed = await catalogRefresh;
             observations.push({ action: "held-catalog-refresh", result: refreshed });
             // Recovery changes availability, so the held generation must not publish stale facts.
@@ -394,22 +417,6 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
                 message: expect.stringContaining("catalog generation was superseded"),
               },
             });
-            let published: ModelsListResult | undefined;
-            await expect
-              .poll(async () => {
-                published = await client.request<ModelsListResult>("models.list", {
-                  agentId: "main",
-                  view: "configured",
-                });
-                return published.pendingProviders?.includes("openai") ?? false;
-              })
-              .toBe(false);
-            observations.push({ action: "catalog-published-after-recovery", result: published });
-            expect
-              .soft(published?.models, evidence())
-              .toContainEqual(
-                expect.objectContaining({ provider: "openai", id: "gpt-5.5", available: true }),
-              );
             expect(provider.heldCatalogResponses[0]?.releaseReason, evidence()).toBe("explicit");
           }
           await captureFinalStatus(fixture, artifactDir, observations);

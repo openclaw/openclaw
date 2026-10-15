@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeJsonSchemaForTypeBox } from "openclaw/plugin-sdk/json-schema-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
+import { readCodexNotificationScope } from "./notification-correlation.js";
 import rawDynamicToolCallParamsSchema from "./protocol-generated/json/DynamicToolCallParams.json" with { type: "json" };
 import sharedDefinitionsSchema from "./protocol-generated/json/v2/CodexAppServerProtocolDefinitions.json" with { type: "json" };
 import rawErrorNotificationSchema from "./protocol-generated/json/v2/ErrorNotification.json" with { type: "json" };
@@ -15,6 +16,8 @@ import {
   type CodexDynamicToolCallParams,
   type CodexErrorNotification,
   type CodexModelListResponse,
+  type CodexPreparedServerNotification,
+  type CodexServerNotification,
   type CodexThread,
   type CodexThreadForkResponse,
   type CodexThreadItem,
@@ -366,6 +369,21 @@ export function readCodexTurnCompletedNotification(
   const notification = readCodexShape(validateTurnCompletedNotification, value);
   // Turn is shared with turn/start, but only terminal states belong in this notification.
   return notification?.turn.status === "inProgress" ? undefined : notification;
+}
+
+/** Normalize the native terminal snapshot once before receipt and queued projection fan-out. */
+export function prepareCodexServerNotification(
+  notification: CodexServerNotification,
+  scope = readCodexNotificationScope(notification.params),
+): CodexPreparedServerNotification {
+  return {
+    ...notification,
+    ...scope,
+    completedTurn:
+      notification.method === "turn/completed"
+        ? readCodexTurnCompletedNotification(notification.params)?.turn
+        : undefined,
+  };
 }
 
 export function assertExactSupervisionModelSelection(

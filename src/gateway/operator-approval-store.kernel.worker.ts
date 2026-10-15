@@ -308,7 +308,7 @@ export function readPendingOperatorApprovalsInDatabase(
   return { records, corrupt };
 }
 
-export function hasDueOperatorApprovalsInDatabase(nowMs: number, db: EngineConnection): boolean {
+function hasDueOperatorApprovalsInDatabase(nowMs: number, db: EngineConnection): boolean {
   return (
     executeSqliteQueryTakeFirstSync(
       db,

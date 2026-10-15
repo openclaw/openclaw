@@ -79,12 +79,8 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
       }
       const { resolveGeneratedMediaMaxBytes } =
         await import("openclaw/plugin-sdk/media-generation-runtime");
-      const {
-        assertOkOrThrowHttpError,
-        postJsonRequest,
-        readProviderJsonResponse,
-        resolveProviderHttpRequestConfig,
-      } = await import("openclaw/plugin-sdk/provider-http");
+      const { postJsonResponse, resolveProviderHttpRequestConfig } =
+        await import("openclaw/plugin-sdk/provider-http");
 
       const fetchFn = fetch;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
@@ -101,7 +97,7 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
           transport: "http",
         });
 
-      const { response, release } = await postJsonRequest({
+      const payload = await postJsonResponse<unknown>({
         url: `${baseUrl}/models/${normalizeOptionalString(overrides?.model) ?? config.model}`,
         headers,
         body: {
@@ -112,37 +108,32 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
         fetchFn,
         allowPrivateNetwork,
         dispatcherPolicy,
+        errorLabel: "Vydra speech synthesis failed",
+        responseLabel: "Vydra speech synthesis",
       });
-
-      try {
-        await assertOkOrThrowHttpError(response, "Vydra speech synthesis failed");
-        const payload = await readProviderJsonResponse<unknown>(response, "Vydra speech synthesis");
-        const audioUrl = extractVydraResultUrls(payload, "audio")[0];
-        if (!audioUrl) {
-          throw new Error("Vydra speech synthesis response missing audio URL");
-        }
-        const audio = await downloadVydraAsset({
-          url: audioUrl,
-          kind: "audio",
-          timeoutMs: req.timeoutMs,
-          fetchFn,
-          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-          requestPolicy: {
-            allowPrivateNetwork,
-            dispatcherPolicy,
-            headers,
-            headerOrigin: new URL(baseUrl).origin,
-          },
-        });
-        return {
-          audioBuffer: audio.buffer,
-          outputFormat: audio.mimeType.includes("wav") ? "wav" : "mp3",
-          fileExtension: audio.fileName.endsWith(".wav") ? ".wav" : ".mp3",
-          voiceCompatible: false,
-        };
-      } finally {
-        await release();
+      const audioUrl = extractVydraResultUrls(payload, "audio")[0];
+      if (!audioUrl) {
+        throw new Error("Vydra speech synthesis response missing audio URL");
       }
+      const audio = await downloadVydraAsset({
+        url: audioUrl,
+        kind: "audio",
+        timeoutMs: req.timeoutMs,
+        fetchFn,
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+        requestPolicy: {
+          allowPrivateNetwork,
+          dispatcherPolicy,
+          headers,
+          headerOrigin: new URL(baseUrl).origin,
+        },
+      });
+      return {
+        audioBuffer: audio.buffer,
+        outputFormat: audio.mimeType.includes("wav") ? "wav" : "mp3",
+        fileExtension: audio.fileName.endsWith(".wav") ? ".wav" : ".mp3",
+        voiceCompatible: false,
+      };
     },
   };
 }

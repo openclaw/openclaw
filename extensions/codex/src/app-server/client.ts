@@ -7,7 +7,10 @@ import {
   closeCodexCatalogClientSource,
   codexCatalogSourceForClient,
 } from "../session-catalog-source.js";
-import type { CodexClientRequestAttempt } from "./client-catalog-response.js";
+import type {
+  CodexCatalogDecodeResult,
+  CodexClientRequestAttempt,
+} from "./client-catalog-response.js";
 import { CodexCatalogWorker, codexCatalogRequestId } from "./client-catalog-worker.js";
 import {
   appendBoundedTail,
@@ -599,7 +602,10 @@ export class CodexAppServerClient {
     return held ? text.slice(0, -held) : text;
   }
 
-  private handleParsedMessage(parsed: unknown, previewStates?: (boolean | undefined)[]): void {
+  private handleParsedMessage(
+    parsed: unknown,
+    preview?: CodexCatalogDecodeResult["preview"],
+  ): void {
     if (this.closed || !parsed || typeof parsed !== "object") {
       return;
     }
@@ -610,7 +616,7 @@ export class CodexAppServerClient {
           message,
           this.pending,
           codexCatalogSourceForClient(this),
-          previewStates,
+          preview,
         ) || this.nativeExecutionObserved;
       return;
     }
@@ -642,7 +648,7 @@ export class CodexAppServerClient {
     if (decoded.projectionError) {
       this.pending.get(decoded.projectionError.id)?.reject(decoded.projectionError.error, false);
     } else if (decoded.message) {
-      this.handleParsedMessage(decoded.message, decoded.previewStates);
+      this.handleParsedMessage(decoded.message, decoded.preview);
     }
   }
 

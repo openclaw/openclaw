@@ -141,6 +141,11 @@ function createPage(initiallyActive = true) {
     agentIdentity,
     agentSelection,
     sessions: sessionCapability,
+    runtimeConfig: {
+      state: { configSnapshot: { sourceConfig: {} } },
+      ensureLoaded: async () => undefined,
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationContext["runtimeConfig"],
     navigate,
   };
   const baselineEventListeners = eventListeners.size;
