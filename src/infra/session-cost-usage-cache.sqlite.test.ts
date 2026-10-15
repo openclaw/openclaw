@@ -178,17 +178,19 @@ describe("session cost usage SQLite cache", () => {
         encoded: ReturnType<typeof encodeUsageCostRollup>,
         updatedAt: number,
         options: Pick<
-          Parameters<typeof owner.writeRollup>[0],
+          Parameters<typeof owner.writeRollup>[0][number],
           "partitions" | "removedDates" | "replacePartitions"
         > = {},
       ) =>
-        owner.writeRollup({
-          rollupId: sessionFile,
-          valueJson: utf8Json(encoded.valueJson),
-          blob: encoded.blob,
-          updatedAt,
-          ...options,
-        });
+        owner.writeRollup([
+          {
+            rollupId: sessionFile,
+            valueJson: utf8Json(encoded.valueJson),
+            blob: encoded.blob,
+            updatedAt,
+            ...options,
+          },
+        ]);
       try {
         const rollup = createSessionUsageRollupData();
         for (const timestamp of [
@@ -497,12 +499,14 @@ describe("session cost usage SQLite cache", () => {
         const owner = prepareSessionCostUsageRefreshLock(agentId, database.path);
         try {
           expect(await owner.acquire()).toBe(true);
-          return await owner.writeRollup({
-            rollupId: "session.jsonl",
-            valueJson: utf8Json(valueJson),
-            blob: null,
-            updatedAt,
-          });
+          return await owner.writeRollup([
+            {
+              rollupId: "session.jsonl",
+              valueJson: utf8Json(valueJson),
+              blob: null,
+              updatedAt,
+            },
+          ]);
         } finally {
           await owner.release();
         }
@@ -798,14 +802,14 @@ it.each(["stored", "decoded", "corrupt-length"] as const)(
       const lock = prepareSessionCostUsageRefreshLock(agentId);
       try {
         expect(await lock.acquire()).toBe(true);
-        expect(
-          await lock.writeRollup({
+        await lock.writeRollup([
+          {
             rollupId: row.key,
             valueJson: new TextEncoder().encode(encoded.valueJson),
             blob: encoded.blob,
             updatedAt: row.updatedAt,
-          }),
-        ).toBe(true);
+          },
+        ]);
       } finally {
         await lock.release();
       }

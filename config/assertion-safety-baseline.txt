@@ -904,7 +904,6 @@ extensions/twitch/src/twitch-ingress.ts	3
 extensions/venice/models.ts	1
 extensions/vllm/stream.ts	1
 extensions/voice-call/index.ts	2
-extensions/voice-call/src/config.ts	1
 extensions/voice-call/src/manager/outbound.ts	2
 extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
@@ -2453,7 +2452,6 @@ src/shared/node-presence.ts	1
 src/shared/node-resolve.ts	1
 src/shared/pid-alive.ts	2
 src/shared/runtime-import.ts	1
-src/shared/safe-record.ts	1
 src/shared/store-writer-queue.ts	1
 src/shared/worker-bundle-archive.ts	1
 src/skills/lifecycle/clawhub-install-core.ts	1
@@ -2615,7 +2613,7 @@ ui/src/lib/sessions/custom-groups.ts	5
 ui/src/lib/sessions/grouping.ts	4
 ui/src/lib/sessions/index.ts	1
 ui/src/lib/sessions/session-key.ts	4
-ui/src/lit/subscriptions-controller.ts	1
+ui/src/lib/subscriptions-controller.ts	1
 ui/src/local-storage.ts	2
 ui/src/main.ts	1
 ui/src/pages/agents/model-config.ts	2
