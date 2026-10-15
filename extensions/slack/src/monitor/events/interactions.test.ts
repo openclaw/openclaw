@@ -1509,7 +1509,7 @@ describe("registerSlackInteractionEvents", () => {
     "filters $kind modal $callbackId before dispatch",
     async ({ kind, callbackId, acknowledged }) => {
       const { getViewHandler, getViewClosedHandler } = setupInteractions({
-        shouldDropMismatchedSlackEvent: () => true,
+        shouldDropMismatchedSlackEvent: () => callbackId !== "third_party_modal",
       });
       const handler = kind === "closed" ? getViewClosedHandler() : getViewHandler();
       const ack = vi.fn().mockResolvedValue(undefined);

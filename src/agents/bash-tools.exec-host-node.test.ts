@@ -1198,7 +1198,7 @@ describe("executeNodeHostCommand", () => {
         executeNodeHostCommand(
           createNodeHostRequest(headless ? { ask: "always", trigger: "cron" } : {}),
         ),
-      ).rejects.toThrow("security=deny");
+      ).rejects.toThrow(headless ? "denied" : "security=deny");
       expect(resolveExecHostApprovalContextMock).toHaveBeenCalledTimes(2);
       expectNoSystemRun();
     },
