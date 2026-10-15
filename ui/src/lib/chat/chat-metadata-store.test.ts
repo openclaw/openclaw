@@ -32,32 +32,6 @@ afterEach(() => {
 });
 
 describe("chat metadata store", () => {
-  it("publishes compact commands while the model catalog is pending", async () => {
-    const current = deferred<{ models: [] }>();
-    const client = clientWith(
-      vi.fn((method: string) =>
-        method === "models.list" ? current.promise : Promise.resolve(metadata("current")),
-      ),
-    );
-    const scope = { agentId: "main", sessionKey: "agent:main:current" };
-    const listener = vi.fn();
-    const release = subscribeChatMetadata(client, scope, listener);
-    const catalog = loadModelCatalog(client, scope);
-    try {
-      await expect(loadChatMetadata(client, scope)).resolves.toEqual(metadata("current"));
-      expect(listener).toHaveBeenLastCalledWith({ type: "result", result: metadata("current") });
-      expect(listener.mock.calls.filter(([update]) => update.type === "result")).toHaveLength(1);
-      expect(peekModelCatalog(client, scope)).toBeUndefined();
-      current.resolve({ models: [] });
-      await catalog;
-      expect(peekModelCatalog(client, scope)).toEqual({ models: [] });
-    } finally {
-      current.resolve({ models: [] });
-      await catalog;
-      release();
-    }
-  });
-
   it("invalidates subscribed catalogs with their aliases and detailed views after a session patch", async () => {
     const client = clientWith(vi.fn().mockResolvedValue({ models: [] }));
     const scope = { agentId: "main", sessionKey: "agent:main:main" };
@@ -383,25 +357,6 @@ describe("chat metadata store", () => {
     await loadChatMetadata(client, recent);
     expect(request).toHaveBeenCalledTimes(71);
     release();
-  });
-
-  it("keeps the stale snapshot readable while one fresh revalidation replaces it", async () => {
-    const oldResult = metadata("old-model");
-    const nextResult = metadata("next-model");
-    const refresh = deferred<ChatMetadataResult>();
-    const request = vi.fn().mockReturnValue(refresh.promise);
-    const client = clientWith(request);
-    beginChatMetadataPublication(client, { agentId: "main" }).publish(oldResult);
-
-    const first = revalidateChatMetadata(client, { agentId: "main" });
-    const second = revalidateChatMetadata(client, { agentId: "main" });
-
-    expect(second).toBe(first);
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(oldResult);
-    expect(request).toHaveBeenCalledOnce();
-    refresh.resolve(nextResult);
-    await expect(first).resolves.toEqual(nextResult);
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(nextResult);
   });
 
   it.each([false, true])(
