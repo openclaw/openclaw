@@ -8,7 +8,6 @@ import {
   commitDaemonRuntimePin,
   readDaemonRuntimePinForInstall,
 } from "../../daemon/runtime-pin-state.js";
-import * as runtimePins from "../../daemon/runtime-pin-state.js";
 import * as nativeLock from "../../daemon/service-operation-lock.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
@@ -26,6 +25,7 @@ import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js"
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { registerRuntimePinPreservationTest } from "./update-command-original-service-pins.test-support.js";
 import {
   observeOriginalManagedServiceRuntime,
   revalidateOriginalManagedServiceRuntime,
@@ -38,9 +38,8 @@ import {
   maybeRestartServiceAfterFailedMutableUpdate,
   compensateOriginalManagedService,
 } from "./update-command-service-recovery.js";
-import { maybeRestartService } from "./update-command-service.js";
 
-type Fixture = {
+export type OriginalServiceFixture = {
   state: OpenClawTestState;
   rootA: string;
   rootB: string;
@@ -59,7 +58,7 @@ type Fixture = {
 
 // Current composition only: real observations, admission and candidate-native helper;
 // receiver probe, native service and HTTP leaves are inert. No native command executes.
-export function registerCurrentF3Controls(fixture: () => Fixture) {
+export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture) {
   const admitted = async (
     operation: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<void>,
     retained = true,
@@ -75,75 +74,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
     });
   };
 
-  it("preserves the observed runtime on a successful update while pin migration is pending", async () => {
-    const { state, rootA, rootB, before, serviceNodeRunner, serviceState, mocks } = fixture();
-    const scope = { kind: "gateway" as const, env: state.env };
-    const pin = { runtime: "node" as const, path: serviceNodeRunner };
-    commitDaemonRuntimePin(
-      scope,
-      { expected: readDaemonRuntimePinForInstall(scope, serviceState.command, true), pin },
-      serviceState.command,
-    );
-    const pending = vi
-      .spyOn(runtimePins, "readDaemonRuntimePinMigrationPending")
-      .mockReturnValue(true);
-    const read = vi.spyOn(runtimePins, "readDaemonRuntimePin").mockImplementation(() => {
-      throw new Error("pending pins must not be read");
-    });
-    await admitted(async (run) => {
-      const original = await observeOriginalManagedServiceRuntime(
-        { root: rootB, opts: { run } },
-        before,
-      );
-      if (!original) {
-        throw new Error("missing original observation");
-      }
-      mocks.restart.mockResolvedValue("accepted");
-      expect(
-        await maybeRestartService({
-          originalManagedServiceRuntime: original,
-          shouldRestart: true,
-          result: {
-            status: "ok",
-            mode: "npm",
-            root: rootB,
-            before: { version: "2026.9.4" },
-            after: { version: "2026.9.5" },
-            steps: [],
-            durationMs: 1,
-          },
-          opts: { json: true, run },
-          refreshServiceEnv: true,
-          serviceInstallEnv: state.env,
-          serviceEnv: state.env,
-          serviceUpdateVerdict: before.serviceUpdateVerdict,
-          gatewayPort: 18789,
-          timeoutMs: 30_000,
-        }),
-      ).toBe("ok");
-      expect(mocks.restart).toHaveBeenCalledWith(
-        expect.objectContaining({
-          nodeRunner: serviceNodeRunner,
-          refreshServiceEnv: false,
-          serviceUpdateVerdict: expect.objectContaining({
-            root: rootA,
-            refreshDefinition: false,
-            requiresInstallRootRefresh: false,
-          }),
-          expectedGatewayIdentity: { version: original.version, buildId: original.buildId },
-        }),
-        "restart",
-      );
-      expect(mocks.nativeInstall).not.toHaveBeenCalled();
-      pending.mockRestore();
-      read.mockRestore();
-      const next = await observeOriginalManagedServiceRuntime(
-        { root: rootB, opts: { run } },
-        before,
-      );
-      expect(next?.definition.runtimePin?.pin).toEqual(pin);
-    });
-  });
+  registerRuntimePinPreservationTest(fixture, admitted);
 
   it.each(["unchanged", "replaced"] as const)(
     "capable original recovery binds definition after native lock: %s",
