@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawAgentHarness } from "../agents/harness/builtin-openclaw.js";
+import type * as RuntimePluginLoadPlan from "../agents/harness/runtime-plugin-load-plan.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   loadSessionEntryReadOnly,
@@ -12,6 +13,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type * as PluginLoader from "../plugins/loader.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
@@ -44,23 +46,42 @@ const anthropicOwner = {
   authProfilePrefixes: ["anthropic:", "claude-cli:"],
 };
 const ownerState = vi.hoisted(() => ({ owners: [] as Array<Record<string, unknown>> }));
-const runtimeState = vi.hoisted(() => ({ registered: true, supported: true }));
-
-vi.mock("../agents/harness/runtime-plugin-load-plan.js", () => ({
-  resolveAgentHarnessOwnerPluginIds: () => ["codex"],
+const runtimeState = vi.hoisted(() => ({
+  registered: true,
+  supported: true,
+  cliBackends: [] as Array<{ id: string; modelProvider: string }>,
 }));
 
-vi.mock("../plugins/loader.js", () => ({
+vi.mock("../agents/harness/runtime-plugin-load-plan.js", async () => ({
+  ...(await vi.importActual<typeof RuntimePluginLoadPlan>(
+    "../agents/harness/runtime-plugin-load-plan.js",
+  )),
+  resolveAgentRuntimePluginLoadPlan: ({ config }: { config: OpenClawConfig }) => ({
+    config,
+    pluginIds: ["codex", "anthropic", "google"],
+  }),
+}));
+
+vi.mock("../plugins/loader.js", async () => ({
+  ...(await vi.importActual<typeof PluginLoader>("../plugins/loader.js")),
   acquirePluginRegistryForInspection: async () => {
     const registry = createEmptyPluginRegistry();
     if (runtimeState.registered) {
       registry.agentHarnesses.push({
         pluginId: "codex",
+        source: "test",
         harness: {
           ...createOpenClawAgentHarness(),
           id: "codex",
           supports: () => ({ supported: runtimeState.supported }),
         },
+      });
+    }
+    for (const backend of runtimeState.cliBackends) {
+      registry.cliBackends.push({
+        pluginId: backend.modelProvider,
+        source: "test",
+        backend: { ...backend, config: { command: backend.id } },
       });
     }
     return { registry, release: async () => {} };
@@ -130,6 +151,7 @@ describe("doctor session state provider routes", () => {
     ownerState.owners = [codexOwner, openAIOwner];
     runtimeState.registered = true;
     runtimeState.supported = true;
+    runtimeState.cliBackends = [];
   });
 
   it("skips unrelated recovery metadata and valid locked harness rows", async () => {
@@ -381,6 +403,60 @@ describe("doctor session state provider routes", () => {
         archived: true,
       });
       expect(result.store[key]).not.toHaveProperty("agentRuntimeOverride");
+    }
+  });
+
+  it.each([
+    {
+      provider: "anthropic",
+      runtime: "claude-cli",
+      model: "claude-sonnet-4-6",
+      available: true,
+    },
+    {
+      provider: "google",
+      runtime: "google-gemini-cli",
+      model: "gemini-2.5-pro",
+      available: true,
+    },
+    {
+      provider: "anthropic",
+      runtime: "claude-cli",
+      model: "claude-sonnet-4-6",
+      available: false,
+    },
+  ])("preserves only available CLI owner $provider/$runtime ($available)", async (choice) => {
+    ownerState.owners = [
+      {
+        id: choice.provider,
+        label: choice.provider,
+        providerIds: [choice.provider],
+        runtimeIds: [choice.runtime],
+      },
+    ];
+    runtimeState.registered = false;
+    runtimeState.cliBackends = choice.available
+      ? [{ id: choice.runtime, modelProvider: choice.provider }]
+      : [];
+    const key = "agent:main:dashboard:cli-runtime";
+    const selected = entry({
+      providerOverride: choice.provider,
+      modelOverride: choice.model,
+      modelOverrideSource: "user",
+      agentRuntimeOverride: choice.runtime,
+    });
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
+      store: { [key]: selected },
+    });
+    if (choice.available) {
+      expect(result.store[key]).toEqual(selected);
+    } else {
+      expect(result.store[key]).not.toHaveProperty("agentRuntimeOverride");
+      expect(result.store[key]).toMatchObject({
+        providerOverride: choice.provider,
+        modelOverride: choice.model,
+      });
     }
   });
 

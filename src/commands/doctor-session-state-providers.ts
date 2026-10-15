@@ -358,39 +358,49 @@ export function createPluginSessionStateDoctorScanner(params: {
       }
       // Inspect installed support without making transient auth failures erase user choices.
       const [
-        { resolveAgentHarnessOwnerPluginIds },
+        { resolveAgentRuntimePluginLoadPlan },
         { buildAgentHarnessSupportContext },
+        { listCliRuntimeModelBackendBindings },
         { acquirePluginRegistryForInspection },
+        { loadPluginMetadataSnapshot },
         { withPluginRuntimeRegistryScope },
       ] = await Promise.all([
         import("../agents/harness/runtime-plugin-load-plan.js"),
         import("../agents/harness/support.js"),
+        import("../agents/cli-backends.js"),
         import("../plugins/loader.js"),
+        import("../plugins/plugin-metadata-snapshot.js"),
         import("../plugins/runtime/gateway-request-scope.js"),
       ]);
       for (const [agentId, selections] of explicitSelections) {
         const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-        const pluginIds = new Set<string>();
-        for (const selection of selections) {
-          for (const pluginId of resolveAgentHarnessOwnerPluginIds({
-            runtime: selection.runtime,
-            provider: selection.model?.provider ?? "",
+        const loadPlan = resolveAgentRuntimePluginLoadPlan({
+          config: params.cfg,
+          workspaceDir,
+          purpose: "isolated-completion",
+          selections: selections.flatMap(({ model, runtime }) =>
+            model ? [{ provider: model.provider, modelId: model.model, runtime, agentId }] : [],
+          ),
+          metadataSnapshot: loadPluginMetadataSnapshot({
             config: params.cfg,
             workspaceDir,
-          })) {
-            pluginIds.add(pluginId);
-          }
-        }
-        const inspection =
-          pluginIds.size > 0
-            ? await acquirePluginRegistryForInspection({
-                config: params.cfg,
-                env: params.env,
-                workspaceDir,
-                onlyPluginIds: [...pluginIds],
-              })
-            : undefined;
+            env: params.env,
+          }),
+        });
+        const inspection = loadPlan.pluginIds?.length
+          ? await acquirePluginRegistryForInspection({
+              config: loadPlan.config ?? params.cfg,
+              env: params.env,
+              workspaceDir,
+              onlyPluginIds: loadPlan.pluginIds,
+            })
+          : undefined;
         try {
+          const cliBindings = inspection
+            ? withPluginRuntimeRegistryScope(inspection.registry, () =>
+                listCliRuntimeModelBackendBindings(),
+              )
+            : [];
           for (const selection of selections) {
             const model = selection.model;
             const harness = inspection?.registry.agentHarnesses.find(
@@ -398,22 +408,27 @@ export function createPluginSessionStateDoctorScanner(params: {
             )?.harness;
             const available = Boolean(
               model &&
-              harness &&
-              inspection &&
               !params.cfg.cloudWorkers?.requiredProfile &&
-              withPluginRuntimeRegistryScope(inspection.registry, () =>
-                harness.supports(
-                  buildAgentHarnessSupportContext({
-                    provider: model.provider,
-                    modelId: model.model,
-                    requestedRuntime: selection.runtime,
-                    contextManagement: harness.contextManagement,
-                    config: params.cfg,
-                    agentId,
-                    sessionKey: selection.key,
-                  }),
-                ),
-              ).supported,
+              (cliBindings.some(
+                (binding) =>
+                  binding.runtime === selection.runtime &&
+                  binding.provider === normalizeProviderId(model.provider),
+              ) ||
+                (harness &&
+                  inspection &&
+                  withPluginRuntimeRegistryScope(inspection.registry, () =>
+                    harness.supports(
+                      buildAgentHarnessSupportContext({
+                        provider: model.provider,
+                        modelId: model.model,
+                        requestedRuntime: selection.runtime,
+                        contextManagement: harness.contextManagement,
+                        config: params.cfg,
+                        agentId,
+                        sessionKey: selection.key,
+                      }),
+                    ),
+                  ).supported)),
             );
             if (!available) {
               repairs.push({
