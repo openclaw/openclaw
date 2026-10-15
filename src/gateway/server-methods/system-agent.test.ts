@@ -406,37 +406,6 @@ describe("openclaw.chat", () => {
   });
 
   it.each([
-    {
-      name: "working",
-      result: { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 25 },
-    },
-    {
-      name: "unavailable",
-      result: {
-        ok: false as const,
-        status: "unavailable" as const,
-        error: "no configured model",
-      },
-    },
-  ])("returns the structured $name inference verification result", async ({ result }) => {
-    setupInferenceMocks.verifySetupInference.mockResolvedValueOnce(result);
-    const { calls, respond } = makeRespond();
-
-    const verify = systemAgentHandler("openclaw.setup.verify");
-    await verify({
-      params: { agentId: "research" },
-      respond,
-      context: await makeVerificationContext(),
-    } as never);
-
-    expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
-      agentId: "research",
-      runtime: defaultRuntime,
-    });
-    expect(calls).toEqual([{ ok: true, payload: result, error: undefined }]);
-  });
-
-  it.each([
     { change: "unapplied revision", when: "before" },
     { change: "unknown revision", when: "before" },
     { change: "restart with unchanged config", when: "before" },
@@ -520,11 +489,15 @@ describe("openclaw.chat", () => {
         expect(calls).toEqual([]);
         expect(systemAgentLane().activeCount).toBe(0);
         await systemAgentHandler("openclaw.setup.verify")({
-          params: {},
+          params: { agentId: "research" },
           respond: () => {},
           context: await makeVerificationContext(),
         } as never);
         expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledOnce();
+        expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
+          agentId: "research",
+          runtime: defaultRuntime,
+        });
       } finally {
         release.resolve();
         if (outcome === "failed") {
@@ -670,26 +643,25 @@ describe("openclaw.chat", () => {
     });
   });
 
-  it.each([
-    { name: "unsafe characters", page: "channels?tab=all" },
-    { name: "an overlong id", page: "a".repeat(65) },
-    { name: "a Unicode case-folding character", page: "\u212A" },
-  ])("drops UI context with $name without rejecting the turn", async ({ page }) => {
-    const engine = makeVerifiedEngine();
-    const handle = vi
-      .spyOn(engine, "handle")
-      .mockResolvedValue({ text: "Everything is healthy.", action: "none" });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+  it.each([{ name: "a Unicode case-folding character", page: "\u212A" }])(
+    "drops UI context with $name without rejecting the turn",
+    async ({ page }) => {
+      const engine = makeVerifiedEngine();
+      const handle = vi
+        .spyOn(engine, "handle")
+        .mockResolvedValue({ text: "Everything is healthy.", action: "none" });
+      const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
 
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      message: "Status please.",
-      context: { page },
-    });
+      const call = await callChat(makeContext(sessions), {
+        sessionId: "s1",
+        message: "Status please.",
+        context: { page },
+      });
 
-    expect(call.ok).toBe(true);
-    expect(handle).toHaveBeenCalledWith("Status please.");
-  });
+      expect(call.ok).toBe(true);
+      expect(handle).toHaveBeenCalledWith("Status please.");
+    },
+  );
 
   it.each([
     { id: "bad?id", name: "Example" },

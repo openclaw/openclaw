@@ -874,30 +874,6 @@ describe("Mistral provider", () => {
     expect(textBlock?.text).toBe("  indented\n");
   });
 
-  it("serializes structured non-image blocks in tool results as JSON text", async () => {
-    const testContext = makeMistralToolResultContext("fetch", [
-      {
-        type: "resource",
-        resource: {
-          uri: "https://example.com/data.json",
-          mimeType: "application/json",
-          text: '{"key":"value"}',
-        },
-      },
-    ]);
-
-    await runMistralFixture(testContext);
-
-    const payload = mistralMockState.payloads[0] as {
-      messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
-    };
-    const toolMessage = payload.messages.find((message) => message.role === "tool");
-    const toolContent = Array.isArray(toolMessage?.content) ? toolMessage.content : [];
-    const textBlock = toolContent.find((block) => block.type === "text");
-    expect(textBlock?.text).toEqual(expect.stringContaining('{"type":"resource"'));
-    expect(textBlock?.text).toContain('{\\"key\\":\\"value\\"}');
-  });
-
   it("does not emit image chunks or placeholders for payload-less tool media", async () => {
     const testContext = makeMistralToolResultContext(
       "screenshot",

@@ -1,8 +1,4 @@
 import type { BedrockClient, ListInferenceProfilesCommandOutput } from "@aws-sdk/client-bedrock";
-import {
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationSeconds,
-} from "openclaw/plugin-sdk/number-runtime";
 import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
@@ -222,7 +218,7 @@ export async function discoverBedrockModels(params: {
 
   if (refreshIntervalSeconds > 0) {
     const cached = discoveryCache.get(cacheKey);
-    if (cached && isFutureDateTimestampMs(cached.expiresAt, { nowMs: now })) {
+    if (cached && cached.expiresAt > now) {
       return cached.result;
     }
     discoveryCache.delete(cacheKey);
@@ -403,13 +399,10 @@ export async function discoverBedrockModels(params: {
   });
 
   if (refreshIntervalSeconds > 0) {
-    const expiresAt = resolveExpiresAtMsFromDurationSeconds(refreshIntervalSeconds, { nowMs: now });
-    if (expiresAt !== undefined) {
-      discoveryCache.set(cacheKey, {
-        expiresAt,
-        result: discoveryPromise,
-      });
-    }
+    discoveryCache.set(cacheKey, {
+      expiresAt: now + refreshIntervalSeconds * 1000,
+      result: discoveryPromise,
+    });
   }
 
   return discoveryPromise;

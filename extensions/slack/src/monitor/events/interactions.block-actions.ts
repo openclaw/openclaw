@@ -733,9 +733,6 @@ export function registerSlackBlockActionHandler(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
 }): void {
-  if (typeof params.ctx.app.action !== "function") {
-    return;
-  }
   params.ctx.app.action(/.+/, async (args: SlackBlockActionHandlerArgs) => {
     const { ack, body, action, respond } = args;
     await ack();

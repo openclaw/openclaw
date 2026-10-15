@@ -137,7 +137,7 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
   expect(rows[3]!.querySelectorAll("img")).toHaveLength(0);
   rows[0]!.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
   await waitForSolid(() =>
-    expect(rows[0]!.querySelector("openclaw-image-lightbox")?.getAttribute("src")).toBe(
+    expect(rows[0]!.querySelector("openclaw-image-lightbox .image")?.getAttribute("src")).toBe(
       "https://images.example.test/first-0.png",
     ),
   );
@@ -156,7 +156,9 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
     expect(first.querySelector("img")?.getAttribute("alt")).toBe("refreshed-0"),
   );
   expect(first.querySelector("openclaw-image-lightbox")).toBe(lightbox);
-  expect(lightbox?.getAttribute("src")).toBe("https://images.example.test/first-0.png");
+  expect(lightbox?.querySelector(".image")?.getAttribute("src")).toBe(
+    "https://images.example.test/first-0.png",
+  );
   first.session = { key: "agent:main:images-0", kind: "direct", permissionMode: "workspace" };
   await waitForSolid(() => expect(first.querySelector("openclaw-image-lightbox")).toBeNull());
 });

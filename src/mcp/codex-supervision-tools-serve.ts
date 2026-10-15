@@ -30,24 +30,22 @@ const LEGACY_TOOL_NAME_SET = new Set<string>(LEGACY_TOOL_NAMES);
 const TRUSTED_STANDALONE_MCP_OWNER_CONTEXT = { senderIsOwner: true as const };
 
 function withCodexSupervisionEnabled(config: OpenClawConfig): OpenClawConfig {
-  const next = structuredClone(normalizePluginTargetConfig(config, "codex")) as OpenClawConfig &
-    Record<string, unknown>;
-  const plugins = (next.plugins ??= {}) as Record<string, unknown>;
+  const next = normalizePluginTargetConfig(config, "codex");
+  const plugins = (next.plugins ??= {});
   plugins.enabled = true;
-  const deny = Array.isArray(plugins.deny)
-    ? plugins.deny.filter((entry) => entry !== "codex")
-    : undefined;
-  if (deny) {
-    plugins.deny = deny;
+  if (plugins.deny) {
+    plugins.deny = plugins.deny.filter((entry) => entry !== "codex");
   }
-  if (Array.isArray(plugins.allow) && !plugins.allow.includes("codex")) {
+  if (plugins.allow && !plugins.allow.includes("codex")) {
     plugins.allow = [...plugins.allow, "codex"];
   }
-  const entries = (plugins.entries ??= {}) as Record<string, unknown>;
-  const codex = (entries.codex ??= {}) as Record<string, unknown>;
+  const entries = (plugins.entries ??= {});
+  const codex = (entries.codex ??= {});
   codex.enabled = true;
-  const codexConfig = (codex.config ??= {}) as Record<string, unknown>;
-  const supervision = (codexConfig.supervision ??= {}) as Record<string, unknown>;
+  const codexConfig = (codex.config = { ...codex.config });
+  const supervision = (codexConfig.supervision = {
+    ...(codexConfig.supervision as Record<string, unknown> | undefined),
+  });
   supervision.enabled = true;
   if (process.env.OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS === "1") {
     supervision.allowRawTranscripts = true;
@@ -86,11 +84,7 @@ async function acquireCodexSupervisionTools(
 function requireCompleteCodexSupervisionToolSet(tools: readonly AnyAgentTool[]): void {
   const loadedNames = new Set(tools.map((tool) => tool.name));
   const missing = LEGACY_TOOL_NAMES.filter((name) => !loadedNames.has(name));
-  if (
-    missing.length === 0 &&
-    loadedNames.size === LEGACY_TOOL_NAMES.length &&
-    tools.length === LEGACY_TOOL_NAMES.length
-  ) {
+  if (missing.length === 0 && tools.length === LEGACY_TOOL_NAMES.length) {
     return;
   }
   throw new Error(

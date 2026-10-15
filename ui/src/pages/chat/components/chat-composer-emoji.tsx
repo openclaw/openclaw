@@ -15,7 +15,6 @@ import {
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
 import "../../../styles/chat/emoji-menu.css";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import {
   handleComposerMenuKeydown,
@@ -236,10 +235,6 @@ export class ComposerEmojiMenu {
       return;
     }
     this.insert(textarea, target, emoji, requestUpdate);
-  }
-
-  render(paneId: string, textarea: HTMLTextAreaElement | null, requestUpdate: () => void) {
-    return solidTemplate(EmojiMenu, { args: [this, paneId, textarea, requestUpdate] });
   }
 
   updatePresentation(textarea: HTMLTextAreaElement, requestUpdate: () => void) {

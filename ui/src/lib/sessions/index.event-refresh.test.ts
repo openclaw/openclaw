@@ -226,16 +226,18 @@ describe("event-driven session list refresh", () => {
     expect(sessions.state.result?.sessions).toEqual([fallbackRow]);
   });
 
-  it("refreshes the owner-filtered primary roster after a terminal session message", async () => {
+  it("updates held owner-filtered rows without rereading until ownership changes", async () => {
     const key = "agent:main:main";
     let matchesFilteredRoster = true;
-    const held = sessionRow(key, 1, {
+    const initial = sessionRow(key, 1, {
+      sessionId: "owned-session",
       hasActiveRun: true,
       status: "running",
       label: "Ada",
       owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
     });
-    const { sessions, request, message } = harness((params) =>
+    let held = initial;
+    const { sessions, request, message, emitEvent } = harness((params) =>
       sessionsResult(
         params.ownerId && !matchesFilteredRoster ? [] : [held],
         matchesFilteredRoster ? 1 : 2,
@@ -245,11 +247,22 @@ describe("event-driven session list refresh", () => {
     await sessions.refresh({ agentId: "main", ownerId: "profile-ada", force: true });
     expect(sessions.state.result?.sessions.map((session) => session.key)).toEqual([key]);
     request.mockClear();
+    for (let second = 0; second < 60; second++) {
+      held = { ...initial, updatedAt: second + 2, totalTokens: second + 1 };
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { reason: "patch", sessionKey: key, session: held, ancestorSessions: [] },
+      });
+      await tick(1_000);
+    }
+    expect(request).not.toHaveBeenCalled();
+    expect(sessions.state.result?.sessions).toEqual([held]);
     matchesFilteredRoster = false;
     message(
       terminal({
         ...held,
-        updatedAt: 2,
+        updatedAt: 62,
         label: "Bob",
         owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
       }),
@@ -263,6 +276,39 @@ describe("event-driven session list refresh", () => {
     );
     expect(sessions.state.result?.sessions).toEqual([]);
   });
+
+  it.each([false, true])(
+    "absorbs an older fallback at an authoritative read but retains later invalidation (%s)",
+    async (invalidateDuringRead) => {
+      let held = sessionRow("agent:main:held", 1, { sessionId: "held" });
+      const pending = createDeferred<SessionsListResult>();
+      let reads = 0;
+      const { sessions, request, emitEvent } = harness(() =>
+        ++reads === 2 ? pending.promise : sessionsResult([held], reads),
+      );
+      await sessions.refresh({ agentId: "main", force: true });
+      held = { ...held, updatedAt: 2, label: "Updated" };
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { reason: "patch", session: held, ancestorSessions: [] },
+      });
+      await tick(10_000);
+      expect(request).toHaveBeenCalledTimes(1);
+      const invalidate = () =>
+        emitEvent({ type: "event", event: "sessions.changed", payload: { reason: "stores" } });
+      invalidate();
+      await tick();
+      expect(request).toHaveBeenCalledTimes(2);
+      if (invalidateDuringRead) {
+        invalidate();
+      }
+      pending.resolve(sessionsResult([held], 2));
+      await tick(70_000);
+      expect(request).toHaveBeenCalledTimes(invalidateDuringRead ? 3 : 2);
+      expect(sessions.state.result?.sessions).toEqual([held]);
+    },
+  );
 
   it("retains every loaded page when a session event replaces the canonical list", async () => {
     const rows = Array.from({ length: 120 }, (_, index) =>

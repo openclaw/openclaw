@@ -621,7 +621,8 @@ function auditDefaultCanonicalExports(repoRoot: string, parser: API): CanonicalC
   const exportsByFile = new Map(
     auditedModules.map((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      const exportedNames = findExportedCallableNames(parser.createSourceFile(file, source));
+      using retainedSource = parser.createSourceFile(file, source);
+      const exportedNames = findExportedCallableNames(retainedSource.sourceFile);
       if (!mixedModules.has(file)) {
         return [file, exportedNames] as const;
       }
@@ -687,11 +688,12 @@ export async function runCoercionHelperDeclarationGuard(
         if (!BANNED_HELPER_NAME_PATTERN.test(result.value.source)) {
           continue;
         }
+        using retainedSource = parser.createSourceFile(result.value.file, result.value.source);
         declarations.push(
           ...findBannedCoercionHelperDeclarations(
             result.value.source,
             result.value.file,
-            parser.createSourceFile(result.value.file, result.value.source),
+            retainedSource.sourceFile,
           ),
         );
       }

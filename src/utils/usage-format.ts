@@ -40,24 +40,12 @@ import {
 export { formatTokenCount } from "./token-format.js";
 export type { ModelCostConfig } from "@openclaw/llm-core";
 
-type ProviderCostIndexSource = {
-  model: NonNullable<ModelProviderConfig["models"]>[number];
-  providerKey: string;
-  modelId: string;
-};
-
-type ProviderCostIndex = {
-  entries: Map<string, RawModelCostConfig>;
-  sources: Map<string, ProviderCostIndexSource["model"][]>;
-  structure: ProviderCostIndexSource[];
-};
-
 const EMPTY_PROVIDER_COST_INDEX = new Map<string, RawModelCostConfig>();
 const MODELS_JSON_COST_CACHE_LIMIT = 128;
 
 const providerCostIndexByNormalizer = new WeakMap<
   ModelKeyNormalizer,
-  WeakMap<Record<string, ModelProviderConfig>, ProviderCostIndex>
+  WeakMap<Record<string, ModelProviderConfig>, Map<string, RawModelCostConfig>>
 >();
 
 /** Formats a USD amount for usage summaries, keeping tiny costs visible. */
@@ -100,27 +88,9 @@ function hasModelCostRates(
   );
 }
 
-function refreshProviderCostIndexEntry(index: ProviderCostIndex, key: string): void {
-  // Retain every row, including metadata-only rows, so edits cannot resurrect
-  // a later duplicate's price or turn a removed cost into an authored pin.
-  let cost: RawModelCostConfig | undefined;
-  for (const model of index.sources.get(key) ?? []) {
-    const candidate = model.cost;
-    if (candidate !== null && typeof candidate === "object") {
-      cost = mergeModelCost(model.cost, cost);
-    }
-  }
-  if (cost) {
-    index.entries.set(key, cost);
-  } else {
-    index.entries.delete(key);
-  }
-}
-
 function getProviderCostIndex(
   providers: Record<string, ModelProviderConfig> | undefined,
   normalizeKey: ModelKeyNormalizer = normalizeRawModelKey,
-  key?: string,
 ): Map<string, RawModelCostConfig> {
   if (!providers) {
     return EMPTY_PROVIDER_COST_INDEX;
@@ -132,39 +102,23 @@ function getProviderCostIndex(
     providerCostIndexByNormalizer.set(normalizeKey, cache);
   }
   let index = cache.get(providers);
-  const structure = Object.entries(normalizeProviderMapKeys(providers)).flatMap(
-    ([providerKey, provider]) =>
-      (provider?.models ?? []).map((model) => ({ providerKey, model, modelId: model.id })),
-  );
-  // Identity and order matter even when duplicate rows have the same id.
-  // Prices stay live on their source rows; only membership/id changes rebuild keys.
-  if (
-    !index ||
-    index.structure.length !== structure.length ||
-    index.structure.some((source, position) => {
-      const current = structure[position];
-      return (
-        !current ||
-        source.model !== current.model ||
-        source.modelId !== current.modelId ||
-        source.providerKey !== current.providerKey
-      );
-    })
-  ) {
-    const sources: ProviderCostIndex["sources"] = new Map();
-    for (const { providerKey, model, modelId } of structure) {
-      const modelKey = normalizeKey(providerKey, modelId);
-      const rows = sources.get(modelKey) ?? [];
-      rows.push(model);
-      sources.set(modelKey, rows);
+  if (!index) {
+    // Config publication replaces snapshots; in-place edits refresh on the next publication.
+    index = new Map();
+    for (const [providerKey, provider] of Object.entries(normalizeProviderMapKeys(providers))) {
+      for (const model of provider?.models ?? []) {
+        if (model.cost !== null && typeof model.cost === "object") {
+          const key = normalizeKey(providerKey, model.id);
+          const cost = mergeModelCost(model.cost, index.get(key));
+          if (cost) {
+            index.set(key, cost);
+          }
+        }
+      }
     }
-    index = { entries: new Map(), sources, structure };
     cache.set(providers, index);
   }
-  for (const entryKey of key === undefined ? index.sources.keys() : [key]) {
-    refreshProviderCostIndexEntry(index, entryKey);
-  }
-  return index.entries;
+  return index;
 }
 
 function loadModelsJsonCostIndex(
@@ -321,9 +275,7 @@ function resolveModelCostConfigWithPricing(
   const sourceConfig = params.config
     ? projectConfigOntoRuntimeSourceSnapshot(params.config)
     : undefined;
-  let configuredCost = getProviderCostIndex(sourceConfig?.models?.providers, undefined, rawKey).get(
-    rawKey,
-  );
+  let configuredCost = getProviderCostIndex(sourceConfig?.models?.providers).get(rawKey);
   let pricingContext = capturedPricing;
   if (params.allowPluginNormalization !== false && !configuredCost) {
     pricingContext ??= resolveModelPricingContext(params.config);
@@ -335,7 +287,6 @@ function resolveModelCostConfigWithPricing(
     configuredCost = getProviderCostIndex(
       sourceConfig?.models?.providers,
       pricingContext.normalizeKey,
-      key,
     ).get(key);
   }
 
@@ -355,7 +306,7 @@ function resolveModelCostConfigWithPricing(
   }
   const inheritedCost = pricingContext
     ? resolveModelPricing(pricingContext, pricingContext.normalizeKey(provider, model))
-    : getProviderCostIndex(params.config?.models?.providers, undefined, rawKey).get(rawKey);
+    : getProviderCostIndex(params.config?.models?.providers).get(rawKey);
   const merged = mergeModelCost(
     hasModelCostRates(inheritedCost) ? normalizeResolvedPricing(inheritedCost) : undefined,
     configuredCost,

@@ -18,7 +18,6 @@ import {
   runDiscordVoiceAgentTurn,
   resolveDiscordVoiceIngressContext,
 } from "./ingress.js";
-import { formatVoiceLogPreview } from "./log-preview.js";
 import type { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceIngressContextWithParticipants } from "./participant-context.js";
 import { DiscordRealtimeRecordingInput } from "./realtime-recording.js";
@@ -507,7 +506,7 @@ export class DiscordVoiceReceive {
       );
     }
     logger.info(
-      `discord voice: agent turn start guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId} user=${userId} speaker=${context.speakerLabel} owner=${context.senderIsOwner} model=${this.params.discordConfig.voice?.model ?? "route-default"} message=${formatVoiceLogPreview(message)}`,
+      `discord voice: agent turn start guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId} user=${userId} owner=${context.senderIsOwner} model=${this.params.discordConfig.voice?.model ?? "route-default"} chars=${message.length}`,
     );
     const text = await runDiscordVoiceAgentTurn({
       ...this.params,
@@ -521,7 +520,7 @@ export class DiscordVoiceReceive {
       return "";
     }
     logger.info(
-      `discord voice: agent turn answer (${text.length} chars) guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}: ${formatVoiceLogPreview(text)}`,
+      `discord voice: agent turn answer (${text.length} chars) guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}`,
     );
     return text;
   }

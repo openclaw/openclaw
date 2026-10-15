@@ -2,7 +2,6 @@ import type { JSX } from "@solidjs/web";
 import { createUniqueId, onCleanup, Show } from "solid-js";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 
 const TABBABLE_SELECTOR =
@@ -24,18 +23,16 @@ function keepSheetFocus(panel: HTMLElement, event: KeyboardEvent) {
 }
 
 type SidebarSessionFilterPopoverProps = {
+  class?: string;
   anchor: HTMLElement | null;
   label: string;
-  initialFocusSelector: string;
+  initialFocusSelector?: string;
   content: JSX.Element;
   onClose: (restoreFocus: boolean) => void;
 };
 
-function renderSidebarSessionFilterPopover(
-  props: SidebarSessionFilterPopoverProps,
-  host: HTMLElement,
-) {
-  host.style.display = "contents";
+export function SidebarSessionFilterPopover(props: SidebarSessionFilterPopoverProps) {
+  let host!: HTMLElement;
   let handle: PopoverHandle | undefined;
   let focused = false;
   const handleKeydown = (event: KeyboardEvent) => {
@@ -51,11 +48,21 @@ function renderSidebarSessionFilterPopover(
     focused = true;
     // Opening must not take focus from a control already chosen inside the panel.
     if (!host.contains(host.ownerDocument.activeElement)) {
-      host.querySelector<HTMLElement>(props.initialFocusSelector)?.focus({ preventScroll: true });
+      host
+        .querySelector<HTMLElement>(
+          props.initialFocusSelector ?? '#sidebar-sessions-status input[type="radio"]:checked',
+        )
+        ?.focus({ preventScroll: true });
     }
   };
   return (
-    <>
+    <openclaw-sidebar-session-filter-popover
+      ref={(element) => {
+        host = element;
+      }}
+      class={props.class}
+      style={{ display: "contents" }}
+    >
       <Show when={isMobileNavLayout()}>
         <button
           type="button"
@@ -92,23 +99,6 @@ function renderSidebarSessionFilterPopover(
         <div class="sidebar-session-filter-panel__grabber" aria-hidden="true" />
         {props.content}
       </Popover>
-    </>
+    </openclaw-sidebar-session-filter-popover>
   );
 }
-
-export const SidebarSessionFilterPopover = defineSolidBridge<SidebarSessionFilterPopoverProps>(
-  "openclaw-sidebar-session-filter-popover",
-  renderSidebarSessionFilterPopover,
-  {
-    properties: {
-      anchor: { default: null, attribute: false },
-      label: { default: "", attribute: false },
-      initialFocusSelector: {
-        default: '#sidebar-sessions-status input[type="radio"]:checked',
-        attribute: false,
-      },
-      content: { default: null, attribute: false },
-      onClose: { default: () => {}, attribute: false },
-    },
-  },
-);

@@ -253,9 +253,7 @@ export class InferenceWorkerClient {
         request.kind === "classify" &&
         reply.results.length === request.inputs.length &&
         reply.results.every(
-          (result, index) =>
-            result.logits.length === request.inputs[index]?.labels.length &&
-            result.logits.every(Number.isFinite),
+          (result, index) => result.logits.length === request.inputs[index]?.labels.length,
         ))
     ) {
       this.finish(reply);

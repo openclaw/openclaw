@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { render, type ReactiveController, type ReactiveControllerHost } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -29,7 +29,9 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import type { SolidController, SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -49,7 +51,7 @@ import {
 } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createSessionEventState, renderedTranscript } from "./chat-state.test-support.ts";
-import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
+import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
@@ -2045,14 +2047,14 @@ describe("ChatStateController render lifecycle", () => {
     } as unknown as ChatPageHost;
   }
 
-  function createControllerHost(overrides: Partial<ReactiveControllerHost> = {}) {
+  function createControllerHost(overrides: Partial<SolidControllerHost> = {}) {
     return {
       addController: () => undefined,
       removeController: () => undefined,
       requestUpdate: () => undefined,
       updateComplete: Promise.resolve(true),
       ...overrides,
-    } satisfies ReactiveControllerHost;
+    } satisfies SolidControllerHost;
   }
 
   function createInputHistoryKey(selectionStart: number, selectionEnd: number) {
@@ -2540,18 +2542,18 @@ describe("ChatStateController render lifecycle", () => {
     async (disconnect) => {
       const { promise: nextCommit, resolve: resolveCommit } = createDeferred<boolean>();
       let completion = Promise.resolve(true);
-      const controllers: ReactiveController[] = [];
+      const controllers: SolidController[] = [];
       const requestUpdate = vi.fn(() => {
         completion = nextCommit;
       });
       const host = {
-        addController: (controller: ReactiveController) => controllers.push(controller),
+        addController: (controller: SolidController) => controllers.push(controller),
         removeController: () => undefined,
         requestUpdate,
         get updateComplete() {
           return completion;
         },
-      } satisfies ReactiveControllerHost;
+      } satisfies SolidControllerHost;
       const controller = new ChatStateController<ChatPageHost>(host);
       controller.hostConnected();
       const renderLifecycle = controller.createRenderLifecycle();
@@ -2833,19 +2835,18 @@ describe("image lightbox lifecycle", () => {
     );
 
     const source = "data:video/mp4;base64,AAAA";
-    const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderAssistantAttachments(
-        [
+    const mounted = mountSolid(() =>
+      createComponent(AssistantAttachments, {
+        attachments: [
           {
             type: "attachment",
             attachment: { kind: "video", label: "Clip", mimeType: "video/mp4", url: source },
           },
         ],
-        { onOpenImage: state.handleOpenImage },
-      ),
-      container,
+        options: { onOpenImage: state.handleOpenImage },
+      }),
     );
+    const { container } = mounted;
     const player = container.querySelector("openclaw-chat-video-player") as HTMLElement & {
       onExpand: (src: string) => void;
     };
@@ -2854,7 +2855,7 @@ describe("image lightbox lifecycle", () => {
 
     state.handleOpenImage({ kind: "video", src: "data:audio/mp3;base64,AAAA", title: "Audio" });
     expect(state.imageLightbox).toBeNull();
-    container.remove();
+    mounted.unmount();
   });
 
   it("invalidates immediately when beginning a deferred image open", () => {

@@ -1,13 +1,13 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { flush } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
@@ -227,7 +227,7 @@ describe("chat pane session access", () => {
     expect(container.querySelector(".chat-pane__sharing-menu")).toBeNull();
   });
 
-  it("keeps visibility controls available without member-list support", () => {
+  it("keeps visibility controls available without member-list support", async () => {
     const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
       sessions: createSessionCapabilityFixture(),
@@ -245,6 +245,8 @@ describe("chat pane session access", () => {
       visibility: "shared",
     } satisfies GatewaySessionRow;
     const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
 
     render(
       pane.renderPaneHeader(
@@ -258,14 +260,18 @@ describe("chat pane session access", () => {
       container,
     );
 
-    expect(
-      container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled,
-    ).toBe(false);
-    container.querySelector(".chat-pane__sharing-menu")?.dispatchEvent(new Event("wa-show"));
-    flush();
-    expect(
-      container.querySelector('wa-dropdown-item[value="visibility:read-only"]'),
-    ).not.toBeNull();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled,
+      ).toBe(false),
+    );
+    container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.click();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-pane__sharing-panel")?.matches(":popover-open")).toBe(
+        true,
+      ),
+    );
+    expect(container.querySelector('[data-value="visibility:read-only"]')).not.toBeNull();
     expect(container.textContent).not.toContain("People");
   });
 });

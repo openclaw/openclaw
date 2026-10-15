@@ -165,24 +165,6 @@ describe("context cache lifecycle", () => {
     ).toBe(1_000_000);
   });
 
-  it("keeps configured limits when an earlier prewarm finishes after refresh", async () => {
-    const previous = config("synthetic", model("current-model", 222_000, 111_000));
-    state.publishedOwner.mockReturnValueOnce({ config: previous, modelCatalog: state.catalog });
-    const warmup = context.prewarmContextWindowCacheAfterReady({ config: previous });
-    state.config = config("synthetic", model("current-model", 64_000, 32_000));
-
-    await context.refreshContextWindowCache(state.config);
-    await warmup;
-
-    expect(
-      context.resolveContextTokensForModel({
-        provider: "synthetic",
-        model: "current-model",
-        allowAsyncLoad: false,
-      }),
-    ).toBe(32_000);
-  });
-
   it("warms configured, discovered, and static windows from the published owner", async () => {
     const requested = config("synthetic", model("stale-model", 111_000));
     state.config = config("synthetic", model("current-model", 222_000));

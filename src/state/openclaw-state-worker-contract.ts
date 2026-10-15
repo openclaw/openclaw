@@ -109,7 +109,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       input: undefined;
       output: StateSchemaPublicationBlocker | undefined;
     };
-    "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
     "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };
     "workspace.replaceAttestation": {

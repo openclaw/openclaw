@@ -362,14 +362,15 @@ function renderConfirmStep(props: WizardStepControlsProps) {
       props.presentation === "channels" && props.busy
         ? renderWizardBusyButton(props.busyLabel ?? t("common.loading"))
         : [false, true].map(
-            (answer) => html`<button
-              type="button"
-              class=${answer ? "btn primary" : "btn"}
-              ?disabled=${props.busy}
-              @click=${() => props.onAnswer(answer)}
-            >
-              ${answer ? (props.confirmAffirmativeLabel ?? t("common.yes")) : t("common.no")}
-            </button>`,
+            (answer) =>
+              html`<button
+                type="button"
+                class=${answer ? "btn primary" : "btn"}
+                ?disabled=${props.busy}
+                @click=${() => props.onAnswer(answer)}
+              >
+                ${answer ? (props.confirmAffirmativeLabel ?? t("common.yes")) : t("common.no")}
+              </button>`,
           )
     }
   `;

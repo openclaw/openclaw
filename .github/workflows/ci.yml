@@ -3354,7 +3354,7 @@ jobs:
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@90ad2b35f69faf97585ad74d28fa006d2739b7af # v7.0.0 + post-release fixes
         with:
           go-version: "1.27.1"
           cache: false
@@ -4589,7 +4589,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.14.8"
 
       - name: Install Python tooling
         id: python_tooling
@@ -6356,7 +6356,7 @@ jobs:
           print(selected)
           PY
           )"
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$apk"
+          "$ANDROID_SDK_ROOT/build-tools/37.0.0/zipalign" -c -P 16 -v 4 "$apk"
 
       - name: Upload Access native test reports
         if: ${{ !cancelled() }}

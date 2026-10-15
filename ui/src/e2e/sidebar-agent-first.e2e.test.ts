@@ -35,8 +35,8 @@ const sessionRow = (
   ...extra,
 });
 const sessionRows = [
-  sessionRow("project", "Project next steps"),
-  sessionRow("weekly", "Weekly review"),
+  sessionRow("project", "Project"),
+  sessionRow("weekly", "Weekly"),
   sessionRow("parent", "Implement the navigation sidebar without losing independent outcomes", {
     lastMessagePreview: "A preview must not create a second line in team mode.",
   }),
@@ -140,8 +140,8 @@ suite.define(() => {
           ).toBe(width + 52);
           await captureSidebarUiProof(suite, page, `agent-first-${mode}-${width}-ready.png`);
           for (const [id, label] of [
-            ["project", "Project next steps"],
-            ["weekly", "Weekly review"],
+            ["project", "Project"],
+            ["weekly", "Weekly"],
           ]) {
             const title = group.locator(
               `[data-session-key="agent:main:${id}"] .sidebar-recent-session__name`,
@@ -313,8 +313,11 @@ suite.define(() => {
           await page.locator("body").click({ position: { x: 1000, y: 800 } });
           const collapsedSlots = parent.locator(".sidebar-session-team-state");
           const collapsedBounds = (await collapsedSlots.boundingBox())!;
+          const collapsedLinkBounds = (await parent
+            .locator(":scope > .sidebar-recent-session__link")
+            .boundingBox())!;
           expect(collapsedBounds.x + collapsedBounds.width).toBeCloseTo(
-            beforeFocus.rows[0]!.right - (touch ? 96 : 0) - beforeFocus.rows[0]!.radius,
+            collapsedLinkBounds.x + collapsedLinkBounds.width - beforeFocus.rows[0]!.radius,
             1,
           );
           expect(

@@ -17,6 +17,7 @@ import {
   buildTestWebFetchProviders,
   buildTestWebSearchProviders,
   createTestProvider,
+  createWebCredentialEntry,
   ensureRecord,
   providerPluginId,
   type ProviderUnderTest,
@@ -95,14 +96,16 @@ vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
     resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock,
 }));
 
-vi.mock("./runtime-web-tools-public-artifacts.runtime.js", () => ({
+vi.mock("../plugins/web-provider-public-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/web-provider-public-artifacts.js")>()),
   resolveBundledWebSearchProvidersFromPublicArtifacts:
     resolveBundledWebSearchProvidersFromPublicArtifactsMock,
   resolveBundledWebFetchProvidersFromPublicArtifacts:
     resolveBundledWebFetchProvidersFromPublicArtifactsMock,
 }));
 
-vi.mock("./runtime-web-tools-manifest.runtime.js", () => ({
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-registry.js")>()),
   resolveManifestContractPluginIds: resolveManifestContractPluginIdsMock,
   resolveManifestContractOwnerPluginId: resolveManifestContractOwnerPluginIdMock,
 }));
@@ -156,17 +159,6 @@ function activateRuntimeWebToolsResult(
     refreshContext: null,
     refreshHandler: null,
   });
-}
-
-function createWebCredentialEntry(
-  surface: "webSearch" | "webFetch",
-  apiKey: unknown,
-  options: { enabled?: boolean } = {},
-) {
-  return {
-    ...options,
-    config: { [surface]: { apiKey } },
-  };
 }
 
 function createProviderSecretRefConfig(

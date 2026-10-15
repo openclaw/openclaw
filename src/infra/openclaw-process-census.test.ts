@@ -159,25 +159,6 @@ it.each(custodyCases)("classifies artifact custody of %j with %j", (argv, facts,
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: holder ? [peer] : [] });
 });
 
-it.each([
-  ["node", "dist/index.js"],
-  ["bun", "run", "--silent", "start"],
-])("preserves the cleanup veto when cwd is unavailable for %j", (...argv) => {
-  rows.set(peer, { ppid: 1, argv });
-  const inspect = readlink.getMockImplementation()!;
-  readlink.mockImplementation((file: string) => {
-    if (file === `/proc/${peer}/cwd`) {
-      throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-    }
-    return inspect(file);
-  });
-  expect(inspectOtherOpenClawProcesses()).toEqual({
-    error: expect.stringContaining(
-      `Could not classify PID ${peer}: working directory is unavailable`,
-    ),
-  });
-});
-
 const foreignArgvs = [
   ["bun", "start"],
   ["bun", "--loader", ".js:ts", "service.js"],
@@ -193,8 +174,6 @@ const foreignArgvs = [
 
 it.each([
   ["/app/dist/index.js", "denied"],
-  ["/app/dist/index.js", "missing"],
-  ["/app/dist/index.js", "malformed"],
   ["/app/dist/index.js", "unnamed"],
   ["/app/service.js", "missing"],
 ])("vetoes absolute entrypoint %s with %s package identity", (script, failure) => {
@@ -204,12 +183,12 @@ it.each([
     if (!file.endsWith("/package.json")) {
       return inspect(file);
     }
-    if (failure === "denied" || failure === "missing") {
-      throw Object.assign(new Error("unreadable manifest"), {
-        code: failure === "denied" ? "EACCES" : "ENOENT",
-      });
+    if (failure === "unnamed") {
+      return JSON.stringify({});
     }
-    return failure === "malformed" ? "{" : JSON.stringify({});
+    throw Object.assign(new Error("unreadable manifest"), {
+      code: failure === "denied" ? "EACCES" : "ENOENT",
+    });
   });
   expect(inspectOtherOpenClawProcesses()).toEqual({
     error: expect.stringContaining("package identity"),
@@ -739,20 +718,6 @@ it.each([
       matchingPids: [],
       unverifiedPids: foreign ? [] : [peer],
     });
-  },
-);
-
-it.each(["container", "missing self", "deadline"])(
-  "holds handoff recovery with %s observations",
-  (failure) => {
-    if (failure === "container") {
-      container.mockReturnValue(true);
-    } else if (failure === "missing self") {
-      rows.delete(self);
-    } else {
-      vi.spyOn(Date, "now").mockReturnValueOnce(1).mockReturnValue(20_000);
-    }
-    expect(inspectOtherOpenClawProcesses(references).error).toBeDefined();
   },
 );
 

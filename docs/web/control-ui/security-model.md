@@ -72,16 +72,26 @@ publication is unavailable, token/password chat links serve the app shell
 directly, without looking up or disclosing a transcript. Serving the shell grants
 no Gateway or session access.
 
-The public renderer includes only user messages and assistant final-answer text.
-It omits tools, reasoning, files, images, widgets, hidden messages, and internal
-metadata. Included text preserves credentials; review it before publishing. A restrictive
-content security policy permits only the fixed reader script; transcript HTML
-cannot execute. Responses retain `Cache-Control: no-store` and
+The public renderer includes user and assistant text, including progress updates,
+tool-call summaries, and shared images. Tool result text, reasoning, executable
+widgets, hidden messages, and internal metadata stay private. Images use a public
+media route bound to the current publication and transcript entry; other
+attachments appear as filename chips without download links. Included text
+preserves credentials; review it before publishing. A restrictive content
+security policy permits only the fixed reader script; transcript HTML cannot
+execute. Responses retain `Cache-Control: no-store` and
 `Referrer-Policy: no-referrer`. Server-side representation reuse never substitutes
 for a current publication check, including before a `304` response.
 
+Public transcript documents, preview cards, shared images, and the share namespace
+send `X-Robots-Tag: noindex, nofollow`; HTML reader and preview documents also
+include a robots meta tag. These directives ask compliant search engines not to
+index the content or follow its links. They do not prevent anonymous downloads,
+recall existing copies, or replace access control. Social-preview crawlers can
+still fetch public documents and images.
+
 Anyone who knows a public thread URL can read its existing and future published
-text until the creator or a Gateway admin disables access. Re-enabling access
+content until the creator or a Gateway admin disables access. Re-enabling access
 revives the normal thread URL, but not previously revoked token links.
 
 A login proxy must expose only the public thread documents and share namespace.
@@ -162,6 +172,8 @@ before they expire.
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 
 Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. That failure tolerance applies only to the mounted image; it does not extend its media ticket or authorize fresh reads. Scrolling can reuse a successfully decoded image from the bounded in-memory preview cache while its existing metadata and ticket remain valid, without another image download or loading placeholder. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image. When the UI receives a sharing invalidation, a role-configuration change, or the connection close for a role reassignment, cached previews must pass fresh admission before remounting.
+
+If uploaded or local image bytes fail to load or decode after the availability check succeeds, the broken preview becomes an **Unavailable** card with **Retry**. Native image errors do not reveal the HTTP status, so the UI does not automatically repeat the byte request. **Retry** checks current availability and access before loading the image again; it does not grant an outside-folder allowance or extend an existing ticket.
 
 Uploaded images also stay visible while a new session's workspace or worktree details arrive. Media access is rechecked in the background without replacing the loaded preview with a loading card.
 

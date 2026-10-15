@@ -2,18 +2,6 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-
-export function elide(text?: string, limit = 400) {
-  if (!text) {
-    return text;
-  }
-  if (text.length <= limit) {
-    return text;
-  }
-  const truncated = truncateUtf16Safe(text, limit);
-  return `${truncated}… (truncated ${text.length - truncated.length} chars)`;
-}
 
 export function markWhatsAppVisibleDeliveryError(error: unknown): unknown {
   if (isRecord(error)) {

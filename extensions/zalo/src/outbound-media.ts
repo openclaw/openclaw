@@ -74,15 +74,6 @@ export async function prepareHostedZaloMediaUrl(params: {
   maxBytes: number;
   proxyUrl?: string;
 }): Promise<string> {
-  const now = asDateTimestampMs(Date.now());
-  const expiresAt =
-    now === undefined
-      ? undefined
-      : resolveExpiresAtMsFromDurationMs(ZALO_OUTBOUND_MEDIA_TTL_MS, { nowMs: now });
-  if (expiresAt === undefined) {
-    throw new Error("Zalo outbound media expiry could not be resolved");
-  }
-
   const routePath = `${resolveHostedZaloMediaRoutePrefix({
     webhookUrl: params.webhookUrl,
     webhookPath: params.webhookPath,

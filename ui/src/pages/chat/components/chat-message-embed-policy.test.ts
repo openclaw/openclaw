@@ -1,17 +1,79 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent, createSignal, getOwner } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { solidContent } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { buildMessageItems } from "../chat-thread-items.ts";
-import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import {
-  renderMessageGroup,
-  renderMessageGroupContent,
-} from "./chat-message-group.test-support.ts";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
+import { MessageGroup, MessageGroupContent } from "./chat-message-group-view.tsx";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
-import { StreamGroupParts } from "./chat-message-stream-view.tsx";
+import { StreamGroupParts, type StreamGroupPart } from "./chat-message-stream-view.tsx";
+
+function createEmbedHarness(container: HTMLElement, surface: "persisted" | "streaming") {
+  type Props = {
+    text: string;
+    options: Pick<
+      Parameters<typeof GroupedMessage>[0]["options"],
+      "allowExternalEmbedUrls" | "embedSandboxMode" | "sessionKey"
+    >;
+  };
+  let root: ReturnType<typeof mountSolid> | undefined;
+  let update: (props: Props) => void;
+  return {
+    render(text: string, options: Props["options"]) {
+      const next = { text, options };
+      if (root) {
+        update(next);
+      } else {
+        root = mountSolid(
+          () => {
+            const [props, setProps] = createSignal(next);
+            update = setProps;
+            return surface === "streaming"
+              ? createComponent(StreamGroupParts, {
+                  get parts(): StreamGroupPart[] {
+                    return [
+                      {
+                        kind: "stream",
+                        key: "message",
+                        text: props().text,
+                        startedAt: 1,
+                        isStreaming: true,
+                      },
+                    ];
+                  },
+                  get options() {
+                    return props().options;
+                  },
+                  presentation: "standalone",
+                })
+              : createComponent(GroupedMessage, {
+                  get preparation() {
+                    return prepareChatMessageRender({
+                      role: "assistant",
+                      content: [{ type: "text", text: props().text }],
+                    });
+                  },
+                  messageKey: "message",
+                  get options() {
+                    return { ...props().options, isStreaming: false, showReasoning: false };
+                  },
+                });
+          },
+          { container },
+        );
+      }
+      if (!getOwner()) {
+        flush();
+      }
+    },
+    unmount() {
+      root?.unmount();
+    },
+  };
+}
 
 describe("assistant message embed policy", () => {
   it.each(["persisted", "streaming"] as const)(
@@ -26,8 +88,9 @@ describe("assistant message embed policy", () => {
       );
       const host = document.createElement("div");
       document.body.append(host);
+      const preview = createEmbedHarness(host, surface);
       onTestFinished(() => {
-        render(null, host);
+        preview.unmount();
         host.remove();
         vi.unstubAllGlobals();
       });
@@ -38,20 +101,7 @@ describe("assistant message embed policy", () => {
       ) => {
         const text = `[embed url="${url}" title="Synthetic video" /]`;
         const options = { allowExternalEmbedUrls: false, embedSandboxMode, sessionKey };
-        render(
-          surface === "streaming"
-            ? solidContent(StreamGroupParts, {
-                parts: [{ kind: "stream", key: "message", text, startedAt: 1, isStreaming: true }],
-                options,
-                presentation: "standalone",
-              })
-            : renderGroupedMessage(
-                prepareChatMessageRender({ role: "assistant", content: [{ type: "text", text }] }),
-                "message",
-                { ...options, isStreaming: false, showReasoning: false },
-              ),
-          host,
-        );
+        preview.render(text, options);
         await vi.dynamicImportSettled();
         const card = host.querySelector("openclaw-youtube-video");
         expect(card).not.toBeNull();
@@ -107,24 +157,12 @@ describe("assistant message embed policy", () => {
       const host = document.createElement("div");
       const url = "https://example.test/widget";
       const text = `[embed url="${url}" title="Widget" /]\nRead the widget.`;
-      const message = { role: "assistant", content: [{ type: "text", text }] };
+      const preview = createEmbedHarness(host, surface);
+      onTestFinished(() => preview.unmount());
 
       for (const allowed of [false, true, false]) {
         const options = { allowExternalEmbedUrls: allowed, embedSandboxMode: "scripts" as const };
-        render(
-          surface === "streaming"
-            ? solidContent(StreamGroupParts, {
-                parts: [{ kind: "stream", key: "message", text, startedAt: 1, isStreaming: true }],
-                options,
-                presentation: "standalone",
-              })
-            : renderGroupedMessage(prepareChatMessageRender(message), "message", {
-                ...options,
-                isStreaming: false,
-                showReasoning: false,
-              }),
-          host,
-        );
+        preview.render(text, options);
 
         const frame = host.querySelector("iframe");
         expect(frame).not.toBeNull();
@@ -135,13 +173,16 @@ describe("assistant message embed policy", () => {
     },
   );
   it.each([
-    { label: "grouped messages", renderGroup: renderMessageGroup },
-    { label: "run-frame message contents", renderGroup: renderMessageGroupContent },
+    { label: "grouped messages", renderGroup: MessageGroup },
+    { label: "run-frame message contents", renderGroup: MessageGroupContent },
   ])("updates the authenticated widget's script policy when $label rerender", ({ renderGroup }) => {
     const container = document.createElement("div");
+    type GroupProps = Parameters<typeof MessageGroup>[0];
+    let root: ReturnType<typeof mountSolid> | undefined;
+    let update: (props: GroupProps) => void;
     onTestFinished(async () => {
       await vi.dynamicImportSettled();
-      render(null, container);
+      root?.unmount();
     });
     let timestamp = 1000;
     const renderCanvas = (embedSandboxMode: "strict" | "scripts", prepend = false) => {
@@ -174,7 +215,27 @@ describe("assistant message embed policy", () => {
       if (group?.kind !== "group") {
         throw new Error("expected a prepared assistant message group");
       }
-      render(renderGroup(group, { showReasoning: true, embedSandboxMode }), container);
+      const next = { group, options: { showReasoning: true, embedSandboxMode } };
+      if (root) {
+        update(next);
+      } else {
+        root = mountSolid(
+          () => {
+            const [props, setProps] = createSignal<GroupProps>(next);
+            update = setProps;
+            return createComponent(renderGroup, {
+              get group() {
+                return props().group;
+              },
+              get options() {
+                return props().options;
+              },
+            });
+          },
+          { container },
+        );
+      }
+      flush();
     };
 
     renderCanvas("strict");

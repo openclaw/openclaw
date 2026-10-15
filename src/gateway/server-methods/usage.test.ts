@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 
 vi.mock("../../infra/session-cost-usage.js", async () => ({
   ...(await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
@@ -14,17 +16,6 @@ vi.mock("../../infra/session-cost-usage.js", async () => ({
   )),
   loadCostUsageSummaryFromCache: vi.fn(async () => costSummary(1, 0)),
   discoverAllSessions: vi.fn(async () => []),
-}));
-vi.mock("../../config/sessions/combined-store-gateway-read.js", async () => ({
-  ...(await vi.importActual<typeof import("../../config/sessions/combined-store-gateway-read.js")>(
-    "../../config/sessions/combined-store-gateway-read.js",
-  )),
-  loadCombinedSessionStoreForGatewayCoreAsync: vi.fn(() => ({
-    targetsBySessionKey: new Map(),
-    durableTargets: [],
-    storePath: "(multiple)",
-    store: {},
-  })),
 }));
 
 import {
@@ -53,11 +44,16 @@ async function request(
   respond = vi.fn(),
 ) {
   const handler = expectDefined(usageHandlers[method], "usage handler");
-  await handler({
-    respond,
-    params,
-    context: { getRuntimeConfig: () => config },
-  } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
+  const projection = createSessionRowProjectionFixture({ cfg: config, store: {} });
+  try {
+    await handler({
+      respond,
+      params,
+      context: bindSessionRowProjection({ getRuntimeConfig: () => config }, () => projection),
+    } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
+  } finally {
+    projection.dispose();
+  }
   expect(respond).toHaveBeenCalledOnce();
   return expectDefined(respond.mock.calls[0], "usage response");
 }

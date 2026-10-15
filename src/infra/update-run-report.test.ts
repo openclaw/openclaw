@@ -47,63 +47,40 @@ function failureReport(record: UpdateRunRecord, result: Partial<UpdateRunResult>
 afterEach(() => vi.restoreAllMocks());
 
 describe("update run report", () => {
-  it.each([
-    {
-      reason: "preflight-node-runtime-incompatible",
-      detail: "Node 24.15.0; requires engines.node >=24.16.0",
-    },
-    { reason: "node-runtime-preflight", detail: "Runtime capability probe failed" },
-  ])("separates the runtime check failure from its $detail diagnostics", ({ reason, detail }) => {
+  it.each([true, false])("keeps runtime guidance within the chat budget (saved=%s)", (saved) => {
+    const action = `Keep the candidate installed and do not roll back code alone. ${"🦞".repeat(600)}`;
+    const reason = saved ? "node-runtime-preflight" : "preflight-node-runtime-incompatible";
     const record = run({
       status: "failed",
       reason,
+      origin: saved ? { nextAction: action } : {},
       steps: [
         { step: "staging", status: "completed" },
         {
           step: "preflight-node-runtime",
           status: "failed",
-          detail,
+          detail: "detail ".repeat(300),
           failureFacts: [{ check: "node-runtime", code: reason, affectedKey: "engines.node" }],
         },
       ],
     });
-    const saved = structuredClone(record);
-    const nextAction = "Run `openclaw --profile work triage` to repair this installation.";
-    const report = renderUpdateRunReport(record, { nextAction });
-
+    const original = structuredClone(record);
+    const report = renderUpdateRunReport(record, saved ? {} : { nextAction: action });
     expect(report.headline).toBe(
       "⚠️ OpenClaw could not complete the update. A required system check failed.",
     );
-    expect(report.lines.slice(0, 4)).toEqual([
-      nextAction,
-      "",
-      "Details:",
-      `Reason code: ${reason}`,
-    ]);
-    expect(report.markdown).toContain(`${report.headline}\n${nextAction}\n\nDetails:`);
-    expect(report.markdown).toContain(`Failed: preflight-node-runtime — ${detail}`);
-    expect(report.markdown).toContain(`Failing check node-runtime (${reason}); key engines.node`);
-    expect(report.markdown).toContain("Phases: staging");
-    expect(record).toEqual(saved);
-  });
-
-  it.each([true, false])("keeps runtime guidance within the chat budget (saved=%s)", (saved) => {
-    const action = `Keep the candidate installed and do not roll back code alone. ${"🦞".repeat(600)}`;
-    const record = run({
-      status: "failed",
-      reason: "node-runtime-preflight",
-      origin: saved ? { nextAction: action } : {},
-      steps: [{ step: "preflight-node-runtime", status: "failed", detail: "detail ".repeat(300) }],
-    });
-    const report = renderUpdateRunReport(record, saved ? {} : { nextAction: action });
+    expect(report.lines.slice(1, 4)).toEqual(["", "Details:", `Reason code: ${reason}`]);
+    expect(report.lines).toContain(`Failing check node-runtime (${reason}); key engines.node`);
+    expect(report.lines).toContain("Phases: staging");
     expect(report.markdown.length).toBeLessThanOrEqual(1500);
     expect(Buffer.from(report.markdown).toString("utf8")).toBe(report.markdown);
     expect(report.markdown).toContain(
       "Keep the candidate installed and do not roll back code alone.",
     );
-    expect(report.markdown).toContain("Reason code: node-runtime-preflight");
+    expect(report.markdown).toContain(`Reason code: ${reason}`);
     expect(report.lines.join("\n")).toContain(action);
     expect(report.markdown.includes("Historical recovery advice:")).toBe(saved);
+    expect(record).toEqual(original);
   });
 
   it.each([
@@ -292,9 +269,7 @@ describe("update run report", () => {
     { reason: "abandoned", acknowledgement: "completed", reconciled: true },
     { reason: "legacy-driver-expired", acknowledgement: "completed", reconciled: true },
     { reason: null, acknowledgement: "completed", reconciled: false },
-    { reason: "  ", acknowledgement: "completed", reconciled: false },
     { reason: "abandoned", acknowledgement: "in_progress", reconciled: false },
-    { reason: "abandoned", acknowledgement: "failed", reconciled: false },
   ])(
     "requires completed acknowledgement of a saved abandonment ($reason, $acknowledgement)",
     ({ reason, acknowledgement, reconciled }) => {
@@ -448,22 +423,10 @@ describe("update run report", () => {
 
   it.each([
     {
-      label: "version upgrade without a recorded previous commit",
-      before: { version: "2026.9.6" },
-      after: { version: "2026.9.7", sha: "2dd93a290b748686160b4a478b7ee003cc0f9f24" },
-      expected: "2026.9.7 (2dd93a29) (from 2026.9.6)",
-    },
-    {
       label: "version upgrade with both commits",
       before: { version: "2026.9.6", sha: "1111111111111111111111111111111111111111" },
       after: { version: "2026.9.7", sha: "9f3c21a0000000000000000000000000000000aa" },
       expected: "2026.9.7 (9f3c21a0) (from 2026.9.6 (11111111))",
-    },
-    {
-      label: "commit change within the same version",
-      before: { version: "2026.8.1", sha: "1111111111111111111111111111111111111111" },
-      after: { version: "2026.8.1", sha: "9f3c21a0000000000000000000000000000000aa" },
-      expected: "2026.8.1 (9f3c21a0) (from 2026.8.1 (11111111))",
     },
     {
       label: "legacy record with only commits",
@@ -766,9 +729,7 @@ describe("update run report", () => {
       failedSteps: ["finalize:doctor"],
       expected: "saved-doctor-error",
     },
-    { reason: null, failedSteps: [], expected: "unknown reason" },
     { reason: null, failedSteps: ["requested"], expected: "unknown reason" },
-    { reason: null, failedSteps: ["requested", "finalize:doctor"], expected: "finalize:doctor" },
     {
       reason: "  ",
       failedSteps: ["requested", "finalize:doctor", "finalize:plugins"],

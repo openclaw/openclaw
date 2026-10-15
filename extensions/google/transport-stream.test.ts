@@ -1108,7 +1108,10 @@ describe("google transport stream", () => {
         const result = await stream.result();
 
         expect(observedRequests).toEqual([
-          { method: "POST", url: expect.stringContaining(":streamGenerateContent?alt=sse") },
+          {
+            method: "POST",
+            url: expect.stringContaining("/models/gemini-2.5-pro:streamGenerateContent?alt=sse"),
+          },
         ]);
         expect(result).toMatchObject({
           responseId: "loopback-google-response",
@@ -1400,26 +1403,6 @@ describe("google transport stream", () => {
     },
   );
 
-  it("strips redundant google provider prefixes from Gemini API model paths", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
-    );
-
-    const result = await runGeminiStreamResult({
-      model: buildGeminiModel({
-        id: "google/gemini-3-flash-preview",
-        name: "Gemini 3 Flash Preview",
-      }),
-      options: { apiKey: "gemini-api-key" },
-    });
-    expect(result.stopReason).toBe("stop");
-
-    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
-    expect(guardedCall[0]).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:streamGenerateContent?alt=sse",
-    );
-  });
-
   it("merges tool-call thought signatures from sibling SSE parts", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([
@@ -1591,48 +1574,6 @@ describe("google transport stream", () => {
     const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
     expect(result.stopReason).toBe("stop");
   });
-
-  it("surfaces a framed provider error arriving after a terminal Google response", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildRawSseResponse(
-        'data: {"candidates":[{"finishReason":"STOP"}]}\n\n' +
-          'data: {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"quota exceeded"}}\n\n',
-      ),
-    );
-
-    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
-
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorCode: "RESOURCE_EXHAUSTED",
-      errorMessage: expect.stringContaining("quota exceeded"),
-    });
-  });
-
-  it.each([
-    { prefix: "data: ", framing: "framed" },
-    { prefix: "", framing: "bare" },
-  ] as const)(
-    "preserves an undelimited $framing terminal provider error from Google Vertex",
-    async ({ prefix }) => {
-      vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
-      vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
-      await useGoogleAuthLibraryCredentials("unterminated-error", "ya29.vertex-token");
-      guardedFetchMock.mockResolvedValueOnce(
-        buildRawSseResponse(
-          'data: {"candidates":[{"finishReason":"STOP"}]}\n\n' +
-            `${prefix}{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"quota exhausted"}}`,
-        ),
-      );
-      const result = await runGoogleVertexStreamResult({ fetch: guardedFetchMock });
-
-      expect(result).toMatchObject({
-        stopReason: "error",
-        errorCode: "RESOURCE_EXHAUSTED",
-        errorMessage: expect.stringContaining("quota exhausted"),
-      });
-    },
-  );
 
   it.each([
     { prefix: "data: ", framing: "framed" },
@@ -2170,26 +2111,6 @@ describe("google transport stream", () => {
     expect(tokenFetchMock).not.toHaveBeenCalled();
   });
 
-  it("uses google-auth-library bearer auth for Google Vertex credential marker requests", async () => {
-    await useGoogleAuthLibraryCredentials("authlib-stream", "ya29.transport-token");
-    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
-    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
-    const tokenFetchMock = vi.fn();
-    mockGoogleTextResponse();
-
-    await runGoogleVertexStreamResult({ fetch: tokenFetchMock });
-
-    expect(tokenFetchMock).not.toHaveBeenCalled();
-    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
-    const guardedInit = requireRequestInit(guardedCall, "guarded fetch");
-    expectHeaders(guardedInit, {
-      Authorization: "Bearer ya29.transport-token",
-      "Content-Type": "application/json",
-      accept: "text/event-stream",
-    });
-    expect(new Headers(guardedInit.headers).has("x-goog-api-key")).toBe(false);
-  });
-
   it.each([
     {
       scenario: "authorized-user ADC quota project",
@@ -2269,61 +2190,11 @@ describe("google transport stream", () => {
         Authorization: "Bearer fixture-vertex-token",
         "x-goog-user-project": expectedQuotaProject,
       });
+      expect(
+        new Headers(requireRequestInit(guardedCall, "guarded fetch").headers).has("x-goog-api-key"),
+      ).toBe(false);
     },
   );
-
-  it("strips redundant google provider prefixes from Google Vertex model paths", async () => {
-    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
-    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
-    await useGoogleAuthLibraryCredentials("prefix", "ya29.transport-token");
-    const tokenFetchMock = vi.fn();
-    mockGoogleTextResponse();
-
-    await runGoogleVertexStreamResult({
-      model: buildGoogleVertexModel({ id: "google/gemini-3.1-pro-preview" }),
-      fetch: tokenFetchMock,
-    });
-
-    // The provider prefix must be stripped from the Vertex model path, matching
-    // resolveGoogleModelPath; otherwise the id becomes models/google%2F... (404).
-    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
-    expect(guardedCall[0]).toContain(
-      "/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent",
-    );
-    expect(guardedCall[0]).not.toContain("google%2F");
-  });
-
-  it("refreshes authorized_user ADC before Google Vertex requests", async () => {
-    await useGoogleAuthorizedUserCredentials("adc", "refresh-token");
-    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
-    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
-    const tokenFetchMock = vi
-      .fn()
-      .mockResolvedValue(Response.json({ access_token: "ya29.vertex-token", expires_in: 3600 }));
-    mockGoogleTextResponse();
-
-    const result = await runGoogleVertexStreamResult({ fetch: tokenFetchMock });
-
-    const tokenCall = requireMockCall(tokenFetchMock, 0, "token fetch");
-    expect(tokenCall[0]).toBe("https://oauth2.googleapis.com/token");
-    expect(requireRequestInit(tokenCall, "token fetch").method).toBe("POST");
-
-    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
-    expect(guardedCall[0]).toBe(
-      "https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
-    );
-    const guardedInit = requireRequestInit(guardedCall, "guarded fetch");
-    expect(guardedInit.method).toBe("POST");
-    expectHeaders(guardedInit, {
-      Authorization: "Bearer ya29.vertex-token",
-      "Content-Type": "application/json",
-      accept: "text/event-stream",
-    });
-    expect(result.api).toBe("google-vertex");
-    expect(result.provider).toBe("google-vertex");
-    expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "text", text: "ok" }]);
-  });
 
   it("times out an authorized_user ADC token refresh", async () => {
     await useGoogleAuthorizedUserCredentials("adc-timeout", "timeout-refresh-token");

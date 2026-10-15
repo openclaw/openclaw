@@ -1,4 +1,4 @@
-import { html, nothing, render } from "lit";
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import "../../../styles.css";
@@ -6,7 +6,7 @@ import "../../../styles/chat.ts";
 import "../../../styles/chat/composer.css";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import "./chat-comment-pins.tsx";
-import { renderCommentPreviewChip, renderCommentPreviewRow } from "./chat-comment-preview.ts";
+import { renderCommentPreviewChip, renderCommentPreviewRows } from "./chat-comment-preview.tsx";
 import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.ts";
 
 const longSelection = "Selected passage with enough words to exceed a compact preview. ".repeat(8);
@@ -45,11 +45,11 @@ function mountComments(count: number, top: number) {
   render(
     renderCommentPreviewChip(
       count,
-      html`<ol class="chat-comment-preview__list">
-        ${Array.from({ length: count }, () =>
-          renderCommentPreviewRow({ text: longSelection, comment: longComment }),
-        )}
-      </ol>`,
+      renderCommentPreviewRows(
+        Array.from({ length: count }, () => ({
+          comment: { text: longSelection, comment: longComment },
+        })),
+      ),
     ),
     container,
   );
@@ -183,7 +183,13 @@ describe("annotation chip and hovercard", () => {
             scroll.scrollTop = scroll.scrollHeight;
             expect(scroll.scrollTop).toBeGreaterThan(0);
           }
-          const row = container.querySelector(".chat-comment-preview__item")!;
+          const rows = container.querySelectorAll(".chat-comment-preview__item");
+          const row = rows[0]!;
+          if (count > 1) {
+            expect(
+              rows[1]!.getBoundingClientRect().top - row.getBoundingClientRect().bottom,
+            ).toBeCloseTo(12, 0);
+          }
           const passages = row.querySelectorAll<HTMLElement>(".chat-comment-preview__text");
           const selection = passages[0]!;
           const comment = passages[1]!;

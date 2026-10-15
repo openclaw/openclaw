@@ -179,36 +179,32 @@ describe("Slack native command argument menus", () => {
     expect(execute).toHaveBeenCalledWith("now please");
   });
 
-  it.each(["login", "reportlong"])(
-    "does not execute a plugin skipped behind the primary /%s command",
-    async (name) => {
-      const execute = vi.fn(async () => ({ text: "wrong owner" }));
-      pluginCommandFixtures.specs = [
-        { name, description: "Skipped plugin", acceptsArgs: false, execute },
-      ];
-      let selectedDispatch: PluginCommandCatalogDecision | undefined;
-      setAsyncDispatchMock(async ({ replyOptions }) => {
-        selectedDispatch = replyOptions?.[PLUGIN_COMMAND_DISPATCH] as
-          | PluginCommandCatalogDecision
-          | undefined;
-        return { counts: { final: 1, tool: 0, block: 0 } };
-      });
-      const collisionHarness = createArgMenusHarness();
-      await registerCommands(collisionHarness.ctx, collisionHarness.account);
-      const handler = requireHandler(collisionHarness.commands, `/${name}`, `${name} command`);
+  it("does not execute a plugin skipped behind the primary /reportlong command", async () => {
+    const name = "reportlong";
+    const execute = vi.fn(async () => ({ text: "wrong owner" }));
+    pluginCommandFixtures.specs = [
+      { name, description: "Skipped plugin", acceptsArgs: false, execute },
+    ];
+    let selectedDispatch: PluginCommandCatalogDecision | undefined;
+    setAsyncDispatchMock(async ({ replyOptions }) => {
+      selectedDispatch = replyOptions?.[PLUGIN_COMMAND_DISPATCH] as
+        | PluginCommandCatalogDecision
+        | undefined;
+      return { counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const collisionHarness = createArgMenusHarness();
+    await registerCommands(collisionHarness.ctx, collisionHarness.account);
+    const handler = requireHandler(collisionHarness.commands, `/${name}`, `${name} command`);
 
-      await runCommandHandler(handler, { text: name === "reportlong" ? "day" : "" });
+    await runCommandHandler(handler, { text: "day" });
 
-      expect(selectedDispatch).toEqual({ kind: "non-plugin" });
-      expect(execute).not.toHaveBeenCalled();
-    },
-  );
+    expect(selectedDispatch).toEqual({ kind: "non-plugin" });
+    expect(execute).not.toHaveBeenCalled();
+  });
 
-  it.each([
-    ["same name", "skill-only"],
-    ["dash/underscore", "foo-bar"],
-  ])("keeps the selected route skill for a %s plugin collision", async (_label, pluginName) => {
-    const skillName = pluginName === "foo-bar" ? "foo_bar" : pluginName;
+  it("keeps the selected route skill for a dash/underscore plugin collision", async () => {
+    const pluginName = "foo-bar";
+    const skillName = "foo_bar";
     skillCommandFixtures.commands = [
       { name: skillName, skillName: "Selected Skill", description: "Selected skill" },
     ];
@@ -223,7 +219,9 @@ describe("Slack native command argument menus", () => {
         | undefined;
       return { counts: { final: 1, tool: 0, block: 0 } };
     });
-    const skillHarness = createArgMenusHarness({ commands: { native: true, nativeSkills: true } });
+    const skillHarness = createArgMenusHarness({
+      commands: { native: true, nativeSkills: true },
+    });
     (skillHarness.account as { config: OpenClawConfig }).config = {
       commands: { native: true, nativeSkills: true },
     };

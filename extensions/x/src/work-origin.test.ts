@@ -3,7 +3,7 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { xPlugin } from "./channel.js";
 import { client, config, fixture, post } from "./test-support/monitor-fixture.js";
-import { openXWorkOrigins, registerXWorkOriginGuidance, type XWorkOrigin } from "./work-origin.js";
+import { openXWorkOrigins, registerXWorkOriginGuidance } from "./work-origin.js";
 
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
@@ -12,7 +12,7 @@ vi.mock("./client.js", async (importOriginal) => ({
 }));
 
 const child = "agent:maintainer:work:example";
-const origin: XWorkOrigin = {
+const origin: Parameters<ReturnType<typeof openXWorkOrigins>["registerIfAbsent"]>[1] = {
   accountId: "default",
   postId: "501",
   postUrl: "https://x.com/config_maintainer/status/501",

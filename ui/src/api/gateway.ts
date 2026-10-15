@@ -329,7 +329,8 @@ export class GatewayBrowserClient {
   }
 
   get needsWakeReconnect() {
-    if (this.pendingPairing || this.pairingFailure) {
+    // Replacing an in-flight upgrade drops it before a busy Gateway can answer.
+    if (this.pendingPairing || this.pairingFailure || this.client.opening) {
       return false;
     }
     return (

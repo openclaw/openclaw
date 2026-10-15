@@ -10,14 +10,10 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
 import "../../../styles/chat/composer-context-strip.css";
-import { renderChatAttachmentInputs } from "./chat-attachment-inputs.ts";
-import {
-  handleChatAttachmentPaste,
-  renderAttachmentPreview,
-  renderAttachmentReadStatus,
-} from "./chat-attachments.ts";
+import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
+import { handleChatAttachmentPaste } from "./chat-attachments.ts";
+import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
 import { ContextNotice } from "./chat-composer-context.tsx";
-import { hasComposerContent } from "./chat-composer-controls.ts";
 import {
   renderChatAbortActionSolid,
   renderChatPrimaryActionsSolid as ChatPrimaryActions,
@@ -27,7 +23,7 @@ import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { GoalComposerMode } from "./chat-composer-goal-mode.tsx";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { hasComposerContent, LitContent } from "./chat-composer-interop.tsx";
 import { HumanMentionMenuView } from "./chat-composer-mention-menu.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
@@ -49,7 +45,7 @@ import {
   markPointerOpenedChatComposerDropdown,
   restorePointerOpenedChatComposerTrigger,
 } from "./chat-picker-overlay.ts";
-import { renderChatVoiceStatus } from "./chat-voice-activity.ts";
+import { ChatVoiceStatus } from "./chat-voice-activity.tsx";
 
 type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
 
@@ -58,11 +54,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
 
   const activeSession = createMemo(() => props.selectedSession);
   const composerControls = createMemo(() => props.composerControls ?? undefined);
-  const attachmentPreview = createMemo(() => {
-    // Read entries mutate without replacing the lifecycle or attachment array.
-    void context.attachmentReadRevision;
-    return renderAttachmentPreview(props);
-  });
   const composerLeadControl = (
     <Show when={props.permissionPicker}>{(picker) => <ChatPermissionPicker {...picker()} />}</Show>
   );
@@ -154,23 +145,19 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const composerAlerts = createMemo(() =>
     showComposerInput() ? (
       <>
-        <LitContent
-          value={renderChatVoiceStatus({
-            status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
-            detail: props.realtimeTalkDetail,
-            onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
-            onDismissError: props.realtimeTalkCameraError
-              ? undefined
-              : props.onDismissRealtimeTalkError,
-          })}
+        <ChatVoiceStatus
+          status={props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus}
+          detail={props.realtimeTalkDetail}
+          onUseSystemDefaultMicrophone={props.onUseSystemDefaultMicrophone}
+          onDismissError={
+            props.realtimeTalkCameraError ? undefined : props.onDismissRealtimeTalkError
+          }
         />
         {props.realtimeTalkInputNotice ? (
-          <LitContent
-            value={renderChatVoiceStatus({
-              status: "error",
-              detail: props.realtimeTalkInputNotice,
-              onDismissError: props.onDismissRealtimeTalkInputNotice,
-            })}
+          <ChatVoiceStatus
+            status="error"
+            detail={props.realtimeTalkInputNotice}
+            onDismissError={props.onDismissRealtimeTalkInputNotice}
           />
         ) : undefined}
       </>
@@ -349,19 +336,17 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     ></openclaw-mcp-app-context-strip>
                   </>
                 )}
-                <LitContent value={attachmentPreview()} />
-                <LitContent
-                  value={renderAttachmentReadStatus(
-                    props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0,
-                  )}
+                <AttachmentPreview {...props} readRevision={context.attachmentReadRevision} />
+                <AttachmentReadStatus
+                  pendingReads={
+                    props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0
+                  }
                 />
                 {renderComposerDictationStatusSolid(context.dictation)}
-                <LitContent
-                  value={renderChatAttachmentInputs({
-                    ...props,
-                    disabled: !context.canCompose,
-                    cameraActive: context.showComposer && props.cameraActive !== false,
-                  })}
+                <ChatAttachmentInputs
+                  {...props}
+                  disabled={!context.canCompose}
+                  cameraActive={context.showComposer && props.cameraActive !== false}
                 />
                 {props.realtimeTalkVideoStream ? (
                   <>

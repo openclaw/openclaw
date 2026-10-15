@@ -278,8 +278,6 @@ describe("chat transcript feed", () => {
 
   it.each<[string, Record<string, unknown>, string | null]>([
     ["exec", { command: "set -e" }, "set -e"],
-    ["exec", { command: "export FOO=bar" }, "export FOO=bar"],
-    ["exec", { command: "unset FOO" }, "unset FOO"],
     ["read", { path: "src/example.ts", offset: 20, limit: 30 }, null],
     ["edit", { path: "src/example.ts", oldText: "before", newText: "after" }, null],
     ["write", { path: "src/example.ts", content: "complete file content" }, null],

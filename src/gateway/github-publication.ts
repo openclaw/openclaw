@@ -580,11 +580,14 @@ export function createGitHubPublicationCoordinator(params: {
     async processClaim(claim: WorkerSessionTurnClaim) {
       return [...(await methods.processClaim(claim)), ...(await repository.processClaim(claim))];
     },
-    async resumeSessionRequests() {
+    async resumeSessionRequests(isStopping?: () => boolean) {
       const failures: unknown[] = [];
       for (const coordinator of [methods, repository]) {
+        if (isStopping?.()) {
+          break;
+        }
         try {
-          await coordinator.resumeSessionRequests();
+          await coordinator.resumeSessionRequests(isStopping);
         } catch (error) {
           failures.push(error);
         }

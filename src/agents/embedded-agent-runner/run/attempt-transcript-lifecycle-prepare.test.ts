@@ -309,10 +309,7 @@ describe("admitted lazy session writer", () => {
                   ? [entry.message]
                   : [],
               );
-              expect(assistants).toHaveLength(closeAdmission ? 0 : 1);
-              if (closeAdmission) {
-                return;
-              }
+              expect(assistants).toHaveLength(1);
               expect(assistants[0]).toMatchObject({
                 stopReason: "aborted",
                 errorCode: "OPENCLAW_RESTART_ABORT",

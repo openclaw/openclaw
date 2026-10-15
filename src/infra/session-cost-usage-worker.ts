@@ -180,10 +180,7 @@ export async function executeUsageCostWorker(
     });
     return result.found ? result.value : missing;
   };
-  const readMetadata = async (): Promise<{
-    found: boolean;
-    rows: SessionCostUsageRollupRow[];
-  }> => {
+  const readMetadata = async (): Promise<SessionCostUsageRollupRow[]> => {
     const receipt = refreshInputs?.rollupReceipt();
     const cached =
       selectedPaths?.flatMap((filePath) => {
@@ -193,7 +190,7 @@ export async function executeUsageCostWorker(
     const cachedKeys = new Set(cached.map((row) => row.key));
     const missing = selectedPaths?.filter((filePath) => !cachedKeys.has(filePath));
     if (missing?.length === 0) {
-      return { found: true, rows: cached };
+      return cached;
     }
     return control.runNativeSection(() =>
       readDatabase(cacheDatabase, () => {
@@ -206,12 +203,12 @@ export async function executeUsageCostWorker(
           for (const row of rows) {
             refreshInputs?.retainRollup(receipt, { row });
           }
-          return { found: result.found, rows: [...cached, ...rows] };
+          return [...cached, ...rows];
         } catch (error) {
           if (!isTransientSqliteError(error)) {
             throw error;
           }
-          return { found: false, rows: [] };
+          return [];
         }
       }),
     );
@@ -490,7 +487,7 @@ export async function executeUsageCostWorker(
     }
   }
 
-  const { found: cacheFound, rows } = await readMetadata();
+  const rows = await readMetadata();
   const byPath = new Map(rows.map((row) => [row.key, row]));
 
   const requestedFiles = selectedFiles.filter((file) => file !== undefined);
@@ -510,8 +507,7 @@ export async function executeUsageCostWorker(
       bytes.buffer,
     ]);
   }
-  // Missing stores have nothing to prune; a real rollup write owns their creation.
-  if (!operation.sessionFiles && cacheFound) {
+  if (!operation.sessionFiles && pruned) {
     await host("prune", {});
   }
   const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;

@@ -3,7 +3,7 @@ import { createMemo, createSignal, onCleanup } from "solid-js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
+import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 
@@ -106,11 +106,11 @@ export function SidebarAgentCard(props: SidebarAgentCardProps) {
           </span>
           <span class="sidebar-agent-card__text">
             <span class="sidebar-agent-card__name">
-              {renderHoverMarquee(props.agentName, "sidebar-agent-card__name-text", {
-                loop: true,
-                delay: 300,
-                speed: 35,
-              })}
+              <HoverMarquee
+                content={props.agentName}
+                class="sidebar-agent-card__name-text"
+                options={{ loop: true, delay: 300, speed: 35 }}
+              />
               <span class="sidebar-agent-card__chevron" aria-hidden="true">
                 <Icon name="chevronsUpDown" />
               </span>

@@ -50,8 +50,6 @@ export type CheckoutChipOptions = {
   submitting: boolean;
   pendingPlacement: boolean;
   popoverOpen: boolean;
-  popoverHiding: boolean;
-  onGuardTransition: (event: MouseEvent) => void;
   onPopoverShow: () => void;
   onPopoverHide: () => void;
   onPopoverAfterHide: () => void;

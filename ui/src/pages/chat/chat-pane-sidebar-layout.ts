@@ -255,12 +255,13 @@ export function renderSidebarRegion(params: {
                   panel.slot !== "conversation" && isSidebarSlotVisible(params.layout, panel.slot),
               )
               .map(
-                (panel) => html`<div
-                  class="side-panel__panel"
-                  data-region=${panel.id === params.layout.mainPanelId ? "main" : "side"}
-                >
-                  ${panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading}
-                </div>`,
+                (panel) =>
+                  html`<div
+                    class="side-panel__panel"
+                    data-region=${panel.id === params.layout.mainPanelId ? "main" : "side"}
+                  >
+                    ${panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading}
+                  </div>`,
               )
           : null
         : html`<openclaw-chat-sidebar-region

@@ -55,10 +55,10 @@ Common forms:
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
 - `/codex plugins list` shows configured native plugins; `/codex plugins
-available` discovers Codex marketplace plugins in the bound workspace.
+  available` discovers Codex marketplace plugins in the bound workspace.
 - `/codex plugins install <plugin>@<marketplace>` installs and authorizes one
   discovered plugin. `/codex plugins enable <name>` and `/codex plugins
-disable <name>` update its persisted policy. Mutations require an owner or
+  disable <name>` update its persisted policy. Mutations require an owner or
   `operator.admin` gateway client.
 - `/codex computer-use [status|install]` manages Codex Computer Use.
 - `/codex help` lists the full command tree.

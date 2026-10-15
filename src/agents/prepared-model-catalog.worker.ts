@@ -20,7 +20,6 @@ import {
   type NativeReferenceProgress,
 } from "../plugins/plugin-native-reference.js";
 import { withPluginSourceCaptureDirectory } from "../plugins/plugin-package-metadata-capture.js";
-import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expiry.js";
 import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
@@ -46,11 +45,10 @@ import {
 import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth-runtime.js";
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
-import { resolveAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import { withWorkerAuthProfileWrites } from "./auth-profiles/runtime-scope.js";
 import { replaceRuntimeAuthProfileStoreSnapshotsAsync } from "./auth-profiles/runtime-snapshots.js";
-import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "./auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreForCatalogAsync } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
@@ -95,11 +93,12 @@ async function refreshAuthStore(params: {
   providerIds?: readonly string[];
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }) {
+  const { store, displayPath } = await loadAuthProfileStoreForCatalogAsync(params.agentDir, {
+    allowKeychainPrompt: false,
+    ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
+  });
   const durable = preserveResolvedSecretBackedCredentials({
-    next: await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir, {
-      allowKeychainPrompt: false,
-      ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
-    }),
+    next: store,
     existing: params.authStore,
   });
   const persistedProfileIds = new Set(params.authStore.runtimePersistedProfileIds ?? []);
@@ -117,7 +116,7 @@ async function refreshAuthStore(params: {
     next: durable,
     existing: params.authStore,
   });
-  return withPluginRuntimeGenerationScope(
+  const authStore = withPluginRuntimeGenerationScope(
     {
       metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
       pluginRegistry: params.pluginGeneration.pluginRegistry,
@@ -131,6 +130,7 @@ async function refreshAuthStore(params: {
         allowKeychainPrompt: false,
       }),
   );
+  return { authStore, displayPath };
 }
 
 function restoreWorkerConfig(value: PreparedModelCatalogWorkerInput) {
@@ -302,7 +302,7 @@ async function runCatalogRequest(
     }
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
-    const authStore = await refreshAuthStore({
+    const { authStore, displayPath } = await refreshAuthStore({
       agentDir: value.input.agentDir,
       inheritedAuthDir: value.input.inheritedAuthDir,
       authStore: value.authStore,
@@ -413,14 +413,17 @@ async function runCatalogRequest(
       staticOwner.staticProviderIds = staticProviderIds;
     }
     catalogGeneration = staticOwner.pluginGeneration;
-    const { value: source, providerExpiries } = await captureProviderCatalogExpiries(
-      () =>
-        prepareAgentCatalogSource(exactAgentFacts, catalogGeneration, "live", false, {
-          authStore,
-          providerDiscoveryProviderIds: request.providerIds,
-          providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
-        }),
-      { refresh: request.refresh },
+    const source = await prepareAgentCatalogSource(
+      exactAgentFacts,
+      catalogGeneration,
+      "live",
+      false,
+      {
+        authStore,
+        refresh: request.refresh,
+        providerDiscoveryProviderIds: request.providerIds,
+        providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
+      },
     );
     const facts = await prepareFullCatalogFacts(
       exactAgentFacts,
@@ -475,7 +478,7 @@ async function runCatalogRequest(
       generationFingerprint,
       snapshot: facts.modelCatalog,
       runtimeModels,
-      providerExpiries,
+      providerExpiries: source.providerExpiries ?? new Map(),
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
       providerAuthLabels:
@@ -485,7 +488,7 @@ async function runCatalogRequest(
               prepareModelCatalogAuthLabels({
                 config: value.input.config,
                 agentDir: value.input.agentDir,
-                authStorePath: resolveAuthStorePathForDisplay(value.input.agentDir),
+                authStorePath: displayPath,
                 workspaceDir: value.input.workspaceDir,
                 env: value.input.env,
                 store: authStore,

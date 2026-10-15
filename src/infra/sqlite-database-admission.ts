@@ -147,13 +147,17 @@ function exchange(target: string | Admission, create?: boolean): void {
   try {
     const scope = typeof target === "string" ? { location: target } : { admissions: [target] };
     const retired = typeof target !== "string" && isRetired(target);
+    const admissions = state.registry.captureExchange(scope, target);
     installSqliteDatabaseAdmissions(
       current(
-        retired ? [target] : captureSqliteDatabaseAdmissions(undefined, scope),
+        admissions,
         retired ? undefined : typeof target === "string" ? target : target.location,
         create,
       ),
     );
+  } catch (error) {
+    state.registry.resetExchangeCursor();
+    throw error;
   } finally {
     state.exchanging = false;
   }
@@ -745,17 +749,7 @@ export function captureSqliteDatabaseAdmissions(
   cursor?: SqliteDatabaseAdmissionCursor,
   scope?: { location?: string; admissions?: SqliteDatabaseAdmissions },
 ): SqliteDatabaseAdmissions {
-  if (!scope) {
-    return state.registry.capture(cursor);
-  }
-  const identities = new Set(scope.admissions?.map((record) => record.identity));
-  if (scope.location !== undefined) {
-    const observed = state.registry.forLocation(scope.location)?.identity;
-    if (observed) {
-      identities.add(observed);
-    }
-  }
-  return state.registry.capture(cursor, identities);
+  return state.registry.capture(cursor, scope);
 }
 
 export function installSqliteDatabaseAdmissions(admissions: SqliteDatabaseAdmissions): void {
@@ -777,4 +771,6 @@ export function canShareSqliteDatabaseAdmissions(): boolean {
 const inherited = readSqliteDatabaseAdmissions(getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY));
 if (inherited) {
   installSqliteDatabaseAdmissions(inherited);
+  // The parent already owns the snapshot inherited by this Worker.
+  state.registry.captureExchange();
 }

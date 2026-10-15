@@ -79,7 +79,7 @@ export function openDashboardPresentation(
 }
 
 function nextPanelId(layout: SidebarLayout, slot: SidebarSlotId): string {
-  const used = new Set(layout.columns.flatMap((column) => column.panels.map((panel) => panel.id)));
+  const used = new Set(layout.columns[0]?.panels.map((panel) => panel.id));
   if (!used.has(slot)) {
     return slot;
   }
@@ -91,20 +91,18 @@ function nextPanelId(layout: SidebarLayout, slot: SidebarSlotId): string {
 }
 
 function removePanel(layout: SidebarLayout, panelId: string): void {
-  for (const column of layout.columns) {
-    const panelIndex = column.panels.findIndex((panel) => panel.id === panelId);
-    if (panelIndex < 0) {
-      continue;
-    }
-    const sideIndex = column.panels
-      .filter((entry) => entry.id !== layout.mainPanelId)
-      .findIndex((entry) => entry.id === panelId);
-    column.panels.splice(panelIndex, 1);
-    if (column.activePanelId === panelId) {
-      const sidePanels = column.panels.filter((entry) => entry.id !== layout.mainPanelId);
-      column.activePanelId = sidePanels[Math.min(sideIndex, sidePanels.length - 1)]?.id ?? "";
-    }
+  const column = layout.columns[0];
+  const panelIndex = column?.panels.findIndex((panel) => panel.id === panelId) ?? -1;
+  if (!column || panelIndex < 0) {
     return;
+  }
+  const sideIndex = column.panels
+    .filter((entry) => entry.id !== layout.mainPanelId)
+    .findIndex((entry) => entry.id === panelId);
+  column.panels.splice(panelIndex, 1);
+  if (column.activePanelId === panelId) {
+    const sidePanels = column.panels.filter((entry) => entry.id !== layout.mainPanelId);
+    column.activePanelId = sidePanels[Math.min(sideIndex, sidePanels.length - 1)]?.id ?? "";
   }
 }
 
@@ -156,9 +154,7 @@ export function openSlot(
   if ((sidebarMainPanel(next)?.slot ?? "conversation") === slot) {
     return next.expandedSide ? setSidebarExpanded(next, false) : next;
   }
-  const column =
-    next.columns.find((entry) => entry.panels.some((panel) => panel.slot === slot)) ??
-    (next.columns[0] ??= createSidebarColumn());
+  const column = (next.columns[0] ??= createSidebarColumn());
   let panel = column.panels.find((entry) => entry.slot === slot);
   if (!panel) {
     panel = { id: nextPanelId(next, slot), slot };
@@ -172,9 +168,7 @@ export function openSlot(
 
 export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {
   let next = structuredClone(layout);
-  const panel = next.columns
-    .flatMap((column) => column.panels)
-    .find((entry) => entry.slot === slot);
+  const panel = next.columns[0]?.panels.find((entry) => entry.slot === slot);
   if (panel) {
     if (next.expandedSide && panel.id === sidebarActivePanel(next)?.id) {
       next = setSidebarExpanded(next, false);
@@ -206,8 +200,8 @@ export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLa
 
 export function activatePanel(layout: SidebarLayout, panelId: string): SidebarLayout {
   const next = structuredClone(layout);
-  const column = next.columns.find((entry) => entry.panels.some((panel) => panel.id === panelId));
-  if (column && panelId !== next.mainPanelId) {
+  const column = next.columns[0];
+  if (column?.panels.some((panel) => panel.id === panelId) && panelId !== next.mainPanelId) {
     selectPanel(next, column, panelId);
   }
   return next;

@@ -119,7 +119,7 @@ async function loadAdmittedImage() {
   return loaded;
 }
 
-it("replaces failed remote images with an unavailable card while preserving local recovery", async () => {
+it("replaces failed native images with unavailable cards and offers local retry", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => Response.json({ available: true })),
@@ -134,8 +134,9 @@ it("replaces failed remote images with an unavailable card while preserving loca
   const localImage = container.querySelector<HTMLImageElement>('img[alt="Local image"]')!;
   expect(localImage).not.toBeNull();
   localImage.dispatchEvent(new Event("error"));
-  expect(container.querySelector('img[alt="Local image"]')).toBe(localImage);
-  expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
+  flush();
+  expect(container.querySelector('img[alt="Local image"]')).toBeNull();
+  expect(container.querySelector(".chat-assistant-attachment-card__retry")).not.toBeNull();
 
   const remoteImage = container.querySelector<HTMLImageElement>('img[alt="Remote image"]')!;
   expect(remoteImage.getAttribute("src")).toBe(remote.url);
@@ -146,13 +147,13 @@ it("replaces failed remote images with an unavailable card while preserving loca
     ".chat-image-frame--compact .chat-assistant-attachment-card",
   );
   expect(card?.textContent).toContain("Could not load this image. Try again.");
-  expect(container.querySelector('img[alt="Local image"]')).toBe(localImage);
+  expect(container.querySelector('img[alt="Local image"]')).toBeNull();
 
   const replacement = { ...remote, url: "https://images.example.test/replacement.png" };
   draw([replacement, local]);
   intersections.at(-1)!();
   flush();
-  expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
+  expect(container.querySelectorAll(".chat-assistant-attachment-card")).toHaveLength(1);
   expect(container.querySelector('img[alt="Remote image"]')?.getAttribute("src")).toBe(
     replacement.url,
   );
@@ -405,3 +406,45 @@ it("ignores replaced observers and aborts detached artifact resolution before bl
   expect(fetch).not.toHaveBeenCalled();
   expect(container.querySelector("img")).toBeNull();
 });
+
+it.each(["error", "timeout"] as const)(
+  "retries a canonical upload handoff after native %s without reviving inline pixels",
+  async (failure) => {
+    const artifactId = crypto.randomUUID();
+    const inline: ImageBlock = { url: "data:image/png;base64,cG5n", artifactId };
+    const fetch = vi.fn(async () => ticketResponse());
+    vi.stubGlobal("fetch", fetch);
+    draw([inline], { localSubmission: true });
+    const image = container.querySelector("img")!;
+    Object.defineProperty(image, "naturalWidth", { value: 20 });
+    image.dispatchEvent(new Event("load"));
+    const canonical: ImageBlock = {
+      url: "media://inbound/" + artifactId,
+      artifactId,
+      factIndex: 0,
+    };
+    draw([canonical], { localSubmission: true, canonicalMessageKey: "failed-upload" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector("img")).toBe(image);
+    if (failure === "error") {
+      image.dispatchEvent(new Event("error"));
+      flush();
+    } else {
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+    expect(container.querySelector("img")).toBeNull();
+    const retry = container.querySelector<HTMLButtonElement>(
+      ".chat-assistant-attachment-card__retry",
+    );
+    expect(retry).not.toBeNull();
+    image.dispatchEvent(new Event("load"));
+    expect(container.querySelector("img")).toBeNull();
+    retry!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const replacement = container.querySelector("img");
+    expect(replacement).not.toBeNull();
+    expect(replacement).not.toBe(image);
+    expect(replacement?.getAttribute("src")).toContain("mediaTicket=image-ticket");
+  },
+);

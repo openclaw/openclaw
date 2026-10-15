@@ -238,7 +238,7 @@ async function captureOriginals(ctx: Context, facts: Awaited<ReturnType<typeof p
   );
 }
 
-async function privateMigrate(ctx: Context, index: number) {
+async function privateMigrate(ctx: Context, index: number, config: OpenClawConfig) {
   ctx.phase = "private migrate";
   const prefix = path.join(storeDirectory(ctx, index), "working-");
   const recorded = manifest(ctx).artifacts.find((file) => file.path.startsWith(prefix));
@@ -252,7 +252,7 @@ async function privateMigrate(ctx: Context, index: number) {
     targetPath: file,
     preserveRowIds: true,
   });
-  await runDatabasePortTask({ operation: "migrate", sourcePath: file }, ctx);
+  await runDatabasePortTask({ operation: "migrate", sourcePath: file, config }, ctx);
   syncDatabasePortPath(file);
   syncDatabasePortPath(path.dirname(file));
   manifest(ctx).artifacts.push(await captureDatabaseArtifact(file));
@@ -266,7 +266,7 @@ async function stageMaterialize(ctx: Context, index: number, config: OpenClawCon
   if (target.verification) {
     return;
   }
-  const working = await privateMigrate(ctx, index);
+  const working = await privateMigrate(ctx, index, config);
   ctx.phase = "stage/materialize";
   const result = await runDatabasePortTask(
     {

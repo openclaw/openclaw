@@ -4,6 +4,7 @@ import { html, render } from "lit";
 import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { settleWebAwesome } from "../../test-helpers/web-awesome.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
   createPaneHeaderWorkspaceFixture,
@@ -94,7 +95,7 @@ it("keeps content actions and focus in Layout across plugin panel swaps", () => 
   expect(state.sidebarLayout.open).toBe(false);
 });
 
-it("retains focused Layout controls and an open menu when header props refresh", () => {
+it("retains focused Layout controls and an open menu when header props refresh", async () => {
   const onSplitRight = vi.fn();
   const sidebarLayout = () => openSlot({ columns: [] }, "workspace");
   const mounted = mountChatPaneHeader([], {
@@ -115,6 +116,7 @@ it("retains focused Layout controls and an open menu when header props refresh",
   menu.open = true;
   menu.dispatchEvent(new Event("wa-show"));
   flush();
+  await settleWebAwesome(mounted.container);
   const close = mounted.container.querySelector(".chat-pane__close-pane")!;
   const split = mounted.container.querySelector(".chat-pane__split-right")!;
   trigger.focus();

@@ -85,6 +85,7 @@ const defaults = {
   hoverDismissDelay: undefined,
   delay: undefined,
   describe: true,
+  pointerThrough: false,
   autoSize: false,
   disabled: false,
   openOnClick: false,
@@ -114,6 +115,7 @@ export class TooltipElement extends HTMLElement implements TooltipProps {
   declare hoverDismissDelay: number | undefined;
   declare delay: number | undefined;
   declare describe: boolean;
+  declare pointerThrough: boolean;
   declare autoSize: boolean;
   declare disabled: boolean;
   declare openOnClick: boolean;
@@ -230,8 +232,8 @@ export class TooltipElement extends HTMLElement implements TooltipProps {
     this.#controller.previewForAnchor(anchor, content, input);
   }
 
-  focusTriggerWithoutOpening(target: HTMLElement) {
-    this.#controller.focusTriggerWithoutOpening(target);
+  focusTriggerWithoutOpening(target: HTMLElement, options?: FocusOptions) {
+    this.#controller.focusTriggerWithoutOpening(target, options);
   }
 
   #scheduleUpdate() {
@@ -294,12 +296,15 @@ export class TooltipElement extends HTMLElement implements TooltipProps {
   }
 }
 
-export function focusWithoutTooltip(target: HTMLElement | null | undefined) {
+export function focusWithoutTooltip(
+  target: HTMLElement | null | undefined,
+  options?: FocusOptions,
+) {
   const tooltip = target?.closest<TooltipElement>("openclaw-tooltip");
   if (tooltip && target) {
-    tooltip.focusTriggerWithoutOpening(target);
+    tooltip.focusTriggerWithoutOpening(target, options);
   } else {
-    target?.focus();
+    target?.focus(options);
   }
 }
 

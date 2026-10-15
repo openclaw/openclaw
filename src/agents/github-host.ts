@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export const GITHUB_PUBLIC_HOST = "github.com";
-export const GITHUB_PUBLIC_API_BASE_URL = "https://api.github.com";
+const GITHUB_PUBLIC_API_BASE_URL = "https://api.github.com";
 
 export const CLEARED_GITHUB_CREDENTIALS = {
   GH_TOKEN: "",

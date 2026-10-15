@@ -2,11 +2,35 @@ import { getHeapStatistics } from "node:v8";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { observeGcSamples, type GcSample } from "./gc-observer.js";
 
+export type WorkerGcStorm = {
+  workerId?: string;
+  runId?: string;
+  sessionKeyHash?: string;
+  cellCount: number;
+  activeCellCount: number;
+  bridgeMethods: string[];
+  majorCollections: number;
+  intervalMs: number;
+  heapUsed: number;
+  heapTotal: number;
+  external: number;
+  arrayBuffers: number;
+  heapSizeLimitBytes: number;
+};
+
+let diagnosticPort: MessagePort | undefined;
+
+/** Isolate-local diagnostics use the memory channel even while a task is parked. */
+export function publishWorkerGcStorm(gcStorm: WorkerGcStorm): void {
+  diagnosticPort?.postMessage({ gcStorm }, []);
+}
+
 const MAX_PENDING_GC_SAMPLES = 256;
 
 /** Publish isolate-local counters without sharing the task transport or keeping it alive. */
 export function serveWorkerMemorySamples(parent: MessagePort): () => void {
   const { port1, port2 } = new MessageChannel();
+  diagnosticPort = port1;
   const heapSizeLimitBytes = process.versions.bun ? undefined : getHeapStatistics().heap_size_limit;
   let gc: GcSample[] | undefined;
   const flushGc = () => {
@@ -42,6 +66,7 @@ export function serveWorkerMemorySamples(parent: MessagePort): () => void {
     }
   });
   port1.once("close", () => {
+    diagnosticPort = undefined;
     stopGc?.();
     gc = undefined;
   });
@@ -50,6 +75,7 @@ export function serveWorkerMemorySamples(parent: MessagePort): () => void {
   sample();
   parent.postMessage({ status: "memory", port: port2 }, [port2]);
   return () => {
+    diagnosticPort = undefined;
     stopGc?.();
     flushGc();
     port1.close();

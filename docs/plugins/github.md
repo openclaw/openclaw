@@ -34,7 +34,10 @@ To intentionally keep it off and silence that notice, set
 The plugin is enabled by default. Connect to the Gateway, then click a public
 GitHub issue, pull request, or commit link in chat. The reader opens beside the
 conversation with a GitHub icon and an **Open on GitHub** link. Hover or focus
-an issue or pull request link to see its preview. Login, OAuth, profile,
+an issue or pull request link to see its preview. Issue and pull request chips
+show the full `owner/repo#number` reference, including shorthand references
+resolved from the session repository. Descriptive link labels stay unchanged.
+Login, OAuth, profile,
 repository, and other general GitHub pages remain ordinary links: neither
 native item previews nor the generic page-preview fallback fetches them.
 A PR or issue URL inside a login redirect query does not make the login link

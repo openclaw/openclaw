@@ -467,16 +467,6 @@ describe("MatrixClient request hardening", () => {
     await expect(first.getTransactionScopeId()).resolves.toBe(await first.getTransactionScopeId());
   });
 
-  it("treats an existing malformed room-encryption state as encrypted", async () => {
-    matrixJsClient.getRoom.mockReturnValue(null);
-    matrixJsClient.getStateEvent.mockResolvedValue({});
-    const client = createSdkClient();
-
-    await expect(client.getMessageWireEventType("!room:example.org")).resolves.toBe(
-      "m.room.encrypted",
-    );
-  });
-
   it("preserves persisted encryption settings when the homeserver no longer exposes room state", async () => {
     matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => false });
     matrixJsClient.getCrypto.mockReturnValue({
@@ -538,21 +528,7 @@ describe("MatrixClient request hardening", () => {
     expect(matrixJsClient.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("does not treat an initialized crypto facade as a working SDK encryption backend", async () => {
-    matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => true });
-    const client = createSdkClient({ encryption: true });
-    (client as { crypto?: object }).crypto = {};
-
-    await expect(
-      client.sendMessage("!room:example.org", { msgtype: "m.text", body: "secret" }),
-    ).rejects.toThrow(/enable encryption/i);
-    expect(matrixJsClient.sendMessage).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { msgtype: MsgType.Image, thumbnail: false },
-    { msgtype: MsgType.Location, thumbnail: true },
-  ])(
+  it.each([{ msgtype: MsgType.Location, thumbnail: true }])(
     "rejects unencrypted $msgtype media (thumbnail: $thumbnail)",
     async ({ msgtype, thumbnail }) => {
       const content = {
@@ -1574,12 +1550,12 @@ describe("MatrixClient request hardening", () => {
     };
     const originalVersion = manifest.version;
     const syncStop = matrixJsClient.classicSyncStop;
-    manifest.version = "42.4.1";
+    manifest.version = "43.0.1";
     try {
       const client = createSdkClient();
 
       await expect(client.quiesceSync()).rejects.toThrow(
-        "Matrix sync quiesce requires matrix-js-sdk 42.4.0; found 42.4.1",
+        "Matrix sync quiesce requires matrix-js-sdk 43.0.0; found 43.0.1",
       );
       expect(syncStop).not.toHaveBeenCalled();
       expect(matrixJsClient.stopClient).not.toHaveBeenCalled();

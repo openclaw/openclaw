@@ -220,17 +220,20 @@ async function runCli(args: string[]) {
 
 async function capture(page: Page, bubble: Locator, name: string) {
   const body = (await page.locator("body").textContent()) ?? "";
-  for (const privateValue of [
-    instance.gatewayToken,
-    instance.hookToken,
-    instance.stateDir,
-    instance.homeDir,
-    process.cwd(),
+  // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- Distinguish rendered disclosure from hidden DOM text.
+  const renderedBody = await page.locator("body").innerText();
+  for (const [field, privateValue] of Object.entries({
+    gatewayToken: instance.gatewayToken,
+    hookToken: instance.hookToken,
+    stateDir: instance.stateDir,
+    homeDir: instance.homeDir,
+    workingDirectory: process.cwd(),
     fixtureKey,
-  ]) {
-    expect(body.includes(privateValue), "Capture must contain only synthetic public content").toBe(
-      false,
-    );
+  })) {
+    expect(
+      body.includes(privateValue),
+      `Capture must contain only synthetic public content (field: ${field}, rendered: ${renderedBody.includes(privateValue)})`,
+    ).toBe(false);
   }
   expect(new URL(page.url()).hash).toBe("");
   const content = [
@@ -416,18 +419,21 @@ suite.define(() => {
                   });
                   throw error;
                 }
-                expect(
-                  await bubble
-                    .locator("img.chat-message-image")
-                    .evaluateAll((images) =>
-                      images.map(
-                        (image) =>
-                          image instanceof HTMLImageElement &&
-                          image.complete &&
-                          image.naturalWidth > 0,
+                // History reconciliation can replace the nodes that just finished decoding.
+                await expect
+                  .poll(() =>
+                    bubble
+                      .locator("img.chat-message-image")
+                      .evaluateAll((images) =>
+                        images.map(
+                          (image) =>
+                            image instanceof HTMLImageElement &&
+                            image.complete &&
+                            image.naturalWidth > 0,
+                        ),
                       ),
-                    ),
-                ).toEqual([true, true]);
+                  )
+                  .toEqual([true, true]);
               };
               await assertDecoded();
               // Capture before the order assertion so an unfixed run retains the actual flattening.

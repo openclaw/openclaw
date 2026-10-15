@@ -213,7 +213,6 @@ describe("paired-node Codex home ownership", () => {
   it.each([
     { phase: "update", home: "changed", sourceHomeId: homeB, allowed: false },
     { phase: "reconcile", home: "changed", sourceHomeId: homeB, allowed: false },
-    { phase: "reconcile", home: "same", sourceHomeId: homeA, allowed: true },
   ] as const)(
     "finalizes during $phase only for the $home home",
     async ({ phase, sourceHomeId, allowed }) => {

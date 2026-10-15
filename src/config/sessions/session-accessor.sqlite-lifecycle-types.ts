@@ -198,6 +198,8 @@ export type SessionEntryMaintenanceInput = {
   activeSessionKeys?: readonly string[];
   archiveDirectory: string;
   forceMaintenance?: boolean;
+  /** Automatic cap work yields between operations; inline cleanup remains exhaustive. */
+  maxCapEntries?: number;
   maintenance: ResolvedSessionMaintenanceConfig;
   preservation: SessionMaintenancePreservationSnapshot;
   storePath: string;

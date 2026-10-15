@@ -29,6 +29,7 @@ import { PRESENCE_QUERY_TIMEOUT_MS } from "../agents/tools/presence-tool-contrac
 import {
   WorkerAdmissionDeadlineExceededError,
   WorkerAdmissionError,
+  WorkerConnectionInterruptedError,
   WorkerConnectionStoppedError,
   WorkerFencedError,
 } from "./worker-connection-contract.js";
@@ -166,6 +167,87 @@ describe("worker presence request lifetime", () => {
       );
       await expect(pending).resolves.toMatchObject({ ok: true });
     } finally {
+      vi.useRealTimers();
+      await connection.stop();
+      for (const peer of server.clients) {
+        peer.terminate();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+});
+
+describe("worker heartbeat callback lifetime", () => {
+  it("settles admitted heartbeat work before stop releases cleanup", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("test gateway did not allocate a TCP port");
+    }
+    const admitted = createDeferred<WebSocket>();
+    server.once("connection", (peer) => {
+      peer.once("message", (data) => {
+        try {
+          const frame: unknown = JSON.parse(rawDataToString(data));
+          if (!Value.Check(WorkerConnectRequestFrameSchema, frame)) {
+            throw new Error("expected the worker admission request");
+          }
+          sendWorkerHello(peer, frame.id, FRAME_CONNECT_PARAMS.admission);
+          admitted.resolve(peer);
+        } catch (error) {
+          admitted.reject(error);
+        }
+      });
+    });
+    const entered = createDeferred<() => void>();
+    const release = createDeferred();
+    const connection = createWorkerConnection({
+      endpoint: {
+        kind: "websocket",
+        url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
+      },
+      connectParams: FRAME_CONNECT_PARAMS,
+      onHeartbeat: async (_result, assertCurrent) => {
+        entered.resolve(assertCurrent);
+        await release.promise;
+      },
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const [peer] = await Promise.all([admitted.promise, connection.start()]);
+      const heartbeat = once(peer, "message");
+      await vi.advanceTimersByTimeAsync(60_000);
+      const [data] = await heartbeat;
+      const frame = JSON.parse(rawDataToString(data));
+      peer.send(
+        JSON.stringify({
+          type: "res",
+          id: frame.id,
+          ok: true,
+          payload: {
+            receivedAtMs: Date.now(),
+            status: "ok",
+            ownerEpoch: FRAME_CONNECT_PARAMS.admission.ownerEpoch,
+          },
+        }),
+      );
+      const assertCurrent = await entered.promise;
+      let stopped = false;
+      const stopping = connection.stop().then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connection.state.kind).toBe("stopped");
+      expect(assertCurrent).toThrow(WorkerConnectionInterruptedError);
+      expect(stopped).toBe(false);
+      release.resolve();
+      await stopping;
+      expect(stopped).toBe(true);
+    } finally {
+      release.resolve();
       vi.useRealTimers();
       await connection.stop();
       for (const peer of server.clients) {
@@ -392,27 +474,6 @@ describe("worker connection endpoint failures", () => {
       }
     },
   );
-
-  it("fails insecure public endpoints without entering reconnect backoff", async () => {
-    const createSocket = vi.fn();
-    const connection = createWorkerConnection({
-      endpoint: {
-        kind: "websocket",
-        url: "ws://gateway.example/__openclaw__/worker",
-      },
-      connectParams: FRAME_CONNECT_PARAMS,
-      createSocket,
-      admissionDeadlineMs: 60_000,
-      reconnectBackoff: { initialMs: 30_000, maxMs: 30_000, factor: 1, jitter: 0 },
-    });
-    const terminalErrors: Error[] = [];
-    connection.onTerminalError((error) => terminalErrors.push(error));
-
-    await expect(connection.start()).rejects.toBeInstanceOf(WorkerConnectionEndpointError);
-    expect(terminalErrors).toHaveLength(1);
-    expect(connection.state).toEqual({ kind: "failed", error: terminalErrors[0] });
-    expect(createSocket).not.toHaveBeenCalled();
-  });
 
   it("does not report local cancellation as a gateway connection failure", async () => {
     let acceptConnection!: (socket: net.Socket) => void;
@@ -690,43 +751,9 @@ describe("worker connection reconnect backoff", () => {
 });
 
 describe("WorkerConnection state listener isolation", () => {
-  it("settles stop and reaches later listeners when an earlier listener throws", async () => {
+  it("isolates listener failures and binds terminal errors during nested transitions", async () => {
     const connection = createIdleConnection();
     const listeners = installThrowingThenHealthyListeners(connection);
-    const terminalErrors: Error[] = [];
-    connection.onTerminalError((error) => terminalErrors.push(error));
-    const exit = connection.waitForExit();
-
-    await expect(connection.stop()).resolves.toBeUndefined();
-    await expect(exit).resolves.toEqual({ kind: "stopped" });
-    await expect(connection.stop()).resolves.toBeUndefined();
-
-    expect(connection.state).toEqual({ kind: "stopped" });
-    expect(listeners.throwingCalls()).toBe(1);
-    expect(listeners.observed).toEqual(["stopped"]);
-    expect(terminalErrors).toEqual([new WorkerConnectionStoppedError()]);
-  });
-
-  it("settles fencing and reaches later listeners when an earlier listener throws", async () => {
-    const connection = createIdleConnection();
-    const listeners = installThrowingThenHealthyListeners(connection);
-    const terminalErrors: Error[] = [];
-    connection.onTerminalError((error) => terminalErrors.push(error));
-
-    expect(() => connection.fence("owner-epoch-mismatch")).not.toThrow();
-    await expect(connection.waitForExit()).resolves.toEqual({
-      kind: "fenced",
-      reason: "owner-epoch-mismatch",
-    });
-
-    expect(connection.state).toEqual({ kind: "fenced", reason: "owner-epoch-mismatch" });
-    expect(listeners.throwingCalls()).toBe(1);
-    expect(listeners.observed).toEqual(["fenced"]);
-    expect(terminalErrors).toEqual([new WorkerFencedError("owner-epoch-mismatch")]);
-  });
-
-  it("keeps terminal errors bound to their emitted state during nested transitions", () => {
-    const connection = createIdleConnection();
     const terminalErrors: Error[] = [];
     connection.onStateChange((state) => {
       if (state.kind === "fenced") {
@@ -741,6 +768,14 @@ describe("WorkerConnection state listener isolation", () => {
       new WorkerConnectionStoppedError(),
       new WorkerFencedError("owner-epoch-mismatch"),
     ]);
+    await expect(connection.waitForExit()).resolves.toEqual({
+      kind: "fenced",
+      reason: "owner-epoch-mismatch",
+    });
+    await expect(connection.stop()).resolves.toBeUndefined();
+    expect(connection.state).toEqual({ kind: "stopped" });
+    expect(listeners.throwingCalls()).toBe(2);
+    expect(listeners.observed).toEqual(["fenced", "stopped"]);
   });
 });
 

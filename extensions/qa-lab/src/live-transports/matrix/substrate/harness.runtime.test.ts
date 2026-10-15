@@ -222,68 +222,17 @@ describe("matrix harness runtime", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds a stalled versions probe by the remaining discovery deadline", async () => {
-    vi.useFakeTimers();
-    const requestTimeout = new AbortController();
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(requestTimeout.signal);
-    try {
-      const { fetchImpl, probeSignals } = createStalledVersionsFetch();
-      const sleepImpl = vi.fn(async () => {});
-      const startedAt = Date.now();
-      const waiting = waitForReachableMatrixBaseUrl({
-        composeFile: "/tmp/docker-compose.matrix-qa.yml",
-        containerBaseUrl: null,
-        fetchImpl,
-        hostBaseUrl: "http://127.0.0.1:28008/",
-        sleepImpl,
-        timeoutMs: 25,
-        pollMs: 1_000,
-      });
-      const rejection = expect(waiting).rejects.toThrow("did not become healthy");
-
-      await vi.advanceTimersByTimeAsync(25);
-      await rejection;
-
-      expect(Date.now() - startedAt).toBe(25);
-      expect(probeSignals).toHaveLength(1);
-      expect(probeSignals[0]?.aborted).toBe(true);
-      expect(sleepImpl).not.toHaveBeenCalled();
-    } finally {
-      timeoutSpy.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not re-poll when the request timeout wins at the discovery deadline", async () => {
-    vi.useFakeTimers();
-    const requestTimeout = new AbortController();
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(requestTimeout.signal);
-    try {
-      const { fetchImpl } = createStalledVersionsFetch();
-      const startedAt = Date.now();
-      const sleepImpl = vi.fn(async (ms: number) => {
-        vi.setSystemTime(Date.now() + ms);
-      });
-      const waiting = waitForReachableMatrixBaseUrl({
-        composeFile: "/tmp/docker-compose.matrix-qa.yml",
-        containerBaseUrl: null,
-        fetchImpl,
-        hostBaseUrl: "http://127.0.0.1:28008/",
-        sleepImpl,
-        timeoutMs: 25,
-        pollMs: 1_000,
-      });
-
-      vi.setSystemTime(startedAt + 24);
-      requestTimeout.abort(new DOMException("request timed out", "TimeoutError"));
-      await expect(waiting).rejects.toThrow("did not become healthy");
-
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(sleepImpl).not.toHaveBeenCalled();
-    } finally {
-      timeoutSpy.mockRestore();
-      vi.useRealTimers();
-    }
+  it("cancels a stalled versions request when its deadline signal aborts", async () => {
+    const { fetchImpl, probeSignals } = createStalledVersionsFetch();
+    const controller = new AbortController();
+    const pending = isMatrixVersionsReachable(
+      "http://127.0.0.1:28008/",
+      fetchImpl,
+      controller.signal,
+    );
+    controller.abort(new DOMException("Deadline expired", "TimeoutError"));
+    await expect(pending).resolves.toBe(false);
+    expect(probeSignals[0]?.aborted).toBe(true);
   });
 
   it("probes the container fallback when the host versions probe stalls", async () => {

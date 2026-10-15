@@ -3,7 +3,7 @@ import { page, userEvent } from "vitest/browser";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { nextFrame } from "../test-helpers/modal-dialog.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
-import "./image-lightbox.ts";
+import "./image-lightbox.tsx";
 
 const containers = new Set<HTMLElement>();
 let previousViewport: { width: number; height: number };

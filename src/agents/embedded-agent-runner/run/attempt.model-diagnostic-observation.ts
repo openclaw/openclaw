@@ -24,7 +24,7 @@ type ModelCallPromptStats = NonNullable<
 type ModelCallUsage = NonNullable<
   Extract<DiagnosticEventInput, { type: "model.call.completed" }>["usage"]
 >;
-export type ModelCallObservationState = {
+type ModelCallObservationState = {
   requestPayloadBytes?: number;
   providerAcceptanceKind?: ProviderAcceptance["kind"];
   responseStatus?: number;

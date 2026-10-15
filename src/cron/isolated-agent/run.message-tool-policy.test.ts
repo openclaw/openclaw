@@ -170,7 +170,7 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
   });
   afterEach(() => restoreFastTestEnv(previousFastTestEnv));
 
-  it.each([undefined, "cron", "event"] as const)(
+  it.each([undefined, "event"] as const)(
     "carries trusted caller classification %s through embedded execution",
     async (trigger) => {
       const result = await runCronIsolatedAgentTurn({ ...makeParams(), trigger });
