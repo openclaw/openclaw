@@ -380,28 +380,21 @@ export function createGatewayChatMetadataRuntime(params: {
   // data minus changed providers instead of waiting for the replacement to publish.
   const publishedModelLists = new Map<
     string,
-    { result: ModelsListResult; facts: PreparedGenerationFacts; authStore: AuthProfileStore }
-  >();
-  const retainedModelsList = (key: string, agentId: string) => {
-    const published = publishedModelLists.get(key);
-    const agent = published?.facts.agents.find((candidate) => candidate.agentId === agentId);
-    if (!published || !agent) {
-      return undefined;
+    {
+      result: ModelsListResult;
+      source: Parameters<typeof retainPublishedModelsList>[1];
+      readAuthStore: () => AuthProfileStore;
     }
-    const { agentDir, inheritedAuthDir, metadataSnapshot } = agent.owner;
-    return retainPublishedModelsList(
-      published.result,
-      {
-        config: published.facts.config,
-        agentId,
-        authStore: published.authStore,
-        providerPlugins: metadataSnapshot.owners.providers,
-      },
-      {
+  >();
+  const retainedModelsList = (key: string) => {
+    const published = publishedModelLists.get(key);
+    return (
+      published &&
+      retainPublishedModelsList(published.result, published.source, {
         config: deps.getConfig(),
-        agentId,
-        authStore: deps.getPreparedAuthStore(agentDir, inheritedAuthDir) ?? EMPTY_AUTH_STORE,
-      },
+        agentId: published.source.agentId,
+        authStore: published.readAuthStore(),
+      })
     );
   };
   const readModelsList = async (
@@ -423,7 +416,7 @@ export function createGatewayChatMetadataRuntime(params: {
       !current ||
       !authStoresCurrent(current.facts, deps) ||
       current.facts.agents.some((agent) => !agent.owner.isCurrent());
-    const retained = rebuilding ? retainedModelsList(key, agentId) : undefined;
+    const retained = rebuilding ? retainedModelsList(key) : undefined;
     if (retained) {
       return retained;
     }
@@ -437,7 +430,10 @@ export function createGatewayChatMetadataRuntime(params: {
       });
     } catch (error) {
       // A publication that retires the read's owner mid-flight is not a user-visible failure.
-      const fallback = retainedModelsList(key, agentId);
+      const fallback =
+        (error instanceof PreparedModelRuntimePublicationSupersededError ||
+          error instanceof ChatMetadataSnapshotUnavailableError) &&
+        retainedModelsList(key);
       if (fallback) {
         return fallback;
       }
@@ -445,12 +441,18 @@ export function createGatewayChatMetadataRuntime(params: {
     }
     const agent = generation?.facts.agents.find((candidate) => candidate.agentId === agentId);
     if (result && generation && agent) {
+      const { agentDir, inheritedAuthDir, metadataSnapshot } = agent.owner;
+      const readAuthStore = () =>
+        deps.getPreparedAuthStore(agentDir, inheritedAuthDir) ?? EMPTY_AUTH_STORE;
       publishedModelLists.set(key, {
         result,
-        facts: generation.facts,
-        authStore:
-          deps.getPreparedAuthStore(agent.owner.agentDir, agent.owner.inheritedAuthDir) ??
-          EMPTY_AUTH_STORE,
+        source: {
+          config: generation.facts.config,
+          agentId,
+          authStore: readAuthStore(),
+          providerPlugins: metadataSnapshot.owners.providers,
+        },
+        readAuthStore,
       });
       pruneMapToMaxSize(publishedModelLists, CHAT_METADATA_CACHE_MAX_ENTRIES);
     }
