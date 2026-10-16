@@ -113,6 +113,7 @@ function createPluginPendingView(): PluginApprovalPendingView {
       {
         decision: "allow-once",
         label: "Allow Once",
+        style: "success",
         command: "/approve plugin:approval-1 allow-once",
       },
     ],
