@@ -22,7 +22,10 @@ import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import "../../ai-transport-runtime-host.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import type { StreamFn } from "../../runtime/index.js";
-import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import {
+  castAgentMessage,
+  makeAgentAssistantMessage,
+} from "../../test-helpers/agent-message-fixtures.js";
 import {
   testing as extraParamsTesting,
   type WrapProviderStreamFnParams,
@@ -312,10 +315,15 @@ describe("prepareEmbeddedAttemptTransport", () => {
     input.attempt.runtimePlan!.transport.resolveExtraParams = () => ({
       [parameter]: scenario.configured,
     });
-    const checkpoint = castAgentMessage({
-      role: "assistant",
+    const checkpoint = makeAgentAssistantMessage({
       content: [{ type: "text", text: "CE_SELECTED_HISTORY" }],
       providerReplay: {
+        v: 1,
+        provider: input.attempt.model.provider,
+        api: input.attempt.model.api,
+        model: input.attempt.model.id,
+        data: "opaque-checkpoint",
+        baseUrlHash: "synthetic-endpoint-hash",
         type: responses ? "openai-responses-compaction" : "anthropic-compaction",
       },
     });
@@ -333,9 +341,9 @@ describe("prepareEmbeddedAttemptTransport", () => {
     if (responses && scenario.suppressed) {
       expect(prepared.effectiveExtraParams.responsesCompactEndpoint).toBe(false);
     }
-    const sent = streamFn.mock.calls.at(-1)?.[1].messages;
-    expect(sent?.[0]?.content).toEqual(checkpoint.content);
-    expect(sent?.[0]?.providerReplay).toEqual(
+    const sent = streamFn.mock.calls.at(-1)?.[1].messages.find((m) => m.role === "assistant");
+    expect(sent?.content).toEqual(checkpoint.content);
+    expect(sent?.providerReplay).toEqual(
       scenario.suppressed ? undefined : checkpoint.providerReplay,
     );
     expect(checkpoint.providerReplay).toBeDefined();
