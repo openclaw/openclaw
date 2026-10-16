@@ -103,7 +103,9 @@ function parseReflectionResponse(text: string) {
           ["true", "yes"].includes(value.followUp.trim().toLowerCase()));
       const userMessage = typeof value.userMessage === "string" ? value.userMessage.trim() : "";
       return { learning, followUp, userMessage: userMessage || undefined };
-    } catch {}
+    } catch {
+      // Non-JSON model replies fall back to the next candidate, then plain-text learning.
+    }
   }
   return trimmed ? { learning: trimmed, followUp: false } : null;
 }

@@ -14,9 +14,10 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.for([false, true])(
-  "launcher exit preserves independent migration or settles bound maintenance (bound=%s)",
-  async (bound, { signal }) => {
+it.for(["independent", "preload", "env"] as const)(
+  "launcher exit preserves independent migration or settles %s maintenance",
+  async (transport, { signal }) => {
+    const bound = transport !== "independent";
     const root = dirs.make("openclaw-parent-lifetime-");
     const databasePath = path.join(root, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -55,7 +56,7 @@ it.for([false, true])(
     `;
     const childArgs = [
       ...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1),
-      ...(bound ? ["--import", CLI_PARENT_BOUND_PRELOAD] : []),
+      ...(transport === "preload" ? ["--import", CLI_PARENT_BOUND_PRELOAD] : []),
       "--input-type=module",
       "-e",
       source,
@@ -66,7 +67,8 @@ it.for([false, true])(
       `
       import { spawn } from "node:child_process";
       const child = spawn(process.execPath, [...process.execArgv, ...${JSON.stringify(childArgs)}], {
-        detached: ${!bound}, stdio: ["ignore", "inherit", "inherit", "ipc"], env: process.env,
+        detached: ${!bound}, stdio: ["ignore", "inherit", "inherit", "ipc"],
+        env: { ...process.env, ...(${transport === "env"} ? { OPENCLAW_CLI_RESPAWN_PARENT: String(process.pid) } : {}) },
       });
       child.once("message", pid => { process.send(pid); process.exit(0); });
     `,

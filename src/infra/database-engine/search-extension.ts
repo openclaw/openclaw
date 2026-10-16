@@ -20,6 +20,8 @@ import {
   publishPostgresSearch,
 } from "./postgres-search-schema.js";
 import { bindStoreSearch } from "./search.js";
+import { admitSqliteMemoryVectorSearch } from "./sqlite-memory-vector-schema.js";
+import { admitSqliteMemoryTextSearch } from "./sqlite-search-schema.js";
 
 class SearchExtensionDefinitionChangedError extends Error {
   override name = "SearchExtensionDefinitionChangedError";
@@ -32,7 +34,13 @@ export function admitStoreSearchExtension(
   definition: SearchSchema,
 ) {
   if (!isPostgresSqlConnection(db)) {
-    return bindStoreSearch(db, definition);
+    if (name === "memory.vector") {
+      admitSqliteMemoryVectorSearch(db, definition);
+    }
+    return bindStoreSearch(
+      db,
+      name === "memory.text" ? admitSqliteMemoryTextSearch(db, definition) : definition,
+    );
   }
   const base = getAdmittedPostgresSchema(db);
   const facts = getPostgresPhysicalFacts(db);

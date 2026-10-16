@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
@@ -119,6 +120,21 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         }
         await closeOpenClawStateDatabaseAsync();
         const retainedEntries = files.map(sqliteEntries);
+        // Fresh crypto roots are port-ready; only genuine legacy dedupe rows require repair.
+        const legacy = {
+          roomId: "!legacy:example.org",
+          eventId: "$before-upgrade",
+          ts: Date.now(),
+        };
+        const legacyKey = `active:${createHash("sha256")
+          .update(`active\0${legacy.roomId}\0${legacy.eventId}`)
+          .digest("hex")}`;
+        {
+          using db = openNodeSqliteDatabase(files[0]!);
+          db.prepare(
+            "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at) VALUES ('matrix', 'inbound-dedupe', ?, ?, ?)",
+          ).run(legacyKey, JSON.stringify(legacy), legacy.ts);
+        }
         await expect(doctorDatabasePort({ to: "postgres", dryRun: true })).rejects.toThrow(
           "Run openclaw doctor --fix first, then retry port. If a named plugin is disabled, enable it for repair.",
         );

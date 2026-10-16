@@ -1,7 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadGitHubDetail } from "./detail.js";
-import type { ControlUiGitHubPreviewIdentity } from "./preview.js";
+import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
 import type { GitHubTarget } from "./targets.js";
 import { parseGitHubTarget } from "./targets.js";
 

@@ -697,6 +697,7 @@ export function createStreamRendering({
     resetPartialReplyDirectives();
     state.partialBlockState = createAssistantStreamBlockState();
     state.assistantStream = undefined;
+    state.nextCommentaryAt = undefined;
     state.currentSourceMessagingToolHeldPartial = undefined;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
