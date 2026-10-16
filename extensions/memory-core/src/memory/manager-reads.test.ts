@@ -62,13 +62,7 @@ describe("memory manager reads", () => {
       true,
     );
     expect(diagnostic.status().sourceCounts).toMatchObject([
-      {
-        source: "memory",
-        files: 0,
-        chunks: 0,
-        eligible: 1,
-        issues: [],
-      },
+      { source: "memory", files: 0, chunks: 0, eligible: 1, issues: [] },
     ]);
   });
 
@@ -143,10 +137,7 @@ describe("memory manager reads", () => {
     try {
       await manager.sync({
         reason: "targeted-read-budget",
-        sessions: [archivedId, archivedId].map((sessionId) => ({
-          agentId: "main",
-          sessionId,
-        })),
+        sessions: [archivedId, archivedId].map((sessionId) => ({ agentId: "main", sessionId })),
         archiveFiles: [activeArchiveFile, archive!.sessionFile, archive!.sessionFile],
       });
     } finally {

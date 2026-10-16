@@ -107,38 +107,25 @@ describe("memory index", () => {
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
     }
-    let releaseFirstQuery: () => void = () => {};
-    let markFirstQueryStarted: () => void = () => {};
-    const firstQueryGate = new Promise<void>((resolve) => {
-      releaseFirstQuery = resolve;
-    });
-    const firstQueryStarted = new Promise<void>((resolve) => {
-      markFirstQueryStarted = resolve;
-    });
+    const firstQueryGate = createDeferred<void>();
+    const firstQueryStarted = createDeferred<void>();
     fields.provider.embed = async () => {
-      markFirstQueryStarted();
-      await firstQueryGate;
+      firstQueryStarted.resolve();
+      await firstQueryGate.promise;
       return [1, 0, 0, 0];
     };
 
     const queryPromise = manager.search("alpha");
-    await firstQueryStarted;
+    await firstQueryStarted.promise;
     const retirementPromise = fields.retireCurrentProvider();
-    let retirementSettled = false;
-    void retirementPromise.then(
-      () => {
-        retirementSettled = true;
-      },
-      () => {
-        retirementSettled = true;
-      },
-    );
+    const retirementSettled = vi.fn();
+    void retirementPromise.then(retirementSettled, retirementSettled);
     try {
       await Promise.resolve();
-      expect(retirementSettled).toBe(false);
+      expect(retirementSettled).not.toHaveBeenCalled();
       expect(providerFixture.providerCloseCalls).toBe(0);
     } finally {
-      releaseFirstQuery();
+      firstQueryGate.resolve();
     }
 
     await expect(queryPromise).resolves.toEqual(
@@ -210,17 +197,11 @@ describe("memory index", () => {
       closing: boolean;
       closed: boolean;
     };
-    let releaseVectorSearch: () => void = () => {};
-    let markVectorSearchStarted: () => void = () => {};
-    const vectorSearchGate = new Promise<void>((resolve) => {
-      releaseVectorSearch = resolve;
-    });
-    const vectorSearchStarted = new Promise<void>((resolve) => {
-      markVectorSearchStarted = resolve;
-    });
+    const vectorSearchGate = createDeferred<void>();
+    const vectorSearchStarted = createDeferred<void>();
     fields.searchVector = async () => {
-      markVectorSearchStarted();
-      await vectorSearchGate;
+      vectorSearchStarted.resolve();
+      await vectorSearchGate.promise;
       return { results: [], candidates: [] };
     };
 
@@ -238,32 +219,25 @@ describe("memory index", () => {
       },
     );
     const searchPromise = manager.search("alpha");
-    await vectorSearchStarted;
+    await vectorSearchStarted.promise;
     const closePromise = manager.close();
-    let closeSettled = false;
-    void closePromise.then(
-      () => {
-        closeSettled = true;
-      },
-      () => {
-        closeSettled = true;
-      },
-    );
+    const closeSettled = vi.fn();
+    void closePromise.then(closeSettled, closeSettled);
     try {
       await Promise.resolve();
-      expect(closeSettled).toBe(false);
+      expect(closeSettled).not.toHaveBeenCalled();
       expect(fields.closing).toBe(true);
       expect(fields.closed).toBe(false);
       expect(providerFixture.providerCloseCalls).toBe(0);
-      releaseVectorSearch();
+      vectorSearchGate.resolve();
       await generationReleaseStarted.promise;
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      expect(closeSettled).toBe(false);
+      expect(closeSettled).not.toHaveBeenCalled();
       expect(providerFixture.providerCloseCalls).toBe(0);
     } finally {
-      releaseVectorSearch();
+      vectorSearchGate.resolve();
       generationReleaseGate.resolve();
       await Promise.allSettled([searchPromise, closePromise]);
     }
@@ -278,38 +252,25 @@ describe("memory index", () => {
     const fields = manager as unknown as {
       ensureVectorReady: () => Promise<boolean>;
     };
-    let releaseProbe: () => void = () => {};
-    let markProbeStarted: () => void = () => {};
-    const probeGate = new Promise<void>((resolve) => {
-      releaseProbe = resolve;
-    });
-    const probeStarted = new Promise<void>((resolve) => {
-      markProbeStarted = resolve;
-    });
+    const probeGate = createDeferred<void>();
+    const probeStarted = createDeferred<void>();
     fields.ensureVectorReady = async () => {
-      markProbeStarted();
-      await probeGate;
+      probeStarted.resolve();
+      await probeGate.promise;
       return true;
     };
 
     const probePromise = manager.probeVectorAvailability();
-    await probeStarted;
+    await probeStarted.promise;
     const closePromise = manager.close();
-    let closeSettled = false;
-    void closePromise.then(
-      () => {
-        closeSettled = true;
-      },
-      () => {
-        closeSettled = true;
-      },
-    );
+    const closeSettled = vi.fn();
+    void closePromise.then(closeSettled, closeSettled);
     try {
       await Promise.resolve();
-      expect(closeSettled).toBe(false);
+      expect(closeSettled).not.toHaveBeenCalled();
       expect(providerFixture.providerCloseCalls).toBe(0);
     } finally {
-      releaseProbe();
+      probeGate.resolve();
     }
 
     await expect(probePromise).resolves.toBe(true);
@@ -377,10 +338,7 @@ describe("memory index", () => {
   });
 
   it("fails closed and retries a required primary after a null fallback result", async () => {
-    const cfg = createCfg({
-      provider: "openai",
-      fallback: "fallback-provider",
-    });
+    const cfg = createCfg({ provider: "openai", fallback: "fallback-provider" });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as {
@@ -427,9 +385,7 @@ describe("memory index", () => {
   });
 
   it("keeps concurrent optional searches in FTS mode when shared fallback fails", async () => {
-    const cfg = createCfg({
-      fallback: "fallback-provider",
-    });
+    const cfg = createCfg({ fallback: "fallback-provider" });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as {
@@ -451,10 +407,8 @@ describe("memory index", () => {
       await ensureProviderInitialized();
     };
     providerFixture.providerCreationFailure = "fallback-provider";
-    let releaseProviderInit: () => void = () => {};
-    providerFixture.providerInitGate = new Promise<void>((resolve) => {
-      releaseProviderInit = resolve;
-    });
+    const providerInit = createDeferred<void>();
+    providerFixture.providerInitGate = providerInit.promise;
 
     const callsBeforeSearch = providerFixture.providerCalls.length;
     const firstSearch = manager.search("alpha");
@@ -465,21 +419,14 @@ describe("memory index", () => {
     );
     const initializationCallsBeforeSecondSearch = providerInitializationCalls;
     const secondSearch = manager.search("zebra");
-    let secondSettled = false;
-    void secondSearch.then(
-      () => {
-        secondSettled = true;
-      },
-      () => {
-        secondSettled = true;
-      },
-    );
+    const secondSettled = vi.fn();
+    void secondSearch.then(secondSettled, secondSettled);
     try {
       await vi.waitFor(() =>
         expect(providerInitializationCalls).toBeGreaterThan(initializationCallsBeforeSecondSearch),
       );
-      expect(secondSettled).toBe(false);
-      releaseProviderInit();
+      expect(secondSettled).not.toHaveBeenCalled();
+      providerInit.resolve();
       const results = await Promise.all([firstSearch, secondSearch]);
       expect(results.every((result) => result.length > 0)).toBe(true);
       expect(
@@ -489,7 +436,7 @@ describe("memory index", () => {
       ).toHaveLength(1);
     } finally {
       providerFixture.providerInitGate = null;
-      releaseProviderInit();
+      providerInit.resolve();
       await Promise.allSettled([firstSearch, secondSearch]);
     }
   });

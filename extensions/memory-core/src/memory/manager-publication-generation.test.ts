@@ -68,30 +68,29 @@ function sourceReplacement(model: string): MemorySourceIndexReplacement {
   };
 }
 
+const publish = (database: MemoryIndexDatabase, model: string) =>
+  database.replaceSource(
+    sourceReplacement(model),
+    () => {},
+    async () => true,
+  );
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object";
+
 function indexCommands(calls: unknown[][]): string[] {
   return calls.flatMap(([message]) => {
     if (
-      typeof message === "object" &&
-      message !== null &&
-      "input" in message &&
-      typeof message.input === "object" &&
-      message.input !== null &&
-      "kind" in message.input &&
+      isRecord(message) &&
+      isRecord(message.input) &&
       message.input.kind === "index-read" &&
-      "command" in message.input &&
-      typeof message.input.command === "object" &&
-      message.input.command !== null &&
-      "type" in message.input.command &&
+      isRecord(message.input.command) &&
       typeof message.input.command.type === "string"
     ) {
       return [message.input.command.type];
     }
     if (
-      typeof message !== "object" ||
-      message === null ||
-      !("type" in message) ||
+      !isRecord(message) ||
       message.type !== "execute" ||
-      !("input" in message) ||
       !(message.input instanceof Uint8Array)
     ) {
       return [];
@@ -151,22 +150,14 @@ it("retains session entry facts across memory publication and refreshes after a 
     const entryReads = () =>
       messages.mock.calls.filter(([message]) => {
         return (
-          typeof message === "object" &&
-          message !== null &&
-          "input" in message &&
-          typeof message.input === "object" &&
-          message.input !== null &&
-          "kind" in message.input &&
+          isRecord(message) &&
+          isRecord(message.input) &&
           message.input.kind === "session-entry-read"
         );
       });
     try {
       await database.writeMetadata(metadata);
-      await database.replaceSource(
-        sourceReplacement("fts-only"),
-        () => {},
-        async () => true,
-      );
+      await publish(database, "fts-only");
       expect((await getSessionEntryAsync(target))?.label).toBe("Before");
       expect(entryReads()).toEqual([]);
 
@@ -238,10 +229,7 @@ it("keeps no-op and refused publication preparation SQL-free without opening a w
       requireNativeSqliteDatabase(borrowed.db),
       borrowed.release,
       false,
-      {
-        agentId: "main",
-        path: source.filename,
-      },
+      { agentId: "main", path: source.filename },
     );
     const sql = observeHostDataSql();
     const messages = vi.spyOn(Worker.prototype, "postMessage");
@@ -257,14 +245,7 @@ it("keeps no-op and refused publication preparation SQL-free without opening a w
       expect(
         messages.mock.calls.filter(([request]) => {
           const value: unknown = request;
-          return (
-            value !== null &&
-            typeof value === "object" &&
-            "type" in value &&
-            value.type === "open" &&
-            "databasePath" in value &&
-            value.databasePath === source.filename
-          );
+          return isRecord(value) && value.type === "open" && value.databasePath === source.filename;
         }),
       ).toEqual([]);
     } finally {
@@ -279,11 +260,7 @@ it("reads committed index state while another operation holds the writer FIFO", 
   signal,
 }) => {
   await withPublishedIndex(async (database) => {
-    await database.replaceSource(
-      sourceReplacement("fts-only"),
-      () => {},
-      async () => true,
-    );
+    await publish(database, "fts-only");
     await database.closePublicationWorker();
     const sql = observeHostDataSql();
     const entered = createDeferred<void>();
@@ -330,11 +307,7 @@ it("publishes committed metadata, presence, and revision facts with source mutat
       hasSemanticChunks: false,
     });
     for (const model of ["fts-only", "test-model"]) {
-      await database.replaceSource(
-        sourceReplacement(model),
-        () => {},
-        async () => true,
-      );
+      await publish(database, model);
       expect(database.facts).toMatchObject({
         meta: metadata,
         hasIndexedChunks: true,
@@ -398,11 +371,7 @@ it("refreshes facts once after another in-process writer commits", async () => {
 
 it("refreshes invalidated source and vector facts after an in-process write", async () => {
   await withPublishedIndex(async (database) => {
-    await database.replaceSource(
-      sourceReplacement("test-model"),
-      () => {},
-      async () => true,
-    );
+    await publish(database, "test-model");
     await withOpenClawAgentDatabaseWrite(database.writeOptions!, ({ db }) => {
       db.prepare("UPDATE memory_index_sources SET hash = '' WHERE source = ?").run("memory");
       db.prepare(
