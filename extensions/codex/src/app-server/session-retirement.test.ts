@@ -219,7 +219,7 @@ it.each(["resume-first", "unsubscribe-first"])(
           await f.resume(successor);
         })
       : f.remove();
-    let completion = Promise.allSettled([first]);
+    let completion: Promise<PromiseSettledResult<void>[]> = Promise.allSettled([first]);
     try {
       await wait(entered.promise, `${order} operation did not enter the native queue`);
       let resumeEntered = false;

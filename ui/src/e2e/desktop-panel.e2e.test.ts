@@ -69,7 +69,7 @@ const workerEnvironment = (worker: object = {}, id = "worker-desktop-1") => ({
 const desktopGateway = (
   page: Page,
   environments: readonly unknown[] | null = [],
-  observation?: unknown,
+  observation?: object,
   scenario: ControlUiMockGatewayScenario = {},
 ) =>
   installMockGateway(page, {

@@ -132,7 +132,7 @@ function bindingAccessors(
   return {
     read: async (locator: string, _lookup?: unknown) =>
       testCodexAppServerBindingStore.read(identity(locator)),
-    async write(locator: string, binding: ThreadBinding, _lookup?: unknown) {
+    write: async (locator: string, binding: ThreadBinding, _lookup?: unknown) => {
       await testCodexAppServerBindingStore.mutate(identity(locator), {
         kind: "set",
         binding: { ...defaults, ...binding },
