@@ -10,7 +10,7 @@ import type { EditorId } from "../../../lib/editor-links.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent } from "../../../lit/solid-content.tsx";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
-import type { FileCopyAction, FileCopyFeedback } from "./chat-file-copy-controller.ts";
+import type { FileCopyAction, FileCopyFeedback } from "./chat-file-copy.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileHtmlPreviewControls } from "./chat-html-preview.ts";
 import type { FileSidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
