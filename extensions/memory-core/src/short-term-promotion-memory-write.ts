@@ -72,12 +72,6 @@ async function readMemoryBytesIfPresent(filePath: string): Promise<Buffer | null
   }
 }
 
-function assertMemoryFileUtf8(filePath: string, bytes: Buffer | null): void {
-  if (bytes && !isUtf8(bytes)) {
-    throw new MemoryFileNotUtf8Error(filePath);
-  }
-}
-
 export async function resolveMemoryWritePath(
   filePath: string,
   workspaceDir?: string,
@@ -134,7 +128,9 @@ async function writeExistingMemoryInPlace(params: {
   conflictMessage?: string;
 }): Promise<boolean> {
   const existingBytes = await readMemoryBytesIfPresent(params.filePath);
-  assertMemoryFileUtf8(params.filePath, existingBytes);
+  if (existingBytes && !isUtf8(existingBytes)) {
+    throw new MemoryFileNotUtf8Error(params.filePath);
+  }
   if ((existingBytes ? existingBytes.toString("utf8") : "") !== params.expectedContent) {
     throw new MemoryWriteConflictError(params.conflictMessage);
   }
@@ -212,7 +208,10 @@ export async function commitMemoryContent(
   // bytes on disk do not decode cleanly so the rewrite cannot persist U+FFFD
   // over unrelated content. beforeRename repeats the admission to close the
   // window between this check and the rename.
-  assertMemoryFileUtf8(params.filePath, await readMemoryBytesIfPresent(params.filePath));
+  const existingBytes = await readMemoryBytesIfPresent(params.filePath);
+  if (existingBytes && !isUtf8(existingBytes)) {
+    throw new MemoryFileNotUtf8Error(params.filePath);
+  }
   const publication: {
     state: "unattempted" | "unchanged-after-rejection" | "uncertain" | "committed";
   } = { state: "unattempted" };
@@ -229,7 +228,9 @@ export async function commitMemoryContent(
       throwOnCleanupError: true,
       beforeRename: async () => {
         const currentBytes = await readMemoryBytesIfPresent(params.filePath);
-        assertMemoryFileUtf8(params.filePath, currentBytes);
+        if (currentBytes && !isUtf8(currentBytes)) {
+          throw new MemoryFileNotUtf8Error(params.filePath);
+        }
         if (
           params.expectedHash &&
           hashMemoryContent(currentBytes ? currentBytes.toString("utf8") : "") !==

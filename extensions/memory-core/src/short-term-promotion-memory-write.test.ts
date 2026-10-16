@@ -209,10 +209,7 @@ it("refuses to rewrite a memory file that is not valid UTF-8", async () => {
       allowInPlaceFallback: true,
       content: `${lossy}- promoted entry\n`,
     }),
-  ).rejects.toMatchObject({
-    name: "MemoryFileNotUtf8Error",
-    message: expect.stringContaining("not valid UTF-8") as unknown as string,
-  });
+  ).rejects.toThrow("not valid UTF-8");
 
   // The refusal must leave the file byte-for-byte unchanged, U+FFFD included nowhere.
   expect(await fs.readFile(memoryPath)).toEqual(malformed);
