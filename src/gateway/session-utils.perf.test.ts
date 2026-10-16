@@ -394,10 +394,9 @@ describe("session list resolver cache", () => {
     { name: "wide ordering", limit: 300, search: undefined },
     { name: "unmatched search", limit: 1, search: "unmatched" },
   ])(
-    "reuses resident input facts for $name while worker selection leaves the event loop free",
+    "reuses resident input facts for $name without a request-time yield",
     async ({ limit, search }) => {
       await withStateDirEnv("openclaw-list-work-budget-", async ({ stateDir }) => {
-        const profiles = await prepareUserProfileCatalog();
         resetPluginRuntimeStateForTest();
         setActivePluginRegistry(createEmptyPluginRegistry());
         const cfg: OpenClawConfig = {};
@@ -446,7 +445,7 @@ describe("session list resolver cache", () => {
             expect(result.sessions.map((row) => row.key)).toEqual(
               !search ? Object.keys(store).toReversed().slice(0, limit) : [],
             );
-            expect(controlRan).toBe(true);
+            expect(controlRan).toBe(false);
             expect(rows).not.toHaveBeenCalled();
             expect(workMs).toBe(0);
           }
@@ -455,7 +454,6 @@ describe("session list resolver cache", () => {
           rows.mockRestore();
           clock.mockRestore();
           projection.dispose();
-          profiles.release();
           await control;
         }
       });

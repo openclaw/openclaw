@@ -22,7 +22,6 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     cronStreamMatcher: runtimeProcessEntrypoint("gateway/cron-stream-matcher.worker"),
     controlUiFile: runtimeProcessEntrypoint("gateway/control-ui-file.worker"),
     publicSessionCard: runtimeProcessEntrypoint("gateway/control-ui-public-session-card.worker"),
-    sessionList: runtimeProcessEntrypoint("gateway/session-list.worker"),
     nodeBootstrapArtifact: runtimeProcessEntrypoint(
       "gateway/worker-environments/node-bootstrap-artifact.worker",
     ),

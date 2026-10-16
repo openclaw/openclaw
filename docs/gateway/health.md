@@ -107,10 +107,6 @@ initial fleet-wide skills scan runs in tracked maintenance after readiness;
 on-demand skill reads still prepare the requested workspace. Readiness
 also waits for the reply and WebSocket connection modules to load, so immediate
 connections and first turns reuse the prepared runtime.
-The session-list worker warms alongside startup without holding readiness. Until
-it is warm, session lists use the already prepared main-thread projection, so
-reconnecting clients do not wait for worker initialization. The worker stays
-resident for the projection's lifetime.
 Update verification still waits for startup completion before checking readiness.
 
 These probe paths stay at the server root even when `gateway.controlUi.basePath`

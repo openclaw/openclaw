@@ -6,7 +6,6 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { PreparedRepositoryWorkspace } from "../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import * as records from "./session-row-projection-record.js";
-import type { SnapshotOptions } from "./session-row-render.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 
@@ -37,7 +36,7 @@ export type SessionRowReadView = {
   readMembership(query: records.Lookup): ReadonlySet<string> | undefined;
   present(
     record: records.MaterializedRow,
-    options?: SnapshotOptions,
+    options?: records.SnapshotOptions,
   ): ReturnType<typeof records.present>;
   selectEntries(query: { key: string }): records.EntryRow[];
   readonly state: {

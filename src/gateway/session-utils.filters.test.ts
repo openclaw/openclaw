@@ -14,30 +14,14 @@ import { createSessionRowProjectionFixture } from "./session-row-projection.test
 import { prepareSessionRowSelection, selectSessionEntries } from "./session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
-const profileDisplay = vi.hoisted(() => (id: string) => ({
-  id: id === "profile-merged-ada" ? "profile-ada" : id,
-  displayName: id,
-  hasAvatar: false,
-  avatarRevision: "1",
-}));
-
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
-  getResidentUserProfileDisplay: vi.fn(profileDisplay),
-  captureResidentUserProfileDisplaySnapshot: () => ({
-    revision: 0,
-    displays: new Map(
-      [
-        "profile-ada",
-        "profile-merged-ada",
-        "profile-bob",
-        "profile-carol",
-        "profile-earlier",
-        "profile-excluded",
-        ...Array.from({ length: 5 }, (_, index) => `profile-other-${index}`),
-      ].map((id) => [id, profileDisplay(id)]),
-    ),
-  }),
+  getResidentUserProfileDisplay: vi.fn((id: string) => ({
+    id: id === "profile-merged-ada" ? "profile-ada" : id,
+    displayName: id,
+    hasAvatar: false,
+    avatarRevision: "1",
+  })),
 }));
 
 afterEach(() => vi.restoreAllMocks());

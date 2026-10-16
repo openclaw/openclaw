@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  SESSION_DASHBOARD_ROW_FIELDS,
+  SESSION_ROW_DETAIL_FIELDS,
+  SESSION_ROWS_DELTA_PREFIX,
+  SESSION_SIDEBAR_ROW_FIELDS,
+} from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -22,33 +27,27 @@ import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
-  captureSessionRowPresentation,
-  renderPreparedSessionRow,
-  type PreparedSessionRowRender,
-  type SessionRowPresentationOptions,
-} from "./session-row-render.js";
-import {
   authorizeIncognitoSessionTarget,
   authorizeSessionAgentRun,
   resolveSessionVisibility,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
-import { resolveSessionChildOwners } from "./session-utils-core.js";
-import { projectGatewaySessionRunState } from "./session-utils-display.js";
+import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
+import {
+  projectGatewaySessionActiveRun,
+  projectGatewaySessionRunState,
+} from "./session-utils-display.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
-type PresentationOptions = SessionRowPresentationOptions;
-
-type CapturedSessionRowPresentation = {
-  row: GatewaySessionRow | null;
-  record?: records.MaterializedRow;
-  views?: Map<string, Readonly<GatewaySessionRow>>;
-  signature?: string;
-  work?: {
-    input: PreparedSessionRowRender;
-    publish: (row: GatewaySessionRow, encoded: string) => GatewaySessionRow;
-  };
+type PresentationOptions = Omit<
+  records.SnapshotOptions,
+  "now" | "active" | "subagentRuns" | "preparedFacts"
+> & {
+  includeActivitySummary?: boolean;
+  rowMode?: SessionsListParams["rowMode"];
+  omitSentinelChildren?: boolean;
+  childArchiveFilter?: SessionsListParams["archived"];
 };
 
 function toProjectedSessionSharingTarget(record: records.MaterializedRow): SessionSharingTarget {
@@ -413,10 +412,10 @@ export function prepareProjectedSessionPresentation(
   };
   // One synchronous presenter compares many rows; only changed facts become retained snapshots.
   let facts: unknown[] = [];
-  const captureRecord = (
+  const present = (
     record: records.MaterializedRow,
     options: PresentationOptions = {},
-  ): CapturedSessionRowPresentation => {
+  ): GatewaySessionRow | null => {
     const run = active(record.key, record.entry, record.agentId);
     const preparedFacts = record.facts?.present();
     const childOwnerSessionKeys = resolveSessionChildOwners({
@@ -553,66 +552,87 @@ export function prepareProjectedSessionPresentation(
       ]);
     const cached = signature === undefined ? undefined : views?.get(signature);
     if (cached) {
-      return { row: cached, record, views, signature };
+      return projectModels(cached, views, signature);
     }
-    return {
-      row: null,
-      record,
-      views,
-      signature,
-      work: {
-        input: {
-          ...captureSessionRowPresentation(record, preparedRowContext, {
-            ...options,
-            active: run?.active,
-            excludedChildKeys,
-            preparedFacts,
-          }),
-          options: { ...options, excludedChildKeys },
-          childOwnerSessionKeys,
-          supportsUltrafast: presentFastMode("ultrafast") === "ultrafast",
-          sourceSwarm,
-          excludedSwarmKeys,
-          run,
-          viewerFacts,
-          canEnsure,
-        },
-        publish(row, encoded) {
-          if (signature !== undefined) {
-            // Concurrent captures can finish after the same immutable view was published.
-            const existing = views?.get(signature);
-            if (existing) {
-              return existing;
-            }
-            // Structured cloning drops freezing; the receiving owner restores immutability.
-            const snapshot = freezeJsonSnapshot(row);
-            encodings.set(snapshot, encoded);
-            views?.set(signature, snapshot);
-            return snapshot;
-          }
-          return row;
-        },
-      },
-    };
-  };
-  const projectCapturedModels = (
-    row: GatewaySessionRow,
-    captured?: Pick<CapturedSessionRowPresentation, "views" | "signature">,
-  ) => projectModels(row, captured?.views, captured?.signature);
-  const present = (
-    record: records.MaterializedRow,
-    options: PresentationOptions,
-  ): GatewaySessionRow | null => {
-    const captured = captureRecord(record, options);
-    let row = captured.row;
-    if (captured.work) {
-      const rendered = renderPreparedSessionRow(captured.work.input, {
-        ...preparedRowContext,
-        now,
-      });
-      row = captured.work.publish(rendered, publicationRows ? JSON.stringify(rendered) : "");
+    const row = projection.present(record, {
+      ...options,
+      now,
+      subagentRuns,
+      active: run?.active,
+      excludedChildKeys,
+      preparedFacts,
+    });
+    row.childOwnerSessionKeys = [...childOwnerSessionKeys];
+    row.fastMode = presentFastMode(row.fastMode);
+    row.effectiveFastMode = presentFastMode(row.effectiveFastMode);
+    if (sourceSwarm) {
+      row.swarm = { ...sourceSwarm, groups: [] };
+      for (const group of sourceSwarm.groups) {
+        row.swarm.groups.push({
+          ...group,
+          children: group.children?.filter(({ sessionKey }) => !excludedSwarmKeys?.has(sessionKey)),
+        });
+      }
     }
-    return row ? projectCapturedModels(row, captured) : null;
+    if (run) {
+      Object.assign(
+        row,
+        projectGatewaySessionActiveRun(run, row.status),
+        run.runIds === undefined ? {} : { activeRunIds: run.runIds },
+      );
+    }
+    if (options.includeActivitySummary === false) {
+      row.activitySummary = undefined;
+    }
+    if (viewerFacts) {
+      Object.assign(row, viewerFacts);
+      if (row.activitySummary) {
+        row.activitySummary = { ...row.activitySummary, canEnsure: canEnsure === true };
+      }
+    }
+    if (options.rowMode === "dashboard" || options.rowMode === "sidebar") {
+      const fields =
+        options.rowMode === "sidebar" ? SESSION_SIDEBAR_ROW_FIELDS : SESSION_DASHBOARD_ROW_FIELDS;
+      for (const field of Object.keys(row)) {
+        if (!fields.has(field)) {
+          Reflect.deleteProperty(row, field);
+        }
+      }
+      row.rowMode = options.rowMode;
+    } else if (options.rowMode === "compact") {
+      for (const field of SESSION_ROW_DETAIL_FIELDS) {
+        delete row[field];
+      }
+      row.rowMode = "compact";
+    }
+    if (options.omitSentinelChildren) {
+      row.childSessions = undefined;
+      row.hasActiveSubagentRun = undefined;
+    }
+    if (
+      row.childSessions?.length &&
+      options.childArchiveFilter !== undefined &&
+      options.childArchiveFilter !== "all"
+    ) {
+      let excluded: Set<string> | undefined;
+      for (const { key: childKey, entry } of record.materialized.source.childLinks ?? []) {
+        if (!matchesSessionArchiveFilter(entry, options.childArchiveFilter)) {
+          (excluded ??= new Set()).add(childKey);
+        }
+      }
+      if (excluded) {
+        row.childSessions = row.childSessions.filter((childKey) => !excluded.has(childKey));
+      }
+    }
+    if (signature !== undefined) {
+      // Publish the wire snapshot and its bytes together; mutable source aliases stay private.
+      const encoded = JSON.stringify(row);
+      const snapshot = freezeJsonSnapshot(row);
+      encodings.set(snapshot, encoded);
+      views?.set(signature, snapshot);
+      return projectModels(snapshot, views, signature);
+    }
+    return projectModels(row, views, signature);
   };
   return {
     get audienceKey() {
@@ -623,14 +643,6 @@ export function prepareProjectedSessionPresentation(
       ]);
     },
     rowContext: preparedRowContext,
-    projectModels: projectCapturedModels,
-    capture(
-      query: records.Lookup,
-      options: PresentationOptions = {},
-    ): CapturedSessionRowPresentation {
-      const record = projection.describe(query);
-      return record ? captureRecord(record, options) : { row: null };
-    },
     active,
     sharing,
     target,
