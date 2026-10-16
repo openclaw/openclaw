@@ -7,7 +7,10 @@ import {
   type SecretInput,
   type SecretInputMode,
 } from "openclaw/plugin-sdk/provider-auth";
-import { selectPreferredLocalModelId } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  selectPreferredLocalModelId,
+  type ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   configureOpenAICompatibleSelfHostedProviderNonInteractive,
   type ProviderAuthContext,
@@ -38,8 +41,24 @@ function automaticModels(listing: Listing) {
   );
 }
 
-function setupResult(listing: Listing, modelId: string): ProviderAuthResult {
+function headerPatch(
+  previous: ModelProviderConfig["headers"],
+  next: ModelProviderConfig["headers"],
+): Partial<NonNullable<ModelProviderConfig["headers"]>> | undefined {
+  return previous
+    ? { ...Object.fromEntries(Object.keys(previous).map((name) => [name, undefined])), ...next }
+    : next;
+}
+
+function setupResult(
+  listing: Listing,
+  modelId: string,
+  config: OpenClawConfig,
+): ProviderAuthResult {
   const { provider } = listing;
+  const configured = config.models?.providers?.omlx;
+  const previous =
+    configured?.baseUrl.trim().replace(/\/+$/, "") === provider.baseUrl ? configured : undefined;
   return {
     profiles: [],
     defaultModel: `${OMLX_PROVIDER_ID}/${modelId}`,
@@ -51,12 +70,12 @@ function setupResult(listing: Listing, modelId: string): ProviderAuthResult {
             // Auth patches deep-merge; explicit undefined removes prior endpoint credentials.
             auth: provider.auth,
             authHeader: provider.authHeader,
-            headers: provider.headers,
+            headers: headerPatch(previous?.headers, provider.headers),
             request: provider.request
               ? {
                   ...provider.request,
                   auth: provider.request.auth,
-                  headers: provider.request.headers,
+                  headers: headerPatch(previous?.request?.headers, provider.request.headers),
                   proxy: provider.request.proxy,
                   tls: provider.request.tls,
                 }
@@ -84,7 +103,7 @@ export async function prepareOmlx(
   const listing = await listOmlxModels(ctx);
   const model =
     listing && automaticModels(listing).find((m) => `${OMLX_PROVIDER_ID}/${m.id}` === ctx.modelRef);
-  return listing && model ? setupResult(listing, model.id) : null;
+  return listing && model ? setupResult(listing, model.id, ctx.config) : null;
 }
 
 const unavailableMessage =
@@ -129,6 +148,7 @@ export async function configureOmlxInteractive(
     env: ctx.env ?? process.env,
     baseUrl,
     apiKey,
+    replaceAuth: true,
   });
   if (!listing?.provider.models.length) {
     throw new Error(unavailableMessage);
@@ -140,7 +160,7 @@ export async function configureOmlxInteractive(
   });
   ctx.signal?.throwIfAborted();
   listing.provider.apiKey = apiKey ? OMLX_API_KEY_ENV_VAR : OMLX_LOCAL_API_KEY;
-  const result = setupResult(listing, modelId);
+  const result = setupResult(listing, modelId, ctx.config);
   if (apiKey) {
     result.profiles = [
       {
@@ -160,30 +180,35 @@ async function prepareNonInteractive(ctx: NonInteractiveContext) {
   const modelId = normalizeOptionalSecretInput(ctx.opts.customModelId);
   const baseUrl = normalizeOptionalSecretInput(ctx.opts.customBaseUrl);
   const apiKey = normalizeOptionalSecretInput(ctx.opts.customApiKey);
+  const replaceAuth = ctx.opts.customApiKey !== undefined;
   if (!modelId) {
     ctx.runtime.error(
       "oMLX setup requires --custom-model-id. List model IDs at the server's /v1/models endpoint.",
     );
     return null;
   }
-  const resolved = await ctx.resolveApiKey({
-    provider: OMLX_PROVIDER_ID,
-    flagValue: apiKey,
-    flagName: "--custom-api-key",
-    envVar: OMLX_API_KEY_ENV_VAR,
-    allowProfile:
-      !baseUrl ||
-      baseUrl.replace(/\/+$/, "") ===
-        (ctx.config.models?.providers?.omlx?.baseUrl ?? OMLX_DEFAULT_BASE_URL)
-          .trim()
-          .replace(/\/+$/, ""),
-    required: false,
-  });
+  const resolved =
+    replaceAuth && !apiKey
+      ? null
+      : await ctx.resolveApiKey({
+          provider: OMLX_PROVIDER_ID,
+          flagValue: apiKey,
+          flagName: "--custom-api-key",
+          envVar: OMLX_API_KEY_ENV_VAR,
+          allowProfile:
+            !baseUrl ||
+            baseUrl.replace(/\/+$/, "") ===
+              (ctx.config.models?.providers?.omlx?.baseUrl ?? OMLX_DEFAULT_BASE_URL)
+                .trim()
+                .replace(/\/+$/, ""),
+          required: false,
+        });
   const listing = await listOmlxModels({
     config: ctx.config,
     env: process.env,
     baseUrl,
-    ...(resolved ? { apiKey: resolved.key } : {}),
+    apiKey: resolved?.key ?? (replaceAuth ? "" : undefined),
+    replaceAuth,
   });
   if (!listing?.provider.models.some((model) => model.id === modelId)) {
     ctx.runtime.error(`${unavailableMessage} Requested model: ${modelId}.`);

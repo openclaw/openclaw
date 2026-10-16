@@ -9,6 +9,35 @@ import { OMLX_DEFAULT_BASE_URL, OMLX_PROVIDER_ID } from "./defaults.js";
 
 type ConnectionContext = { config: OpenClawConfig; env: NodeJS.ProcessEnv };
 
+export function withoutOmlxAuthentication(configured: ModelProviderConfig): ModelProviderConfig {
+  const authHeaderNames = new Set(["authorization"]);
+  if (configured.request?.auth?.mode === "header") {
+    authHeaderNames.add(configured.request.auth.headerName.trim().toLowerCase());
+  }
+  const withoutAuthHeaders = (headers: ModelProviderConfig["headers"]) =>
+    headers
+      ? Object.fromEntries(
+          Object.entries(headers).filter(
+            ([name]) => !authHeaderNames.has(name.trim().toLowerCase()),
+          ),
+        )
+      : undefined;
+  return {
+    ...configured,
+    apiKey: undefined,
+    auth: undefined,
+    authHeader: undefined,
+    headers: withoutAuthHeaders(configured.headers),
+    request: configured.request
+      ? {
+          ...configured.request,
+          auth: undefined,
+          headers: withoutAuthHeaders(configured.request.headers),
+        }
+      : undefined,
+  };
+}
+
 export async function resolveOmlxSecret(
   params: ConnectionContext,
   value: unknown,

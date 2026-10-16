@@ -9,7 +9,7 @@ import {
   discoverOpenAICompatibleLocalModels,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-setup";
-import { resolveOmlxHeaders, resolveOmlxSecret } from "./connection.js";
+import { resolveOmlxHeaders, resolveOmlxSecret, withoutOmlxAuthentication } from "./connection.js";
 import {
   OMLX_API_KEY_ENV_VAR,
   OMLX_DEFAULT_BASE_URL,
@@ -22,6 +22,7 @@ export async function listOmlxModels(params: {
   env: NodeJS.ProcessEnv;
   baseUrl?: string;
   apiKey?: string;
+  replaceAuth?: boolean;
   agentDir?: string;
   signal?: AbortSignal;
   strict?: boolean;
@@ -32,10 +33,13 @@ export async function listOmlxModels(params: {
     .trim()
     .replace(/\/+$/, "");
   // Saved endpoint credentials must never follow a URL entered during setup.
-  const existing =
+  let existing =
     (configured?.baseUrl ?? OMLX_DEFAULT_BASE_URL).trim().replace(/\/+$/, "") === baseUrl
       ? configured
       : undefined;
+  if (params.replaceAuth && existing) {
+    existing = withoutOmlxAuthentication(existing);
+  }
   const request =
     existing?.request ??
     (configured?.request?.allowPrivateNetwork !== undefined

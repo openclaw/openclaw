@@ -47,6 +47,11 @@ authentication disabled, and choose a chat model. Alternatively, run
 `openclaw onboard` and choose **oMLX**. Guided setup detects the running local
 server and discovers models through `/v1/models`.
 
+Entering a new key replaces saved request authentication, including custom
+headers. An explicitly blank key disables authentication. In noninteractive
+setup, omit `--custom-api-key` to reuse the saved connection, or pass
+`--custom-api-key ""` to clear its authentication.
+
 The inference catalog does not report model types, so it can also list embedding
 models. Choose a chat model for conversations and configure the embedding model
 separately below.

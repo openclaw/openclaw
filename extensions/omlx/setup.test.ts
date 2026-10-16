@@ -352,6 +352,73 @@ describe("oMLX setup through the inference catalog", () => {
     );
   });
 
+  it.each([
+    { interactive: true, key: "replacement-key", custom: true, unavailable: false },
+    { interactive: true, key: "", custom: false, unavailable: false },
+    { interactive: false, key: "replacement-key", custom: true, unavailable: true },
+    { interactive: false, key: "", custom: true, unavailable: false },
+  ])("replaces saved authentication on same-endpoint setup %j", async (scenario) => {
+    const fetchMock = fixture();
+    const stale = scenario.unavailable
+      ? { source: "env" as const, provider: "default", id: "OMLX_STALE_SETUP_KEY" }
+      : "old-key";
+    vi.stubEnv("OMLX_STALE_SETUP_KEY", undefined);
+    const config = {
+      models: {
+        providers: {
+          omlx: {
+            baseUrl: "http://127.0.0.1:8000/v1",
+            apiKey: "old-key",
+            headers: { Authorization: "Bearer old-key", "X-Deployment": "fixture" },
+            request: {
+              allowPrivateNetwork: true,
+              headers: {
+                ...(scenario.custom ? { "X-oMLX-Key": "old-key" } : {}),
+                "X-Request": "fixture",
+              },
+              auth: scenario.custom
+                ? { mode: "header" as const, headerName: "X-oMLX-Key", value: stale }
+                : { mode: "authorization-bearer" as const, token: stale },
+            },
+            models: [],
+          },
+        },
+      },
+    };
+    const ctx = nonInteractiveContext();
+    ctx.config = config;
+    ctx.baseConfig = config;
+    ctx.opts.customApiKey = scenario.key;
+    ctx.resolveApiKey = vi.fn(async () => ({
+      key: scenario.key || "old-key",
+      source: "flag" as const,
+    }));
+    if (scenario.interactive) {
+      const result = await configureOmlxInteractive({
+        ...interactiveContext(scenario.key),
+        config,
+      });
+      const provider = result.configPatch?.models?.providers?.omlx;
+      expect(provider?.headers?.Authorization).toBeUndefined();
+      expect(provider?.headers?.["X-Deployment"]).toBe("fixture");
+      expect(provider?.request?.headers?.["X-oMLX-Key"]).toBeUndefined();
+      expect(provider?.request?.headers?.["X-Request"]).toBe("fixture");
+      expect(provider?.request?.auth).toBeUndefined();
+      expect(provider?.request?.allowPrivateNetwork).toBe(true);
+    } else {
+      await expect(validateOmlxNonInteractive(ctx)).resolves.toBe(true);
+      expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
+    }
+    if (!scenario.interactive && !scenario.key) {
+      expect(ctx.resolveApiKey).not.toHaveBeenCalled();
+    }
+    const headers = new Headers(fetchMock.mock.lastCall?.[1]?.headers);
+    expect(headers.get("authorization")).toBe(scenario.key ? `Bearer ${scenario.key}` : null);
+    expect(headers.has("x-omlx-key")).toBe(false);
+    expect(headers.get("x-deployment")).toBe("fixture");
+    expect(headers.get("x-request")).toBe("fixture");
+  });
+
   it.each([undefined, true])(
     "clears saved credentials on an endpoint switch with private-network policy %s",
     async (allowPrivateNetwork) => {
@@ -432,10 +499,13 @@ describe("oMLX setup through the inference catalog", () => {
       },
     };
     const result = await configureOmlxInteractive(ctx);
-    const providerConfig = result.configPatch?.models?.providers?.omlx;
-    if (!providerConfig) {
+    const providerPatch = result.configPatch?.models?.providers?.omlx;
+    if (!providerPatch) {
       throw new Error("missing configured oMLX provider");
     }
+    const { headers, request, ...providerConfig } = providerPatch;
+    expect(headers).toBeUndefined();
+    expect(request).toBeUndefined();
     const config = { ...ctx.config, models: { providers: { omlx: providerConfig } } };
     const provider = capturePluginRegistration(plugin).providers[0];
     const model: ProviderRuntimeModel = {

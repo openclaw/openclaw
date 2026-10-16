@@ -21,7 +21,7 @@ export const omlxEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
     const providerId = options.provider?.trim() || OMLX_PROVIDER_ID;
     const providers = options.config.models?.providers;
     const configuredKey = findNormalizedProviderKey(providers, providerId);
-    const configured = configuredKey ? providers?.[configuredKey] : undefined;
+    let configured = configuredKey ? providers?.[configuredKey] : undefined;
     const baseUrl = options.remote?.baseUrl ?? configured?.baseUrl ?? OMLX_DEFAULT_BASE_URL;
     let config = options.config;
     if (
@@ -29,15 +29,19 @@ export const omlxEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
       configured &&
       embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl: configured.baseUrl })
     ) {
-      const { resolveOmlxHeaders } = await import("./connection.js");
+      const { resolveOmlxHeaders, withoutOmlxAuthentication } = await import("./connection.js");
+      const remoteKey = options.remote?.apiKey;
+      const hasRemoteKey = Boolean(typeof remoteKey === "string" ? remoteKey.trim() : remoteKey);
+      if (hasRemoteKey) {
+        configured = withoutOmlxAuthentication(configured);
+      }
       const { headers, hasHeaderAuth } = await resolveOmlxHeaders(
         { config, env: process.env },
         configured,
         options.remote?.headers,
       );
-      const remoteKey = options.remote?.apiKey;
       const hasRemoteAuth =
-        Boolean(typeof remoteKey === "string" ? remoteKey.trim() : remoteKey) ||
+        hasRemoteKey ||
         Object.entries(options.remote?.headers ?? {}).some(
           ([name, value]) => name.trim().toLowerCase() === "authorization" && Boolean(value.trim()),
         );
