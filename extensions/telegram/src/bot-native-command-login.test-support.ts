@@ -15,18 +15,19 @@ import type {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect, type Mock, vi } from "vitest";
-import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
   createPrivateCommandContext,
   deliverReplies,
+  nativeCommandMocks,
 } from "./bot-native-commands.menu-test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { parseTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 
-export type TelegramLoginFlow = NonNullable<TelegramNativeCommandDeps["runModelsAuthLoginFlow"]>;
+export type TelegramLoginFlow =
+  typeof import("openclaw/plugin-sdk/provider-auth-login-flow-runtime").runModelsAuthLoginFlow;
 
 let loginAccountIndex = 0;
 
@@ -110,23 +111,20 @@ export async function registerLoginCommand(params: {
       : {}),
     ...(params.runtime ? { runtime: params.runtime } : {}),
   });
-  const sendMessageTelegram = vi.fn(async (_to, text) => {
-    const result = await botHarness.bot.api.sendMessage(100, text, {});
-    return { messageId: String(result.message_id), chatId: "100" };
-  });
+  const sendMessageTelegram = vi.fn<typeof import("./send.js").sendMessageTelegram>(
+    async (_to, text) => {
+      const result = await botHarness.bot.api.sendMessage(100, text, {});
+      return { messageId: String(result.message_id), chatId: "100" };
+    },
+  );
+  if (params.getRuntimeConfig) {
+    nativeCommandMocks.getRuntimeConfig.mockImplementation(params.getRuntimeConfig);
+  }
+  nativeCommandMocks.runModelsAuthLoginFlow.mockImplementation(params.loginFlow);
+  nativeCommandMocks.sendMessageTelegram.mockImplementation(sendMessageTelegram);
   const { nativeCommandCallbackDispatcher } = await withPluginRuntimeRegistryScope(
     createEmptyPluginRegistry(),
-    () =>
-      registerTelegramNativeCommands({
-        ...nativeParams,
-        telegramDeps: {
-          ...nativeParams.telegramDeps,
-          ...(params.getRuntimeConfig ? { getRuntimeConfig: params.getRuntimeConfig } : {}),
-          runModelsAuthLoginFlow:
-            params.loginFlow ?? nativeParams.telegramDeps.runModelsAuthLoginFlow,
-          sendMessageTelegram,
-        },
-      }),
+    () => registerTelegramNativeCommands(nativeParams),
   );
   const handler = botHarness.commandHandlers.get("login");
   if (!handler) {

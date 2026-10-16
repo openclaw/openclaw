@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { AttachmentPreviewSkeleton, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";

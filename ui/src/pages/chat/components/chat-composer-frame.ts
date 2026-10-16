@@ -33,7 +33,6 @@ import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
 import type { ComposerPrediction } from "./chat-composer-prediction.ts";
-import { resolveComposerQuestionPanel } from "./chat-composer-question.tsx";
 import { isSkillMenuVisible, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
 import type { SlashMenuHost } from "./chat-composer-slash-menu.tsx";
 import {
@@ -49,12 +48,14 @@ import {
   suppressStaleSubmittedDraftReplay,
 } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
+import type { QuestionPanelProps } from "./chat-question-card.ts";
 
 registerChatGoalsEnglish();
 
 export function createChatComposerContext(
   props: ChatComposerProps,
-  prediction?: ComposerPrediction,
+  prediction: ComposerPrediction | undefined,
+  questionPanelProps: QuestionPanelProps | null,
 ) {
   const state = getChatComposerState(props.paneId);
   state.slashCommandDispatchConnected = props.connected;
@@ -208,24 +209,9 @@ export function createChatComposerContext(
         ? "queue"
         : "steer"
       : undefined;
-  const questionPanelProps = resolveComposerQuestionPanel(props, state, requestUpdate);
-  const questionTakeoverActive = Boolean(
-    questionPanelProps && !questionPanelProps.model.nonBlocking && !state.questionCollapsed,
-  );
-  if (!state.questionTakeoverActive && questionTakeoverActive) {
-    // A question can arrive mid-IME composition before compositionend commits the host draft.
-    // Commit before unmounting so the detached input cannot leave a stale shadow behind.
-    if (state.composingDraft?.key === draftKey) {
-      commitComposerDraft(props, state.composingDraft.value);
-      state.composingDraft = null;
-    }
-    state.composerComposing = false;
-  }
-  if (state.questionTakeoverActive && !questionTakeoverActive) {
-    state.restoreComposerFocus = true;
-  }
-  state.questionTakeoverActive = questionTakeoverActive;
-  const showComposer = !questionTakeoverActive;
+  const showComposer =
+    !state.presentation.activeQuestionKey?.startsWith("gateway:") ||
+    state.presentation.questionCollapsed;
 
   // Offline text and attachments may enter the persisted reconnect queue, but
   // slash commands are live controls and must not execute against stale state.

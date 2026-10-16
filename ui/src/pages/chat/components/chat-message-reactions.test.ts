@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 /* @vitest-environment jsdom */
-import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";

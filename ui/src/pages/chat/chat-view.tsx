@@ -25,7 +25,7 @@ import {
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
 import {
   ComposerQuestionDock,
-  resolveComposerQuestionPanel,
+  createComposerQuestionPanel,
 } from "./components/chat-composer-question.tsx";
 import { ComposerQueue } from "./components/chat-composer-regions.tsx";
 import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
@@ -176,19 +176,17 @@ function ChatComposerView(input: ChatViewInput) {
 }
 
 function ChatComposerCompanion(input: ChatViewInput) {
+  const questionPanel = createComposerQuestionPanel(
+    () => ({ ...input.props, asyncQuestions: input.frame.asyncQuestions }),
+    getChatComposerState(untrack(() => input.props.paneId)),
+  );
   return (
     <div class="chat-footer__context">
       <ChatFooterContent {...input} />
       <div class="agent-chat__composer-notices">
         <ChatComposerNoticesView {...input.props} />
       </div>
-      <ComposerQuestionDock
-        panel={resolveComposerQuestionPanel(
-          { ...input.props, asyncQuestions: input.frame.asyncQuestions },
-          getChatComposerState(input.props.paneId),
-          input.frame.requestUpdate,
-        )}
-      />
+      <ComposerQuestionDock panel={questionPanel()} />
       <ComposerQueue
         composer={{ ...input.props, displayQueue: input.frame.displayQueue }}
         showAbortableUi={

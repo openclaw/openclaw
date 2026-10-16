@@ -93,12 +93,6 @@ export class Client {
     return this.plugins.find((plugin) => plugin.id === id);
   }
 
-  getRuntimeMetrics() {
-    return {
-      eventQueue: this.eventQueue?.getMetrics(),
-    };
-  }
-
   async fetchUser(id: string): Promise<User> {
     return await this.entityCache.fetchUser(id);
   }

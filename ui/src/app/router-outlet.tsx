@@ -440,6 +440,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     };
   });
 
+  // Readiness must observe the DOM commit, not just the preceding presentation calculation.
   createEffect(presentation, (value) => {
     committedSnapshot = value.snapshot;
     committedSettled = value.settled;

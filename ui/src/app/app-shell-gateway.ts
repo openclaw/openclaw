@@ -56,7 +56,7 @@ export interface ShellGatewayHost {
   observeDeletedSessions(sessionState: ApplicationContext["sessions"]["state"]): void;
   recoverDeletedActiveSession(): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
-  requestUpdate(): void;
+  invalidate(): void;
 }
 
 function diffAgentRoster(
@@ -599,7 +599,7 @@ export class ShellGatewayOwner {
           }
           // Readiness releases the shell and private-background descendants even
           // when the profile snapshot matches the browser mirror.
-          this.host.requestUpdate();
+          this.host.invalidate();
         }
       })
       .catch(reportError);

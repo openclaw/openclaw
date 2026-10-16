@@ -3,7 +3,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { McpAppConfirmation } from "./mcp-app-confirm-solid.tsx";
 import {
   McpAppViewController,

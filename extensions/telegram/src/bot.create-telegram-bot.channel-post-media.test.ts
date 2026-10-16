@@ -53,8 +53,7 @@ vi.mock("./sticker-cache.js", () => ({
 }));
 
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
-const { getLoadConfigMock, getOnHandler, replySpy, sendMessageSpy, telegramBotDepsForTest } =
-  harness;
+const { getLoadConfigMock, getOnHandler, replySpy, sendMessageSpy } = harness;
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 const {
   getTelegramSpooledReplayDeferredParticipant,
@@ -270,7 +269,6 @@ describe("createTelegramBot channel_post media", () => {
           close: async () => {},
         },
         ...opts,
-        telegramDeps: telegramBotDepsForTest,
       });
   });
 

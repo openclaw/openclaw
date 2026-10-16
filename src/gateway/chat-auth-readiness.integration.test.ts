@@ -90,7 +90,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       observeDeletedSessions() {},
       recoverDeletedActiveSession() {},
       selectChatSession() {},
-      requestUpdate() {},
+      invalidate() {},
     });
     await refreshChatMetadata(retained);
     await refreshChatMetadata(sibling);

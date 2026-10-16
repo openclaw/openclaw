@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SolidController } from "../lib/reactive/solid-controller-host.ts";
 import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
-import type { SolidController } from "../lit/solid-controller-host.ts";
 import { SessionAttentionController } from "./session-attention-controller.ts";
 
 afterEach(() => vi.useRealTimers());

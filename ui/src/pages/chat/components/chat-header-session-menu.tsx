@@ -25,7 +25,7 @@ import {
 } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
 import { chatQuickActionEntry, type HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 import {

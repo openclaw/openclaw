@@ -248,7 +248,7 @@ function visitProjectionSource(
   };
 }
 
-function prepareProjectionSource(
+export function prepareProjectionSource(
   source: SessionTranscriptProjectionSource,
 ): PreparedSessionTranscriptProjection | undefined {
   const activeRows: PreparedSessionTranscriptProjection["activeRows"] = [];

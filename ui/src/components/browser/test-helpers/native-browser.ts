@@ -138,7 +138,10 @@ export function setupNativeBrowserPanelTests() {
     const controller = new BrowserPanelController(host);
     cleanups.push(controller.native.presentation.mountStage(stage));
     controllers.push(controller);
-    controller.hostConnected();
+    const stopNative = controller.native.mount();
+    if (stopNative) {
+      cleanups.push(stopNative);
+    }
     return { controller, host, request };
   }
 

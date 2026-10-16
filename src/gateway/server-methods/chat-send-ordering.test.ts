@@ -1,11 +1,12 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import * as replyAdmission from "../../auto-reply/reply/reply-admission-ticket.js";
-import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import * as skillSelection from "../../skills/library/selection.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -13,12 +14,14 @@ import {
   gatewayReplyMock,
   installGatewayTestHooks,
 } from "../test-helpers.js";
-import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
-import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
+import { handleTrustedInternalChatSend } from "./chat-send-handler.js";
+import {
+  setClientProfile,
+  useBrowserFollowupFixture,
+} from "./chat-send-pending-inputs.test-support.js";
 import type { RespondFn } from "./types.js";
 
 installGatewayTestHooks();
-registerAgentSessionLoopTestLifecycle();
 const createFixture = useBrowserFollowupFixture();
 
 it.for([false, true])(
@@ -30,46 +33,34 @@ it.for([false, true])(
     const respond = vi.fn<RespondFn>();
     const release = vi.fn();
     let current = true;
-    const sending = withPluginRuntimeGatewayRequestScope(
-      { context: fixture.context, isWebchatConnect: () => true },
-      () =>
-        handleTrustedInternalChatSend(
-          {
-            req: {
-              type: "req",
-              id: fixture.params.idempotencyKey,
-              method: "chat.send",
-            },
-            params: fixture.params,
-            client: fixture.client,
-            context: fixture.context,
-            respond,
-            isWebchatConnect: () => true,
-            sessionMutationCommitGuard: () => {
-              if (!current) {
-                throw new Error("Talk requester was revoked during registration");
-              }
-            },
+    const sending = fixture.send(respond, undefined, fixture.params, (request) =>
+      handleTrustedInternalChatSend(
+        {
+          ...request,
+          sessionMutationCommitGuard: () => {
+            if (!current) {
+              throw new Error("Talk requester was revoked during registration");
+            }
           },
-          undefined,
-          {
-            beforeDispatch: async ({ runId }) => {
-              expect(runId).toBe(fixture.params.idempotencyKey);
-              registrationEntered.resolve();
-              await releaseRegistration.promise;
-              return release;
-            },
+        },
+        undefined,
+        {
+          beforeDispatch: async ({ runId }) => {
+            expect(runId).toBe(fixture.params.idempotencyKey);
+            registrationEntered.resolve();
+            await releaseRegistration.promise;
+            return release;
           },
-        ),
+        },
+      ),
     );
     try {
       await withinTest(
-        Promise.race([
+        awaitGateBeforeSettlement(
           registrationEntered.promise,
-          sending.then(() => {
-            throw new Error("chat.send returned before awaiting run registration");
-          }),
-        ]),
+          sending,
+          "chat.send returned before awaiting run registration",
+        ),
         signal,
       );
       expect(respond).not.toHaveBeenCalled();
@@ -103,21 +94,17 @@ it.for([false, true])(
   "dispatches acknowledged inputs in order when the first skill preparation stalls (retry: %s)",
   async (retry, { signal }) => {
     const fixture = await createFixture({ active: false });
-    fixture.params.idempotencyKey = `ordered-first-${retry}`;
+    const { scope, params } = fixture;
+    params.idempotencyKey = `ordered-first-${retry}`;
     const profile = ensureProfileForEmail("ordered-preparation@example.test");
-    fixture.client.authenticatedUserProfile = {
-      profileId: profile.id,
-      displayName: "Ordering fixture",
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    };
+    setClientProfile(fixture.client, profile, "Ordering fixture");
     // Keep the handler, reply dispatcher, admission FIFO, and transcript stores real.
     dispatchInboundMessageMock.mockReset();
     let retried = false;
     gatewayReplyMock.mockImplementation(async (ctx) => {
-      if (retry && !retried && ctx.MessageSid === fixture.params.idempotencyKey) {
+      if (retry && !retried && ctx.MessageSid === params.idempotencyKey) {
         retried = true;
-        throw new SessionTranscriptProjectionUnavailableError(fixture.scope.sessionId);
+        throw new SessionTranscriptProjectionUnavailableError(scope.sessionId);
       }
       return { text: `Reply to ${ctx.MessageSid}` };
     });
@@ -154,36 +141,20 @@ it.for([false, true])(
     const firstResponse = vi.fn<RespondFn>();
     const secondResponse = vi.fn<RespondFn>();
     const firstSending = fixture.send(firstResponse);
-    let secondSending: Promise<void> | undefined;
+    let secondSending: ReturnType<typeof fixture.send> | undefined;
     const secondParams = {
-      ...fixture.params,
+      ...params,
       idempotencyKey: `ordered-second-${retry}`,
       message: "Run this only after the first message.",
     };
     try {
       await withinTest(firstPreparationEntered.promise, signal);
       expect(firstResponse.mock.calls[0]?.[1]).toMatchObject({
-        runId: fixture.params.idempotencyKey,
+        runId: params.idempotencyKey,
         status: "started",
         messageSeq: 2,
       });
-      secondSending = withPluginRuntimeGatewayRequestScope(
-        { context: fixture.context, isWebchatConnect: () => true },
-        () =>
-          handleChatSend({
-            req: {
-              type: "req",
-              id: secondParams.idempotencyKey,
-              method: "chat.send",
-              params: secondParams,
-            },
-            params: secondParams,
-            client: fixture.client,
-            context: fixture.context,
-            respond: secondResponse,
-            isWebchatConnect: () => true,
-          }),
-      );
+      secondSending = fixture.send(secondResponse, undefined, secondParams);
       await withinTest(laterAdmissionEntered.promise, signal);
       expect(secondResponse.mock.calls[0]?.[1]).toMatchObject({
         runId: secondParams.idempotencyKey,
@@ -196,22 +167,19 @@ it.for([false, true])(
       await Promise.all([firstSending, secondSending]);
       await withinTest(fixture.finishDispatch(), signal);
       expect(gatewayReplyMock.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual([
-        fixture.params.idempotencyKey,
-        ...(retry ? [fixture.params.idempotencyKey] : []),
+        params.idempotencyKey,
+        ...(retry ? [params.idempotencyKey] : []),
         secondParams.idempotencyKey,
       ]);
       expect(firstResponse).toHaveBeenCalledOnce();
       expect(secondResponse).toHaveBeenCalledOnce();
       expect(
-        loadTranscriptEventsSync(fixture.scope)
+        fixture
+          .readTranscript()
           .map((entry) => asOptionalRecord(asOptionalRecord(entry)?.message))
           .filter((message) => message?.role === "user")
           .map((message) => message?.content),
-      ).toEqual([
-        "Keep working on the current task.",
-        fixture.params.message,
-        secondParams.message,
-      ]);
+      ).toEqual(["Keep working on the current task.", params.message, secondParams.message]);
     } finally {
       firstPreparationHeld = false;
       releaseFirstPreparation.resolve();

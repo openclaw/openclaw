@@ -92,9 +92,11 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
   await prepareSharedStatePortSource(ctx, from, to, options.dryRun);
   const context = { stateDir: ctx.stateDir, config, env: ctx.env };
   const plugins = resolvePluginMetadataSnapshot(context);
-  const roots = databasePortProviders.flatMap((provider) =>
-    provider.resolveRoots({ ...context, plugins }),
-  );
+  const roots = (
+    await Promise.all(
+      databasePortProviders.map(async (provider) => provider.resolveRoots({ ...context, plugins })),
+    )
+  ).flat();
   privatePaths(ctx, roots);
   const all = await discoverBackupDatabasePaths({ stateDir: ctx.stateDir, config, env: ctx.env });
   const stores = all.filter((file) =>
@@ -471,7 +473,9 @@ async function loadRecovery(ctx: Context) {
     ctx.inputs.stores.length !== saved.targets.length ||
     saved.targets.some((target, index) => {
       const file = ctx.inputs?.stores[index]?.original.path;
-      return !file?.startsWith(`${ctx.stateDir}${path.sep}`) || file !== livePath(target);
+      // Configured and retained agents can live outside the state root. The
+      // verified private input must still name its manifest-bound target.
+      return !file || file !== livePath(target);
     })
   ) {
     refuse(ctx, "mismatched target set", "complete captured store set");

@@ -17,7 +17,7 @@ import {
   setCiAutomationEnabled,
   type CiAutomationJobs,
 } from "../../../lib/session-pr-automation.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ChatCiAutomationView, type ChatCiAutomationProps } from "./chat-ci-automation.tsx";
 import { createCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclosure.ts";
 

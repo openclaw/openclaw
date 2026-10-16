@@ -366,8 +366,10 @@ provider. It does not register a provider itself.
 Providers own model-specific input translation, transport or local inference,
 prepared credentials where needed, and physical cleanup on cancellation.
 Registration and optional `isReady()` must be synchronous and network-free;
-`isReady()` checks prepared credential availability, not model warmup. Return real
-model estimates rather than manufacturing certainty from a label-only response.
+`isReady()` checks prepared credential availability, not model warmup. Omitting it
+leaves readiness unconfirmed without blocking evaluation; returning `false`
+blocks evaluation until the provider reports ready. Return real model estimates
+rather than manufacturing certainty from a label-only response.
 
 The [provider contract](/plugins/sdk-overview/capabilities#decision-models-contract-version-1)
 owns the full SDK rules; the [manifest reference](/plugins/manifest/capabilities#decision-models-reference)

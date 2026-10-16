@@ -16,7 +16,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import { SidebarPanel as SidebarPanelView } from "../chat-pane-embedded-view.tsx";
 import {

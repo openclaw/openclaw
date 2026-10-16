@@ -13,6 +13,7 @@ import {
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as processRunner from "./crabbox-process.js";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import {
   createCrabboxNodeEnrollmentSetup,
@@ -325,63 +326,63 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       slug: id,
       timeoutMs: () => 60_000,
     });
+    vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(async (argv, options) => {
+      if (argv[1] === "warmup") {
+        homeFor(argv[argv.indexOf("--lease-id") + 1]!);
+      }
+      if (argv[1] === "run") {
+        const id = argv[argv.indexOf("--id") + 1]!;
+        const home = homes.get(id)!;
+        execFileSync("/bin/sh", [], {
+          input: options?.input,
+          cwd: home,
+          env: { HOME: home, PATH: process.env.PATH },
+        });
+      }
+      if (argv[1] === "checkpoint" && argv[2] === "create") {
+        const id = argv[argv.indexOf("--id") + 1]!;
+        const checkpoint = `chk_fixture_${++snapshotCount}`;
+        const snapshot = path.join(root, checkpoint);
+        fs.cpSync(runtimeRoot(homes.get(id)!), snapshot, { recursive: true });
+        snapshots.set(checkpoint, snapshot);
+        return checkpointResult(checkpoint, id, "completed");
+      }
+      if (argv[1] === "checkpoint" && argv[2] === "delete") {
+        fs.rmSync(snapshots.get(argv[3]!)!, { recursive: true });
+        snapshots.delete(argv[3]!);
+      }
+      if (argv[1] === "checkpoint" && argv[2] === "inspect") {
+        return commandResult({
+          stdout: JSON.stringify({
+            localState: "metadata_available",
+            providerState: "completed",
+            nextAction: "fork_or_delete",
+          }),
+        });
+      }
+      if (argv[1] === "checkpoint" && argv[2] === "fork") {
+        const checkpoint = argv[3]!;
+        const id = argv[argv.indexOf("--lease-id") + 1]!;
+        const home = homeFor(id);
+        fs.cpSync(snapshots.get(checkpoint)!, runtimeRoot(home), { recursive: true });
+        forkChoices.push(checkpoint);
+        return commandResult({
+          stdout: JSON.stringify({
+            checkpointId: checkpoint,
+            leaseId: id,
+            provider: "aws",
+            slug: id,
+            workdir: "/workspace",
+          }),
+        });
+      }
+      return commandResult();
+    });
     const manager = createCrabboxWarmImageManager({
       state: crabboxState,
       prepareCapture: async () => {},
       warn: (message) => {
         throw new Error(message);
-      },
-      runCommand: async (argv, options) => {
-        if (argv[1] === "warmup") {
-          homeFor(argv[argv.indexOf("--lease-id") + 1]!);
-        }
-        if (argv[1] === "run") {
-          const id = argv[argv.indexOf("--id") + 1]!;
-          const home = homes.get(id)!;
-          execFileSync("/bin/sh", [], {
-            input: options?.input,
-            cwd: home,
-            env: { HOME: home, PATH: process.env.PATH },
-          });
-        }
-        if (argv[1] === "checkpoint" && argv[2] === "create") {
-          const id = argv[argv.indexOf("--id") + 1]!;
-          const checkpoint = `chk_fixture_${++snapshotCount}`;
-          const snapshot = path.join(root, checkpoint);
-          fs.cpSync(runtimeRoot(homes.get(id)!), snapshot, { recursive: true });
-          snapshots.set(checkpoint, snapshot);
-          return checkpointResult(checkpoint, id, "completed");
-        }
-        if (argv[1] === "checkpoint" && argv[2] === "delete") {
-          fs.rmSync(snapshots.get(argv[3]!)!, { recursive: true });
-          snapshots.delete(argv[3]!);
-        }
-        if (argv[1] === "checkpoint" && argv[2] === "inspect") {
-          return commandResult({
-            stdout: JSON.stringify({
-              localState: "metadata_available",
-              providerState: "completed",
-              nextAction: "fork_or_delete",
-            }),
-          });
-        }
-        if (argv[1] === "checkpoint" && argv[2] === "fork") {
-          const checkpoint = argv[3]!;
-          const id = argv[argv.indexOf("--lease-id") + 1]!;
-          const home = homeFor(id);
-          fs.cpSync(snapshots.get(checkpoint)!, runtimeRoot(home), { recursive: true });
-          forkChoices.push(checkpoint);
-          return commandResult({
-            stdout: JSON.stringify({
-              checkpointId: checkpoint,
-              leaseId: id,
-              provider: "aws",
-              slug: id,
-              workdir: "/workspace",
-            }),
-          });
-        }
-        return commandResult();
       },
     });
     const initial = context("cbx_initial");

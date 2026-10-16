@@ -38,7 +38,7 @@ import {
 } from "openclaw/plugin-sdk/thread-bindings-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
-import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramBotFixtureMocks } from "./bot-module-mocks.test-support.js";
 import {
   makeDirectTelegramConfig,
   makeTelegramConfig,
@@ -112,6 +112,7 @@ const {
   getChatSpy,
   getLoadConfigMock,
   getOnHandler,
+  mockTelegramDirectDelivery,
   prepareSkillCommandsForAgents,
   onSpy,
   getReadChannelAllowFromStoreMock,
@@ -540,13 +541,14 @@ type TelegramDispatchParams = Parameters<TelegramDispatch>[0];
 
 async function dispatchDirectTelegramTurn(params: {
   cfg?: OpenClawConfig;
-  deliverReplies: NonNullable<TelegramBotDeps["deliverReplies"]>;
+  deliverReplies: NonNullable<TelegramBotFixtureMocks["deliverReplies"]>;
   telegramCfg?: TelegramDispatchParams["telegramCfg"];
 }) {
   const cfg = params.cfg ?? {};
   const { dispatchTelegramMessage } = await import("./bot-message-dispatch.js");
   const { Bot } = await import("./bot.runtime.js");
   const bot = new Bot("tok", { botInfo: telegramBotInfoForTest });
+  mockTelegramDirectDelivery(params.deliverReplies);
   return await dispatchTelegramMessage({
     context: createDirectDispatchContext(cfg),
     bot,
@@ -556,11 +558,6 @@ async function dispatchDirectTelegramTurn(params: {
     streamMode: "off",
     textLimit: 4096,
     telegramCfg: params.telegramCfg ?? {},
-    telegramDeps: {
-      ...telegramBotDepsForTest,
-      deliverReplies: params.deliverReplies,
-      deliverStructuredReplies: params.deliverReplies,
-    },
     opts: { token: "tok" },
   });
 }
@@ -576,7 +573,7 @@ function requireFinalization(result: unknown): Promise<unknown> {
 describe("dispatchTelegramMessage reply settlement", () => {
   it("reports each payload independently when a later provider-hook send is cancelled", async () => {
     const deliverReplies = vi
-      .fn<NonNullable<TelegramBotDeps["deliverReplies"]>>()
+      .fn<NonNullable<TelegramBotFixtureMocks["deliverReplies"]>>()
       .mockResolvedValueOnce({ delivered: true })
       .mockResolvedValueOnce({ delivered: false });
     const results: unknown[] = [];
@@ -602,7 +599,7 @@ describe("dispatchTelegramMessage reply settlement", () => {
   it("settles a buffered final before a later empty final resets reasoning state", async () => {
     const cfg: OpenClawConfig = { agents: { defaults: { reasoningDefault: "on" } } };
     const deliverReplies = vi
-      .fn<NonNullable<TelegramBotDeps["deliverReplies"]>>()
+      .fn<NonNullable<TelegramBotFixtureMocks["deliverReplies"]>>()
       .mockResolvedValueOnce({ delivered: false })
       .mockResolvedValueOnce({ delivered: true });
     let bufferedFinalization: Promise<unknown> | undefined;
@@ -636,7 +633,7 @@ describe("dispatchTelegramMessage reply settlement", () => {
     const cfg: OpenClawConfig = { agents: { defaults: { reasoningDefault: "on" } } };
     const error = new Error("buffered final failed");
     const deliverReplies = vi
-      .fn<NonNullable<TelegramBotDeps["deliverReplies"]>>()
+      .fn<NonNullable<TelegramBotFixtureMocks["deliverReplies"]>>()
       .mockResolvedValueOnce({ delivered: false })
       .mockResolvedValueOnce({ delivered: true })
       .mockRejectedValueOnce(error);
@@ -681,7 +678,7 @@ describe("dispatchTelegramMessage reply settlement", () => {
     };
     const cfg: OpenClawConfig = { channels: { telegram: telegramCfg } };
     const deliverReplies = vi
-      .fn<NonNullable<TelegramBotDeps["deliverReplies"]>>()
+      .fn<NonNullable<TelegramBotFixtureMocks["deliverReplies"]>>()
       .mockResolvedValue({ delivered: true });
     let suppressedResult: unknown;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -759,13 +756,9 @@ describe("createTelegramBot", () => {
       },
     );
     createTelegramBot = (opts) => {
-      const telegramDeps = {
-        ...telegramBotDepsForTest,
-      };
       return createTelegramBotBase({
         botInfo: telegramBotInfoForTest,
         ...opts,
-        telegramDeps,
       });
     };
   });

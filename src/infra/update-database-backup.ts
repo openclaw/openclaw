@@ -454,7 +454,11 @@ export async function createUpdateDatabaseBackup({
   const prepared =
     input.config.database?.engine === "postgres"
       ? await (await import("./backup-database-discovery.js")).preparePostgresBackupDiscovery(input)
-      : { paths: await discoverBackupDatabasePaths(input), pluginOwners: undefined };
+      : {
+          // Read legacy SQLite registrations from the private inspection copy, before admission.
+          paths: await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }),
+          pluginOwners: undefined,
+        };
   const postgresPaths = prepared.paths.filter(
     (file) => readBackupEngine(file).engine === "postgres",
   );

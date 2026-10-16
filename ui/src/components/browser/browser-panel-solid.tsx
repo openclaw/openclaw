@@ -1,4 +1,5 @@
 import { untrack } from "@solidjs/signals";
+import { onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { usePanelController } from "../solid-panel-controller.ts";
@@ -7,6 +8,8 @@ import { BrowserPanelChrome } from "./browser-panel-render.tsx";
 
 export function BrowserPanelContent(props: { controller: BrowserPanelPresentation }) {
   const controller = untrack(() => props.controller);
+  // Seed retained native tabs before the connected panel restores its open view.
+  onSettled(() => controller.browserPanelController.native.mount());
   usePanelController(controller);
   const panel = () => controller.read();
   return (

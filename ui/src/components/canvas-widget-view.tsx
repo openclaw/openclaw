@@ -23,6 +23,7 @@ import { isAwaitingGatewayFailure, isGatewayAvailable } from "../lib/gateway-ava
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import {
   WidgetSandboxHost,
@@ -30,7 +31,6 @@ import {
   WIDGET_LOAD_NOTICE_MS,
 } from "../lib/widget-sandbox-host.ts";
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";

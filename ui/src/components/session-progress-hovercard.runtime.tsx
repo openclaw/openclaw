@@ -17,7 +17,7 @@ import {
   type SessionPullRequestSnapshotStore,
 } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { AppSidebarElement } from "./app-sidebar.tsx";
 import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";

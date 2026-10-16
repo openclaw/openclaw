@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { renderChatView, requireElement } from "./chat-view.test-helpers.ts";

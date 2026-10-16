@@ -1,8 +1,11 @@
 import type { SessionsListResult } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import type {
+  SolidController,
+  SolidControllerHost,
+} from "../lib/reactive/solid-controller-host.ts";
 import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
   storeSidebarSessionOwnerFilter,

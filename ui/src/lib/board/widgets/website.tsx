@@ -4,9 +4,9 @@ import { BoardWidgetError } from "../../../components/board/board-widget-error.t
 import { resolveGatewayHttpOrigin } from "../../../components/sandbox-host.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerBoardWebsiteEnglish } from "../../../i18n/locales/en-board-website.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { useOptionalApplication } from "../../reactive/context.ts";
 import { t } from "../../reactive/i18n.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
 import type { BoardWidget } from "../types.ts";
 import "./website.css";
 

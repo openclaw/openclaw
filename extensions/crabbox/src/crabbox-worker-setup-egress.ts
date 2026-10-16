@@ -3,7 +3,8 @@ import { WorkerProviderError, type WorkerProvider } from "openclaw/plugin-sdk/pl
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { withSetupSecretEgress } from "openclaw/plugin-sdk/secret-egress-runtime";
 import type { SecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
-import type { CrabboxCommandRunner, LeaseCommandContext } from "./crabbox-worker-command.js";
+import { runCrabboxProcess } from "./crabbox-process.js";
+import type { LeaseCommandContext } from "./crabbox-worker-command.js";
 import { runCrabboxCommand } from "./crabbox-worker-command.js";
 import { assertCrabboxLeaseId, parseCrabboxProfile } from "./crabbox-worker-profile.js";
 
@@ -19,7 +20,6 @@ function quote(value: string): string {
 export async function assertCrabboxSetupEgressSupport(params: {
   binary: string;
   target: string;
-  runCommand: CrabboxCommandRunner;
   assertCurrent: () => void;
   signal?: AbortSignal;
   projectPrepared?: boolean;
@@ -53,7 +53,6 @@ export async function assertCrabboxSetupEgressSupport(params: {
 
 export function createCrabboxSetupCommandRunner(params: {
   resolveBinary: (binary?: string, signal?: AbortSignal) => Promise<string>;
-  runCommand: CrabboxCommandRunner;
 }): NonNullable<WorkerProvider["runSetupCommand"]> {
   return async (lease, command) => {
     command.assertCurrent();
@@ -69,7 +68,6 @@ export function createCrabboxSetupCommandRunner(params: {
     await assertCrabboxSetupEgressSupport({
       binary,
       target: profile.target,
-      runCommand: params.runCommand,
       assertCurrent: command.assertCurrent,
       signal: command.signal,
     });
@@ -80,7 +78,6 @@ export function createCrabboxSetupCommandRunner(params: {
       id: lease.leaseId,
       secrets: profile.setupSecrets ?? {},
       createScript,
-      runCommand: params.runCommand,
       timeoutMs: command.timeoutMs,
       assertCurrent: command.assertCurrent,
       signal: command.signal,
@@ -93,7 +90,6 @@ export async function runCrabboxSetupEgress(
   params: LeaseCommandContext & {
     secrets: Readonly<Record<string, SecretRef>>;
     createScript: (env: Record<string, string>) => string;
-    runCommand: CrabboxCommandRunner;
     timeoutMs: number;
     assertCurrent: () => void;
     signal?: AbortSignal;
@@ -146,7 +142,7 @@ ${params.createScript(remoteEnv)}
     try {
       signal.throwIfAborted();
       params.assertCurrent();
-      const result = await params.runCommand(
+      const result = await runCrabboxProcess(
         [
           params.binary,
           "egress",

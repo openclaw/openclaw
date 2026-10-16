@@ -1,5 +1,5 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
+import type { SolidControllerHost } from "../lib/reactive/solid-controller-host.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { SidebarEmptyGroupsMode } from "./app-sidebar-session-types.ts";
 

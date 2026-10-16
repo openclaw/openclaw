@@ -1,7 +1,16 @@
 import { expect, it, vi } from "vitest";
+import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  ensureSessionInputCompletionsSchema,
+  ensureSessionPendingInputsSchema,
+} from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  readSessionInputCompletion,
+  writeSessionInputCompletion,
+} from "./session-accessor.sqlite-pending-inputs.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import {
   canRebasePreparedAssistantInTransaction,
@@ -44,6 +53,91 @@ function hydrateActor(f: ReturnType<typeof createSessionCompoundWorkerFixture>) 
   };
   return hydrateSessionActorState(f.database, target, { epoch: "window", sequence: 0 }, "");
 }
+
+it("bounds completion residency while preserving old retries, committed writes, and rollback", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = createSessionCompoundWorkerFixture();
+    const { database } = f;
+    const options = { agentId: database.agentId, path: database.path };
+    const write = <T>(run: () => T) => runOpenClawAgentWriteTransaction(run, options);
+    const scope = (idempotencyKey: string) => ({
+      ...f.scope,
+      idempotencyKey,
+      runId: `run-${idempotencyKey}`,
+      requestHash: `hash-${idempotencyKey}`,
+      lifecycleGeneration: "synthetic",
+    });
+    const success = buildAgentRunTerminalOutcome({ status: "ok" });
+    const interrupted = buildAgentRunTerminalOutcome({ status: "timeout", stopReason: "restart" });
+    write(() => {
+      ensureSessionPendingInputsSchema(database.db);
+      ensureSessionInputCompletionsSchema(database.db);
+      for (let index = 0; index < 512; index += 1) {
+        writeSessionInputCompletion(
+          database,
+          scope(`receipt-${String(index).padStart(3, "0")}`),
+          index === 0 ? interrupted : success,
+        );
+      }
+    });
+    const resident = hydrateActor(f);
+    const newScope = scope("recent-completion");
+    const complete = (state: SessionActorStoredState) =>
+      withSessionActorTransactionState(database, state, () => {
+        expect(writeSessionInputCompletion(database, newScope, success)).toEqual(success);
+        expect(readSessionInputCompletion(database, newScope)?.outcome).toEqual(success);
+      });
+    expect(() =>
+      write(() => {
+        complete(forkSessionActorStoredState(resident));
+        throw new Error("synthetic rollback");
+      }),
+    ).toThrow("synthetic rollback");
+    write(() =>
+      withSessionActorTransactionState(database, resident, () => {
+        expect(readSessionInputCompletion(database, newScope)).toBeUndefined();
+        expect(readSessionInputCompletion(database, scope("receipt-000"))?.outcome).toEqual(
+          interrupted,
+        );
+      }),
+    );
+    expect(readSessionInputCompletion(database, newScope)).toBeUndefined();
+
+    const committed = forkSessionActorStoredState(resident);
+    write(() => complete(committed));
+    expect(committed.completions.size).toBeLessThanOrEqual(512);
+    write(() =>
+      withSessionActorTransactionState(database, committed, () => {
+        expect(writeSessionInputCompletion(database, scope("receipt-000"), success)).toEqual(
+          success,
+        );
+        expect(readSessionInputCompletion(database, scope("receipt-000"))?.outcome).toEqual(
+          success,
+        );
+        expect(writeSessionInputCompletion(database, scope("receipt-001"), interrupted)).toEqual(
+          success,
+        );
+        expect(() =>
+          writeSessionInputCompletion(
+            database,
+            { ...scope("receipt-001"), requestHash: "conflicting-input" },
+            success,
+          ),
+        ).toThrow("Input completion conflicts with the accepted input");
+      }),
+    );
+    const rehydrated = hydrateActor(f);
+    expect(rehydrated.completions.size).toBeLessThanOrEqual(512);
+    write(() =>
+      withSessionActorTransactionState(database, rehydrated, () => {
+        expect(readSessionInputCompletion(database, newScope)?.outcome).toEqual(success);
+        expect(readSessionInputCompletion(database, scope("receipt-000"))?.outcome).toEqual(
+          success,
+        );
+      }),
+    );
+  });
+});
 
 it("preserves historical replay and branch ancestry outside the actor's retained window", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
