@@ -45,6 +45,20 @@ import {
 } from "./message-handler.process.test-helpers.js";
 
 registerDiscordProcessTestLifecycle();
+
+async function runBase(overrides: Parameters<typeof createBaseContext>[0] = {}) {
+  await runProcessDiscordMessage(await createBaseContext(overrides));
+}
+
+async function runAutomatic(
+  overrides: Parameters<typeof createAutomaticSourceDeliveryContext>[0] = {},
+) {
+  await runProcessDiscordMessage(await createAutomaticSourceDeliveryContext(overrides));
+}
+async function runQuoted(options: Parameters<typeof createQuotedContext>[0]) {
+  await runProcessDiscordMessage(await createQuotedContext(options));
+}
+
 const emptyCounts = {
   delivered: 0,
   deliveredNotVisible: 0,
@@ -110,11 +124,9 @@ describe("processDiscordMessage ack reactions", () => {
       await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
-    const ctx = await createAutomaticSourceDeliveryContext({
+    await runAutomatic({
       cfg: { agents: { defaults: { typingMode: "message" } } },
     });
-
-    await runProcessDiscordMessage(ctx);
 
     expect(typingMocks.sendTyping).toHaveBeenCalledTimes(2);
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
@@ -128,7 +140,7 @@ describe("processDiscordMessage ack reactions", () => {
         await vi.advanceTimersByTimeAsync(3_500);
         return createNoQueuedDispatchResult();
       });
-      const ctx = await createBaseContext({
+      await runBase({
         shouldRequireMention: false,
         effectiveWasMentioned: false,
         discordConfig: { streaming: { mode: "partial", block: { enabled: true } } },
@@ -138,8 +150,6 @@ describe("processDiscordMessage ack reactions", () => {
         },
         route: BASE_CHANNEL_ROUTE,
       });
-
-      await runProcessDiscordMessage(ctx);
 
       expectRecordFields(requireRecord(getLastDispatchReplyOptions(), "dispatch reply options"), {
         sourceReplyDeliveryMode: "message_tool_only",
@@ -160,9 +170,7 @@ describe("processDiscordMessage ack reactions", () => {
       settledReceipt: failedFinalReceipt,
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext();
-
-    await runProcessDiscordMessage(ctx);
+    await runAutomatic();
 
     const emojis = getReactionEmojis();
     expect(emojis).toContain(DEFAULT_EMOJIS.error);
@@ -174,15 +182,10 @@ describe("processDiscordMessage ack reactions", () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "Something failed", isError: true });
       await params?.dispatcher.waitForIdle();
-      return {
-        queuedFinal: true,
-        counts: { final: 1, tool: 0, block: 0 },
-      };
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext();
-
-    await runProcessDiscordMessage(ctx);
+    await runAutomatic();
 
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     const emojis = getReactionEmojis();
@@ -286,13 +289,11 @@ describe("processDiscordMessage deliver-lambda abort logging", () => {
       return { queuedFinal: false, counts: { final: 0, tool: 0, block: 1 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    await runAutomatic({
       abortSignal: abortController.signal,
       baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
       route: BASE_CHANNEL_ROUTE,
     });
-
-    await runProcessDiscordMessage(ctx);
 
     expect(logVerbose).toHaveBeenCalledWith(
       "discord block reply skipped (aborted before delivery): target=channel:c1 session=agent:main:discord:channel:c1",
@@ -441,11 +442,7 @@ describe("processDiscordMessage reply session init conflict retry", () => {
     dispatchInboundMessage.mockRejectedValueOnce(originalError);
     const guildHistories = new Map();
     const createReplayContext = () =>
-      createBaseContext({
-        guildHistories,
-        historyLimit: 10,
-        inboundEventKind: "room_event",
-      });
+      createBaseContext({ guildHistories, historyLimit: 10, inboundEventKind: "room_event" });
 
     await expect(runProcessDiscordMessage(await createReplayContext())).rejects.toBe(originalError);
     expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
@@ -492,7 +489,7 @@ describe("processDiscordMessage session routing and room events", () => {
           return createNoQueuedDispatchResult();
         });
       }
-      const ctx = await createBaseContext({
+      await runBase({
         guildHistories,
         historyLimit: 10,
         isGuildMessage: !groupDm,
@@ -504,7 +501,6 @@ describe("processDiscordMessage session routing and room events", () => {
         baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
         route: BASE_CHANNEL_ROUTE,
       });
-      await runProcessDiscordMessage(ctx);
       if (groupDm) {
         expect(getLastDispatchCtx()?.GroupRequireMention).toBe(false);
       } else {
@@ -537,15 +533,13 @@ describe("processDiscordMessage session routing and room events", () => {
       introText: "",
     });
 
-    const ctx = await createBaseContext({
+    await runBase({
       messageChannelId: "thread-1",
       threadChannel: { id: "thread-1", name: "subagent-thread" },
       boundSessionKey: "agent:main:subagent:child",
       threadBindings,
       route: BASE_CHANNEL_ROUTE,
     });
-
-    await runProcessDiscordMessage(ctx);
 
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       SessionKey: "agent:main:subagent:child",
@@ -574,10 +568,8 @@ describe("processDiscordMessage session routing and room events", () => {
         timestamp: new Date().toISOString(),
       })),
     };
-    const ctx = await createBaseContext({
-      cfg: {
-        channels: { discord: { contextVisibility: "allowlist" } },
-      },
+    await runBase({
+      cfg: { channels: { discord: { contextVisibility: "allowlist" } } },
       baseSessionKey: threadSessionKey,
       route: BASE_CHANNEL_ROUTE,
       messageChannelId: threadId,
@@ -595,8 +587,6 @@ describe("processDiscordMessage session routing and room events", () => {
       client: { rest },
       channelConfig: { allowed: true, users: ["U2"] },
     });
-
-    await runProcessDiscordMessage(ctx);
 
     expect(rest.get).toHaveBeenCalled();
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
@@ -660,7 +650,7 @@ describe("processDiscordMessage session routing", () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("prepared media must not be fetched again");
     });
-    const ctx = await createBaseContext({
+    await runBase({
       discordRestFetch: fetchImpl,
       message: {
         id: "m-audio-preflight",
@@ -679,19 +669,12 @@ describe("processDiscordMessage session routing", () => {
       baseText: "",
       messageText: "",
       preflightAudioTranscript: "/status",
-      preparedMedia: [
-        {
-          path: "/tmp/openclaw-discord-test/voice.ogg",
-          contentType: "audio/ogg",
-        },
-      ],
+      preparedMedia: [{ path: "/tmp/openclaw-discord-test/voice.ogg", contentType: "audio/ogg" }],
       cfg: {
         messages: { groupChat: { visibleReplies: "message_tool" } },
         session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
     });
-
-    await runProcessDiscordMessage(ctx);
 
     expect(fetchImpl).not.toHaveBeenCalled();
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
@@ -718,14 +701,12 @@ describe("processDiscordMessage session routing", () => {
   });
 
   it("keeps typed control commands as explicit text command turns", async () => {
-    const ctx = await createBaseContext({
+    await runBase({
       baseText: "/status",
       messageText: "/status",
       hasControlCommand: true,
       commandAuthorized: true,
     });
-
-    await runProcessDiscordMessage(ctx);
 
     expect(requireRecord(getLastDispatchCtx(), "dispatch context").CommandTurn).toEqual({
       kind: "text-slash",
@@ -740,15 +721,13 @@ describe("processDiscordMessage session routing", () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("hidden reply media should not be fetched");
     });
-    const ctx = await createQuotedContext({
+    await runQuoted({
       replyId: "m-hidden",
       body: "hidden image",
       author: { id: "U2", username: "mallory", globalName: "Mallory" },
       fetch: fetchImpl,
       visibility: "allowlist",
     });
-
-    await runProcessDiscordMessage(ctx);
 
     const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -762,24 +741,19 @@ describe("processDiscordMessage session routing", () => {
     const fetchImpl = vi.fn(
       async () => new Response(Buffer.from("image"), { headers: { "content-type": "image/png" } }),
     );
-    const ctx = await createQuotedContext({
+    await runQuoted({
       replyId: "m-attachment-only",
       body: "",
       author: { id: "U2", username: "bob", globalName: "Bob" },
       fetch: fetchImpl,
     });
 
-    await runProcessDiscordMessage(ctx);
-
     const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
     expect(dispatchCtx.ReplyToId).toBe("m-attachment-only");
     expect(dispatchCtx.ReplyToSender).toBe("bob");
     expect(dispatchCtx.ReplyToBody).toBeUndefined();
     expect(dispatchCtx.media).toEqual([
-      expect.objectContaining({
-        contentType: "image/png",
-        messageId: "m-attachment-only",
-      }),
+      expect.objectContaining({ contentType: "image/png", messageId: "m-attachment-only" }),
     ]);
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
@@ -789,7 +763,7 @@ describe("processDiscordMessage session routing", () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("self-reply media should not be fetched");
     });
-    const ctx = await createQuotedContext({
+    await runQuoted({
       replyId: "m-bot-previous",
       body,
       author: { id: "bot-1", username: "Spartacus", globalName: "Spartacus" },
@@ -797,7 +771,6 @@ describe("processDiscordMessage session routing", () => {
       botUserId: "bot-1",
       text: "<@bot> hit that again",
     });
-    await runProcessDiscordMessage(ctx);
     const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(dispatchCtx.ReplyToId).toBe("m-bot-previous");
@@ -808,7 +781,7 @@ describe("processDiscordMessage session routing", () => {
   });
 
   it("stores DM lastRoute with user target for direct-session continuity", async () => {
-    const ctx = await createBaseContext({
+    await runBase({
       ...createDirectMessageContextOverrides(),
       message: {
         id: "m1",
@@ -818,8 +791,6 @@ describe("processDiscordMessage session routing", () => {
       },
       messageChannelId: "dm1",
     });
-
-    await runProcessDiscordMessage(ctx);
 
     expect(getLastRouteUpdate()).toEqual({
       sessionKey: "agent:main:discord:direct:u1",
@@ -837,23 +808,15 @@ describe("processDiscordMessage session routing", () => {
   });
 
   it("pins Discord text DM main-route updates to the single configured DM owner", async () => {
-    const ctx = await createBaseContext({
+    await runBase({
       ...createDirectMessageContextOverrides(),
       cfg: {
         messages: { ackReaction: "👀" },
-        session: {
-          store: "/tmp/openclaw-discord-process-test-sessions.json",
-          dmScope: "main",
-        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json", dmScope: "main" },
       },
       channelConfig: { users: ["user:111"] },
       baseSessionKey: "agent:main:main",
-      author: {
-        id: "222",
-        username: "bob",
-        discriminator: "0",
-        globalName: "Bob",
-      },
+      author: { id: "222", username: "bob", discriminator: "0", globalName: "Bob" },
       sender: { id: "222", label: "bob" },
       route: {
         agentId: "main",
@@ -863,8 +826,6 @@ describe("processDiscordMessage session routing", () => {
         mainSessionKey: "agent:main:main",
       },
     });
-
-    await runProcessDiscordMessage(ctx);
 
     expect(getLastRouteUpdate()).toMatchObject({
       sessionKey: "agent:main:main",

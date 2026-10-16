@@ -7,7 +7,7 @@ import {
   type ReplyDispatchRuntimeInfo,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { RequestClient } from "../internal/discord.js";
 import { withDiscordRequestAuthority } from "../internal/request-authority.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
@@ -81,6 +81,20 @@ function createContinuationHarness(options?: {
   return { controller, visible, failures, rest, requests, admission, rateLimited };
 }
 
+function cleanupPreview(
+  controller: ReturnType<typeof createDiscordDraftPreviewController>,
+  beforeCleanup?: () => Promise<void>,
+) {
+  onTestFinished(async () => {
+    try {
+      await beforeCleanup?.();
+      await controller.cleanup();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+}
+
 type RetainedDraft = Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>>[0];
 
 async function deliverWaitingReply(
@@ -135,11 +149,7 @@ async function stageDelegation(controller: ReturnType<typeof createDiscordDraftP
     progressText: "Checking the implementation with delegated reviewers.",
   });
   await controller.pushItemEvent(
-    projectAgentToolActivity({
-      name: "sessions_spawn",
-      toolCallId: "spawn",
-      phase: "start",
-    }),
+    projectAgentToolActivity({ name: "sessions_spawn", toolCallId: "spawn", phase: "start" }),
   );
 }
 
@@ -151,40 +161,32 @@ describe("Discord draft preview REST lifecycle", () => {
       discordConfig: {},
       isRoomEvent: true,
     });
-    try {
-      await stageDelegation(controller);
-      await controller.pushPlanProgress([{ step: "Private ambient work", status: "in_progress" }]);
-      await vi.advanceTimersByTimeAsync(1_500);
-      await controller.flush();
-      expect(controller.draftStream).toBeUndefined();
-      expect(visible.size).toBe(0);
-    } finally {
-      await controller.cleanup();
-      vi.useRealTimers();
-    }
+    cleanupPreview(controller);
+    await stageDelegation(controller);
+    await controller.pushPlanProgress([{ step: "Private ambient work", status: "in_progress" }]);
+    await vi.advanceTimersByTimeAsync(1_500);
+    await controller.flush();
+    expect(controller.draftStream).toBeUndefined();
+    expect(visible.size).toBe(0);
   });
 
   it("shows running work without a preamble or utility narration", async () => {
     vi.useFakeTimers();
     const { controller, visible } = createContinuationHarness({ discordConfig: {} });
-    try {
-      await controller.pushItemEvent(
-        projectAgentToolActivity({
-          name: "exec",
-          toolCallId: "long-exec",
-          phase: "start",
-          args: { command: "PRIVATE_COMMAND_ARGUMENT" },
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(1_500);
-      await controller.flush();
-      expect(visible.size).toBe(1);
-      expect([...visible.values()][0]).toContain("Exec: running");
-      expect([...visible.values()][0]).not.toContain("PRIVATE_COMMAND_ARGUMENT");
-    } finally {
-      await controller.cleanup();
-      vi.useRealTimers();
-    }
+    cleanupPreview(controller);
+    await controller.pushItemEvent(
+      projectAgentToolActivity({
+        name: "exec",
+        toolCallId: "long-exec",
+        phase: "start",
+        args: { command: "PRIVATE_COMMAND_ARGUMENT" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(1_500);
+    await controller.flush();
+    expect(visible.size).toBe(1);
+    expect([...visible.values()][0]).toContain("Exec: running");
+    expect([...visible.values()][0]).not.toContain("PRIVATE_COMMAND_ARGUMENT");
   });
 
   it("keeps one confirmed card after yield and isolates a queued turn's cleanup", async () => {
@@ -192,90 +194,79 @@ describe("Discord draft preview REST lifecycle", () => {
     const harness = createContinuationHarness({ discordConfig: {} });
     const { controller, visible, requests } = harness;
     let draft: RetainedDraft | undefined;
-    try {
-      await stageDelegation(controller);
-      const retainedStream = controller.draftStream!;
-      await deliverWaitingReply(harness, (candidate) => {
-        draft = candidate;
-        return true;
-      });
-      expect(draft).toBeDefined();
-      expect(requests).toEqual(["POST"]);
-      expect(controller.draftStream).toBeUndefined();
-      await controller.cleanup();
-      draft!.push({ itemId: "child", kind: "subagent", title: "Review", status: "running" });
-      await vi.advanceTimersByTimeAsync(1_200);
-      await retainedStream.flush();
-      expect(visible.get("1")).toContain("Review: running");
-      expect(visible.size).toBe(1);
-      await controller.pushItemEvent({ kind: "preamble", progressText: "Late parent text" });
-      expect(controller.handleQueuedFollowupAdmitted()).toBe(true);
-      expect(controller.draftStream).not.toBe(retainedStream);
-      await controller.pushItemEvent(
-        projectAgentToolActivity({
-          name: "read",
-          toolCallId: "queued-read",
-          phase: "start",
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(1_500);
-      await controller.flush();
-      expect(visible.size).toBe(2);
-      expect(visible.get("2")).toContain("Read: running");
-      await controller.lifecycle.observeDelivery({ visibleReplySent: true });
-      await controller.cleanup();
-      expect([...visible.keys()]).toEqual(["1"]);
-      draft!.push({
-        itemId: "child",
-        kind: "subagent",
-        title: "Review",
-        status: "completed",
-        phase: "end",
-      });
-      await vi.advanceTimersByTimeAsync(1_200);
-      await retainedStream.flush();
-      expect(visible.get("1")).toContain("Review: completed");
-      expect(visible.get("1")).not.toContain("Late parent text");
-      draft!.retire();
-      draft!.retire();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(visible.size).toBe(0);
-      expect(requests.filter((method) => method === "DELETE")).toHaveLength(2);
-    } finally {
+    cleanupPreview(controller, async () => {
       draft?.retire();
       await vi.advanceTimersByTimeAsync(0);
-      await controller.cleanup();
-      vi.useRealTimers();
-    }
+    });
+    await stageDelegation(controller);
+    const retainedStream = controller.draftStream!;
+    await deliverWaitingReply(harness, (candidate) => {
+      draft = candidate;
+      return true;
+    });
+    expect(draft).toBeDefined();
+    expect(requests).toEqual(["POST"]);
+    expect(controller.draftStream).toBeUndefined();
+    await controller.cleanup();
+    draft!.push({ itemId: "child", kind: "subagent", title: "Review", status: "running" });
+    await vi.advanceTimersByTimeAsync(1_200);
+    await retainedStream.flush();
+    expect(visible.get("1")).toContain("Review: running");
+    expect(visible.size).toBe(1);
+    await controller.pushItemEvent({ kind: "preamble", progressText: "Late parent text" });
+    expect(controller.handleQueuedFollowupAdmitted()).toBe(true);
+    expect(controller.draftStream).not.toBe(retainedStream);
+    await controller.pushItemEvent(
+      projectAgentToolActivity({ name: "read", toolCallId: "queued-read", phase: "start" }),
+    );
+    await vi.advanceTimersByTimeAsync(1_500);
+    await controller.flush();
+    expect(visible.size).toBe(2);
+    expect(visible.get("2")).toContain("Read: running");
+    await controller.lifecycle.observeDelivery({ visibleReplySent: true });
+    await controller.cleanup();
+    expect([...visible.keys()]).toEqual(["1"]);
+    draft!.push({
+      itemId: "child",
+      kind: "subagent",
+      title: "Review",
+      status: "completed",
+      phase: "end",
+    });
+    await vi.advanceTimersByTimeAsync(1_200);
+    await retainedStream.flush();
+    expect(visible.get("1")).toContain("Review: completed");
+    expect(visible.get("1")).not.toContain("Late parent text");
+    draft!.retire();
+    draft!.retire();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(visible.size).toBe(0);
+    expect(requests.filter((method) => method === "DELETE")).toHaveLength(2);
   });
 
   it("does not flush a progress final when delivery admission refuses custody", async () => {
     vi.useFakeTimers();
     const { controller, requests } = createContinuationHarness();
     const adopt = vi.fn(() => true);
-    try {
-      await stageDelegation(controller);
-      await vi.advanceTimersByTimeAsync(1_500);
-      await controller.flush();
-      const priorRequests = [...requests];
-      await expect(
-        controller.adoptProgressDraft(
-          { text: "Waiting for delegated work." },
-          {
-            kind: "final",
-            adoptProgressDraft: adopt,
-            onPlatformSendDispatch: async () => {
-              throw new Error("Delivery custody belongs to an earlier attempt");
-            },
+    cleanupPreview(controller);
+    await stageDelegation(controller);
+    await vi.advanceTimersByTimeAsync(1_500);
+    await controller.flush();
+    const priorRequests = [...requests];
+    await expect(
+      controller.adoptProgressDraft(
+        { text: "Waiting for delegated work." },
+        {
+          kind: "final",
+          adoptProgressDraft: adopt,
+          onPlatformSendDispatch: async () => {
+            throw new Error("Delivery custody belongs to an earlier attempt");
           },
-        ),
-      ).rejects.toThrow("Delivery custody belongs to an earlier attempt");
-      expect(requests).toEqual(priorRequests);
-      expect(adopt).not.toHaveBeenCalled();
-    } finally {
-      await controller.cleanup();
-      vi.useRealTimers();
-    }
+        },
+      ),
+    ).rejects.toThrow("Delivery custody belongs to an earlier attempt");
+    expect(requests).toEqual(priorRequests);
+    expect(adopt).not.toHaveBeenCalled();
   });
 
   it.each(["missing-id", "stopped", "declined", "label-only"] as const)(
@@ -288,35 +279,31 @@ describe("Discord draft preview REST lifecycle", () => {
       });
       const { controller, visible, failures } = harness;
       const adopt = vi.fn(() => scenario !== "declined");
-      try {
-        if (scenario === "label-only") {
-          await controller.pushItemEvent({
-            itemId: "read",
-            kind: "tool",
-            name: "read",
-            phase: "update",
-          });
-          await vi.advanceTimersByTimeAsync(1_500);
-          await controller.flush();
-          expect(visible.size).toBe(1);
-          expect([...visible.values()][0]).not.toContain("Read");
-        } else {
-          await stageDelegation(controller);
-        }
-        if (scenario === "stopped") {
-          await vi.advanceTimersByTimeAsync(1_500);
-          failures.edit = true;
-          controller.draftStream?.update("This edit is rejected", { complete: true });
-          await controller.flush();
-          expect(controller.draftStream?.isStopped()).toBe(true);
-        }
-        await deliverWaitingReply(harness, adopt);
-        expect(adopt).toHaveBeenCalledTimes(scenario === "declined" ? 1 : 0);
-        expect([...visible.values()]).toContain("Waiting for delegated work.");
-      } finally {
-        await controller.cleanup();
-        vi.useRealTimers();
+      cleanupPreview(controller);
+      if (scenario === "label-only") {
+        await controller.pushItemEvent({
+          itemId: "read",
+          kind: "tool",
+          name: "read",
+          phase: "update",
+        });
+        await vi.advanceTimersByTimeAsync(1_500);
+        await controller.flush();
+        expect(visible.size).toBe(1);
+        expect([...visible.values()][0]).not.toContain("Read");
+      } else {
+        await stageDelegation(controller);
       }
+      if (scenario === "stopped") {
+        await vi.advanceTimersByTimeAsync(1_500);
+        failures.edit = true;
+        controller.draftStream?.update("This edit is rejected", { complete: true });
+        await controller.flush();
+        expect(controller.draftStream?.isStopped()).toBe(true);
+      }
+      await deliverWaitingReply(harness, adopt);
+      expect(adopt).toHaveBeenCalledTimes(scenario === "declined" ? 1 : 0);
+      expect([...visible.values()]).toContain("Waiting for delegated work.");
     },
   );
 
@@ -334,62 +321,59 @@ describe("Discord draft preview REST lifecycle", () => {
     );
     const { controller, visible } = harness;
     let draft: RetainedDraft | undefined;
-    try {
-      await stageDelegation(controller);
-      const stream = controller.draftStream!;
-      await withDiscordRequestAuthority(
-        () => {
-          if (!requesterOpen) {
-            throw new Error("requester settled");
-          }
-        },
-        () =>
-          deliverWaitingReply(harness, (candidate) => {
-            draft = candidate;
-            candidate.push({
-              itemId: "child",
-              kind: "subagent",
-              title: "Review",
-              status: "running",
-            });
-            requesterOpen = false;
-            return true;
-          }),
-      );
-      await vi.advanceTimersByTimeAsync(1_200);
-      await stream.flush();
-      expect(visible.get("1")).toContain("Review: running");
-      withDiscordRequestAuthority(
-        () => {
-          throw new Error("unrelated child scope");
-        },
-        () => {
-          draft!.push({
-            itemId: "child",
-            kind: "subagent",
-            title: "Review",
-            status: "completed",
-            phase: "end",
-          });
-        },
-      );
-      await vi.advanceTimersByTimeAsync(1_200);
-      await stream.flush();
-      expect(visible.get("1")).toContain("Review: completed");
-      expect(serviceAssertion).toHaveBeenCalled();
-      const accepted = visible.get("1");
-      serviceOpen = false;
-      draft!.push({ itemId: "another", kind: "subagent", title: "Forbidden", status: "running" });
-      await vi.advanceTimersByTimeAsync(1_200);
-      await stream.flush();
-      expect(visible.get("1")).toBe(accepted);
-    } finally {
+    cleanupPreview(controller, async () => {
       serviceOpen = true;
       draft?.retire();
       await vi.advanceTimersByTimeAsync(0);
-      await controller.cleanup();
-      vi.useRealTimers();
-    }
+    });
+    await stageDelegation(controller);
+    const stream = controller.draftStream!;
+    await withDiscordRequestAuthority(
+      () => {
+        if (!requesterOpen) {
+          throw new Error("requester settled");
+        }
+      },
+      () =>
+        deliverWaitingReply(harness, (candidate) => {
+          draft = candidate;
+          candidate.push({
+            itemId: "child",
+            kind: "subagent",
+            title: "Review",
+            status: "running",
+          });
+          requesterOpen = false;
+          return true;
+        }),
+    );
+    await vi.advanceTimersByTimeAsync(1_200);
+    await stream.flush();
+    expect(visible.get("1")).toContain("Review: running");
+    withDiscordRequestAuthority(
+      () => {
+        throw new Error("unrelated child scope");
+      },
+      () => {
+        draft!.push({
+          itemId: "child",
+          kind: "subagent",
+          title: "Review",
+          status: "completed",
+          phase: "end",
+        });
+      },
+    );
+    await vi.advanceTimersByTimeAsync(1_200);
+    await stream.flush();
+    expect(visible.get("1")).toContain("Review: completed");
+    expect(serviceAssertion).toHaveBeenCalled();
+    const accepted = visible.get("1");
+    serviceOpen = false;
+    draft!.push({ itemId: "another", kind: "subagent", title: "Forbidden", status: "running" });
+    await vi.advanceTimersByTimeAsync(1_200);
+    await stream.flush();
+    expect(visible.get("1")).toBe(accepted);
   });
 
   it.each(["admission", "rate-limit retry"] as const)(
@@ -404,40 +388,37 @@ describe("Discord draft preview REST lifecycle", () => {
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
       let draft: RetainedDraft | undefined;
-      try {
-        await stageDelegation(controller);
-        await deliverWaitingReply(harness, (candidate) => {
-          draft = candidate;
-          return true;
-        });
-        if (boundary === "admission") {
-          admission.beforeRequest = async (method) => {
-            if (method === "PATCH") {
-              entered.resolve();
-              await release.promise;
-            }
-          };
-        } else {
-          failures.rateLimitOnce = true;
-        }
-        draft!.push({ itemId: "child", kind: "subagent", title: "Review", status: "running" });
-        const advancing = vi.advanceTimersByTimeAsync(1_200);
-        await (boundary === "admission" ? entered.promise : rateLimited.promise);
-        draft!.retire();
-        release.resolve();
-        await advancing;
-        await vi.advanceTimersByTimeAsync(boundary === "rate-limit retry" ? 1_000 : 0);
-        expect(requests).toEqual(
-          boundary === "admission" ? ["POST", "DELETE"] : ["POST", "PATCH", "DELETE"],
-        );
-        expect(visible.size).toBe(0);
-      } finally {
+      cleanupPreview(controller, async () => {
         release.resolve();
         draft?.retire();
         await vi.advanceTimersByTimeAsync(0);
-        await controller.cleanup();
-        vi.useRealTimers();
+      });
+      await stageDelegation(controller);
+      await deliverWaitingReply(harness, (candidate) => {
+        draft = candidate;
+        return true;
+      });
+      if (boundary === "admission") {
+        admission.beforeRequest = async (method) => {
+          if (method === "PATCH") {
+            entered.resolve();
+            await release.promise;
+          }
+        };
+      } else {
+        failures.rateLimitOnce = true;
       }
+      draft!.push({ itemId: "child", kind: "subagent", title: "Review", status: "running" });
+      const advancing = vi.advanceTimersByTimeAsync(1_200);
+      await (boundary === "admission" ? entered.promise : rateLimited.promise);
+      draft!.retire();
+      release.resolve();
+      await advancing;
+      await vi.advanceTimersByTimeAsync(boundary === "rate-limit retry" ? 1_000 : 0);
+      expect(requests).toEqual(
+        boundary === "admission" ? ["POST", "DELETE"] : ["POST", "PATCH", "DELETE"],
+      );
+      expect(visible.size).toBe(0);
     },
   );
 
