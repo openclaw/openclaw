@@ -20,6 +20,7 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import type { UnindexedHistoryControl } from "./session-accessor.sqlite-history-navigation.types.js";
+import type { VisibleHistoryProjection } from "./session-accessor.sqlite-history-projection.js";
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import { projectSessionActorContextMetadata } from "./session-actor-context-metadata.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
@@ -62,6 +63,8 @@ export type CurrentTranscriptProjection = {
   state: SessionTranscriptProjectionState;
   contextMetadata?: SessionTranscriptContextMetadata;
   contextStats?: SessionTranscriptContextStats;
+  /** Installed by the history worker; accounting-only snapshots never resolve markers. */
+  resolveVisibleHistory?: (projection: CurrentTranscriptProjection) => VisibleHistoryProjection;
 };
 
 export type SessionTranscriptMessageEvent = {
