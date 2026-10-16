@@ -193,11 +193,10 @@ async function preparePostgresRestoreInWorker(params: {
   return await withDatabasePortConnection(params.config, async (client) => {
     const { loadDatabasePortDescriptor } =
       await import("../infra/database-engine/port-provider-descriptor.js");
-    const descriptor = await loadDatabasePortDescriptor(
-      manifest.source.owner,
-      params.config,
-      { version: manifest.source.schemaVersion, pluginOwners: params.pluginOwners },
-    );
+    const descriptor = await loadDatabasePortDescriptor(manifest.source.owner, params.config, {
+      version: manifest.source.schemaVersion,
+      pluginOwners: params.pluginOwners,
+    });
     const { namespace } = await restorePostgresBackup({ ...params, client, descriptor, manifest });
     const { resolveDatabaseEngineInput } = await import("../infra/database-engine/config.js");
     const input = await resolveDatabaseEngineInput(params.config);

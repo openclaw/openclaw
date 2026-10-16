@@ -497,9 +497,10 @@ Release packages declare supported engines in the optional
 `openclaw.updateAdmissionProtocol`. An absent array means `["sqlite"]`; the
 admission protocol remains `1`. PostgreSQL targets also declare
 `openclaw.postgresFamilies`: the supported family IDs (`state`, `workboard`,
-`logbook`, and `team-reports`). The updater checks every selected PostgreSQL
-family and retained physical store, including disabled plugins. Missing engine
-or family support refuses before stopping the previous Gateway or mutating data.
+`logbook`, and `team-reports`). On installations configured for PostgreSQL,
+the updater checks every selected family and retained physical store, including
+disabled plugins. Missing engine or family support refuses before stopping the
+previous Gateway or mutating data.
 Reverse-port to SQLite with the current compatible binary, or stay on the
 current version. PostgreSQL agent runtime support does not yet include a port
 and exact-backup provider. A global PostgreSQL configuration selects that family,
