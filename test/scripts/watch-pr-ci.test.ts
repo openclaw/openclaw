@@ -28,11 +28,39 @@ function expectRun(
   }
 }
 
-function readCalls(file: string): string[][] {
-  return readFileSync(file, "utf8")
+function parseCalls(text: string): string[][] {
+  return text
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
+}
+
+function readCalls(file: string) {
+  return parseCalls(readFileSync(file, "utf8"));
+}
+function placeholder() {
+  const fixture = structuredClone(placeholderFixture);
+  const rollup = fixture.graphql.data.repository.pullRequest.statusCheckRollup;
+  return { fixture, rollup, contexts: rollup.contexts };
+}
+function queuedCheck(contexts: ReturnType<typeof placeholder>["contexts"]) {
+  const check = contexts.nodes.find((entry) => entry.databaseId === 98802098786);
+  assert(check);
+  return check;
+}
+function refreshedPlaceholder(fixture: typeof placeholderFixture) {
+  const afterAliasScan = structuredClone(fixture.graphql);
+  const pr = afterAliasScan.data.repository.pullRequest;
+  pr.state = "OPEN";
+  return { afterAliasScan, pr, contexts: pr.statusCheckRollup.contexts };
+}
+function expectBlocked(
+  result: Awaited<ReturnType<typeof runWatcher>>,
+  status = 16,
+  green = "GREEN",
+) {
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(status);
+  expect(result.stdout).not.toContain(green);
 }
 
 function replayPlaceholder(
@@ -247,6 +275,48 @@ function restCheck(id = 1, patch: Record<string, unknown> = {}) {
     conclusion: "success",
     check_suite: { id: 20_000 },
     ...patch,
+  };
+}
+
+function restPage(key: string, rows: unknown[], total_count = rows.length) {
+  return { total_count, [key]: rows };
+}
+function restStatusPage(
+  state: string,
+  statuses: unknown[],
+  total_count = statuses.length,
+  head = sha,
+) {
+  return { sha: head, state, total_count, statuses };
+}
+function restSuite(id = 20_000, patch: Record<string, unknown> = {}) {
+  return {
+    id,
+    head_sha: sha,
+    status: "completed",
+    conclusion: "success",
+    latest_check_runs_count: 1,
+    ...patch,
+  };
+}
+function ownedCheck(
+  databaseId: number,
+  name: string,
+  conclusion: string,
+  suite: number | undefined,
+  run: number,
+  event: string | undefined,
+): RollupCheck {
+  return {
+    kind: "CheckRun",
+    databaseId,
+    name,
+    status: "COMPLETED",
+    conclusion,
+    checkSuite: {
+      databaseId: suite,
+      workflowRun: { databaseId: run, event, workflow: { databaseId: 10 } },
+    },
   };
 }
 
@@ -512,7 +582,7 @@ console.log(JSON.stringify(value));
     });
   });
 
-  it.skipIf(process.platform === "win32").each<{
+  type CiRunScenario = {
     label: string;
     phase: "attach" | "watch";
     patch: Record<string, unknown>;
@@ -523,84 +593,56 @@ console.log(JSON.stringify(value));
     notifier?: boolean;
     inheritedNotifier?: boolean;
     host?: string;
-  }>([
+  };
+  function restScenario(
+    label: string,
+    details: Partial<Omit<CiRunScenario, "label">> = {},
+  ): CiRunScenario {
+    return { label, phase: "attach", patch: {}, exitCode: 0, output: "GREEN", ...details };
+  }
+  it.skipIf(process.platform === "win32").each<CiRunScenario>([
     ...(["attach", "watch"] as const).flatMap((phase) => [
-      {
-        label: "closed",
+      restScenario("closed", {
         phase,
         patch: { state: "closed" },
         exitCode: 10,
         output: "PR-CLOSED state=CLOSED",
-      },
-      {
-        label: "merged",
+      }),
+      restScenario("merged", {
         phase,
         patch: { state: "closed", merged_at: "2026-09-19T00:00:00Z" },
         exitCode: 10,
         output: "PR-CLOSED state=MERGED",
-      },
-      {
-        label: "moved head",
+      }),
+      restScenario("moved head", {
         phase,
         patch: { head: { sha: "b".repeat(40) } },
         exitCode: 11,
         output: "HEAD-MOVED",
-      },
-      {
-        label: "conflict",
+      }),
+      restScenario("conflict", {
         phase,
         patch: { mergeable: false },
         exitCode: phase === "attach" ? 12 : 14,
         output: phase === "attach" ? "CONFLICTING mergeable=" : "CONFLICTING-MID-WAIT",
-      },
+      }),
     ]),
-    {
-      label: "unknown mergeability",
-      phase: "attach",
-      patch: { mergeable: null },
-      exitCode: 0,
-      output: "GREEN",
-    },
-    {
-      label: "slow current PR read",
+    restScenario("unknown mergeability", { patch: { mergeable: null } }),
+    restScenario("slow current PR read", {
       phase: "watch",
-      patch: {},
       slowPr: true,
       exitCode: 16,
       output: "TIMEOUT completion=ci-run",
-    },
-    {
-      label: "slow quota diagnostics",
+    }),
+    restScenario("slow quota diagnostics", {
       phase: "watch",
-      patch: {},
       slowQuota: true,
       exitCode: 16,
       output: "TIMEOUT completion=ci-run",
-    },
-    {
-      label: "native notifier",
-      phase: "attach",
-      patch: {},
-      notifier: true,
-      exitCode: 0,
-      output: "GREEN",
-    },
-    {
-      label: "inherited notifier",
-      phase: "attach",
-      patch: {},
-      inheritedNotifier: true,
-      exitCode: 0,
-      output: "GREEN",
-    },
-    {
-      label: "enterprise port",
-      phase: "attach",
-      patch: {},
-      host: "github.enterprise.invalid:8443",
-      exitCode: 0,
-      output: "GREEN",
-    },
+    }),
+    restScenario("native notifier", { notifier: true }),
+    restScenario("inherited notifier", { inheritedNotifier: true }),
+    restScenario("enterprise port", { host: "github.enterprise.invalid:8443" }),
   ])(
     "uses REST for ci-run $phase: $label",
     async ({
@@ -859,11 +901,12 @@ console.log(JSON.stringify(value));
       const result = await replayRestRollup({
         runStatuses: ["in_progress", "in_progress", "in_progress", "completed"],
         checkPages: [
-          {
-            total_count: 101,
-            check_runs: Array.from({ length: 100 }, (_, index) => restCheck(index + 1)),
-          },
-          { total_count: 101, check_runs: [restCheck(101)] },
+          restPage(
+            "check_runs",
+            Array.from({ length: 100 }, (_, index) => restCheck(index + 1)),
+            101,
+          ),
+          restPage("check_runs", [restCheck(101)], 101),
         ],
       });
       expectRun(result, 0, "\nGREEN");
@@ -897,13 +940,12 @@ console.log(JSON.stringify(value));
       }));
       const result = await replayRestRollup({
         statusPages: [
-          { sha, state: "failure", total_count: 101, statuses },
-          {
-            sha,
-            state: "failure",
-            total_count: 101,
-            statuses: [{ id: 101, context: "last required status", state: "failure" }],
-          },
+          restStatusPage("failure", statuses, 101),
+          restStatusPage(
+            "failure",
+            [{ id: 101, context: "last required status", state: "failure" }],
+            101,
+          ),
         ],
       });
       expectRun(result, 15, "FAILING checks=last required status", "\nGREEN");
@@ -920,9 +962,7 @@ console.log(JSON.stringify(value));
       async (state) => {
         const result = await replayRestRollup({
           afterRun: {
-            statusPages: [
-              { sha, state, total_count: 1, statuses: [{ id: 1, context: "required", state }] },
-            ],
+            statusPages: [restStatusPage(state, [{ id: 1, context: "required", state }])],
           },
         });
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(
@@ -941,14 +981,13 @@ console.log(JSON.stringify(value));
       { label: "conflicting PR", afterCollection: { mergeable: false }, exitCode: 14 },
     ])("revalidates a $label after REST collection", async ({ afterCollection, exitCode }) => {
       const result = await replayRestRollup({ afterCollection });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-      expect(result.stdout).not.toContain("\nGREEN");
+      expectBlocked(result, exitCode, "\nGREEN");
     });
 
     const failedCheck = restCheck(1, { conclusion: "failure" });
     it.concurrent("keeps an unknown completed REST outcome pending", async () => {
       const result = await replayRestRollup({
-        checkPages: [{ total_count: 1, check_runs: [restCheck(1, { conclusion: "new_outcome" })] }],
+        checkPages: [restPage("check_runs", [restCheck(1, { conclusion: "new_outcome" })])],
       });
       expectRun(result, 16, "STATUS rollup=pending", "\nGREEN");
     });
@@ -962,99 +1001,65 @@ console.log(JSON.stringify(value));
     it.concurrent.each([
       {
         label: "missing check page",
-        checkPages: [
-          { total_count: 2, check_runs: [restCheck()] },
-          { total_count: 2, check_runs: [] },
-        ],
+        checkPages: [restPage("check_runs", [restCheck()], 2), restPage("check_runs", [], 2)],
       },
       {
         label: "changed check count",
         checkPages: [
-          { total_count: 2, check_runs: [restCheck()] },
-          { total_count: 3, check_runs: [restCheck(2)] },
+          restPage("check_runs", [restCheck()], 2),
+          restPage("check_runs", [restCheck(2)], 3),
         ],
       },
       {
         label: "duplicate check identity",
-        checkPages: [{ total_count: 2, check_runs: [restCheck(), restCheck()] }],
+        checkPages: [restPage("check_runs", [restCheck(), restCheck()])],
       },
       {
         label: "foreign check head",
-        checkPages: [{ total_count: 1, check_runs: [restCheck(1, { head_sha: "b".repeat(40) })] }],
+        checkPages: [restPage("check_runs", [restCheck(1, { head_sha: "b".repeat(40) })])],
       },
       {
         label: "foreign status head",
-        statusPages: [{ sha: "b".repeat(40), state: "success", total_count: 0, statuses: [] }],
+        statusPages: [restStatusPage("success", [], 0, "b".repeat(40))],
       },
       {
         label: "duplicate status context",
         statusPages: [
-          {
-            sha,
-            state: "success",
-            total_count: 2,
-            statuses: [
-              { id: 1, context: "required", state: "success" },
-              { id: 2, context: "required", state: "success" },
-            ],
-          },
+          restStatusPage("success", [
+            { id: 1, context: "required", state: "success" },
+            { id: 2, context: "required", state: "success" },
+          ]),
         ],
       },
-      { label: "excess check count", checkPages: [{ total_count: 1_001, check_runs: [] }] },
-      { label: "hidden old check suites", suitePages: [{ total_count: 1_001, check_suites: [] }] },
+      { label: "excess check count", checkPages: [restPage("check_runs", [], 1_001)] },
+      { label: "hidden old check suites", suitePages: [restPage("check_suites", [], 1_001)] },
       ...["failure", "unknown"].map((state) => ({
         label: `contradictory ${state} status aggregate`,
-        statusPages: [
-          {
-            sha,
-            state,
-            total_count: 1,
-            statuses: [{ id: 1, context: "required", state: "success" }],
-          },
-        ],
+        statusPages: [restStatusPage(state, [{ id: 1, context: "required", state: "success" }])],
       })),
       ...[
         { status: "queued", conclusion: null },
         { status: "completed", conclusion: "failure" },
       ].map((outcome) => ({
         label: `${outcome.status}/${outcome.conclusion} suite after successful check collection`,
-        suitePages: [
-          {
-            total_count: 1,
-            check_suites: [{ id: 20_000, head_sha: sha, latest_check_runs_count: 1, ...outcome }],
-          },
-        ],
+        suitePages: [restPage("check_suites", [restSuite(20_000, outcome)])],
       })),
       ...[
         { status: "queued", conclusion: null },
         { status: "completed", conclusion: "failure" },
       ].map((outcome) => ({
         label: `new ${outcome.status}/${outcome.conclusion} suite with a missing published check`,
-        suitePages: [
-          {
-            total_count: 2,
-            check_suites: [
-              {
-                id: 20_000,
-                head_sha: sha,
-                status: "completed",
-                conclusion: "success",
-                latest_check_runs_count: 1,
-              },
-              { id: 30_000, head_sha: sha, latest_check_runs_count: 1, ...outcome },
-            ],
-          },
-        ],
+        suitePages: [restPage("check_suites", [restSuite(), restSuite(30_000, outcome)])],
       })),
       {
         label: "duplicate workflow identity",
-        checkPages: [{ total_count: 1, check_runs: [failedCheck] }],
-        runPages: [{ total_count: 2, workflow_runs: [workflow, workflow] }],
+        checkPages: [restPage("check_runs", [failedCheck])],
+        runPages: [restPage("workflow_runs", [workflow, workflow])],
       },
       {
         label: "foreign workflow head",
-        checkPages: [{ total_count: 1, check_runs: [failedCheck] }],
-        runPages: [{ total_count: 1, workflow_runs: [{ ...workflow, head_sha: "b".repeat(40) }] }],
+        checkPages: [restPage("check_runs", [failedCheck])],
+        runPages: [restPage("workflow_runs", [{ ...workflow, head_sha: "b".repeat(40) }])],
       },
     ])(
       "rejects $label without accepting partial success",
@@ -1073,25 +1078,14 @@ console.log(JSON.stringify(value));
       async (outcome) => {
         const result = await replayRestRollup({
           suitePages: [
-            {
-              total_count: 2,
-              check_suites: [
-                {
-                  id: 20_000,
-                  head_sha: sha,
-                  status: "completed",
-                  conclusion: "success",
-                  latest_check_runs_count: 1,
-                },
-                {
-                  id: 30_000,
-                  head_sha: sha,
-                  app: { id: 34598, slug: "github-pages" },
-                  latest_check_runs_count: 0,
-                  ...outcome,
-                },
-              ],
-            },
+            restPage("check_suites", [
+              restSuite(),
+              restSuite(30_000, {
+                app: { id: 34598, slug: "github-pages" },
+                latest_check_runs_count: 0,
+                ...outcome,
+              }),
+            ]),
           ],
         });
         expectRun(result, 0, "\nGREEN");
@@ -1124,18 +1118,15 @@ console.log(JSON.stringify(value));
       const result = await replayRestRollup({
         runStatuses: active ? ["in_progress"] : undefined,
         checkPages: [
-          {
-            total_count: 2,
-            check_runs: [
-              restCheck(1, { name: "build", conclusion: "failure", check_suite: { id: 10_000 } }),
-              restCheck(2, {
-                name: "build",
-                ...(active ? { status: "in_progress", conclusion: null } : {}),
-              }),
-            ],
-          },
+          restPage("check_runs", [
+            restCheck(1, { name: "build", conclusion: "failure", check_suite: { id: 10_000 } }),
+            restCheck(2, {
+              name: "build",
+              ...(active ? { status: "in_progress", conclusion: null } : {}),
+            }),
+          ]),
         ],
-        runPages: [{ total_count: runs.length, workflow_runs: runs }],
+        runPages: [restPage("workflow_runs", runs, runs.length)],
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
       expect(result.stdout).toContain(
@@ -1564,6 +1555,28 @@ console.log(JSON.stringify(value));
               : undefined,
           ...(index === oldRunCount - 1 ? lastPreviousPatch : undefined),
         }));
+        const nodes = [
+          ownedCheck(
+            1_000,
+            "old matrix shard",
+            oldConclusion,
+            checkSuiteId ?? undefined,
+            100,
+            checkEvent,
+          ),
+          ...(newCheckName
+            ? [
+                ownedCheck(
+                  2_000,
+                  newCheckName,
+                  newCheckConclusion,
+                  20_000,
+                  201,
+                  newCheckEvent ?? undefined,
+                ),
+              ]
+            : []),
+        ];
         const pr = {
           state: "OPEN",
           mergeable: true,
@@ -1571,44 +1584,9 @@ console.log(JSON.stringify(value));
           statusCheckRollup: {
             state: rollupState,
             contexts: {
-              totalCount: newCheckName ? 2 : 1,
+              totalCount: nodes.length,
               pageInfo: { hasNextPage: false, endCursor: null },
-              nodes: [
-                {
-                  kind: "CheckRun",
-                  databaseId: 1_000,
-                  name: "old matrix shard",
-                  status: "COMPLETED",
-                  conclusion: oldConclusion,
-                  checkSuite: {
-                    databaseId: checkSuiteId ?? undefined,
-                    workflowRun: {
-                      databaseId: 100,
-                      event: checkEvent,
-                      workflow: { databaseId: 10 },
-                    },
-                  },
-                },
-                ...(newCheckName
-                  ? [
-                      {
-                        kind: "CheckRun",
-                        databaseId: 2_000,
-                        name: newCheckName,
-                        status: "COMPLETED",
-                        conclusion: newCheckConclusion,
-                        checkSuite: {
-                          databaseId: 20_000,
-                          workflowRun: {
-                            databaseId: 201,
-                            event: newCheckEvent ?? undefined,
-                            workflow: { databaseId: 10 },
-                          },
-                        },
-                      },
-                    ]
-                  : []),
-              ],
+              nodes,
             },
           },
         };
@@ -1616,20 +1594,16 @@ console.log(JSON.stringify(value));
           ? [run, ...Array.from({ length: 19 }, (_, index) => ({ ...run, id: 200 - index }))]
           : [run, previous];
         for (let index = 1; index < oldRunCount; index += 1) {
-          const old = pr.statusCheckRollup.contexts.nodes[0]!;
-          pr.statusCheckRollup.contexts.nodes.push({
-            ...old,
-            databaseId: 1_000 + index,
-            name: `old matrix shard ${index + 1}`,
-            checkSuite: {
-              databaseId: 10_000 - index,
-              workflowRun: {
-                databaseId: 100 - index,
-                event: "pull_request",
-                workflow: { databaseId: 10 },
-              },
-            },
-          });
+          nodes.push(
+            ownedCheck(
+              1_000 + index,
+              `old matrix shard ${index + 1}`,
+              oldConclusion,
+              10_000 - index,
+              100 - index,
+              "pull_request",
+            ),
+          );
           pr.statusCheckRollup.contexts.totalCount += 1;
         }
         if (olderRunOutsidePage) {
@@ -1724,16 +1698,12 @@ console.log(JSON.stringify(value));
     ])(
       "reconciles the captured queued group with aggregate $state and $observed observed checks (REST: $rest)",
       async ({ state, observed, rest }) => {
-        const fixture = structuredClone(placeholderFixture);
-        const rollup = fixture.graphql.data.repository.pullRequest.statusCheckRollup;
+        const { fixture, rollup } = placeholder();
         rollup.state = state;
         if (observed === 2) {
           // Synthetic visibility of another captured alias proves group reads are shared.
-          const queuedCheck = rollup.contexts.nodes.find(
-            (check) => check.databaseId === 98802098786,
-          );
-          assert(queuedCheck);
-          rollup.contexts.nodes.push({ ...queuedCheck, databaseId: 98802098559 });
+          const queued = queuedCheck(rollup.contexts);
+          rollup.contexts.nodes.push({ ...queued, databaseId: 98802098559 });
           rollup.contexts.totalCount += 1;
         }
         const result = await replayPlaceholder(fixture, { watchTimeout: 5, rest });
@@ -1744,10 +1714,7 @@ console.log(JSON.stringify(value));
         expect(result.stdout).toContain("GREEN");
         // Cost and ordering matter: direct proof precedes run revalidation and
         // a fresh rollup and CI-run check, followed by a final PR lifecycle check.
-        const calls: string[][] = result.calls
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
+        const calls = parseCalls(result.calls);
         expect(calls.filter((call) => call[1]?.includes("/attempts/"))).toHaveLength(1);
         const directReads = calls.filter((call) => call[1]?.includes("/actions/jobs/"));
         expect(
@@ -1792,10 +1759,7 @@ console.log(JSON.stringify(value));
         fixture.jobs.total_count = fixture.jobs.jobs.length;
         const result = await replayPlaceholder(fixture, { watchTimeout: exitCode === 0 ? 5 : 1 });
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-        const calls: string[][] = result.calls
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
+        const calls = parseCalls(result.calls);
         const directReads = calls.filter((call) => call[1]?.includes("/actions/jobs/"));
         expect(directReads).toHaveLength(exitCode === 0 ? aliasCount : 0);
         if (exitCode !== 0) {
@@ -1811,10 +1775,7 @@ console.log(JSON.stringify(value));
         clock: "wall",
       });
       expectRun(result, 16, "pending=1", "GREEN");
-      const calls: string[][] = result.calls
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
+      const calls = parseCalls(result.calls);
       expect(calls.filter((call) => call[1]?.includes("/actions/jobs/"))).toHaveLength(1);
       expect(result.calls).not.toContain('"slow-alias-completed"');
     });
@@ -1835,9 +1796,8 @@ console.log(JSON.stringify(value));
       },
     ])("rechecks a $label after alias verification", async ({ patch, exitCode, output }) => {
       const fixture = structuredClone(placeholderFixture);
-      const afterAliasScan = structuredClone(fixture.graphql);
-      afterAliasScan.data.repository.pullRequest.state = "OPEN";
-      Object.assign(afterAliasScan.data.repository.pullRequest, patch);
+      const { afterAliasScan, pr } = refreshedPlaceholder(fixture);
+      Object.assign(pr, patch);
       const result = await replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
       expectRun(result, exitCode, output, "GREEN");
     });
@@ -1865,22 +1825,17 @@ console.log(JSON.stringify(value));
       { label: "is renamed", patch: { name: "different required check" }, exitCode: 16 },
     ])("revalidates alias evidence: $label", async ({ patch, exitCode, added }) => {
       const fixture = structuredClone(placeholderFixture);
-      const afterAliasScan = structuredClone(fixture.graphql);
-      afterAliasScan.data.repository.pullRequest.state = "OPEN";
-      const contexts = afterAliasScan.data.repository.pullRequest.statusCheckRollup.contexts;
+      const { afterAliasScan, contexts } = refreshedPlaceholder(fixture);
       if (added) {
         Object.assign(contexts, {
           totalCount: contexts.totalCount + 1,
           nodes: [...contexts.nodes, { kind: "CheckRun", name: "new required check", ...patch }],
         });
       } else {
-        const alias = contexts.nodes.find((check) => check.databaseId === 98802098786);
-        assert(alias);
-        Object.assign(alias, patch);
+        Object.assign(queuedCheck(contexts), patch);
       }
       const result = await replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-      expect(result.stdout).not.toContain("GREEN");
+      expectBlocked(result, exitCode);
     });
 
     it.each([
@@ -1889,18 +1844,14 @@ console.log(JSON.stringify(value));
     ])(
       "keeps a changed lower-ID alias blocking ($status, initially visible: $initiallyVisible)",
       async ({ status, conclusion, exitCode, initiallyVisible }) => {
-        const fixture = structuredClone(placeholderFixture);
-        const contexts = fixture.graphql.data.repository.pullRequest.statusCheckRollup.contexts;
-        const queued = contexts.nodes.find((check) => check.databaseId === 98802098786);
-        assert(queued);
+        const { fixture, contexts } = placeholder();
+        const queued = queuedCheck(contexts);
         const lower = { ...queued, databaseId: 98802098559 };
         if (initiallyVisible) {
           contexts.nodes.push(lower);
           contexts.totalCount += 1;
         }
-        const afterAliasScan = structuredClone(fixture.graphql);
-        afterAliasScan.data.repository.pullRequest.state = "OPEN";
-        const refreshed = afterAliasScan.data.repository.pullRequest.statusCheckRollup.contexts;
+        const { afterAliasScan, contexts: refreshed } = refreshedPlaceholder(fixture);
         if (!initiallyVisible) {
           refreshed.nodes.push(lower);
           refreshed.totalCount += 1;
@@ -1909,18 +1860,15 @@ console.log(JSON.stringify(value));
         assert(changed);
         Object.assign(changed, { status, conclusion });
         const result = await replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-        expect(result.stdout).not.toContain("GREEN");
+        expectBlocked(result, exitCode);
       },
     );
 
     it.each([33155056361, 33155056360])(
       "still supersedes an older failed check from run %s",
       async (runId) => {
-        const fixture = structuredClone(placeholderFixture);
-        const contexts = fixture.graphql.data.repository.pullRequest.statusCheckRollup.contexts;
-        const queued = contexts.nodes.find((check) => check.databaseId === 98802098786);
-        assert(queued);
+        const { fixture, contexts } = placeholder();
+        const queued = queuedCheck(contexts);
         const older = structuredClone(queued);
         Object.assign(older, {
           databaseId: 98790000000,
@@ -1966,8 +1914,7 @@ console.log(JSON.stringify(value));
         patch,
       );
       const result = await replayPlaceholder(fixture);
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-      expect(result.stdout).not.toContain("GREEN");
+      expectBlocked(result);
       expect(result.calls).toContain("/attempts/3/jobs?per_page=100&page=1");
     });
 
@@ -1993,8 +1940,7 @@ console.log(JSON.stringify(value));
           job.id === 98802098786 ? Object.assign({}, job, patch) : job,
         ),
       });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-      expect(result.stdout).not.toContain("GREEN");
+      expectBlocked(result);
       expect(result.calls).toContain('"repos/openclaw/openclaw/actions/jobs/98802098786"');
     });
 
@@ -2010,8 +1956,7 @@ console.log(JSON.stringify(value));
           job.id === 98802098559 ? Object.assign({}, job, patch) : job,
         ),
       });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-      expect(result.stdout).not.toContain("GREEN");
+      expectBlocked(result);
       expect(result.calls).toContain('"repos/openclaw/openclaw/actions/jobs/98802098559"');
     });
 
@@ -2025,8 +1970,7 @@ console.log(JSON.stringify(value));
         ],
         watchTimeout: 5,
       });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-      expect(result.stdout).not.toContain("\nGREEN");
+      expectBlocked(result, 16, "\nGREEN");
       expect(result.calls).toContain('"repos/openclaw/openclaw/actions/jobs/98802098786"');
       expect(
         result.calls.split("\n").filter((call) => call.startsWith('["api","graphql",')),
@@ -2051,8 +1995,7 @@ console.log(JSON.stringify(value));
         watchTimeout: 5,
         runSnapshots: [fixture.run, { ...fixture.run, ...patch }],
       });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-      expect(result.stdout).not.toContain("GREEN");
+      expectBlocked(result);
       const runReads = result.calls
         .split("\n")
         .filter((call) => call.includes('"repos/openclaw/openclaw/actions/runs/33155056361"'));
@@ -2065,10 +2008,11 @@ console.log(JSON.stringify(value));
       assert(replacement);
       const result = await replayPlaceholder(fixture, {
         jobPages: [
-          {
-            total_count: fixture.jobs.total_count + 1,
-            jobs: [...fixture.jobs.jobs, { ...replacement, id: 98802098799 }],
-          },
+          restPage(
+            "jobs",
+            [...fixture.jobs.jobs, { ...replacement, id: 98802098799 }],
+            fixture.jobs.total_count + 1,
+          ),
         ],
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
@@ -2096,13 +2040,8 @@ console.log(JSON.stringify(value));
         { kind: "StatusContext", context: "required status", state: "PENDING" },
       ],
     ])("does not reconcile %s", async (_label, patch) => {
-      const fixture = structuredClone(placeholderFixture);
-      const queuedCheck =
-        fixture.graphql.data.repository.pullRequest.statusCheckRollup.contexts.nodes.find(
-          (check) => check.databaseId === 98802098786,
-        );
-      assert(queuedCheck);
-      Object.assign(queuedCheck, patch);
+      const { fixture, contexts } = placeholder();
+      Object.assign(queuedCheck(contexts), patch);
       const result = await replayPlaceholder(fixture);
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
       expect(result.calls).not.toContain("/attempts/");
@@ -2136,16 +2075,14 @@ console.log(JSON.stringify(value));
         16,
       ],
     ] as const)("keeps %s independently blocking", async (_label, sibling, exitCode) => {
-      const fixture = structuredClone(placeholderFixture);
-      const contexts = fixture.graphql.data.repository.pullRequest.statusCheckRollup.contexts;
+      const { fixture, contexts } = placeholder();
       // Synthetic counterexamples add a separate, lineage-less required context.
       Object.assign(contexts, {
         totalCount: contexts.totalCount + 1,
         nodes: [...contexts.nodes, sibling],
       });
       const result = await replayPlaceholder(fixture, { watchTimeout: 5 });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-      expect(result.stdout).not.toContain("GREEN");
+      expectBlocked(result, exitCode);
       expect(result.stdout).toContain(
         `STATUS rollup=${exitCode === 16 ? "pending" : "failing"} github_rollup=FAILURE`,
       );
@@ -2158,8 +2095,7 @@ console.log(JSON.stringify(value));
     it.concurrent.each(["unknown", "truncated", "unfinished pagination", "missing count"])(
       "does not green an %s rollup",
       async (scenario) => {
-        const fixture = structuredClone(placeholderFixture);
-        const rollup = fixture.graphql.data.repository.pullRequest.statusCheckRollup;
+        const { fixture, rollup } = placeholder();
         if (scenario === "unknown") {
           rollup.state = "UNKNOWN";
         } else if (scenario === "truncated") {
@@ -2208,8 +2144,8 @@ console.log(JSON.stringify(value));
           id: scenario === "duplicate IDs" ? 1_000 : 1_000 + index,
           name: `pagination sibling ${index}`,
         }));
-        const firstPage = { total_count: 100 + fixture.jobs.total_count, jobs: padding };
-        const lastPage = { total_count: firstPage.total_count, jobs: fixture.jobs.jobs };
+        const firstPage = restPage("jobs", padding, 100 + fixture.jobs.total_count);
+        const lastPage = restPage("jobs", fixture.jobs.jobs, firstPage.total_count);
         const jobPages = [firstPage, lastPage];
         if (scenario === "missing page") {
           jobPages.pop();
@@ -2292,13 +2228,24 @@ console.log(JSON.stringify(value));
     };
   }
 
-  it.each<{
-    label: string;
-    state?: string;
-    totalCount?: number;
-    nodes: RollupCheck[];
-    expected: ReturnType<typeof classifyRollup>;
-  }>([
+  function expectedRollup(
+    verdict: ReturnType<typeof classifyRollup>["verdict"],
+    failingNames: string[] = [],
+    pendingCount = 0,
+    supersededCount = 0,
+  ) {
+    return { verdict, pendingCount, failingNames, supersededCount };
+  }
+
+  it.each<
+    [
+      label: string,
+      nodes: RollupCheck[],
+      expected: ReturnType<typeof classifyRollup>,
+      state?: string,
+      totalCount?: number,
+    ]
+  >([
     ...(
       [
         ["plain ASCII / check (1)", "plain ASCII / check (1)"],
@@ -2308,172 +2255,126 @@ console.log(JSON.stringify(value));
         ["link\u001b]8;;https://example.com\u0007text\u001b]8;;\u0007", "link?text?"],
         ["left\u202Eright 😀", "left?right ?"],
       ] satisfies [string, string][]
-    ).map(([input, output]) => ({
-      label: `sanitized check name ${JSON.stringify(input)}`,
-      nodes: [rollupCheck(input, "FAILURE")],
-      expected: { verdict: "FAILING", pendingCount: 0, failingNames: [output], supersededCount: 0 },
-    })),
-    {
-      label: "sanitized failing check and status-context names",
-      nodes: [
+    ).map(([input, output]): [string, RollupCheck[], ReturnType<typeof classifyRollup>] => [
+      `sanitized check name ${JSON.stringify(input)}`,
+      [rollupCheck(input, "FAILURE")],
+      expectedRollup("FAILING", [output]),
+    ]),
+    [
+      "sanitized failing check and status-context names",
+      [
         rollupCheck("unit\u001b[31mowned\u001b[0m", "FAILURE"),
         { kind: "StatusContext", context: "deploy\nprod", state: "ERROR" },
       ],
-      expected: {
-        verdict: "FAILING",
-        pendingCount: 0,
-        failingNames: ["deploy?prod", "unit?owned?"],
-        supersededCount: 0,
-      },
-    },
-    {
-      label: "aggregate success",
-      state: "SUCCESS",
-      nodes: [],
-      expected: { verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 0 },
-    },
-    {
-      label: "pending aggregate with completed checks",
-      state: "PENDING",
-      nodes: [rollupCheck("unit", "SUCCESS")],
-      expected: { verdict: "PENDING", pendingCount: 0, failingNames: [], supersededCount: 0 },
-    },
-    {
-      label: "pending contexts",
-      state: "PENDING",
-      nodes: [rollupCheck("unit", null)],
-      expected: { verdict: "PENDING", pendingCount: 1, failingNames: [], supersededCount: 0 },
-    },
-    {
-      label: "identity-less same-name cancellations",
-      state: "ERROR",
-      totalCount: 3,
-      nodes: [
+      expectedRollup("FAILING", ["deploy?prod", "unit?owned?"]),
+    ],
+    ["aggregate success", [], expectedRollup("GREEN"), "SUCCESS"],
+    [
+      "pending aggregate with completed checks",
+      [rollupCheck("unit", "SUCCESS")],
+      expectedRollup("PENDING"),
+      "PENDING",
+    ],
+    ["pending contexts", [rollupCheck("unit", null)], expectedRollup("PENDING", [], 1), "PENDING"],
+    [
+      "identity-less same-name cancellations",
+      [
         rollupCheck("Auto response", "FAILURE"),
         rollupCheck("unit", "CANCELLED"),
         rollupCheck("unit", "SUCCESS"),
       ],
-      expected: { verdict: "FAILING", pendingCount: 0, failingNames: ["unit"], supersededCount: 0 },
-    },
-    {
-      label: "truncated failing rollup",
-      totalCount: 4,
-      nodes: [rollupCheck("unit", "CANCELLED"), rollupCheck("unit", "SUCCESS")],
-      expected: {
-        verdict: "FAILING",
-        pendingCount: 0,
-        failingNames: ["unit", "+2 more contexts not shown"],
-        supersededCount: 0,
-      },
-    },
-    {
-      label: "cancelled and timed-out attempts",
-      nodes: [
+      expectedRollup("FAILING", ["unit"]),
+      "ERROR",
+      3,
+    ],
+    [
+      "truncated failing rollup",
+      [rollupCheck("unit", "CANCELLED"), rollupCheck("unit", "SUCCESS")],
+      expectedRollup("FAILING", ["unit", "+2 more contexts not shown"]),
+      "FAILURE",
+      4,
+    ],
+    [
+      "cancelled and timed-out attempts",
+      [
         rollupCheck("Auto response", "FAILURE"),
         rollupCheck("unit", "CANCELLED"),
         rollupCheck("unit", "SUCCESS"),
         rollupCheck("lint", "TIMED_OUT"),
       ],
-      expected: {
-        verdict: "FAILING",
-        pendingCount: 0,
-        failingNames: ["lint", "unit"],
-        supersededCount: 0,
-      },
-    },
-    {
-      label: "superseded runs with pending replacements",
-      nodes: [
+      expectedRollup("FAILING", ["lint", "unit"]),
+    ],
+    [
+      "superseded runs with pending replacements",
+      [
         rollupCheck("Real behavior proof", "CANCELLED", 100, 10, 1_000),
         rollupCheck("Real behavior proof", null, 200, 10, 2_000),
         rollupCheck("CI", null, 150, 20),
       ],
-      expected: { verdict: "PENDING", pendingCount: 2, failingNames: [], supersededCount: 1 },
-    },
-    {
-      label: "pending same-run check replacement",
-      nodes: [
-        rollupCheck("unit", "CANCELLED", 500, 20, 1_000),
-        rollupCheck("unit", null, 500, 20, 2_000),
-      ],
-      expected: { verdict: "PENDING", pendingCount: 1, failingNames: [], supersededCount: 1 },
-    },
-    {
-      label: "successful same-run check replacement",
-      nodes: [
+      expectedRollup("PENDING", [], 2, 1),
+    ],
+    [
+      "pending same-run check replacement",
+      [rollupCheck("unit", "CANCELLED", 500, 20, 1_000), rollupCheck("unit", null, 500, 20, 2_000)],
+      expectedRollup("PENDING", [], 1, 1),
+    ],
+    [
+      "successful same-run check replacement",
+      [
         rollupCheck("unit", "CANCELLED", 500, 20, 1_000),
         rollupCheck("unit", "SUCCESS", 500, 20, 2_000),
       ],
-      expected: { verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 1 },
-    },
-    {
-      label: "unique cancellations across independent workflows",
-      nodes: [
+      expectedRollup("GREEN", [], 0, 1),
+    ],
+    [
+      "unique cancellations across independent workflows",
+      [
         rollupCheck("old proof", "CANCELLED", 100, 10),
         rollupCheck("proof", "SUCCESS", 200, 10),
         rollupCheck("old CI", "CANCELLED", 150, 20),
         rollupCheck("CI", "SUCCESS", 250, 20),
       ],
-      expected: {
-        verdict: "FAILING",
-        pendingCount: 0,
-        failingNames: ["old CI", "old proof"],
-        supersededCount: 0,
-      },
-    },
-    {
-      label: "genuine newest-run failure",
-      nodes: [
+      expectedRollup("FAILING", ["old CI", "old proof"]),
+    ],
+    [
+      "genuine newest-run failure",
+      [
         rollupCheck("older cancelled check", "CANCELLED", 100, 20),
         rollupCheck("unit", "FAILURE", 200, 20),
       ],
-      expected: {
-        verdict: "FAILING",
-        pendingCount: 0,
-        failingNames: ["older cancelled check", "unit"],
-        supersededCount: 0,
-      },
-    },
-    {
-      label: "interleaved distinct workflows",
-      nodes: [
+      expectedRollup("FAILING", ["older cancelled check", "unit"]),
+    ],
+    [
+      "interleaved distinct workflows",
+      [
         rollupCheck("old deploy", "CANCELLED", 200, 20),
         rollupCheck("unit", "FAILURE", 300, 10),
         rollupCheck("deploy", "SUCCESS", 400, 20),
       ],
-      expected: {
-        verdict: "FAILING",
-        pendingCount: 0,
-        failingNames: ["old deploy", "unit"],
-        supersededCount: 0,
-      },
-    },
-    {
-      label: "same-name checks across runs",
-      nodes: [
+      expectedRollup("FAILING", ["old deploy", "unit"]),
+    ],
+    [
+      "same-name checks across runs",
+      [
         rollupCheck("unit", "FAILURE", 300, 20, 1_000),
         rollupCheck("unit", "SUCCESS", 400, 20, 2_000),
       ],
-      expected: { verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 1 },
-    },
-    {
-      label: "unseen contexts after supersession",
-      totalCount: 3,
-      nodes: [
+      expectedRollup("GREEN", [], 0, 1),
+    ],
+    [
+      "unseen contexts after supersession",
+      [
         rollupCheck("CI", "CANCELLED", 100, 20, 1_000),
         rollupCheck("CI", "SUCCESS", 200, 20, 2_000),
       ],
-      expected: {
-        verdict: "FAILING",
-        pendingCount: 0,
-        failingNames: ["status rollup", "+1 more contexts not shown"],
-        supersededCount: 1,
-      },
-    },
-  ])("classifies $label", ({ state = "FAILURE", totalCount, nodes, expected }) => {
+      expectedRollup("FAILING", ["status rollup", "+1 more contexts not shown"], 0, 1),
+      "FAILURE",
+      3,
+    ],
+  ])("classifies %s", (_label, nodes, expected, state, totalCount) => {
     expect(
       classifyRollup({
-        state,
+        state: state ?? "FAILURE",
         contexts: { nodes, ...(totalCount === undefined ? {} : { totalCount }) },
       }),
     ).toEqual(expected);
