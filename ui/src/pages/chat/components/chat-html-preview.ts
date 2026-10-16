@@ -1,4 +1,7 @@
-import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
+import {
+  createLazyCustomElementRequests,
+  type LazyCustomElementRequests,
+} from "../../../app/lazy-custom-element.ts";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
@@ -32,14 +35,15 @@ export const htmlPreviewElement = {
 export class FileHtmlPreviewController {
   private source = false;
   private preview: string | null = null;
-  private readonly loader: LazyCustomElementRequestController;
+  private readonly loader: LazyCustomElementRequests;
 
   constructor(
     private readonly host: { requestUpdate(): void; readonly updateComplete?: Promise<unknown> },
     private readonly content: () => SidebarContent | null,
     private readonly text: () => string,
   ) {
-    this.loader = new LazyCustomElementRequestController(host);
+    this.loader = createLazyCustomElementRequests(host);
+    this.loader.subscribe(() => host.requestUpdate());
   }
 
   get file() {

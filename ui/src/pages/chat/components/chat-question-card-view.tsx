@@ -1,11 +1,12 @@
-import { createEffect, createSignal, lazy, Loading, onCleanup } from "solid-js";
+import { createEffect, lazy, Loading, onCleanup } from "solid-js";
 import {
   isOptionalElementDefined,
-  LazyCustomElementRequestController,
+  createLazyCustomElementRequests,
 } from "../../../app/lazy-custom-element.ts";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import type { QuestionPanelProps } from "./chat-question-types.ts";
 
@@ -28,30 +29,21 @@ export const ChatQuestionCard = defineSolidBridge<CardProps>(
   "openclaw-chat-question-card",
   (props, host) => {
     host.style.display = "contents";
-    const [revision, setRevision] = createSignal(0);
-    let live = true;
-    const loader = new LazyCustomElementRequestController({
-      requestUpdate: () => {
-        if (live) {
-          setRevision((value) => value + 1);
-        }
-      },
-    });
+    const loader = createLazyCustomElementRequests();
+    const loadState = projectOwner(loader, (owner) => owner.visibleState);
     createEffect(
       () => Boolean(props.props),
       (active) => loader.requestWhileActive(questionPanelElement, active),
     );
     onCleanup(() => {
-      live = false;
       loader.requestWhileActive(questionPanelElement, false);
     });
     const loaded = () => {
-      revision();
+      loadState.revision();
       return isOptionalElementDefined(questionPanelElement);
     };
     const failure = () => {
-      revision();
-      const value = loader.visibleState;
+      const value = loadState.read();
       return value?.status === "error" ? value : undefined;
     };
     return (

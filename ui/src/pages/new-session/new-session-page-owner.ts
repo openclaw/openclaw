@@ -1,6 +1,6 @@
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { LazyCustomElementRequestController } from "../../app/lazy-custom-element.ts";
+import { createLazyCustomElementRequests } from "../../app/lazy-custom-element.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
@@ -91,9 +91,7 @@ export class NewSessionPageOwner {
     ownerKey: string;
     agentId: string;
   } | null = null;
-  readonly attachmentPanelLoader = new LazyCustomElementRequestController({
-    requestUpdate: this.changed,
-  });
+  readonly attachmentPanelLoader = createLazyCustomElementRequests();
   readonly closeAttachmentPanel = () => {
     if (this.attachmentPanel) {
       this.attachmentPanel = null;
@@ -126,6 +124,7 @@ export class NewSessionPageOwner {
   };
 
   constructor(readonly host: PageHost) {
+    this.attachmentPanelLoader.subscribe(this.changed);
     this.draft = new NewSessionDraft(
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {

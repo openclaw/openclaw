@@ -2,7 +2,7 @@ import { createComponent, createEffect, createSignal, onCleanup, Show, untrack }
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   isOptionalElementDefined,
-  LazyCustomElementRequestController,
+  createLazyCustomElementRequests,
   type OptionalCustomElement,
 } from "../../app/lazy-custom-element.ts";
 import {
@@ -15,6 +15,7 @@ import { DEBUG_OVERLAY_REQUEST_EVENT } from "../../components/panel-toggle-contr
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { DebugOverlayFrame } from "./debug-overlay-frame-view.tsx";
 import { DebugOverlayLoading } from "./debug-overlay-loading-view.tsx";
@@ -32,7 +33,6 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
   const close = () => {
     host.mode = "closed";
   };
-  const [loadRevision, setLoadRevision] = createSignal(0, { ownedWrite: true });
   const [Content, setContent] =
     createSignal<typeof import("./debug-overlay-content.ts").DebugOverlayContent>();
   let disposed = false;
@@ -58,24 +58,20 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
     }
     recoveryActionPending = false;
   };
-  const content = new LazyCustomElementRequestController(
-    {
-      requestUpdate: () => setLoadRevision((value) => value + 1),
-    },
-    undefined,
-    (canReload) =>
-      retryStaleChunkReloadWhenReachable({
-        canReload: () => {
-          if (!canReload()) {
-            return false;
-          }
-          recoveryActionPending = persistLazyShellAction({
-            eventType: DEBUG_OVERLAY_REQUEST_EVENT,
-          });
-          return recoveryActionPending;
-        },
-      }),
+  const content = createLazyCustomElementRequests({}, undefined, (canReload) =>
+    retryStaleChunkReloadWhenReachable({
+      canReload: () => {
+        if (!canReload()) {
+          return false;
+        }
+        recoveryActionPending = persistLazyShellAction({
+          eventType: DEBUG_OVERLAY_REQUEST_EVENT,
+        });
+        return recoveryActionPending;
+      },
+    }),
   );
+  const loadState = projectOwner(content, (owner) => owner.visibleState);
   const clear = () => {
     document.removeEventListener("keydown", keydown, true);
     content.close();
@@ -88,7 +84,7 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
     }
   };
   createEffect(
-    () => ({ mode: props.mode, key: props.contentKey, revision: loadRevision() }),
+    () => ({ mode: props.mode, key: props.contentKey, revision: loadState.revision() }),
     (current, previous) => {
       if (current.mode === "closed") {
         clear();
@@ -114,8 +110,7 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
     }
   });
   const error = () => {
-    loadRevision();
-    const state = content.visibleState;
+    const state = loadState.read();
     return state?.status === "error" ? state : null;
   };
   return (
