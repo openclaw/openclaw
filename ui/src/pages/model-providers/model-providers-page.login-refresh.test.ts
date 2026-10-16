@@ -4,7 +4,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { loginHarness, openLogin, openPicker } from "./model-providers-page.login.test-support.ts";
-import { appendPage, submitCredential } from "./model-providers-page.test-support.tsx";
+import {
+  appendPage,
+  modelPicker,
+  openModelPicker,
+  submitCredential,
+} from "./model-providers-page.test-support.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -61,6 +66,12 @@ it("refreshes the connected provider without reloading usage or replacing other 
   connected = true;
 
   answer.resolve({ done: true, status: "done" });
+  await waitForSolid(() =>
+    expect(modelPicker(page, "primary").querySelector<HTMLButtonElement>("button")?.disabled).toBe(
+      false,
+    ),
+  );
+  await openModelPicker(page);
   await waitForSolid(() => expect(page.renderRoot.textContent).toContain("New account model"));
   expect(page.querySelector('[data-provider-id="example"]')).not.toBeNull();
   expect(

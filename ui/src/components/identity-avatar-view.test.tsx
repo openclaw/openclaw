@@ -311,10 +311,12 @@ describe("shared agent avatar view", () => {
     expect(frame?.getAttribute("data-avatar-state")).toBe("failed");
   });
 
-  it("recognizes cached image decoding without another load event", async () => {
+  it("recognizes cached image decoding across remount without another load event", async () => {
     vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
     vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(32);
     const view = mountAgent({ id: "cached", avatar: "/avatar/cached" });
+    view.present(false);
+    view.present(true);
     await Promise.resolve();
     expect(view.frame()?.classList.contains("is-pending")).toBe(false);
     expect(view.frame()?.getAttribute("data-avatar-state")).toBe("loaded");

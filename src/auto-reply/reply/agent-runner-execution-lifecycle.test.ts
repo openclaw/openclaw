@@ -14,7 +14,6 @@ import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-i
 import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { useBundledProviderPolicyArtifactsForTest } from "../../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   setupAgentRunnerExecutionTestState,
@@ -489,7 +488,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
     await expect(pending).resolves.toEqual({
       kind: "final",
-      payload: { text: SILENT_REPLY_TOKEN },
+      payload: {},
     });
     expect(freezeAbortMock).toHaveBeenCalledTimes(1);
   });

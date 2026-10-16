@@ -679,8 +679,31 @@ test("write-scoped operators manage chat organization but not admin session sett
     },
   });
 
-  agentDiscoveryMock.enabled = true;
-  agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+  const { getRuntimeConfig, writeConfigFile } = await getGatewayConfigModule();
+  // Catalog workers need the fixture model in configuration, not a host-only discovery mock.
+  await writeConfigFile({
+    ...getRuntimeConfig(),
+    models: {
+      providers: {
+        openai: {
+          api: "openai-responses",
+          baseUrl: "https://openai.invalid/v1",
+          agentRuntime: { id: "openclaw" },
+          models: [
+            {
+              id: "gpt-test-a",
+              name: "A",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 32768,
+              maxTokens: 2048,
+            },
+          ],
+        },
+      },
+    },
+  });
 
   const { ws } = await openClient({ scopes: ["operator.write"] });
   try {

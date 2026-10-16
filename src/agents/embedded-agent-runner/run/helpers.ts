@@ -1,6 +1,6 @@
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
+import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
 import {
   deriveContextPromptTokens,
@@ -174,7 +174,7 @@ export function resolveFinalAssistantVisibleText(
   if (!lastAssistant) {
     return undefined;
   }
-  const visibleText = extractAssistantVisibleText(lastAssistant).trim();
+  const visibleText = extractAssistantVisibleText(lastAssistant);
   return visibleText || undefined;
 }
 
@@ -199,10 +199,5 @@ export function resolveFinalMessageRawText(
 export function resolveFinalAssistantRawText(
   lastAssistant: AssistantMessage | undefined,
 ): string | undefined {
-  if (!lastAssistant) {
-    return undefined;
-  }
-  const finalAnswerText = extractAssistantTextForPhase(lastAssistant, { phase: "final_answer" });
-  const rawText = (finalAnswerText ?? extractAssistantTextForPhase(lastAssistant) ?? "").trim();
-  return rawText || undefined;
+  return lastAssistant ? resolveRawAssistantAnswerText(lastAssistant) || undefined : undefined;
 }

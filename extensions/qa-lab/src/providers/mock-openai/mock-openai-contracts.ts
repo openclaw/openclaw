@@ -347,10 +347,9 @@ export const QA_IMAGE_GENERATION_PROMPT_RE =
   /image generation check|capability flip image check|\/tool\s+image_generate/i;
 export const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
-export const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
-  "The previous attempt did not produce a user-visible answer.";
+export const QA_EMPTY_RESPONSE_RETRY_NEEDLE = "Continue from the current state";
 export const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer.";
+  "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:";
 export const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
   /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
 export const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;

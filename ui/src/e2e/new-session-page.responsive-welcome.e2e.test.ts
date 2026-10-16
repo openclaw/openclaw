@@ -167,6 +167,98 @@ suite.define(() => {
     });
   });
 
+  it("keeps recent-chat timestamps on one right-aligned line in a narrow column", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const now = Date.now();
+      const checkout = (branch?: string) => ({
+        worktree: { repoRoot: "/workspace/workspace-openclaw", ...(branch ? { branch } : {}) },
+      });
+      await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": {
+            count: 4,
+            defaults: { contextTokens: null, model: null, modelProvider: null },
+            path: "",
+            sessions: [
+              {
+                key: "agent:main:dashboard:theme",
+                kind: "direct",
+                label: "Install and set up theme",
+                updatedAt: now - 5_000,
+                ...checkout("neat-lobster"),
+              },
+              {
+                key: "agent:main:dashboard:pr",
+                kind: "direct",
+                label: "I'll pull the PR details and diff from GitHub and summarize the review",
+                updatedAt: now - 32 * 60_000,
+                ...checkout(),
+              },
+              {
+                key: "agent:main:dashboard:clawhub",
+                kind: "direct",
+                label: "ClawHub app detection via deeplinks",
+                updatedAt: now - 2 * 86_400_000,
+                ...checkout("tender-krill"),
+              },
+              {
+                key: "agent:main:dashboard:ads",
+                kind: "direct",
+                label: "Stop Facebook and Google ads",
+                updatedAt: now - 5 * 86_400_000,
+              },
+            ],
+            ts: now,
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}new`);
+      const rows = page.locator(".agent-chat__recent");
+      await expect.poll(() => rows.count()).toBe(4);
+      await page.evaluate(() => document.fonts.ready);
+      // A narrow chat pane; the second pass lets inherited text wrap, as a
+      // theme or plugin stylesheet may, which must not squeeze the timestamp.
+      await page.addStyleTag({ content: ".agent-chat__recents { width: 320px; }" });
+      for (const textWrap of ["default", "inherited-wrap"] as const) {
+        if (textWrap === "inherited-wrap") {
+          await page.addStyleTag({
+            content: ".agent-chat__recent-time { white-space: normal; }",
+          });
+        }
+        await waitForLayoutSettled(page, ".agent-chat__recent");
+        await captureNewSessionComposerUiProof(suite, page, `recent-chats-narrow-${textWrap}.png`, {
+          surface: page.locator(".agent-chat__recents"),
+          content: [rows.first()],
+        });
+        const layout = await rows.evaluateAll((elements) =>
+          elements.map((row) => {
+            const time = row.querySelector<HTMLElement>(".agent-chat__recent-time")!;
+            const name = row.querySelector<HTMLElement>(".agent-chat__recent-name")!;
+            const lineHeight = Number.parseFloat(getComputedStyle(time).lineHeight);
+            return {
+              text: time.textContent,
+              timeRight: Math.round(time.getBoundingClientRect().right),
+              timeHeight: time.getBoundingClientRect().height,
+              lineHeight,
+              timeClipped: time.scrollWidth > time.clientWidth,
+              nameTruncated: name.scrollWidth > name.clientWidth,
+              rowRight: Math.round(row.getBoundingClientRect().right),
+            };
+          }),
+        );
+        expect(new Set(layout.map((row) => row.timeRight)).size, JSON.stringify(layout)).toBe(1);
+        for (const row of layout) {
+          expect(row.timeHeight, JSON.stringify(row)).toBeLessThanOrEqual(row.lineHeight + 1);
+          expect(row.timeClipped, JSON.stringify(row)).toBe(false);
+          expect(row.timeRight).toBeLessThanOrEqual(row.rowRight);
+        }
+        // The left side gives up the width: the long title truncates instead.
+        expect(layout[1]!.nameTruncated).toBe(true);
+      }
+    });
+  });
+
   it("keeps the mobile composer within reach and lets long prompts scroll", async () => {
     await suite.withPage({ viewport: { width: 320, height: 568 } }, async ({ page }) => {
       await installMockGateway(page, {

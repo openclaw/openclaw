@@ -467,6 +467,7 @@ rechecks physical usage before considering another deletion. A measurement
 failure stops the sweep.
 
 Background disk-budget checks run at most every 30 minutes on entry writes.
+Unchanged entry patches do not schedule a check.
 Delete and reset operations can request a check sooner, but repeated requests
 coalesce to at most one forced check per minute per store. If cleanup exhausts
 eligible history and the store remains over budget, automatic checks back off
