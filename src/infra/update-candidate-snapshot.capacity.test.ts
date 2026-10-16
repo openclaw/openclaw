@@ -61,7 +61,7 @@ it("admits one private generation and sequential scratch without reserving remov
     stateDir: f.stateDir,
     env: {},
   });
-  expect(result.exitCode, result.stderrTail).toBe(0);
+  expect(result.exitCode, result.stderrTail ?? undefined).toBe(0);
   expect(await databaseHashes(f.files)).toEqual(before);
 });
 
