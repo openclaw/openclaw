@@ -4,7 +4,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexThread } from "./app-server/protocol.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const createdAt = Date.parse("2026-09-16T12:00:00.000Z") / 1_000;

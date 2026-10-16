@@ -79,7 +79,6 @@ export function createSlackProgressRuntime(runtimeParams: {
           }
           return ts;
         },
-        log: logVerbose,
         warn: logVerbose,
       })
     : undefined;

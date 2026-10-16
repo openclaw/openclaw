@@ -71,11 +71,6 @@ const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;
 const CODEX_APP_SERVER_OVERLOAD_RETRY_BASE_MS = 50;
 
-export {
-  getCodexAppServerClientInstanceId,
-  resolveCodexAppServerClientInstanceId,
-} from "./client-diagnostics.js";
-
 type RequestOptions = {
   timeoutMs?: number;
   signal?: AbortSignal;

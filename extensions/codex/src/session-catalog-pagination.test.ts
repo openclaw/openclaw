@@ -7,7 +7,7 @@ import {
   observeCodexCatalogClient,
 } from "./session-catalog-events.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 
 describe("resident catalog cursor stability", () => {
   it.each([

@@ -8,6 +8,7 @@ import {
 } from "./graph-thread.js";
 import {
   deleteGraphRequest,
+  fetchAllGraphPages,
   fetchGraphAbsoluteUrl,
   fetchGraphJson,
   mutateGraphJson,
@@ -203,34 +204,19 @@ const LIST_PINS_MAX_PAGES = 10;
 
 export async function listPinsMSTeams(params: ListPinsMSTeamsParams) {
   const { token, basePath } = await resolveGraphPinContext(params, "list");
-
-  const path = `${basePath}/pinnedMessages?$expand=message`;
-  const allPins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }> =
-    [];
-
-  let res = await fetchGraphJson<GraphResponse<GraphPinnedMessage>>({ token, path });
-  let pages = 1;
-
-  while (true) {
-    for (const pin of res.value ?? []) {
-      allPins.push({
-        id: pin.id ?? "",
-        pinnedMessageId: pin.id ?? "",
-        messageId: pin.message?.id,
-        text: pin.message?.body?.content,
-      });
-    }
-
-    const nextLink = res["@odata.nextLink"];
-    if (!nextLink || pages >= LIST_PINS_MAX_PAGES) {
-      break;
-    }
-
-    res = await fetchGraphAbsoluteUrl<GraphResponse<GraphPinnedMessage>>({ token, url: nextLink });
-    pages++;
-  }
-
-  return { pins: allPins };
+  const { items } = await fetchAllGraphPages<GraphPinnedMessage>({
+    token,
+    path: `${basePath}/pinnedMessages?$expand=message`,
+    maxPages: LIST_PINS_MAX_PAGES,
+  });
+  return {
+    pins: items.map((pin) => ({
+      id: pin.id ?? "",
+      pinnedMessageId: pin.id ?? "",
+      messageId: pin.message?.id,
+      text: pin.message?.body?.content,
+    })),
+  };
 }
 
 type GraphReaction = {

@@ -1,7 +1,7 @@
 # Per-file counts of production type assertions without a // SAFETY: invariant.
 # Ratchet: counts may only shrink. New non-const assertions need a SAFETY comment.
 # Format: repo-relative path, tab, positive count. Zero-count files are omitted.
-extensions/acpx/src/codex-auth-bridge.ts	7
+extensions/acpx/src/codex-auth-bridge.ts	5
 extensions/acpx/src/pi-session-catalog-runtime.ts	1
 extensions/acpx/src/process-lease.ts	1
 extensions/acpx/src/runtime.ts	2
@@ -144,7 +144,7 @@ extensions/codex/src/app-server/thread-lifecycle-run.ts	1
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
 extensions/codex/src/app-server/transcript-mirror.ts	1
 extensions/codex/src/app-server/transport-stdio.ts	1
-extensions/codex/src/command-handlers.ts	3
+extensions/codex/src/command-handlers.ts	2
 extensions/codex/src/command-rpc.ts	1
 extensions/codex/src/conversation-control.ts	1
 extensions/codex/src/migration/apply.ts	2
@@ -162,18 +162,18 @@ extensions/cohere/stream.ts	2
 extensions/comfy/workflow-runtime.ts	2
 extensions/copilot-proxy/index.ts	1
 extensions/copilot/harness.ts	8
-extensions/copilot/src/attempt-config.ts	10
+extensions/copilot/src/attempt-config.ts	8
 extensions/copilot/src/attempt-execution.ts	2
 extensions/copilot/src/attempt-finalize.ts	2
 extensions/copilot/src/attempt-prepare.ts	4
-extensions/copilot/src/attempt-transcript-journal.ts	22
+extensions/copilot/src/attempt-transcript-journal.ts	21
 extensions/copilot/src/byok-proxy.ts	1
 extensions/copilot/src/event-bridge-transcript.ts	4
 extensions/copilot/src/event-bridge.ts	1
-extensions/copilot/src/hooks-bridge.ts	7
+extensions/copilot/src/hooks-bridge.ts	1
 extensions/copilot/src/provider-bridge.ts	1
 extensions/copilot/src/sdk-loader.ts	2
-extensions/copilot/src/tool-bridge.ts	3
+extensions/copilot/src/tool-bridge.ts	2
 extensions/copilot/src/workspace-bootstrap.ts	1
 extensions/cua-computer/src/commands.ts	2
 extensions/cua-computer/src/driver-artifact-verification.ts	1
@@ -287,7 +287,6 @@ extensions/exa/src/exa-web-search-provider.runtime.ts	1
 extensions/fal/video-generation-provider.ts	3
 extensions/feishu/src/accounts.ts	3
 extensions/feishu/src/bitable.ts	1
-extensions/feishu/src/bot-broadcast.ts	3
 extensions/feishu/src/bot-content.ts	1
 extensions/feishu/src/bot-identity-cache.ts	1
 extensions/feishu/src/bot-name.ts	2
@@ -534,7 +533,6 @@ extensions/microsoft-foundry/onboard.ts	2
 extensions/microsoft-foundry/provider.ts	1
 extensions/migrate-hermes/apply.ts	1
 extensions/migrate-hermes/auth-config.ts	2
-extensions/migrate-hermes/auth.ts	1
 extensions/minimax/model-definitions.ts	2
 extensions/minimax/music-generation-provider.ts	2
 extensions/minimax/oauth.ts	1
@@ -564,7 +562,7 @@ extensions/msteams/src/qa/adapter.runtime.ts	1
 extensions/msteams/src/qa/bot-framework-server.ts	2
 extensions/msteams/src/qa/private-runtime.ts	1
 extensions/msteams/src/reply-stream-controller.ts	1
-extensions/msteams/src/sdk-proactive.ts	3
+extensions/msteams/src/sdk-proactive.ts	1
 extensions/msteams/src/sdk.ts	3
 extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/user-agent.ts	1
@@ -903,7 +901,7 @@ extensions/whatsapp/src/agent-tools-login.ts	6
 extensions/whatsapp/src/approval-handler.runtime.ts	1
 extensions/whatsapp/src/auth-store.ts	1
 extensions/whatsapp/src/auto-reply/monitor.ts	2
-extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	2
+extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	1
 extensions/whatsapp/src/channel-outbound.ts	1
 extensions/whatsapp/src/connection-controller-runtime-context.ts	1
 extensions/whatsapp/src/connection-controller.ts	2
@@ -961,7 +959,7 @@ extensions/zalouser/src/text-styles-ranges.ts	1
 extensions/zalouser/src/text-styles-source.ts	1
 extensions/zalouser/src/tool.ts	1
 extensions/zalouser/src/zalo-js.ts	7
-extensions/zalouser/src/zca-client.ts	2
+extensions/zalouser/src/zca-client.ts	1
 packages/acp-core/src/runtime/errors.ts	6
 packages/agent-core/src/agent-loop.ts	2
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1

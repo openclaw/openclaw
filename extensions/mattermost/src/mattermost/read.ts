@@ -32,14 +32,14 @@ function isCurrentMattermostReadTarget(params: {
 }): boolean {
   const toolContext = params.context.toolContext;
   const nativeChannelId = toolContext?.currentChannelId;
-  if (typeof nativeChannelId === "string" && nativeChannelId.trim()) {
+  if (nativeChannelId?.trim()) {
     // Mattermost DMs route outbound messages via `user:<peerId>`, while the
     // trusted native channel ID remains the exact conversation identity.
     return parseMattermostChannelTarget(nativeChannelId) === params.channelId;
   }
   const messagingTarget = toolContext?.currentMessagingTarget;
   return (
-    typeof messagingTarget === "string" &&
+    messagingTarget !== undefined &&
     Boolean(messagingTarget.trim()) &&
     parseMattermostChannelTarget(messagingTarget) === params.channelId
   );

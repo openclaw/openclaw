@@ -222,10 +222,6 @@ export async function resolveSlackThreadContextData(params: {
           prependUnavailable: true,
         });
       }
-      if (threadStarterMedia) {
-        const starterPlaceholders = threadStarterMedia.map((item) => item.placeholder).join(", ");
-        logVerbose(`slack: hydrated thread starter file ${starterPlaceholders} from root message`);
-      }
     }
   } else {
     threadLabel = `Slack thread ${params.roomLabel}`;
@@ -244,7 +240,6 @@ export async function resolveSlackThreadContextData(params: {
   } else if (includeBotStarterAsRootContext) {
     const snippet = formatSlackThreadLabelSnippet(starter?.text ?? "").trim();
     threadLabel = `Slack thread ${params.roomLabel}${snippet ? ` (assistant root): ${snippet}` : ""}`;
-    logVerbose("slack: retained current-bot thread starter as assistant root context");
   }
 
   const threadInitialHistoryLimit = Math.min(
@@ -380,9 +375,6 @@ export async function resolveSlackThreadContextData(params: {
       }
       if (historyParts.length > 0) {
         threadHistoryBody = historyParts.join("\n\n");
-        logVerbose(
-          `slack: populated thread history with ${filteredThreadHistory.length} messages for new session`,
-        );
       }
     }
   }

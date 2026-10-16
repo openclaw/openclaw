@@ -892,6 +892,11 @@ describe("ClickClack HTTP client", () => {
 
   it("aborts a stalled ephemeral request", async () => {
     vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), delay);
+      return controller.signal;
+    });
     try {
       const fetchMock = vi.fn(
         async (_input: string | URL | Request, init?: RequestInit): Promise<Response> =>
@@ -922,8 +927,10 @@ describe("ClickClack HTTP client", () => {
       await vi.advanceTimersByTimeAsync(15_000);
 
       await rejected;
+      expect(timeout).toHaveBeenCalledWith(15_000);
       expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeDefined();
     } finally {
+      timeout.mockRestore();
       vi.useRealTimers();
     }
   });

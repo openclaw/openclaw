@@ -50,6 +50,9 @@ function createOutboundCapture() {
   const app = {
     api: {
       serviceUrl: "https://smba.trafficmanager.net/emea/",
+      fromServiceUrl({ serviceUrl }: { serviceUrl: string }) {
+        return { ...this, serviceUrl };
+      },
       teams: { getById: vi.fn(async () => ({})) },
       conversations: {
         activities: (conversationId: string) => ({
