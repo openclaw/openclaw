@@ -48,16 +48,12 @@ async function resolveOuterTimeoutRace(data: Readonly<Record<string, unknown>>) 
   });
 
   emitLifecycle(runId, { phase: "start", startedAt: 1_000 });
-  emitAgentEvent({
-    runId,
-    stream: "lifecycle",
-    data: {
-      phase: "end",
-      startedAt: 1_000,
-      endedAt: 1_100,
-      aborted: true,
-      ...data,
-    },
+  emitLifecycle(runId, {
+    phase: "end",
+    startedAt: 1_000,
+    endedAt: 1_100,
+    aborted: true,
+    ...data,
   });
 
   // Fire the outer wait before the 15-second terminal retry grace publishes.
@@ -97,17 +93,13 @@ describe("waitForAgentJob timeout fallback", () => {
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
 
     emitLifecycle(runId, { phase: "start", startedAt: 1_000 });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        startedAt: 1_000,
-        endedAt: 1_100,
-        ...providerTimeout,
-        error: "All model fallback candidates failed",
-        fallbackExhaustedFailure: true,
-      },
+    emitLifecycle(runId, {
+      phase: "error",
+      startedAt: 1_000,
+      endedAt: 1_100,
+      ...providerTimeout,
+      error: "All model fallback candidates failed",
+      fallbackExhaustedFailure: true,
     });
 
     const terminalTimeout = {
@@ -128,15 +120,11 @@ describe("waitForAgentJob timeout fallback", () => {
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
 
     emitLifecycle(runId, { phase: "start", startedAt: 1_000 });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        startedAt: 1_000,
-        endedAt: 1_100,
-        error: "Retryable provider failure",
-      },
+    emitLifecycle(runId, {
+      phase: "error",
+      startedAt: 1_000,
+      endedAt: 1_100,
+      error: "Retryable provider failure",
     });
 
     await vi.advanceTimersByTimeAsync(5_000);
@@ -192,15 +180,11 @@ describe("waitForAgentJob timeout fallback", () => {
 
       emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
       for (let attempt = 0; attempt < failureCount; attempt += 1) {
-        emitAgentEvent({
-          runId,
-          stream: "lifecycle",
-          data: {
-            phase: "error",
-            startedAt: 1_000,
-            endedAt: 1_100 + attempt,
-            error: `Retryable provider failure ${attempt + 1}`,
-          },
+        emitLifecycle(runId, {
+          phase: "error",
+          startedAt: 1_000,
+          endedAt: 1_100 + attempt,
+          error: `Retryable provider failure ${attempt + 1}`,
         });
         await vi.advanceTimersByTimeAsync(15_000);
         expect(settled).toBe(false);
@@ -317,32 +301,19 @@ describe("waitForAgentJob timeout fallback", () => {
     const runId = `run-timeout-fallback-pending-error-${runSequence++}`;
 
     emitLifecycle(runId, { phase: "start", startedAt: 1_000 });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        startedAt: 1_000,
-        endedAt: 1_100,
-        ...initial,
-      },
-    });
+    emitLifecycle(runId, { phase: "error", startedAt: 1_000, endedAt: 1_100, ...initial });
 
     const waitPromise = waitForAgentJob({
       runId,
       timeoutMs: 1_000,
     });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        startedAt: 1_000,
-        endedAt: 1_200,
-        error: "All model fallback candidates failed",
-        ...final,
-        fallbackExhaustedFailure: true,
-      },
+    emitLifecycle(runId, {
+      phase: "error",
+      startedAt: 1_000,
+      endedAt: 1_200,
+      error: "All model fallback candidates failed",
+      ...final,
+      fallbackExhaustedFailure: true,
     });
 
     const terminalOutcome = { ...expected, startedAt: 1_000, endedAt: 1_100 };
@@ -418,28 +389,20 @@ describe("waitForAgentJob timeout fallback", () => {
     const runId = `run-timeout-fallback-exhausted-cancelled-${runSequence++}`;
 
     emitLifecycle(runId, { phase: "start", startedAt: 1_000 });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        startedAt: 1_000,
-        endedAt: 1_050,
-        aborted: true,
-        stopReason: "rpc",
-      },
+    emitLifecycle(runId, {
+      phase: "end",
+      startedAt: 1_000,
+      endedAt: 1_050,
+      aborted: true,
+      stopReason: "rpc",
     });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        startedAt: 1_000,
-        endedAt: 1_100,
-        ...providerTimeout,
-        error: "All model fallback candidates failed",
-        fallbackExhaustedFailure: true,
-      },
+    emitLifecycle(runId, {
+      phase: "error",
+      startedAt: 1_000,
+      endedAt: 1_100,
+      ...providerTimeout,
+      error: "All model fallback candidates failed",
+      fallbackExhaustedFailure: true,
     });
 
     await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({

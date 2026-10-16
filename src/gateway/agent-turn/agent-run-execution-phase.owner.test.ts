@@ -297,122 +297,137 @@ describe("startAgentRunExecution Gateway ownership", () => {
     agentCommand.mockReset();
   });
 
-  it.each(["success", "startup failure", "cleanup failure", "completed cleanup failure"] as const)(
-    "retains raw disposal after its real terminal producer settles %s",
-    async (outcome) => {
-      const execution = createExecution();
-      const instance = createOperationalRunInstanceRef(execution.params.runId);
-      execution.params.prepared.operationalRunInstance = instance;
-      const { controllers, registration, entry } = registerExecution(
-        execution,
-        "composed-terminal-disposal",
-        { sessionId: "composed-terminal-disposal" },
+  it.each([
+    "success",
+    "startup failure",
+    "cleanup failure",
+    "completed cleanup failure",
+    "prewriter abort",
+  ] as const)("retains the exact run owner through runtime disposal: %s", async (outcome) => {
+    const prewriter = outcome === "prewriter abort";
+    const execution = createExecution();
+    if (!prewriter) {
+      execution.params.prepared.operationalRunInstance = createOperationalRunInstanceRef(
+        execution.params.runId,
       );
+    }
+    const { controllers, registration, entry } = registerExecution(
+      execution,
+      prewriter ? "retained-disposal" : "composed-terminal-disposal",
+      prewriter ? undefined : { sessionId: "composed-terminal-disposal" },
+    );
+    if (prewriter) {
+      registration.controller.abort();
+    } else {
       execution.params.lifecycleGeneration = getAgentEventLifecycleGeneration();
       Object.assign(
         execution.params.context,
         createChatAbortContext({ ...execution.params.context, chatAbortControllers: controllers }),
       );
-      const admission = await beginSessionWorkAdmission({
-        scope: "composed-terminal-disposal",
-        identities: [entry.sessionKey, entry.sessionId],
-        assertAllowed: () => {},
-      });
-      execution.params.prepared.activeGatewayWorkAdmission = admission;
-      const commandEntered = createDeferred();
-      const finishCommand = createDeferred();
-      const save = createGate();
-      const disposal = createGate();
-      agentCommand.mockImplementationOnce(async () => {
-        commandEntered.resolve();
-        await finishCommand.promise;
-        if (outcome === "startup failure") {
-          throw new Error("Synthetic command startup failure");
-        }
-        return { payloads: [], meta: {} };
-      });
-      const actualDispatch =
-        await vi.importActual<typeof import("./agent-run-dispatch.js")>("./agent-run-dispatch.js");
-      dispatchAgentRunFromGateway.mockImplementationOnce(
-        actualDispatch.dispatchAgentRunFromGateway,
-      );
-      const cleanupFault = new Error("Synthetic unfinished runtime cleanup");
-      execution.runtimeRelease.mockImplementation(async () => {
-        await disposal.wait();
-        if (outcome === "cleanup failure") {
-          throw cleanupFault;
-        }
-      });
-      const callbackFault = new Error("Synthetic completed inspection callback failure");
-      let database: DatabaseSync | undefined;
-      let nativeDisposals = 0;
-      if (outcome === "completed cleanup failure") {
-        const registry = createEmptyPluginRegistry();
-        const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
-        resources.attach(registry);
-        const native = (database = new DatabaseSync(":memory:"));
-        let releaseGeneration: (() => Promise<void>) | undefined = undefined;
-        onTestFinished(async () => {
-          disposal.resolve();
-          await releaseGeneration?.().catch(() => {});
-          await resources.release().catch(() => {});
-          if (native.isOpen) {
-            native.close();
-          }
-        });
-        const nativeDispose = async () => {
-          nativeDisposals++;
-          await disposal.wait();
-          native.close();
-          throw callbackFault;
-        };
-        resources.runRegistration("completed-cleanup", () => {
-          resources.register("completed-cleanup", { id: "sqlite", dispose: nativeDispose });
-        });
-        const construction = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
-        const discovery = vi
-          .spyOn(runtimePlugins, "acquireAgentRuntimePluginRegistry")
-          .mockResolvedValueOnce({
-            registry,
-            primaryRegistry: registry,
-            resources,
-            releaseRegistry: resources.release.bind(resources),
-            releaseWork: retainRuntimePluginWork([registry]),
-          });
-        try {
-          await construction.load({ config: {} }, () => {});
-        } finally {
-          discovery.mockRestore();
-        }
-        const generation: PreparedModelRuntimePluginGeneration = {
-          remoteCatalog: null,
-          pluginMetadataSnapshot: createPluginMetadataSnapshot({
-            config: {},
-            manifestRegistry: makeRegistry([]),
-          }),
-          inlineProviderModels: [],
-          configuredCatalogEntries: [],
-          pluginRegistry: registry,
-        };
-        releaseGeneration = retainPreparedPluginGeneration(generation);
-        await construction[Symbol.asyncDispose]();
-        execution.params.prepared.preparedModelRuntimeLease = {
-          ...expectDefined(
-            execution.params.prepared.preparedModelRuntimeLease,
-            "ready session runtime",
-          ),
-          pluginGeneration: generation,
-          [Symbol.asyncDispose]: releaseGeneration,
-        };
-        execution.params.prepared.replyDispatchRuntime = {
-          ...execution.params.prepared.replyDispatchRuntime,
-          pluginGeneration: generation,
-        };
+    }
+    const admission = await beginSessionWorkAdmission({
+      scope: prewriter ? "gateway-retained-disposal" : "composed-terminal-disposal",
+      identities: [entry.sessionKey, entry.sessionId],
+      assertAllowed: () => {},
+    });
+    execution.params.prepared.activeGatewayWorkAdmission = admission;
+    const commandEntered = createDeferred();
+    const finishCommand = createDeferred();
+    const save = createGate();
+    const disposal = createGate();
+    agentCommand.mockImplementationOnce(async () => {
+      commandEntered.resolve();
+      await finishCommand.promise;
+      if (outcome === "startup failure") {
+        throw new Error("Synthetic command startup failure");
       }
-      const finished = vi.fn();
-      const completion = startAgentRunExecution(execution.params).then(finished);
-      const observed = completion.catch((error: unknown) => error);
+      return { payloads: [], meta: {} };
+    });
+    const actualDispatch =
+      await vi.importActual<typeof import("./agent-run-dispatch.js")>("./agent-run-dispatch.js");
+    dispatchAgentRunFromGateway.mockImplementationOnce(actualDispatch.dispatchAgentRunFromGateway);
+    const cleanupFault = new Error("Synthetic unfinished runtime cleanup");
+    execution.runtimeRelease.mockImplementation(
+      prewriter
+        ? disposal.wait
+        : async () => {
+            await disposal.wait();
+            if (outcome === "cleanup failure") {
+              throw cleanupFault;
+            }
+          },
+    );
+    const callbackFault = new Error("Synthetic completed inspection callback failure");
+    let database: DatabaseSync | undefined;
+    let nativeDisposals = 0;
+    if (outcome === "completed cleanup failure") {
+      const registry = createEmptyPluginRegistry();
+      const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
+      resources.attach(registry);
+      const native = (database = new DatabaseSync(":memory:"));
+      let releaseGeneration: (() => Promise<void>) | undefined = undefined;
+      onTestFinished(async () => {
+        disposal.resolve();
+        await releaseGeneration?.().catch(() => {});
+        await resources.release().catch(() => {});
+        if (native.isOpen) {
+          native.close();
+        }
+      });
+      const nativeDispose = async () => {
+        nativeDisposals++;
+        await disposal.wait();
+        native.close();
+        throw callbackFault;
+      };
+      resources.runRegistration("completed-cleanup", () => {
+        resources.register("completed-cleanup", { id: "sqlite", dispose: nativeDispose });
+      });
+      const construction = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
+      const discovery = vi
+        .spyOn(runtimePlugins, "acquireAgentRuntimePluginRegistry")
+        .mockResolvedValueOnce({
+          registry,
+          primaryRegistry: registry,
+          resources,
+          releaseRegistry: resources.release.bind(resources),
+          releaseWork: retainRuntimePluginWork([registry]),
+        });
       try {
+        await construction.load({ config: {} }, () => {});
+      } finally {
+        discovery.mockRestore();
+      }
+      const generation: PreparedModelRuntimePluginGeneration = {
+        remoteCatalog: null,
+        pluginMetadataSnapshot: createPluginMetadataSnapshot({
+          config: {},
+          manifestRegistry: makeRegistry([]),
+        }),
+        inlineProviderModels: [],
+        configuredCatalogEntries: [],
+        pluginRegistry: registry,
+      };
+      releaseGeneration = retainPreparedPluginGeneration(generation);
+      await construction[Symbol.asyncDispose]();
+      execution.params.prepared.preparedModelRuntimeLease = {
+        ...expectDefined(
+          execution.params.prepared.preparedModelRuntimeLease,
+          "ready session runtime",
+        ),
+        pluginGeneration: generation,
+        [Symbol.asyncDispose]: releaseGeneration,
+      };
+      execution.params.prepared.replyDispatchRuntime = {
+        ...execution.params.prepared.replyDispatchRuntime,
+        pluginGeneration: generation,
+      };
+    }
+    const finished = vi.fn();
+    const completion = startAgentRunExecution(execution.params).then(finished);
+    const observed = completion.catch((error: unknown) => error);
+    try {
+      if (!prewriter) {
         await awaitGateBeforeSettlement(
           commandEntered.promise,
           disposal.entered,
@@ -434,82 +449,56 @@ describe("startAgentRunExecution Gateway ownership", () => {
         expect(execution.runtimeRelease).not.toHaveBeenCalled();
         expect(entry.executionSettlement?.status).toBe("pending");
         save.resolve();
-        await disposal.entered;
-        expect(entry).toMatchObject({
-          registrationCleanupRequested: true,
-          projectSessionActive: false,
-          executionSettlement: { status: "pending" },
-        });
-        expect(entry.resolveTerminalProducer?.()).toBeUndefined();
-        expect(registration.markExecutionStarted()).toBe(false);
-        expect(controllers.get(execution.params.runId)).toBe(entry);
-        expectCalls(0, execution.callerRelease, finished);
-        if (database) {
-          expect(database.isOpen).toBe(true);
-        }
-        disposal.resolve();
-        if (outcome === "completed cleanup failure") {
-          expect(collectNestedErrorCandidates(await observed)).toContain(callbackFault);
-          expect(database?.isOpen).toBe(false);
-          expect(nativeDisposals).toBe(1);
-          expect(entry.executionSettlement).toMatchObject({
-            status: "rejected",
-            cleanupSettled: true,
-          });
-        } else if (outcome === "cleanup failure") {
-          expect(await observed).toBe(cleanupFault);
-          expect(entry.executionSettlement).toMatchObject({
-            status: "rejected",
-            cleanupSettled: false,
-          });
-        } else {
-          await completion;
-          expect(entry.executionSettlement?.status).toBe("fulfilled");
-        }
-        expect(controllers.has(execution.params.runId)).toBe(outcome === "cleanup failure");
-        expect(execution.callerRelease).toHaveBeenCalledOnce();
-      } finally {
-        finishCommand.resolve();
-        save.resolve();
-        disposal.resolve();
-        await observed;
-        admission.release();
-        controllers.clear();
       }
-    },
-  );
-
-  it("retains an inactive exact run owner after prewriter cleanup until disposal settles", async () => {
-    const execution = createExecution();
-    const { controllers, registration } = registerExecution(execution, "retained-disposal");
-    registration.controller.abort();
-    const admission = await beginSessionWorkAdmission({
-      scope: "gateway-retained-disposal",
-      identities: [registration.entry.sessionKey, registration.entry.sessionId],
-      assertAllowed: () => {},
-    });
-    execution.params.prepared.activeGatewayWorkAdmission = admission;
-    const disposal = createGate();
-    execution.runtimeRelease.mockImplementation(disposal.wait);
-    const completion = startAgentRunExecution(execution.params);
-    try {
       await disposal.entered;
-      expect(registration.entry).toMatchObject({
+      expect(entry).toMatchObject({
         registrationCleanupRequested: true,
         projectSessionActive: false,
       });
-      expect(admission.isActive()).toBe(false);
-      expect(controllers.get(execution.params.runId)).toBe(registration.entry);
-      expect(isChatAbortControllerEntryAbortable(registration.entry)).toBe(false);
+      if (prewriter) {
+        expect(admission.isActive()).toBe(false);
+        expect(isChatAbortControllerEntryAbortable(entry)).toBe(false);
+        expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
+      } else {
+        expect(entry.executionSettlement?.status).toBe("pending");
+        expect(entry.resolveTerminalProducer?.()).toBeUndefined();
+      }
       expect(registration.markExecutionStarted()).toBe(false);
-      expectCalls(0, dispatchAgentRunFromGateway, execution.callerRelease);
+      expect(controllers.get(execution.params.runId)).toBe(entry);
+      expectCalls(0, execution.callerRelease, finished);
+      if (database) {
+        expect(database.isOpen).toBe(true);
+      }
       disposal.resolve();
-      await completion;
-      expect(controllers.has(execution.params.runId)).toBe(false);
+      if (outcome === "completed cleanup failure") {
+        expect(collectNestedErrorCandidates(await observed)).toContain(callbackFault);
+        expect(database?.isOpen).toBe(false);
+        expect(nativeDisposals).toBe(1);
+        expect(entry.executionSettlement).toMatchObject({
+          status: "rejected",
+          cleanupSettled: true,
+        });
+      } else if (outcome === "cleanup failure") {
+        expect(await observed).toBe(cleanupFault);
+        expect(entry.executionSettlement).toMatchObject({
+          status: "rejected",
+          cleanupSettled: false,
+        });
+      } else {
+        await completion;
+        if (!prewriter) {
+          expect(entry.executionSettlement?.status).toBe("fulfilled");
+        }
+      }
+      expect(controllers.has(execution.params.runId)).toBe(outcome === "cleanup failure");
+      expect(execution.callerRelease).toHaveBeenCalledOnce();
     } finally {
+      finishCommand.resolve();
+      save.resolve();
       disposal.resolve();
-      await completion;
+      await observed;
       admission.release();
+      controllers.clear();
     }
   });
 

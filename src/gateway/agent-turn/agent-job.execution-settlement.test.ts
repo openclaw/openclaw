@@ -22,13 +22,20 @@ const providerTimeout = {
   providerStarted: true,
 } as const;
 type Source = "agent" | "chat";
-type DedupeOptions = Pick<
-  Parameters<typeof setGatewayDedupeEntry>[0],
-  "session" | "startNewAttempt"
-> & {
+type Publication = Parameters<typeof setGatewayDedupeEntry>[0];
+type DedupeOptions = Pick<Publication, "session" | "startNewAttempt"> & {
   ts?: number;
   ok?: boolean;
 };
+
+function createSession(name = "original", sessionId = `${name}-session`): AgentJobSession {
+  return {
+    ...originalSession,
+    sessionKey: `agent:main:${name}`,
+    sessionId,
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+  };
+}
 
 function createJob(prefix: string) {
   const runId = `${prefix}-${runSequence++}`;
@@ -51,56 +58,54 @@ function createJob(prefix: string) {
     },
     expect: (expected: unknown, source?: Source) =>
       expect(wait(source)).resolves.toMatchObject(expected),
+    async assertSettled(expected: unknown, produce: () => void | Promise<void>) {
+      const waiter = wait(undefined, 60_000);
+      try {
+        await produce();
+        await expect(wait()).resolves.toMatchObject(expected);
+        await expect(waiter).resolves.toMatchObject(expected);
+      } finally {
+        await vi.advanceTimersByTimeAsync(60_000);
+        await waiter;
+      }
+    },
   };
 }
 
 describe("waitForAgentJob settled execution", () => {
   it("observes completed hidden refreshes without treating acceptance as completion", async () => {
     const job = createJob("progress-card-refresh:completed");
-    for (const status of ["accepted", "completed"] as const) {
-      job.publish("chat", { status });
-      const result = await job.wait("chat");
-      if (status === "accepted") {
-        expect(result).toBeNull();
-      } else {
-        expect(result).toMatchObject({ status: "ok" });
-      }
-    }
+    job.publish("chat", { status: "accepted" });
+    await expect(job.wait("chat")).resolves.toBeNull();
+    job.publish("chat", { status: "completed" });
+    await job.expect({ status: "ok" }, "chat");
   });
 
   it("normalizes an outer timeout after yield before publishing the wait snapshot", async () => {
     const job = createJob("outer-timeout-after-yield");
-    const waiter = job.wait(undefined, 60_000);
-    const controller = new AbortController();
-    const lifecycle = createAgentCommandLifecycle({
-      runId: job.runId,
-      lifecycleGeneration: getAgentEventLifecycleGeneration,
-      startedAt: 100,
-      abortSignal: controller.signal,
-      state: {
-        currentTurnUserMessagePersisted: true,
-        lifecycleFinishing: false,
-        lifecycleEnded: false,
-      },
+    await job.assertSettled({ status: "timeout", stopReason: "timeout", yielded: true }, () => {
+      const controller = new AbortController();
+      const lifecycle = createAgentCommandLifecycle({
+        runId: job.runId,
+        lifecycleGeneration: getAgentEventLifecycleGeneration,
+        startedAt: 100,
+        abortSignal: controller.signal,
+        state: {
+          currentTurnUserMessagePersisted: true,
+          lifecycleFinishing: false,
+          lifecycleEnded: false,
+        },
+      });
+      controller.abort(new DOMException("outer deadline", "TimeoutError"));
+      lifecycle.emitEnd({
+        metadata: { yielded: true, aborted: false },
+        outcome: buildAgentRunTerminalOutcome({
+          status: "ok",
+          stopReason: "end_turn",
+          livenessState: "paused",
+        }),
+      });
     });
-    const terminal = {
-      metadata: { yielded: true, aborted: false },
-      outcome: buildAgentRunTerminalOutcome({
-        status: "ok",
-        stopReason: "end_turn",
-        livenessState: "paused",
-      }),
-    };
-    controller.abort(new DOMException("outer deadline", "TimeoutError"));
-    lifecycle.emitEnd(terminal);
-    try {
-      const expected = { status: "timeout", stopReason: "timeout", yielded: true } as const;
-      await expect(waiter).resolves.toMatchObject(expected);
-      await job.expect(expected);
-    } finally {
-      await vi.advanceTimersByTimeAsync(60_000);
-      await waiter;
-    }
   });
 
   beforeEach(() => {
@@ -173,12 +178,7 @@ describe("waitForAgentJob settled execution", () => {
     "expired lifecycle",
   ] as const)("does not borrow timing from a %s", async (change) => {
     const job = createJob("execution-timing-fence");
-    const original = {
-      agentId: "main",
-      sessionKey: "agent:main:original",
-      sessionId: "original",
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    };
+    const original = createSession("original", "original");
     job.emit(settledTiming, original);
     if (change === "new attempt") {
       job.publish("agent", { status: "accepted" }, { startNewAttempt: true });
@@ -213,11 +213,7 @@ describe("waitForAgentJob settled execution", () => {
       if (lifecycleFirst) {
         recordLifecycle();
       }
-      registerAgentRunContext(runId, {
-        sessionKey: "agent:main:replacement",
-        sessionId: "replacement-session",
-        agentId: "main",
-      });
+      registerAgentRunContext(runId, createSession("replacement"));
       try {
         job.publish("chat", { status: "ok", endedAt: 200 });
       } finally {
@@ -229,10 +225,7 @@ describe("waitForAgentJob settled execution", () => {
       if (waiter) {
         await expect(waiter).resolves.toMatchObject({ ...outcome, terminalReply });
       }
-      expect(getAgentJobSession(runId)).toMatchObject({
-        sessionKey: "agent:main:original",
-        sessionId: "original-session",
-      });
+      expect(getAgentJobSession(runId)).toMatchObject(originalSession);
       await job.expect({ ...outcome, terminalReply }, "chat");
     }
   });
@@ -262,10 +255,7 @@ describe("waitForAgentJob settled execution", () => {
     "keeps companion evidence with its selected session when the other producer is %s",
     async (otherBinding) => {
       const job = createJob("terminal-companion-binding");
-      const session = {
-        ...originalSession,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      };
+      const session = createSession();
       job.publish(
         "agent",
         { status: "timeout", stopReason: "timeout", timeoutPhase: "provider" },
@@ -285,9 +275,7 @@ describe("waitForAgentJob settled execution", () => {
               : { ...session, sessionKey: "agent:main:other", sessionId: "other-session" },
         },
       );
-      const selected = await job.wait();
-      expect(selected).toMatchObject({ status: "timeout", session });
-      expect(selected?.terminalReply).toBeUndefined();
+      await job.expect({ status: "timeout", session, terminalReply: undefined });
     },
   );
 
@@ -296,19 +284,11 @@ describe("waitForAgentJob settled execution", () => {
     async (replacement) => {
       const job = createJob("terminal-session-binding");
       const { runId } = job;
-      const original = {
-        ...originalSession,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      };
-      const successor = {
-        ...original,
-        sessionKey: "agent:main:successor",
-        sessionId: "successor-session",
-      };
-      const session = { ...original };
+      const original = createSession();
+      const successor = createSession("successor");
       registerAgentRunContext(runId, replacement === "live registration" ? successor : original);
       try {
-        job.publish("agent", { status: "ok", endedAt: 100 }, { session });
+        job.publish("agent", { status: "ok", endedAt: 100 }, { session: original });
         if (replacement === "live registration") {
           expect(getAgentJobSession(runId)).toEqual(original);
         }
@@ -342,11 +322,7 @@ describe("waitForAgentJob settled execution", () => {
       { status: "error", stopReason: "rpc" },
       { aborted: true, stopReason: "rpc" },
     ],
-    [
-      "bare abort from a settled backend",
-      { meta: { aborted: true } },
-      { status: "error", stopReason: "aborted" },
-    ],
+    ["bare abort", { meta: { aborted: true } }, { status: "error", stopReason: "aborted" }],
     [
       "provider timeout",
       { meta: { aborted: true, ...providerTimeout } },
@@ -358,27 +334,18 @@ describe("waitForAgentJob settled execution", () => {
     async (_label, result, expected, termination = {}) => {
       const phase = result instanceof Error ? "error" : "end";
       const job = createJob("settled-execution");
-      const { runId } = job;
-      const waiter = job.wait(undefined, 60_000);
-      const lifecycle = createAgentLifecycleTerminalBackstop({
-        runId,
-        startedAt: 1_000,
-        getLifecycleGeneration: getAgentEventLifecycleGeneration,
-        resolveTerminationFields: () => termination,
-      });
-      job.emit({ phase: "start", startedAt: 1_000 });
-      try {
+      await job.assertSettled(expected, async () => {
+        const lifecycle = createAgentLifecycleTerminalBackstop({
+          runId: job.runId,
+          startedAt: 1_000,
+          getLifecycleGeneration: getAgentEventLifecycleGeneration,
+          resolveTerminationFields: () => termination,
+        });
+        job.emit({ phase: "start", startedAt: 1_000 });
         lifecycle.capture(phase, result);
         await expect(job.wait()).resolves.toBeNull();
         lifecycle.emit(phase, result);
-        // Assert before advancing clocks: an active waiter and a new reader must
-        // observe the producer's final result, not its eventual deadline fallback.
-        await job.expect(expected);
-        await expect(waiter).resolves.toMatchObject(expected);
-      } finally {
-        await vi.advanceTimersByTimeAsync(60_000);
-        await waiter;
-      }
+      });
     },
   );
 });

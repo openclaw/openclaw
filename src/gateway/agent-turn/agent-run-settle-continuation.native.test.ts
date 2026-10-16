@@ -81,8 +81,9 @@ describe("requester-settle processing survives later user turns", () => {
     return { io, cleanup, result: reconcileCompletion(turn, { runId }, cleanup, io) };
   };
   const expectAcknowledgement = async (turn: Prepared, payload: Record<string, unknown>) => {
-    const { io, result } = reconciliation(turn);
+    const { io, cleanup, result } = reconciliation(turn);
     await result;
+    expect(cleanup).toHaveBeenCalledOnce();
     expect(io.emitAcceptance).toHaveBeenCalledWith([true, { runId, ...payload }, undefined], {
       runId,
     });
@@ -103,6 +104,25 @@ describe("requester-settle processing survives later user turns", () => {
     };
     await manager.appendMessageAsync(user);
     await manager.appendMessageAsync(assistant("stop", `${text} finished`));
+  };
+  const expectCompletedReplays = async (
+    before: Awaited<ReturnType<typeof loadTranscriptEvents>>,
+    prepareReplay = prepare,
+    count = 1,
+  ) => {
+    rotateAgentEventLifecycleGeneration();
+    for (let duplicate = 0; duplicate < count; duplicate++) {
+      const replay = await prepareReplay();
+      expect(completion(replay)).toMatchObject({ reason: "completed", status: "ok" });
+      await expectAcknowledgement(replay, {
+        status: "ok",
+        summary: "completed",
+        inputProcessingCompleted: true,
+      });
+      expect(await loadTranscriptEvents(scope())).toEqual(before);
+      await release(replay);
+    }
+    expect(await loadTranscriptEvents(scope())).toEqual(before);
   };
   beforeEach(async () => {
     logGateway.warn.mockClear();
@@ -159,23 +179,7 @@ describe("requester-settle processing survives later user turns", () => {
       manager.appendMessageAsync(original.recorder!.getPendingInputMessage!()!),
     ).rejects.toThrow("outside the current turn");
     expect(completed).toMatchObject({ reason: "completed", status: "ok" });
-    rotateAgentEventLifecycleGeneration();
-    for (let duplicate = 0; duplicate < 2; duplicate++) {
-      const replay = await prepare();
-      expect(completion(replay)).toMatchObject({ reason: "completed", status: "ok" });
-      const { io, cleanup, result } = reconciliation(replay);
-      await result;
-      expect(cleanup).toHaveBeenCalledOnce();
-      expect(io.emitAcceptance).toHaveBeenCalledWith(
-        expect.arrayContaining([
-          true,
-          expect.objectContaining({ inputProcessingCompleted: true, status: "ok" }),
-        ]),
-        { runId },
-      );
-      await release(replay);
-    }
-    expect(await loadTranscriptEvents(scope())).toEqual(before);
+    await expectCompletedReplays(before, prepare, 2);
     expect(reads.command).toHaveBeenCalledOnce();
   });
 
@@ -337,15 +341,7 @@ describe("requester-settle processing survives later user turns", () => {
     await complete(original);
     await release(original);
     const before = await loadTranscriptEvents(scope());
-    rotateAgentEventLifecycleGeneration();
-    const replay = await preparePeer();
-    await expectAcknowledgement(replay, {
-      status: "ok",
-      summary: "completed",
-      inputProcessingCompleted: true,
-    });
-    expect(await loadTranscriptEvents(scope())).toEqual(before);
-    await release(replay);
+    await expectCompletedReplays(before, preparePeer);
     expect(reads.command).not.toHaveBeenCalled();
   });
 });
