@@ -101,26 +101,18 @@ async function startEmbeddingServer(options?: {
   return testServer;
 }
 
-function createMemoryEmbeddingOptions(overrides?: {
-  provider?: string;
-  model?: string;
-  baseUrl?: string;
-}) {
+function createMemoryEmbeddingOptions(baseUrl: string, provider = "openai-compatible") {
   return {
-    config: {
-      plugins: {
-        enabled: false,
-      },
-    } as OpenClawConfig,
+    config: { plugins: { enabled: false } } satisfies OpenClawConfig,
     agentDir: "/tmp/openclaw-agent",
-    provider: overrides?.provider ?? "openai-compatible",
+    provider,
     fallback: "none",
-    model: overrides?.model ?? "text-embedding-bge-m3",
+    model: "text-embedding-bge-m3",
     inputType: "default",
     queryInputType: "query",
     documentInputType: "document",
     remote: {
-      baseUrl: overrides?.baseUrl,
+      baseUrl,
       apiKey: "fixture-token",
       headers: {
         Authorization: "Bearer destination-header",
@@ -155,11 +147,13 @@ describe("memory-core generic embedding provider contract", () => {
     ]);
 
     const result = await createEmbeddingProvider(
-      createMemoryEmbeddingOptions({ baseUrl: `  ${server.baseUrl}/  ` }),
+      createMemoryEmbeddingOptions(`  ${server.baseUrl}/  `),
     );
 
-    expect(result.provider?.id).toBe("openai-compatible");
-    expect(result.provider?.model).toBe("text-embedding-bge-m3");
+    expect(result.provider).toMatchObject({
+      id: "openai-compatible",
+      model: "text-embedding-bge-m3",
+    });
     expect(result.runtime).toMatchObject({
       id: "openai-compatible",
       inlineBatchTimeoutMs: 600_000,
@@ -211,11 +205,13 @@ describe("memory-core generic embedding provider contract", () => {
         dimensions: 3,
         input_type: "query",
       },
+      headers: {
+        authorization: "Bearer destination-header",
+        "x-api-key": "hidden",
+        "x-deployment": "tenant-a",
+      },
     });
     expect(server.requests[0]?.body).not.toHaveProperty("encoding_format");
-    expect(server.requests[0]?.headers.authorization).toBe("Bearer destination-header");
-    expect(server.requests[0]?.headers["x-api-key"]).toBe("hidden");
-    expect(server.requests[0]?.headers["x-deployment"]).toBe("tenant-a");
     expect(server.requests[1]?.body).toEqual({
       model: "text-embedding-bge-m3",
       input: ["a", "abcd"],
@@ -234,12 +230,7 @@ describe("memory-core generic embedding provider contract", () => {
     const server = await startEmbeddingServer();
 
     await expect(
-      createEmbeddingProvider(
-        createMemoryEmbeddingOptions({
-          provider: "auto",
-          baseUrl: server.baseUrl,
-        }),
-      ),
+      createEmbeddingProvider(createMemoryEmbeddingOptions(server.baseUrl, "auto")),
     ).rejects.toThrow("Unknown memory embedding provider: openai");
     expect(server.requests).toHaveLength(0);
   });
@@ -265,7 +256,7 @@ function createMemoryEmbeddingOwner(generation: MemorySemanticProviderGeneration
 }
 
 async function createMemoryEmbeddingOwnerForServer(baseUrl: string, database: DatabaseSync) {
-  const created = await createEmbeddingProvider(createMemoryEmbeddingOptions({ baseUrl }));
+  const created = await createEmbeddingProvider(createMemoryEmbeddingOptions(baseUrl));
   const provider = created.provider;
   if (!provider) {
     throw new Error("expected the OpenAI-compatible embedding provider to be created");
@@ -314,45 +305,18 @@ function distinctCandidates(
 
 describe("memory-core embedding batch recovery over real transport", () => {
   it.each([
-    {
-      message: "input array max 10",
-      count: 33,
-      limit: 10,
-      maxInputsPerRequest: 10,
-      requests: [10, 10, 10, 3],
-    },
-    {
-      message: "input array max 10",
-      count: 33,
-      limit: 10,
-      maxInputsPerRequest: 20,
-      requests: [20, 10, 10, 13, 10, 3],
-    },
-    {
-      message: "batch size is invalid, it should not be larger than 10",
-      count: 33,
-      limit: 10,
-      requests: [33, 10, 10, 10, 3],
-    },
-    { message: "input array max 64", count: 100, limit: 64, requests: [100, 64, 36] },
-    {
-      message: "input数组最大不得超过10条",
-      count: 33,
-      limit: 10,
-      requests: [33, 10, 10, 10, 3],
-    },
-    {
-      message: "Embeddings API input limit exceeded: max 10, got 33",
-      count: 33,
-      limit: 10,
-      requests: [33, 10, 10, 10, 3],
-    },
-    {
-      message: "request header fields too large",
-      count: 100,
-      limit: 50,
-      requests: [100, 50, 50],
-    },
+    limitCase("input array max 10", 33, 10, [10, 10, 10, 3], 10),
+    limitCase("input array max 10", 33, 10, [20, 10, 10, 13, 10, 3], 20),
+    limitCase(
+      "batch size is invalid, it should not be larger than 10",
+      33,
+      10,
+      [33, 10, 10, 10, 3],
+    ),
+    limitCase("input array max 64", 100, 64, [100, 64, 36]),
+    limitCase("input数组最大不得超过10条", 33, 10, [33, 10, 10, 10, 3]),
+    limitCase("Embeddings API input limit exceeded: max 10, got 33", 33, 10, [33, 10, 10, 10, 3]),
+    limitCase("request header fields too large", 100, 50, [100, 50, 50]),
   ])(
     "embeds in order for $message with declared cap $maxInputsPerRequest",
     async ({ message, count, limit, requests, maxInputsPerRequest }) => {
@@ -362,28 +326,24 @@ describe("memory-core embedding batch recovery over real transport", () => {
             ? { status: 400, body: JSON.stringify({ error: { message } }) }
             : undefined,
       });
-      const database = new DatabaseSync(":memory:");
-      try {
-        const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
-          server.baseUrl,
-          database,
-        );
-        generation.provider.maxInputsPerRequest = maxInputsPerRequest;
-        const embeddings = await owner.embedChunksInBatches(
-          distinctCandidates(count),
-          generation,
-          8000,
-        );
+      using database = new DatabaseSync(":memory:");
+      const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
+        server.baseUrl,
+        database,
+      );
+      generation.provider.maxInputsPerRequest = maxInputsPerRequest;
+      const embeddings = await owner.embedChunksInBatches(
+        distinctCandidates(count),
+        generation,
+        8000,
+      );
 
-        expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual(
-          requests,
-        );
-        expect(embeddings).toEqual(
-          Array.from({ length: count }, (_, index) => [index + 1, (index % limit) + 0.5, 3]),
-        );
-      } finally {
-        database.close();
-      }
+      expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual(
+        requests,
+      );
+      expect(embeddings).toEqual(
+        Array.from({ length: count }, (_, index) => [index + 1, (index % limit) + 0.5, 3]),
+      );
     },
   );
 
@@ -402,21 +362,27 @@ describe("memory-core embedding batch recovery over real transport", () => {
         }),
       }),
     });
-    const database = new DatabaseSync(":memory:");
-    try {
-      const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
-        server.baseUrl,
-        database,
-      );
-      await expect(
-        owner.embedChunksInBatches(distinctCandidates(100), generation, 8000),
-      ).rejects.toMatchObject({
-        code: "MEMORY_EMBEDDING_OPERATION_FAILED",
-        operation: "batch",
-      });
-      expect(server.requests).toHaveLength(1);
-    } finally {
-      database.close();
-    }
+    using database = new DatabaseSync(":memory:");
+    const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
+      server.baseUrl,
+      database,
+    );
+    await expect(
+      owner.embedChunksInBatches(distinctCandidates(100), generation, 8000),
+    ).rejects.toMatchObject({
+      code: "MEMORY_EMBEDDING_OPERATION_FAILED",
+      operation: "batch",
+    });
+    expect(server.requests).toHaveLength(1);
   });
 });
+
+function limitCase(
+  message: string,
+  count: number,
+  limit: number,
+  requests: number[],
+  maxInputsPerRequest?: number,
+) {
+  return { message, count, limit, requests, maxInputsPerRequest };
+}

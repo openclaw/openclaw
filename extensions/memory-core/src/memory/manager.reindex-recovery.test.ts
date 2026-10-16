@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -59,6 +60,25 @@ type ReindexHarness = {
   sessionsDirtyFiles: Set<string>;
 };
 
+function fixtureProvider(harness: ReindexHarness) {
+  assert.ok(harness.provider, "fixture provider missing");
+  return harness.provider;
+}
+
+function expectChunks(db: DatabaseSync, ...texts: string[]) {
+  expect(db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual(
+    texts.map((text) => ({ text })),
+  );
+}
+
+function cacheRows(db: DatabaseSync) {
+  return db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
+}
+
+function expectRowCount(db: DatabaseSync, table: string, count: number) {
+  expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count });
+}
+
 describe("memory manager reindex recovery", () => {
   let fixtureRoot = "";
   let workspaceDir = "";
@@ -70,24 +90,8 @@ describe("memory manager reindex recovery", () => {
   beforeEach(async () => {
     embeddingCalls = [];
     batchEmbeddingCalls = [];
-    // Register the fixture at the same boundary used by config and provider creation.
-    registerEmbeddingProvider({
-      id: "openai",
-      transport: "remote",
-      create: async () => ({
-        provider: {
-          id: "openai",
-          model: "mock-embed",
-          maxInputTokens: 8192,
-          embed: async () => [0, 1, 0],
-          embedBatch: async (inputs) => {
-            embeddingCalls.push(inputs);
-            return inputs.map(() => [0, 1, 0]);
-          },
-        },
-      }),
-    });
-    for (const id of ["batch-test", "batch-wide-test"] as const) {
+    // Register fixtures at the config/provider creation boundary.
+    for (const id of ["openai", "batch-test", "batch-wide-test"] as const) {
       registerEmbeddingProvider({
         id,
         transport: "remote",
@@ -97,16 +101,24 @@ describe("memory manager reindex recovery", () => {
             model: "mock-embed",
             maxInputTokens: 8192,
             embed: async () => [0, 1, 0],
-            embedBatch: async (inputs) => inputs.map(() => [0, 1, 0]),
-          },
-          runtime: {
-            id,
-            ...(id === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
-            batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
-              batchEmbeddingCalls.push(batch.chunks.map((chunk) => chunk.text));
-              return batch.chunks.map(() => [0, 1, 0]);
+            embedBatch: async (inputs) => {
+              if (id === "openai") {
+                embeddingCalls.push(inputs);
+              }
+              return inputs.map(() => [0, 1, 0]);
             },
           },
+          runtime:
+            id === "openai"
+              ? undefined
+              : {
+                  id,
+                  ...(id === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
+                  batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
+                    batchEmbeddingCalls.push(batch.chunks.map((chunk) => chunk.text));
+                    return batch.chunks.map(() => [0, 1, 0]);
+                  },
+                },
         }),
       });
     }
@@ -182,28 +194,42 @@ describe("memory manager reindex recovery", () => {
     return manager;
   }
 
+  async function openHarness(
+    params: Parameters<typeof createCfg>[0] = { sources: ["memory"], cacheEnabled: true },
+  ) {
+    const memoryManager = await openManager(createCfg(params));
+    return { memoryManager, harness: memoryManager as unknown as ReindexHarness };
+  }
+
+  const writeMemory = (filename: string, text: string) =>
+    fs.writeFile(path.join(memoryDir, filename), text);
+  const writeLargeMemory = () =>
+    writeMemory("large.md", `${"first ".repeat(3500)}\n${"second ".repeat(3500)}`);
+
   it("retries both sources without force after a late shadow failure", async () => {
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     await fs.mkdir(sessionsDir, { recursive: true });
     const transcript = path.join(sessionsDir, "retry.jsonl.deleted.2026-09-01T00-00-00.000Z");
     const writeSources = async (version: string) => {
-      await fs.writeFile(path.join(memoryDir, "alpha.md"), `${version} memory`);
+      await writeMemory("alpha.md", `${version} memory`);
       await fs.writeFile(
         transcript,
         `${JSON.stringify({ type: "message", message: { role: "user", content: `${version} session` } })}\n`,
       );
     };
     await writeSources("published");
-    const memoryManager = await openManager(
-      createCfg({ provider: "none", sources: ["memory", "sessions"] }),
-    );
-    const harness = memoryManager as unknown as ReindexHarness;
+    const { memoryManager, harness } = await openHarness({
+      provider: "none",
+      sources: ["memory", "sessions"],
+    });
     const rows = harness.db.prepare("SELECT source, text FROM memory_index_chunks ORDER BY source");
+    const expectSources = (version: string) =>
+      expect(rows.all()).toEqual([
+        { source: "memory", text: `${version} memory` },
+        { source: "sessions", text: `User: ${version} session` },
+      ]);
     await memoryManager.sync({ force: true });
-    expect(rows.all()).toEqual([
-      { source: "memory", text: "published memory" },
-      { source: "sessions", text: "User: published session" },
-    ]);
+    expectSources("published");
 
     await writeSources("replacement");
     harness.sessionsDirty = true;
@@ -219,17 +245,11 @@ describe("memory manager reindex recovery", () => {
       sessionsFullRetryDirty: true,
     });
     expect([...harness.sessionsDirtyFiles]).toEqual([transcript]);
-    expect(rows.all()).toEqual([
-      { source: "memory", text: "published memory" },
-      { source: "sessions", text: "User: published session" },
-    ]);
+    expectSources("published");
 
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000);
     await memoryManager.sync();
-    expect(rows.all()).toEqual([
-      { source: "memory", text: "replacement memory" },
-      { source: "sessions", text: "User: replacement session" },
-    ]);
+    expectSources("replacement");
     expect(harness).toMatchObject({
       dirty: false,
       memoryFullRetryDirty: false,
@@ -251,24 +271,19 @@ describe("memory manager reindex recovery", () => {
   )(
     "rejects $condition with cache enabled=$cacheEnabled",
     async ({ cacheEnabled, invalid, condition }) => {
-      await fs.writeFile(path.join(memoryDir, "alpha.md"), "published alpha");
-      const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled }));
+      await writeMemory("alpha.md", "published alpha");
+      const { memoryManager, harness } = await openHarness({ sources: ["memory"], cacheEnabled });
       await memoryManager.sync({ reason: "cli", force: true });
-      await fs.writeFile(
-        path.join(memoryDir, "alpha.md"),
+      await writeMemory(
+        "alpha.md",
         Array.from(
           { length: 80 },
           (_, index) => `Fact ${index}: keep independent reusable memory content.`,
         ).join("\n"),
       );
-      // SAFETY: the fixture owns this manager and its registered embedding provider.
-      const harness = memoryManager as unknown as ReindexHarness;
-      if (!harness.provider) {
-        throw new Error("fixture provider missing");
-      }
       const cachedBefore = harness.db.prepare("SELECT hash FROM memory_embedding_cache").all();
       const embed = vi
-        .spyOn(harness.provider, "embedBatch")
+        .spyOn(fixtureProvider(harness), "embedBatch")
         .mockImplementationOnce(async (inputs) => {
           expect(inputs.length).toBeGreaterThan(1);
           return inputs.map((_, index) => (index === 0 ? [0, 1, 0] : invalid));
@@ -281,9 +296,7 @@ describe("memory manager reindex recovery", () => {
       expect(harness.db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual(
         cachedBefore,
       );
-      expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-        { text: "published alpha" },
-      ]);
+      expectChunks(harness.db, "published alpha");
       await memoryManager.sync({ reason: "cli", force: true });
       expect(embed).toHaveBeenCalledTimes(2);
       const cached = harness.db.prepare("SELECT hash FROM memory_embedding_cache").all();
@@ -303,20 +316,14 @@ describe("memory manager reindex recovery", () => {
       }
     });
     await memoryManager.sync({ reason: "cli", force: true });
-    if (!harness.provider) {
-      throw new Error("fixture provider missing");
-    }
-    await fs.writeFile(
-      path.join(memoryDir, "large.md"),
-      `${"first ".repeat(3500)}\n${"second ".repeat(3500)}`,
-    );
+    await writeLargeMemory();
     openOpenClawAgentDatabase({ agentId: "main" })
       .db.prepare(`INSERT INTO memory_embedding_cache
       (provider, model, provider_key, hash, embedding, dims, updated_at)
       VALUES ('unrelated', 'unrelated', 'unrelated', 'keep', ?, 2, 1)`)
       .run(encodeMemoryEmbedding([1, 0]));
     const embed = vi
-      .spyOn(harness.provider, "embedBatch")
+      .spyOn(fixtureProvider(harness), "embedBatch")
       .mockImplementationOnce(async (inputs) => inputs.map(() => [0, 1]))
       .mockImplementationOnce(async (inputs) => {
         reservation = await reservePublishedWriter();
@@ -359,10 +366,7 @@ describe("memory manager reindex recovery", () => {
   it.each(["committed clear reply", "publication admission"] as const)(
     "does not resurrect an ambiguous cache when its %s fails",
     async (failurePoint) => {
-      const memoryManager = await openManager(
-        createCfg({ sources: ["memory"], cacheEnabled: true }),
-      );
-      const harness = memoryManager as unknown as ReindexHarness;
+      const { memoryManager, harness } = await openHarness();
       const publishedDb = harness.db;
       const cached = createDeferred<void>();
       const allProvidersEntered = createDeferred<void>();
@@ -376,10 +380,9 @@ describe("memory manager reindex recovery", () => {
           : admissionError.message;
       let conflictReturned = false;
       let admissionRefused = false;
-      const cacheRows = () =>
+      const cacheDimensions = () =>
         publishedDb.prepare("SELECT hash, dims FROM memory_embedding_cache ORDER BY hash").all();
-      const fullCacheRows = () =>
-        publishedDb.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
+      const fullCacheRows = () => cacheRows(publishedDb);
       const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
       vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
         async (...args) => {
@@ -411,7 +414,7 @@ describe("memory manager reindex recovery", () => {
                 throw admissionError;
               }
               const result = await execute(...executeArgs);
-              if (cacheRows().some((row) => row.dims === 2)) {
+              if (cacheDimensions().some((row) => row.dims === 2)) {
                 cached.resolve();
               }
               return result;
@@ -424,17 +427,14 @@ describe("memory manager reindex recovery", () => {
         },
       );
       await memoryManager.sync({ reason: "baseline", force: true });
-      const provider = harness.provider;
-      if (!provider) {
-        throw new Error("fixture provider missing after initialization");
-      }
+      const provider = fixtureProvider(harness);
       const sources = [
         ["good", "First reusable violet memory."],
         ["conflict", "Conflicting reusable amber memory."],
         ["late", "Later reusable cobalt memory."],
       ] as const;
       for (const [name, text] of sources) {
-        await fs.writeFile(path.join(memoryDir, `${name}.md`), text);
+        await writeMemory(`${name}.md`, text);
       }
       const calls: string[] = [];
       const embed = vi.spyOn(provider, "embedBatch").mockImplementation(async (inputs) => {
@@ -469,7 +469,7 @@ describe("memory manager reindex recovery", () => {
           sync,
         ]);
         expect(calls.toSorted()).toEqual(["conflict", "good", "late"]);
-        expect(cacheRows()).toEqual([{ hash: expect.any(String), dims: 2 }]);
+        expect(cacheDimensions()).toEqual([{ hash: expect.any(String), dims: 2 }]);
         const retainedCache = fullCacheRows();
         releaseConflict.resolve();
         const clearError = await Promise.race([clearFailed.promise, sync]);
@@ -514,11 +514,8 @@ describe("memory manager reindex recovery", () => {
       }
     });
     await memoryManager.sync({ reason: "cli", force: true });
-    if (!harness.provider) {
-      throw new Error("fixture provider missing");
-    }
-    await fs.writeFile(path.join(memoryDir, "alpha.md"), "New reusable alpha memory.");
-    vi.spyOn(harness.provider, "embedBatch").mockImplementationOnce(async (inputs) => {
+    await writeMemory("alpha.md", "New reusable alpha memory.");
+    vi.spyOn(fixtureProvider(harness), "embedBatch").mockImplementationOnce(async (inputs) => {
       reservation = await reservePublishedWriter(() => {
         closeOpenClawAgentDatabasesForTest();
       });
@@ -546,21 +543,17 @@ describe("memory manager reindex recovery", () => {
   });
 
   it("drains accepted sync through provider and writer waits before closing", async () => {
-    const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
+    const { memoryManager, harness } = await openHarness();
     await memoryManager.sync({ reason: "baseline", force: true });
-    const harness = memoryManager as unknown as ReindexHarness; // SAFETY: this fixture owns the manager and provider.
     const db = harness.db;
     const databasePath = db.location();
     if (!databasePath) {
       throw new Error("Expected the fixture's file-backed memory index");
     }
-    if (!harness.provider) {
-      throw new Error("fixture provider missing");
-    }
-    await fs.writeFile(path.join(memoryDir, "alpha.md"), "Accepted sync survives close.");
+    await writeMemory("alpha.md", "Accepted sync survives close.");
     const entered = createDeferred<void>();
     const releaseProvider = createDeferred<void>();
-    vi.spyOn(harness.provider, "embedBatch").mockImplementationOnce(async (inputs) => {
+    vi.spyOn(fixtureProvider(harness), "embedBatch").mockImplementationOnce(async (inputs) => {
       entered.resolve();
       await releaseProvider.promise;
       return inputs.map(() => [0, 1, 0]);
@@ -586,9 +579,7 @@ describe("memory manager reindex recovery", () => {
       await Promise.all([sync, close, reservation.done]);
       expect(db.isOpen).toBe(false);
       using reader = new DatabaseSync(databasePath, { readOnly: true });
-      expect(reader.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-        { text: "Accepted sync survives close." },
-      ]);
+      expectChunks(reader, "Accepted sync survives close.");
     } finally {
       releaseProvider.resolve();
       reservation?.release();
@@ -597,19 +588,11 @@ describe("memory manager reindex recovery", () => {
   });
 
   it("retains successful batches when a later batch in the same file fails", async () => {
-    const cfg = createCfg({ sources: ["memory"], cacheEnabled: true });
-    await fs.writeFile(path.join(memoryDir, "alpha.md"), "published alpha");
-    const memoryManager = await openManager(cfg);
+    await writeMemory("alpha.md", "published alpha");
+    const { memoryManager, harness } = await openHarness();
     await memoryManager.sync({ reason: "cli", force: true });
-    const harness = memoryManager as unknown as ReindexHarness;
-    const provider = harness.provider;
-    if (!provider) {
-      throw new Error("expected the test embedding provider");
-    }
-    await fs.writeFile(
-      path.join(memoryDir, "large.md"),
-      `${"first ".repeat(3500)}\n${"second ".repeat(3500)}`,
-    );
+    const provider = fixtureProvider(harness);
+    await writeLargeMemory();
     let completed: unknown[] = [];
     const requests = vi.spyOn(provider, "embedBatch").mockImplementation(async (inputs) => {
       if (completed.length > 0) {
@@ -623,9 +606,7 @@ describe("memory manager reindex recovery", () => {
       "permanent embedding failure",
     );
     expect(completed.length).toBeGreaterThan(0);
-    expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-      { text: "published alpha" },
-    ]);
+    expectChunks(harness.db, "published alpha");
     requests.mockRestore();
     embeddingCalls = [];
 
@@ -646,15 +627,13 @@ describe("memory manager reindex recovery", () => {
         cacheEnabled: true,
         batchEnabled: true,
       });
-      const alphaPath = path.join(memoryDir, "alpha.md");
-      const betaPath = path.join(memoryDir, "beta.md");
-      await fs.writeFile(alphaPath, "published alpha");
-      await fs.writeFile(betaPath, "published beta");
+      await writeMemory("alpha.md", "published alpha");
+      await writeMemory("beta.md", "published beta");
       const memoryManager = await openManager(cfg);
       await memoryManager.sync({ reason: "cli", force: true });
       const harness = memoryManager as unknown as ReindexHarness;
-      await fs.writeFile(alphaPath, "replacement alpha");
-      await fs.writeFile(betaPath, "replacement beta");
+      await writeMemory("alpha.md", "replacement alpha");
+      await writeMemory("beta.md", "replacement beta");
       batchEmbeddingCalls = [];
       const metadata = vi.spyOn(harness, "writeMeta").mockImplementationOnce(() => {
         throw new Error("late runtime batch failure");
@@ -703,11 +682,10 @@ describe("memory manager reindex recovery", () => {
         return client;
       },
     );
-    const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
-    const harness = memoryManager as unknown as ReindexHarness;
+    const { memoryManager, harness } = await openHarness();
     harness.cache.maxEntries = 2;
     for (let i = 0; i < 4; i += 1) {
-      await fs.writeFile(path.join(memoryDir, `${i}.md`), `unique cache content ${i}`);
+      await writeMemory(`${i}.md`, `unique cache content ${i}`);
     }
     // Reject transient overflow too: checking only the final row count misses
     // primary-file high-water growth followed by post-publication deletion.
@@ -715,12 +693,8 @@ describe("memory manager reindex recovery", () => {
 
     expect(interceptedPaths.length).toBeGreaterThan(0);
     expect(interceptedPaths.every((filename) => filename === harness.db.location())).toBe(true);
-    expect(
-      harness.db.prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache").get(),
-    ).toEqual({ count: 2 });
-    expect(harness.db.prepare("SELECT COUNT(*) AS count FROM memory_index_sources").get()).toEqual({
-      count: 4,
-    });
+    expectRowCount(harness.db, "memory_embedding_cache", 2);
+    expectRowCount(harness.db, "memory_index_sources", 4);
   });
 
   it("bounds the canonical cache after a successful all-cache-hit rebuild", async () => {
@@ -751,12 +725,8 @@ describe("memory manager reindex recovery", () => {
 
       expect(embeddingCalls).toEqual([]);
       expect({ reads: reads(), deletes: deletes() }).toEqual({ reads: [], deletes: [] });
-      expect(
-        harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all(),
-      ).toEqual(newest);
-      expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-        { text: "published alpha" },
-      ]);
+      expect(cacheRows(harness.db)).toEqual(newest);
+      expectChunks(harness.db, "published alpha");
     } finally {
       observed.restore();
     }
@@ -772,18 +742,16 @@ describe("memory manager reindex recovery", () => {
       "failed shadow metadata",
     );
 
-    expect(harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all()).toEqual(
-      before,
-    );
+    expect(cacheRows(harness.db)).toEqual(before);
   });
 
   async function createOversizedPublishedCache() {
-    const memoryManager = await openManager(
-      createCfg({ sources: ["memory", "sessions"], cacheEnabled: true }),
-    );
-    await fs.writeFile(path.join(memoryDir, "alpha.md"), "published alpha");
+    const { memoryManager, harness } = await openHarness({
+      sources: ["memory", "sessions"],
+      cacheEnabled: true,
+    });
+    await writeMemory("alpha.md", "published alpha");
     await memoryManager.sync({ reason: "cli", force: true });
-    const harness = memoryManager as unknown as ReindexHarness;
     const insert = openOpenClawAgentDatabase({ agentId: "main" }).db.prepare(`
       INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
@@ -792,7 +760,7 @@ describe("memory manager reindex recovery", () => {
     insert.run("old-a", encodeMemoryEmbedding([0, 1, 0]));
     insert.run("old-b", encodeMemoryEmbedding([0, 1, 0]));
     harness.cache.maxEntries = 1;
-    const before = harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
+    const before = cacheRows(harness.db);
     expect(before).toHaveLength(3);
     const newest = harness.db
       .prepare("SELECT * FROM memory_embedding_cache ORDER BY updated_at DESC LIMIT 1")
@@ -813,9 +781,7 @@ describe("memory manager reindex recovery", () => {
       /Memory sync unavailable: embedding provider "openai" is configured but unavailable\./,
     );
 
-    expect(harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all()).toEqual(
-      force ? before : newest,
-    );
+    expect(cacheRows(harness.db)).toEqual(force ? before : newest);
   });
 
   it("bounds unresolved targeted sync cache even when forced", async () => {
@@ -832,9 +798,7 @@ describe("memory manager reindex recovery", () => {
       ],
     });
 
-    expect(harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all()).toEqual(
-      newest,
-    );
+    expect(cacheRows(harness.db)).toEqual(newest);
     expect(harness.db.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all()).toEqual(
       publishedChunks,
     );
@@ -862,15 +826,10 @@ describe("memory manager reindex recovery", () => {
   });
 
   it("refuses reset during incremental embeddings, then clears and rebuilds their writes", async () => {
-    const memoryPath = path.join(memoryDir, "alpha.md");
-    await fs.writeFile(memoryPath, "published alpha");
-    const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
+    await writeMemory("alpha.md", "published alpha");
+    const { memoryManager, harness } = await openHarness();
     await memoryManager.sync({ reason: "cli", force: true });
-    const harness = memoryManager as unknown as ReindexHarness;
-    const provider = harness.provider;
-    if (!provider) {
-      throw new Error("expected the test embedding provider");
-    }
+    const provider = fixtureProvider(harness);
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const reset = () =>
       resetMemoryDatabase({
@@ -878,63 +837,41 @@ describe("memory manager reindex recovery", () => {
         dbPath: databasePath,
         workspaceDir,
       });
-    let releaseEmbedding = () => {};
-    let markEmbeddingStarted = () => {};
-    const embeddingGate = new Promise<void>((resolve) => {
-      releaseEmbedding = resolve;
-    });
-    const embeddingStarted = new Promise<void>((resolve) => {
-      markEmbeddingStarted = resolve;
-    });
+    const embeddingGate = createDeferred<void>();
+    const embeddingStarted = createDeferred<void>();
     vi.spyOn(provider, "embedBatch").mockImplementationOnce(async (inputs) => {
-      markEmbeddingStarted();
-      await embeddingGate;
+      embeddingStarted.resolve();
+      await embeddingGate.promise;
       return inputs.map(() => [0, 1, 0]);
     });
-    await fs.writeFile(memoryPath, "incremental beta");
+    await writeMemory("alpha.md", "incremental beta");
     harness.dirty = true;
     const activeSync = memoryManager.sync({ reason: "session-delta" });
     try {
-      await embeddingStarted;
+      await embeddingStarted.promise;
       await expect(reset()).rejects.toMatchObject({ code: "SQLITE_BUSY" });
-      expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-        { text: "published alpha" },
-      ]);
+      expectChunks(harness.db, "published alpha");
     } finally {
-      releaseEmbedding();
+      embeddingGate.resolve();
       await activeSync;
     }
 
-    expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-      { text: "incremental beta" },
-    ]);
+    expectChunks(harness.db, "incremental beta");
     await expect(reset()).resolves.toBe(true);
     for (const table of ["memory_index_sources", "memory_index_chunks", "memory_embedding_cache"]) {
-      expect(harness.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
-        count: 0,
-      });
+      expectRowCount(harness.db, table, 0);
     }
     await memoryManager.sync({ reason: "cli" });
-    expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-      { text: "incremental beta" },
-    ]);
-    expect(
-      harness.db.prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache").get(),
-    ).toEqual({
-      count: 1,
-    });
+    expectChunks(harness.db, "incremental beta");
+    expectRowCount(harness.db, "memory_embedding_cache", 1);
   });
 
   it("forces source-wide session sync when retrying a failed full reindex", async () => {
-    const memoryManager = await openManager(
-      createCfg({
-        provider: "none",
-        sources: ["sessions"],
-      }),
-    );
+    const { memoryManager, harness } = await openHarness({
+      provider: "none",
+      sources: ["sessions"],
+    });
     await memoryManager.sync({ reason: "test", force: true });
-
-    const harness = memoryManager as unknown as ReindexHarness;
     const emptySyncPlan = { indexItems: [], finalize: () => undefined };
     const sessionSyncCalls: SyncArchiveParams[] = [];
 
@@ -951,20 +888,15 @@ describe("memory manager reindex recovery", () => {
     expect(sessionSyncCalls).toHaveLength(1);
     expect(sessionSyncCalls[0]).toMatchObject({ needsFullReindex: true });
     expect(sessionSyncCalls[0]?.targetArchiveFiles).toBeUndefined();
-    expect(harness.sessionsDirty).toBe(false);
-    expect(harness.sessionsFullRetryDirty).toBe(false);
+    expect(harness).toMatchObject({ sessionsDirty: false, sessionsFullRetryDirty: false });
   });
 
   it("full-reindexes sessions-only retry state when metadata is mismatched", async () => {
-    const memoryManager = await openManager(
-      createCfg({
-        provider: "none",
-        sources: ["sessions"],
-      }),
-    );
+    const { memoryManager, harness } = await openHarness({
+      provider: "none",
+      sources: ["sessions"],
+    });
     await memoryManager.sync({ reason: "test", force: true });
-
-    const harness = memoryManager as unknown as ReindexHarness;
     const databasePath = harness.db.location();
     if (!databasePath) {
       throw new Error("Expected the fixture's file-backed memory index");
@@ -975,20 +907,10 @@ describe("memory manager reindex recovery", () => {
       writer
         .prepare(
           `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES ('sessions-retry-chunk', 'sessions/retry.jsonl', 'sessions', 1, 1,
+           'sessions-retry-hash', 'fts-only', 'sessions retry marker', ?, ?)`,
         )
-        .run(
-          "sessions-retry-chunk",
-          "sessions/retry.jsonl",
-          "sessions",
-          1,
-          1,
-          "sessions-retry-hash",
-          "fts-only",
-          "sessions retry marker",
-          encodeMemoryEmbedding([]),
-          Date.now(),
-        );
+        .run(encodeMemoryEmbedding([]), Date.now());
     }
     await harness.writeMeta({
       model: "fts-only",
@@ -1003,9 +925,8 @@ describe("memory manager reindex recovery", () => {
 
     await harness.sync({ reason: "test" });
 
-    expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([]);
+    expectChunks(harness.db);
     expect(memoryManager.status().custom?.indexIdentity).toMatchObject({ status: "valid" });
-    expect(harness.sessionsDirty).toBe(false);
-    expect(harness.sessionsFullRetryDirty).toBe(false);
+    expect(harness).toMatchObject({ sessionsDirty: false, sessionsFullRetryDirty: false });
   });
 });
