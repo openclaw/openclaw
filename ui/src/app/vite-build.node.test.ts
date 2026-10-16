@@ -346,7 +346,10 @@ describe("Control UI Vite build", () => {
       if (!message.includes("Control UI precompression")) {
         return;
       }
-      const emitted = fsSync.readdirSync(path.join(outDir, "assets"), { recursive: true });
+      const emitted = fsSync.readdirSync(path.join(outDir, "assets"), {
+        encoding: "utf8",
+        recursive: true,
+      });
       activity.push({
         message,
         elapsed: clockMs,
@@ -376,7 +379,10 @@ describe("Control UI Vite build", () => {
 
     await build(config);
 
-    const emitted = await fs.readdir(path.join(outDir, "assets"), { recursive: true });
+    const emitted = await fs.readdir(path.join(outDir, "assets"), {
+      encoding: "utf8",
+      recursive: true,
+    });
     const completed = emitted.filter((name) => name.endsWith(".gz")).length;
     expect(completed).toBeGreaterThan(4);
     expect(
