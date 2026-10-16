@@ -41,7 +41,6 @@ type AdapterHandoff = {
   params?: Record<string, unknown>;
 };
 
-// Register in the existing send suite so all shared setup and test ordering stay intact.
 export function registerSendUploadPolicyTests({
   mocks,
   runSendWithClient,
@@ -55,8 +54,8 @@ export function registerSendUploadPolicyTests({
     let env: ReturnType<typeof captureEnv> | undefined;
     afterEach(() => env?.restore());
 
-    function expectUploadsDisabled(respond: ReturnType<typeof vi.fn>) {
-      expect(firstRespondCall(respond)[2]).toMatchObject({
+    function expectUploadsDisabled(response: ReturnType<typeof firstRespondCall>) {
+      expect(response[2]).toMatchObject({
         code: ErrorCodes.FORBIDDEN,
         details: { code: "UPLOADS_DISABLED" },
       });
@@ -86,9 +85,6 @@ export function registerSendUploadPolicyTests({
         } = {},
       ) => {
         const sessionKey = "agent:main:slack:channel:C1";
-        const client = options.trusted
-          ? agentRuntimeClient(sessionKey)
-          : { connect: { ...directCliClient().connect, scopes: ["operator.write"] } };
         const content = options.mediaUrl
           ? { mediaUrl: options.mediaUrl }
           : {
@@ -123,26 +119,28 @@ export function registerSendUploadPolicyTests({
             },
             isWebchatConnect: () => false,
           });
-          return { respond };
+          return firstRespondCall(respond);
         }
-        return method === "send"
+        const client = options.trusted
+          ? agentRuntimeClient(sessionKey)
+          : { connect: { ...directCliClient().connect, scopes: ["operator.write"] } };
+        const { respond } = await (method === "send"
           ? runSendWithClient(params, client, context)
-          : runMessageActionRequest(params, client, context);
+          : runMessageActionRequest(params, client, context));
+        return firstRespondCall(respond);
       };
       return {
         plugin,
         context,
         invoke,
-        mockAdapter: async (
-          send: (params: AdapterHandoff) => Promise<void>,
-          messageId: string,
-          once = true,
-        ) => {
+        dedupeKeys: (suffix: string) =>
+          [...context.dedupe.keys()].filter((key) => key.endsWith(`:${suffix}`)),
+        mockAdapter: async (send: (params: AdapterHandoff) => Promise<void>, once = true) => {
           const install = once ? "mockImplementationOnce" : "mockImplementation";
           if (method === "send") {
             mocks.deliverOutboundPayloads[install](async (params) => {
               await send(params);
-              return [{ channel: "slack", messageId }];
+              return [{ channel: "slack", messageId: "upload-accepted" }];
             });
           } else {
             const { dispatchChannelMessageAction } = await vi.importActual<
@@ -151,16 +149,13 @@ export function registerSendUploadPolicyTests({
             mocks.dispatchChannelMessageAction[install](dispatchChannelMessageAction);
             expectDefined(plugin.actions, "upload action adapter").handleAction = async (ctx) => {
               await send(ctx);
-              return jsonResult({ ok: true, messageId });
+              return jsonResult({ ok: true, messageId: "upload-accepted" });
             };
           }
         },
-        enable: () => {
-          enabled = true;
-        },
         outboundDir: path.join(stateDir, "media", "outbound"),
-        disable: () => {
-          enabled = false;
+        setEnabled: (value: boolean) => {
+          enabled = value;
         },
       };
     }
@@ -182,7 +177,7 @@ export function registerSendUploadPolicyTests({
           entered.resolve();
           await release.promise;
         };
-        await fixture.mockAdapter(accepted, "accepted-upload", false);
+        await fixture.mockAdapter(accepted, false);
         const first = fixture.invoke({ viaRouter: true });
         let restoreReplay: (() => void) | undefined;
         try {
@@ -190,7 +185,7 @@ export function registerSendUploadPolicyTests({
           expect(acceptedSend).toHaveBeenCalledTimes(1);
           if (!inflight) {
             release.resolve();
-            expect(firstRespondCall((await first).respond)[0]).toBe(true);
+            expect((await first)[0]).toBe(true);
           }
           const files = await fs.readdir(fixture.outboundDir);
           const replayReached = createDeferred();
@@ -198,45 +193,39 @@ export function registerSendUploadPolicyTests({
           const observeReplay = vi
             .spyOn(fixture.context.dedupe, "get")
             .mockImplementation((key) => {
-              const result = readDedupe(key);
               if (key.endsWith(":client-upload-policy")) {
                 replayReached.resolve();
               }
-              return result;
+              return readDedupe(key);
             });
           restoreReplay = () => observeReplay.mockRestore();
-          fixture.disable();
+          fixture.setEnabled(false);
           const retry = fixture.invoke({ viaRouter: true });
           await Promise.race([
             replayReached.promise,
-            retry.then(({ respond }) => {
-              expect(firstRespondCall(respond)[0]).toBe(true);
-              expect(firstRespondCall(respond)[3]).toMatchObject({ cached: true });
+            retry.then((response) => {
+              expect(response[0]).toBe(true);
+              expect(response[3]).toMatchObject({ cached: true });
             }),
           ]);
           release.resolve();
-          const [{ respond: initial }, { respond: replay }] = await Promise.all([first, retry]);
-          expect(firstRespondCall(initial)[0]).toBe(true);
-          expect(firstRespondCall(replay).slice(0, 3)).toEqual(
-            firstRespondCall(initial).slice(0, 3),
-          );
-          expect(firstRespondCall(replay)[3]).toMatchObject({ cached: true });
+          const [initial, replay] = await Promise.all([first, retry]);
+          expect(initial[0]).toBe(true);
+          expect(replay.slice(0, 3)).toEqual(initial.slice(0, 3));
+          expect(replay[3]).toMatchObject({ cached: true });
           restoreReplay();
           restoreReplay = undefined;
           const fresh = { viaRouter: true, idempotencyKey: "fresh-upload-key" };
-          const denied = await fixture.invoke(fresh);
-          expectUploadsDisabled(denied.respond);
-          expect(
-            [...fixture.context.dedupe.keys()].some((key) => key.endsWith(":fresh-upload-key")),
-          ).toBe(false);
+          expectUploadsDisabled(await fixture.invoke(fresh));
+          expect(fixture.dedupeKeys("fresh-upload-key")).toEqual([]);
           expect(await fs.readdir(fixture.outboundDir)).toEqual(files);
           expect(acceptedSend).toHaveBeenCalledTimes(1);
           defaultAccountId = "secondary";
-          fixture.enable();
-          expect(firstRespondCall((await fixture.invoke(fresh)).respond)[0]).toBe(true);
-          expect(
-            [...fixture.context.dedupe.keys()].filter((key) => key.endsWith(":fresh-upload-key")),
-          ).toEqual([expect.stringContaining('["slack","secondary"]')]);
+          fixture.setEnabled(true);
+          expect((await fixture.invoke(fresh))[0]).toBe(true);
+          expect(fixture.dedupeKeys("fresh-upload-key")).toEqual([
+            expect.stringContaining('["slack","secondary"]'),
+          ]);
           expect(acceptedSend).toHaveBeenCalledTimes(2);
         } finally {
           restoreReplay?.();
@@ -268,11 +257,11 @@ export function registerSendUploadPolicyTests({
       try {
         await Promise.race([prepared.promise, request]);
         expect(preparing).toBe(true);
-        fixture.disable();
+        fixture.setEnabled(false);
         release.resolve();
-        const { respond } = await request;
-        expect(firstRespondCall(respond)[0]).toBe(false);
-        expectUploadsDisabled(respond);
+        const response = await request;
+        expect(response[0]).toBe(false);
+        expectUploadsDisabled(response);
         expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
         expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
         expect(await fs.readdir(fixture.outboundDir)).toEqual([]);
@@ -315,7 +304,7 @@ export function registerSendUploadPolicyTests({
           assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
           platformSend();
         };
-        await fixture.mockAdapter(send, "upload-accepted");
+        await fixture.mockAdapter(send);
         const request = fixture.invoke({
           trusted,
           ...(reference ? { mediaUrl: "https://example.com/already-hosted.png" } : {}),
@@ -330,14 +319,14 @@ export function registerSendUploadPolicyTests({
               fs.readFile(path.join(fixture.outboundDir, files[0]!), "utf8"),
             ).resolves.toBe(bytes);
           }
-          fixture.disable();
+          fixture.setEnabled(false);
           release.resolve();
-          const { respond } = await request;
+          const response = await request;
           const allowed = trusted || reference;
-          expect(firstRespondCall(respond)[0]).toBe(allowed);
+          expect(response[0]).toBe(allowed);
           expect(platformSend).toHaveBeenCalledTimes(allowed ? 1 : 0);
           if (!allowed) {
-            expectUploadsDisabled(respond);
+            expectUploadsDisabled(response);
           }
         } finally {
           release.resolve();

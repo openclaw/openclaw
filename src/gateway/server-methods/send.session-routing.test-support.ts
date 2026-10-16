@@ -20,21 +20,19 @@ import type {
   createMessageMethodTestDriver,
 } from "./send.test-support.js";
 
-type SessionRoutingTestHarness = Pick<
-  ReturnType<typeof createMessageMethodTestDriver>,
-  "runSend"
-> & {
-  mocks: {
-    deliverOutboundPayloads: Mock<typeof deliverOutboundPayloads>;
-    ensureOutboundSessionEntry: Mock<typeof ensureOutboundSessionEntry>;
-    resolveOutboundSessionRoute: Mock<typeof resolveOutboundSessionRoute>;
-    getChannelPlugin: Mock<typeof getChannelPlugin>;
+type SessionRoutingTestHarness = Pick<ReturnType<typeof createMessageMethodTestDriver>, "runSend"> &
+  Pick<
+    ReturnType<typeof createMessageMethodPluginFixtures>,
+    "registerMessageThreadAddressingPlugin"
+  > & {
+    mocks: {
+      deliverOutboundPayloads: Mock<typeof deliverOutboundPayloads>;
+      ensureOutboundSessionEntry: Mock<typeof ensureOutboundSessionEntry>;
+      resolveOutboundSessionRoute: Mock<typeof resolveOutboundSessionRoute>;
+      getChannelPlugin: Mock<typeof getChannelPlugin>;
+    };
+    mockDeliverySuccess: (messageId: string) => void;
   };
-  mockDeliverySuccess: (messageId: string) => void;
-  registerMessageThreadAddressingPlugin: ReturnType<
-    typeof createMessageMethodPluginFixtures
-  >["registerMessageThreadAddressingPlugin"];
-};
 
 export function registerSendSessionRoutingTests({
   mocks,
@@ -61,14 +59,24 @@ export function registerSendSessionRoutingTests({
       ...(threadId ? { threadId } : {}),
     };
   }
+  const main = "agent:main:main",
+    slack = "agent:main:slack:channel:c1";
+  const send = (params: Parameters<typeof runSend>[0] = {}) =>
+    runSend({
+      to: "channel:C1",
+      message: "First contact",
+      channel: "slack",
+      sessionKey: slack,
+      idempotencyKey: "route",
+      ...params,
+    });
 
   it.each([false, true])(
     "persists a transcript mirror without rebinding its route (existing=%s)",
-    async (existing) => {
+    async (existing) =>
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
-        const mirror = "agent:main:main";
-        const destination = "agent:main:slack:channel:c1";
+        const mirror = main;
         mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(slackRoute());
         mocks.ensureOutboundSessionEntry.mockImplementationOnce(persistRoute);
         mocks.deliverOutboundPayloads.mockImplementationOnce(async (delivery) => {
@@ -91,23 +99,16 @@ export function registerSendSessionRoutingTests({
         } else {
           expect(loadSessionEntry({ sessionKey: mirror })).toBeUndefined();
         }
-        const { respond } = await runSend({
-          to: "channel:C1",
-          message: "First contact",
-          channel: "slack",
-          sessionKey: mirror,
-          idempotencyKey: "first-contact-mirror",
-        });
+        const { respond } = await send({ sessionKey: mirror });
         expect(firstRespondCall(respond)[0]).toBe(true);
         const entry = loadSessionEntry({ sessionKey: mirror });
-        expect(entry?.sessionId).toBeDefined();
+        expect(entry?.sessionId).toEqual(existing ? "existing-mirror" : expect.any(String));
         if (existing) {
-          expect(entry?.sessionId).toBe("existing-mirror");
           expect(entry?.delivery).toEqual(savedDelivery);
         } else {
           expect(entry?.delivery?.kind).not.toBe("external");
         }
-        expect(loadSessionEntry({ sessionKey: destination })?.delivery).toMatchObject({
+        expect(loadSessionEntry({ sessionKey: slack })?.delivery).toMatchObject({
           kind: "external",
           context: { channel: "slack", to: "channel:C1" },
         });
@@ -126,15 +127,12 @@ export function registerSendSessionRoutingTests({
             }),
           }),
         );
-      });
-    },
+      }),
   );
 
   const deliveryCall = () => mocks.deliverOutboundPayloads.mock.calls[0]?.[0];
   const ensureSessionEntryCall = () => mocks.ensureOutboundSessionEntry.mock.calls[0]?.[0];
 
-  const main = "agent:main:main",
-    slack = "agent:main:slack:channel:c1";
   it.each([
     ["WebChat transcript", "agent:main:dashboard:send-mirror", slack],
     ["main transcript", main, slack],
@@ -149,17 +147,13 @@ export function registerSendSessionRoutingTests({
         baseSessionKey: destination,
       });
 
-      const { respond } = await runSend({
-        to: "channel:C1",
-        message: "Requested external update",
-        channel: "slack",
-        sessionKey: mirror,
-        idempotencyKey: "idem-route-owner",
-      });
+      const { respond } = await send({ sessionKey: mirror });
 
       expect(firstRespondCall(respond)[0]).toBe(true);
-      expect(deliveryCall()?.mirror?.sessionKey).toBe(mirror);
-      expect(deliveryCall()?.session?.key).toBe(mirror);
+      expect(deliveryCall()).toMatchObject({
+        mirror: { sessionKey: mirror },
+        session: { key: mirror },
+      });
       expect(ensureSessionEntryCall()?.route).toMatchObject({
         sessionKey: destination,
         baseSessionKey: destination,
@@ -168,49 +162,30 @@ export function registerSendSessionRoutingTests({
     },
   );
 
-  it("updates mirror session keys and delivery thread ids when Slack routing derives a thread", async () => {
-    registerMessageThreadAddressingPlugin("slack");
-    mockDeliverySuccess("m-thread-derived");
-    mocks.getChannelPlugin.mockReturnValueOnce(undefined);
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(slackRoute("c1", "1710000000.9999"));
-
-    await runSend({
-      to: "channel:C1",
-      message: "threaded",
-      channel: "slack",
-      sessionKey: "agent:main:slack:channel:c1",
-      idempotencyKey: "idem-thread-derived",
-    });
-
-    expect(ensureSessionEntryCall()?.route).toMatchObject({
-      sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
-      baseSessionKey: "agent:main:slack:channel:c1",
-      threadId: "1710000000.9999",
-    });
-    expect(deliveryCall()).toMatchObject({
-      threadId: "1710000000.9999",
-      mirror: { sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999" },
-    });
-  });
-
-  it("preserves the provided session when Slack derives a thread for a different base session", async () => {
-    registerMessageThreadAddressingPlugin("slack");
-    mockDeliverySuccess("m-thread-mismatch");
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(slackRoute("c2", "1710000000.9999"));
-
-    await runSend({
-      to: "channel:C2",
-      message: "threaded",
-      channel: "slack",
-      sessionKey: "agent:main:slack:channel:c1",
-      threadId: "1710000000.9999",
-      idempotencyKey: "idem-thread-mismatch",
-    });
-
-    expect(deliveryCall()).toMatchObject({
-      threadId: "1710000000.9999",
-      session: { key: "agent:main:slack:channel:c1" },
-      mirror: { sessionKey: "agent:main:slack:channel:c1" },
-    });
-  });
+  it.each(["c1", "c2"])(
+    "binds derived Slack threads only to their matching base (%s)",
+    async (id) => {
+      registerMessageThreadAddressingPlugin("slack");
+      mockDeliverySuccess("m-thread");
+      const threadId = "1710000000.9999";
+      if (id === "c1") {
+        mocks.getChannelPlugin.mockReturnValueOnce(undefined);
+      }
+      mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(slackRoute(id, threadId));
+      await send({ to: `channel:${id.toUpperCase()}`, ...(id === "c2" ? { threadId } : {}) });
+      if (id === "c1") {
+        expect(ensureSessionEntryCall()?.route).toMatchObject({
+          sessionKey: `${slack}:thread:${threadId}`,
+          baseSessionKey: slack,
+          threadId,
+        });
+      }
+      const mirror = id === "c1" ? `${slack}:thread:${threadId}` : slack;
+      expect(deliveryCall()).toMatchObject({
+        threadId,
+        mirror: { sessionKey: mirror },
+        ...(id === "c2" ? { session: { key: slack } } : {}),
+      });
+    },
+  );
 }

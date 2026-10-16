@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -7,20 +7,17 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import {
   createMessageActionClientForTests,
   messageActionClientForTests,
 } from "./send.test-helpers.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
-export const makeContext = (
+export function makeContext(
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({}),
-): GatewayRequestContext =>
-  ({
-    dedupe: new Map(),
-    getRuntimeConfig,
-  }) as unknown as GatewayRequestContext;
+) {
+  return { dedupe: new Map(), getRuntimeConfig } as unknown as GatewayRequestContext;
+}
 
 export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestHandlers) {
   async function invokeGatewayMessageMethod(params: {
@@ -28,15 +25,12 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
     client?: GatewayClient | null;
     requestId?: string;
     request: Record<string, unknown>;
-    respond: ReturnType<typeof vi.fn>;
+    respond: Mock;
     context: GatewayRequestContext;
     sessionMutationCommitGuard?: () => void;
   }) {
-    const sendHandlers = getHandlers();
-    await expectDefined(
-      sendHandlers[params.method],
-      `sendHandlers.${params.method} test invariant`,
-    )({
+    const handler = expectDefined(getHandlers()[params.method], params.method);
+    await handler({
       params: params.request as never,
       respond: params.respond as never,
       context: params.context,
@@ -67,12 +61,6 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
   }
 
   const runSendWithClient = runMethod.bind(null, "send");
-  function runPollWithClient(
-    params: Record<string, unknown>,
-    client?: { connect?: { scopes?: string[] } } | null,
-  ) {
-    return runMethod("poll", params, client);
-  }
 
   async function runMessageActionRequest(
     params: Record<string, unknown>,
@@ -81,12 +69,7 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
         scopes?: string[];
         client?: { id: string; mode: string };
       };
-      internal?: {
-        agentRuntimeIdentity?: Pick<
-          AgentRuntimeIdentity,
-          "kind" | "agentId" | "sessionKey" | "messageActionContext"
-        >;
-      };
+      internal?: ReturnType<typeof messageActionClientForTests>["internal"];
     } | null,
     context: GatewayRequestContext = makeContext(),
   ) {
@@ -146,15 +129,12 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
     runTelegramTerminalAction,
     runSend: runSendWithClient,
     runSendWithClient,
-    runPoll: runPollWithClient,
-    runPollWithClient,
+    runPoll: runMethod.bind(null, "poll"),
     runMessageActionRequest,
   };
 }
 
-export function createMessageMethodPluginFixtures(mocks: {
-  getChannelPlugin: ReturnType<typeof vi.fn>;
-}) {
+export function createMessageMethodPluginFixtures(mocks: { getChannelPlugin: Mock }) {
   function registerMessageThreadAddressingPlugin(id: ChannelPlugin["id"]): void {
     const plugin: ChannelPlugin = {
       ...createChannelTestPluginBase({ id }),
@@ -172,18 +152,16 @@ export function createMessageMethodPluginFixtures(mocks: {
   function registerMessageActionPlugin({
     id = "telegram",
     action = "send",
-    messageId,
     chatType = "direct",
     threading,
-    registrySuffix,
+    registrySuffix = "message-action",
   }: {
     id?: ChannelPlugin["id"];
     action?: "send" | "sendAttachment";
-    messageId?: string;
     chatType?: "direct" | "group";
     threading?: ChannelPlugin["threading"];
-    registrySuffix: string;
-  }): ChannelPlugin {
+    registrySuffix?: string;
+  } = {}): ChannelPlugin {
     const plugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
         id,
@@ -193,7 +171,7 @@ export function createMessageMethodPluginFixtures(mocks: {
       actions: {
         describeMessageTool: () => ({ actions: [action] }),
         supportsAction: ({ action: requestedAction }) => requestedAction === action,
-        handleAction: async () => jsonResult({ ok: true, ...(messageId ? { messageId } : {}) }),
+        handleAction: async () => jsonResult({ ok: true }),
       },
       ...(threading ? { threading } : {}),
     };

@@ -17,7 +17,6 @@ import {
   createRecoveryLog,
   loadPendingDeliveries,
 } from "../../infra/outbound/delivery-queue.test-helpers.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
@@ -26,6 +25,7 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { createDeferredJsonResponse, createDiscordHttpFixture } from "./send.test-helpers.js";
 import type { GatewayRequestContext, GatewayRequestHandler, RespondFn } from "./types.js";
 
 const channelId = "100000000000000002";
@@ -47,7 +47,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   resetPluginRuntimeStateForTest();
-  setActivePluginRegistry(createEmptyPluginRegistry());
   clearRuntimeConfigSnapshot();
 });
 
@@ -69,31 +68,14 @@ async function createFixture(state: OpenClawTestState) {
     createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
   );
   const post = vi.fn<(init?: RequestInit) => Promise<Response>>(async () => Response.json(message));
-  const httpRequests: Array<{ method: string; path: string }> = [];
-  const unexpectedRequests: string[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>(async (input, init) => {
-      const url = new URL(input instanceof Request ? input.url : String(input));
-      const method = init?.method ?? (input instanceof Request ? input.method : "GET");
-      httpRequests.push({ method, path: url.pathname });
-      if (url.origin === "https://discord.com" && method === "GET") {
-        if (url.pathname === `/api/v10/channels/${channelId}`) {
-          return Response.json({ id: channelId, guild_id: guildId, type: 0, name: "fixture" });
-        }
-      }
-      if (
-        url.origin === "https://discord.com" &&
-        url.pathname === `/api/v10/channels/${channelId}/messages` &&
-        method === "POST"
-      ) {
-        return await post(init);
-      }
-      const unexpected = `Unexpected fake Discord request: ${method} ${url.pathname}`;
-      unexpectedRequests.push(unexpected);
-      throw new Error(unexpected);
-    }),
-  );
+  const { httpRequests, unexpectedRequests } = createDiscordHttpFixture({
+    channelId,
+    guildId,
+    handle: async ({ method, path, init }) =>
+      method === "POST" && path === `/api/v10/channels/${channelId}/messages`
+        ? post(init)
+        : undefined,
+  });
   const caller = new AbortController();
   const respond = vi.fn<RespondFn>();
   const context = {
@@ -207,8 +189,7 @@ describe("Gateway send through Discord's default request scheduler", () => {
                 log: createRecoveryLog(),
                 deliver: deliverOutboundPayloads,
               });
-              expect(recovery.deferredBackoff).toBe(0);
-              expect(recovery.skippedMaxRetries).toBe(0);
+              expect(recovery).toMatchObject({ deferredBackoff: 0, skippedMaxRetries: 0 });
               if (unfinished && !unfinished.settlement) {
                 expect(recovery.recovered + recovery.failed).toBe(1);
               }
@@ -242,30 +223,16 @@ describe("Gateway send through Discord's default request scheduler", () => {
     },
   );
 
-  it("settles an accepted Discord response after the Gateway caller retires", async () => {
+  it("settles an accepted Discord response after the Gateway caller retires", async () =>
     await withOpenClawTestState(
       { prefix: "discord-send-settlement-", env: { DISCORD_API_URL: undefined } },
       async (testState) => {
         const fixture = await createFixture(testState);
-        const accepted = createDeferred();
-        const releaseResponse = createDeferred();
-        fixture.post.mockImplementationOnce(async () => {
-          const body = new ReadableStream<Uint8Array>({
-            async start(controller) {
-              accepted.resolve();
-              await releaseResponse.promise;
-              controller.enqueue(new TextEncoder().encode(JSON.stringify(message)));
-              controller.close();
-            },
-          });
-          return new Response(body, {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
-        });
+        const deferred = createDeferredJsonResponse(message);
+        fixture.post.mockImplementationOnce(deferred.respond);
         const request = fixture.send();
         try {
-          await Promise.race([accepted.promise, request]);
+          await Promise.race([deferred.accepted.promise, request]);
           await new Promise<void>((resolve) => {
             setImmediate(resolve);
           });
@@ -273,7 +240,7 @@ describe("Gateway send through Discord's default request scheduler", () => {
           expect(fixture.post).toHaveBeenCalledOnce();
           fixture.caller.abort(new Error("message caller retired after provider acceptance"));
           expect(fixture.post.mock.calls[0]?.[0]?.signal?.aborted).toBe(false);
-          releaseResponse.resolve();
+          deferred.release.resolve();
           await request;
           expect(fixture.post).toHaveBeenCalledOnce();
           expect(fixture.respond).toHaveBeenCalledOnce();
@@ -281,10 +248,9 @@ describe("Gateway send through Discord's default request scheduler", () => {
           expect(fixture.respond.mock.calls[0]?.[1]).toMatchObject({ messageId: message.id });
           expect(fixture.unexpectedRequests).toEqual([]);
         } finally {
-          releaseResponse.resolve();
+          deferred.release.resolve();
           await request;
         }
       },
-    );
-  });
+    ));
 });

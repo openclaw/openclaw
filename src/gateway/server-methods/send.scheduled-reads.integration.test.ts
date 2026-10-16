@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -12,7 +12,6 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
@@ -26,6 +25,7 @@ import {
   resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../message-action-turn-capability.js";
+import { createDeferredJsonResponse, createDiscordHttpFixture } from "./send.test-helpers.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -57,7 +57,6 @@ beforeAll(async () => {
 afterEach(() => {
   vi.unstubAllGlobals();
   resetPluginRuntimeStateForTest();
-  setActivePluginRegistry(createEmptyPluginRegistry());
   clearRuntimeConfigSnapshot();
 });
 
@@ -75,10 +74,6 @@ function accountPolicy(
     ownerAccountId: "creator",
     ownerOrigin: { kind: "external", channel },
   };
-}
-
-function localAccountPolicy(): Extract<ScheduledToolPolicyContext, { mode: "account" }> {
-  return { ...accountPolicy(), ownerOrigin: { kind: "local" } };
 }
 
 async function createFixture(state: OpenClawTestState) {
@@ -115,67 +110,30 @@ async function createFixture(state: OpenClawTestState) {
   const providerRead = vi.fn<() => Promise<Response>>(async () =>
     Response.json(discordMessages(`fresh-${++sequence}`)),
   );
-  const httpRequests: Array<{
-    method: string;
-    path: string;
-    creatorCredentials: boolean;
-    otherCredentials: boolean;
-  }> = [];
-  const unexpectedRequests: string[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>(async (input, init) => {
-      const url = new URL(input instanceof Request ? input.url : String(input));
-      const method = init?.method ?? (input instanceof Request ? input.method : "GET");
-      const headers = new Headers(
-        init?.headers ?? (input instanceof Request ? input.headers : undefined),
-      );
-      httpRequests.push({
-        method,
-        path: url.pathname,
-        creatorCredentials:
-          headers.get("authorization") === "Bot synthetic-creator-provider-fixture",
-        otherCredentials: headers.get("authorization") === "Bot synthetic-other-provider-fixture",
-      });
-      if (url.origin === "https://discord.com" && method === "GET") {
-        if (url.pathname === `/api/v10/channels/${channelId}`) {
-          return Response.json({ id: channelId, guild_id: guildId, type: 0, name: "fixture" });
-        }
-        if (url.pathname === `/api/v10/channels/${channelId}/messages`) {
-          return await providerRead();
-        }
+  const { httpRequests, unexpectedRequests } = createDiscordHttpFixture({
+    channelId,
+    guildId,
+    handle: async ({ method, path }) => {
+      if (method === "GET" && path === `/api/v10/channels/${channelId}/messages`) {
+        return providerRead();
       }
-      if (
-        url.origin === "https://discord.com" &&
-        method === "PUT" &&
-        url.pathname === pinWritePath
-      ) {
+      if (method === "PUT" && path === pinWritePath) {
         return new Response(null, { status: 204 });
       }
-      const unexpected = `Unexpected fake Discord request: ${method} ${url.pathname}`;
-      unexpectedRequests.push(unexpected);
-      throw new Error(unexpected);
-    }),
-  );
+      return undefined;
+    },
+  });
 
   const operationalRunInstance = createOperationalRunInstanceRef("scheduled-reads-run");
   const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   // Only the independently covered cron lifetime owner is controlled by this fixture.
   const permission = new AbortController();
   const tokens: string[] = [];
+  const identity = { agentId: "main", runId: operationalRunInstance.runId, sessionKey, sessionId };
   const createClient = (policy: ScheduledToolPolicyContext): GatewayClient => {
-    const identity = {
-      agentId: "main",
-      runId: operationalRunInstance.runId,
-      sessionKey,
-      sessionId,
-    };
     const token = mintMessageActionTurnCapability({
       ...identity,
-      scheduled: {
-        policy,
-        assertCurrent: () => permission.signal.throwIfAborted(),
-      },
+      scheduled: { policy, assertCurrent: () => permission.signal.throwIfAborted() },
     });
     tokens.push(token);
     const messageActionContext = expectDefined(
@@ -243,9 +201,18 @@ async function createFixture(state: OpenClawTestState) {
   };
   return {
     providerRead,
-    httpRequests,
+    get httpRequests() {
+      return httpRequests.map(({ method, path, headers }) => ({
+        method,
+        path,
+        creatorCredentials:
+          headers.get("authorization") === "Bot synthetic-creator-provider-fixture",
+        otherCredentials: headers.get("authorization") === "Bot synthetic-other-provider-fixture",
+      }));
+    },
     unexpectedRequests,
     createClient,
+    localClient: () => createClient({ ...accountPolicy(), ownerOrigin: { kind: "local" } }),
     revoke: () => permission.abort(new Error("scheduled message permission revoked")),
     setDefaultAccount: async (accountId: string) => {
       cfg = {
@@ -288,9 +255,11 @@ async function withFixture(
 }
 
 function expectRead(response: Parameters<RespondFn>, content: string) {
-  expect(response[0]).toBe(true);
-  expect(response[1]).toMatchObject({ ok: true, channelId, messages: [{ content }] });
-  expect(response[2]).toBeUndefined();
+  expectSuccess(response, { channelId, messages: [{ content }] });
+}
+
+function expectSuccess(response: Parameters<RespondFn>, payload = {}) {
+  expect(response.slice(0, 3)).toMatchObject([true, { ok: true, ...payload }, undefined]);
 }
 
 function expectDenied(response: Parameters<RespondFn>, reason: string) {
@@ -300,9 +269,9 @@ function expectDenied(response: Parameters<RespondFn>, reason: string) {
 }
 
 describe("Gateway scheduled message actions through an installed Discord plugin", () => {
-  it("fetches fresh same-key results and rejects a repeat after permission revocation", async () => {
+  it("fetches fresh same-key results and rejects a repeat after permission revocation", async () =>
     await withFixture(async (fixture) => {
-      const client = fixture.createClient(localAccountPolicy());
+      const client = fixture.localClient();
       expectRead(await fixture.read({ client }), "fresh-1");
       expectRead(await fixture.read({ client }), "fresh-2");
       expect(fixture.providerRead).toHaveBeenCalledTimes(2);
@@ -310,32 +279,18 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
       fixture.revoke();
       expectDenied(await fixture.read({ client }), "authority is no longer active");
       expect(fixture.httpRequests).toHaveLength(requestsBeforeRevocation);
-    });
-  });
+    }));
 
-  it("rejects a concurrent same-key read without joining a response accepted before revocation", async () => {
+  it("rejects a concurrent same-key read without joining a response accepted before revocation", async () =>
     await withFixture(async (fixture) => {
-      const client = fixture.createClient(localAccountPolicy());
-      const accepted = createDeferred();
-      const releaseResponse = createDeferred();
-      fixture.providerRead.mockImplementationOnce(async () => {
-        const body = new ReadableStream<Uint8Array>({
-          async start(controller) {
-            accepted.resolve();
-            await releaseResponse.promise;
-            controller.enqueue(
-              new TextEncoder().encode(JSON.stringify(discordMessages("late-data"))),
-            );
-            controller.close();
-          },
-        });
-        return new Response(body, { headers: { "content-type": "application/json" } });
-      });
+      const client = fixture.localClient();
+      const deferred = createDeferredJsonResponse(discordMessages("late-data"));
+      fixture.providerRead.mockImplementationOnce(deferred.respond);
       const first = fixture.read({ client });
       let repeated: ReturnType<typeof fixture.read> | undefined;
       try {
         await withTestTimeout(
-          Promise.race([accepted.promise, first]),
+          Promise.race([deferred.accepted.promise, first]),
           5000,
           "Discord read did not reach the provider",
         );
@@ -352,15 +307,14 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
           "authority is no longer active",
         );
         expect(fixture.httpRequests).toHaveLength(requestsBeforeRevocation);
-        releaseResponse.resolve();
+        deferred.release.resolve();
         expectDenied(await first, "authority is no longer active");
         expect(fixture.providerRead).toHaveBeenCalledOnce();
       } finally {
-        releaseResponse.resolve();
+        deferred.release.resolve();
         await Promise.allSettled([first, repeated]);
       }
-    });
-  });
+    }));
 
   it.each([
     ["read", "account"],
@@ -369,54 +323,53 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
     ["read", "missing origin"],
     ["pin", "account"],
     ["pin", "params.accountId"],
-  ] as const)("rejects %s with a mismatched creator %s", async (action, mismatch) => {
-    await withFixture(async (fixture) => {
-      if (action === "read") {
-        expectRead(await fixture.read(), "fresh-1");
-      } else {
-        await fixture.setDefaultAccount("other");
-      }
-      const requestsBeforeMismatch = fixture.httpRequests.length;
-      const policy = accountPolicy(mismatch === "provider" ? "slack" : "discord");
-      if (mismatch === "unknown origin") {
-        policy.ownerOrigin = { kind: "unknown" };
-      } else if (mismatch === "missing origin") {
-        delete policy.ownerOrigin;
-      }
-      const response =
-        action === "read"
-          ? await fixture.read(
-              mismatch === "account"
-                ? { accountId: "other" }
-                : { client: fixture.createClient(policy) },
-            )
-          : await fixture.invokeAction("pin", {
-              idempotencyKey: `scheduled-pin-explicit-${mismatch}`,
-              accountId: mismatch === "account" ? "other" : undefined,
-              paramsAccountId: mismatch === "params.accountId" ? "other" : undefined,
-            });
-      expectDenied(
-        response,
-        action === "pin" || mismatch === "account"
-          ? "another creator account"
-          : "matching recorded creator origin",
-      );
-      expect(fixture.httpRequests).toHaveLength(requestsBeforeMismatch);
-      if (action === "pin") {
-        expect(fixture.httpRequests).toEqual([]);
-      }
-    });
-  });
+  ] as const)(
+    "rejects %s with a mismatched creator %s",
+    async (action, mismatch) =>
+      await withFixture(async (fixture) => {
+        if (action === "read") {
+          expectRead(await fixture.read(), "fresh-1");
+        } else {
+          await fixture.setDefaultAccount("other");
+        }
+        const requestsBeforeMismatch = fixture.httpRequests.length;
+        const policy = accountPolicy(mismatch === "provider" ? "slack" : "discord");
+        if (mismatch === "unknown origin") {
+          policy.ownerOrigin = { kind: "unknown" };
+        } else if (mismatch === "missing origin") {
+          delete policy.ownerOrigin;
+        }
+        const response =
+          action === "read"
+            ? await fixture.read(
+                mismatch === "account"
+                  ? { accountId: "other" }
+                  : { client: fixture.createClient(policy) },
+              )
+            : await fixture.invokeAction("pin", {
+                idempotencyKey: `scheduled-pin-explicit-${mismatch}`,
+                accountId: mismatch === "account" ? "other" : undefined,
+                paramsAccountId: mismatch === "params.accountId" ? "other" : undefined,
+              });
+        expectDenied(
+          response,
+          action === "pin" || mismatch === "account"
+            ? "another creator account"
+            : "matching recorded creator origin",
+        );
+        expect(fixture.httpRequests).toHaveLength(requestsBeforeMismatch);
+        if (action === "pin") {
+          expect(fixture.httpRequests).toEqual([]);
+        }
+      }),
+  );
 
   it.each(["read", "pin"] as const)(
     "keeps omitted-account %s on the creator when the provider default changes",
-    async (action) => {
+    async (action) =>
       await withFixture(async (fixture) => {
-        for (const [phase, expectedMutationCount] of [
-          ["before", 1],
-          ["after", 2],
-        ] as const) {
-          if (phase === "after") {
+        for (const expectedMutationCount of [1, 2]) {
+          if (expectedMutationCount === 2) {
             await fixture.setDefaultAccount("other");
           }
           if (action === "read") {
@@ -425,11 +378,9 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
           }
           // A fresh key forces account selection instead of replaying the first write.
           const response = await fixture.invokeAction("pin", {
-            idempotencyKey: `scheduled-pin-${phase}-default-change`,
+            idempotencyKey: `scheduled-pin-${expectedMutationCount}-default-change`,
           });
-          expect(response[0], JSON.stringify(response)).toBe(true);
-          expect(response[1]).toMatchObject({ ok: true });
-          expect(response[2]).toBeUndefined();
+          expectSuccess(response);
           const mutations = fixture.httpRequests.filter((request) => request.method !== "GET");
           expect(mutations).toHaveLength(expectedMutationCount);
           expect(mutations.at(-1)).toMatchObject({
@@ -442,11 +393,10 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
           expect(fixture.providerRead).toHaveBeenCalledTimes(2);
         }
         expect(fixture.httpRequests.every((request) => request.creatorCredentials)).toBe(true);
-      });
-    },
+      }),
   );
 
-  it("keeps same-key pins separate for different saved accounts", async () => {
+  it("keeps same-key pins separate for different saved accounts", async () =>
     await withFixture(async (fixture) => {
       const otherClient = fixture.createClient({
         ...accountPolicy(),
@@ -456,25 +406,16 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
 
       for (const client of [undefined, otherClient]) {
         const response = await fixture.invokeAction("pin", { idempotencyKey, client });
-        expect(response[0], JSON.stringify(response)).toBe(true);
-        expect(response[1]).toMatchObject({ ok: true });
-        expect(response[2]).toBeUndefined();
+        expectSuccess(response);
       }
 
-      expect(fixture.httpRequests.filter((request) => request.method !== "GET")).toEqual([
-        {
+      expect(fixture.httpRequests.filter((request) => request.method !== "GET")).toEqual(
+        [true, false].map((creatorCredentials) => ({
           method: "PUT",
           path: pinWritePath,
-          creatorCredentials: true,
-          otherCredentials: false,
-        },
-        {
-          method: "PUT",
-          path: pinWritePath,
-          creatorCredentials: false,
-          otherCredentials: true,
-        },
-      ]);
-    });
-  });
+          creatorCredentials,
+          otherCredentials: !creatorCredentials,
+        })),
+      );
+    }));
 });

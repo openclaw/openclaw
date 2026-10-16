@@ -1,7 +1,9 @@
+import { vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -37,26 +39,20 @@ export function resolveAgentIdFromSessionKeyForTests(params: {
   agentId?: string;
 }): string {
   const explicitAgentId = params.agentId?.trim().toLowerCase();
-  if (typeof params.sessionKey === "string") {
-    const match = params.sessionKey.match(/^agent:([^:]+)/i);
-    if (match?.[1]) {
-      const sessionAgentId = match[1].toLowerCase();
-      if (explicitAgentId && explicitAgentId !== sessionAgentId) {
-        throw new Error(
-          `agent "${explicitAgentId}" does not match session key agent "${sessionAgentId}"`,
-        );
-      }
-      return sessionAgentId;
-    }
+  const sessionAgentId = params.sessionKey?.match(/^agent:([^:]+)/i)?.[1]?.toLowerCase();
+  if (explicitAgentId && sessionAgentId && explicitAgentId !== sessionAgentId) {
+    throw new Error(
+      `agent "${explicitAgentId}" does not match session key agent "${sessionAgentId}"`,
+    );
   }
-  return explicitAgentId ?? "main";
+  return sessionAgentId ?? explicitAgentId ?? "main";
 }
 
 function messageActionContextFromSessionKeyForTests(sessionKey: string) {
   const parts = sessionKey.split(":");
-  const provider = parts[2];
-  const peerKind = parts[3];
-  const peerId = parts.slice(4).join(":");
+  const provider = parts[2],
+    peerKind = parts[3],
+    peerId = parts.slice(4).join(":");
   const currentChatType: "direct" | "group" | "channel" | undefined =
     peerKind === "direct" || peerKind === "dm"
       ? "direct"
@@ -93,7 +89,7 @@ export function createMessageActionClientForTests(
   return messageActionClientForTests(sessionKey, {
     agentId,
     messageActionContext: {
-      expiresAtMs: Date.now() + 60_000,
+      ...messageActionContextFromSessionKeyForTests(sessionKey),
       sessionId: typeof params.sessionId === "string" ? params.sessionId : undefined,
       requesterAccountId:
         typeof params.requesterAccountId === "string" ? params.requesterAccountId : undefined,
@@ -193,9 +189,7 @@ export function createMessageActionTurnClientForTests(params: {
       },
       internal: {
         agentRuntimeIdentity: {
-          kind: "agentRuntime" as const,
-          agentId: "main",
-          sessionKey: params.sessionKey,
+          ...messageActionClientForTests(params.sessionKey).internal.agentRuntimeIdentity,
           operationalRunInstance,
           delegatedAuthority: { kind: "local" as const, ...delegatedAuthority },
           messageActionContext: {
@@ -210,4 +204,71 @@ export function createMessageActionTurnClientForTests(params: {
       releaseAgentRunDelegatedAuthority(delegatedAuthority);
     },
   };
+}
+
+export function createDeferredJsonResponse(value: unknown) {
+  const accepted = createDeferred(),
+    release = createDeferred();
+  return {
+    accepted,
+    release,
+    respond: async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          async start(controller) {
+            accepted.resolve();
+            await release.promise;
+            controller.enqueue(new TextEncoder().encode(JSON.stringify(value)));
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+  };
+}
+
+export function createDiscordHttpFixture({
+  channelId,
+  guildId,
+  handle,
+}: {
+  channelId: string;
+  guildId: string;
+  handle: (request: {
+    method: string;
+    path: string;
+    headers: Headers;
+    init?: RequestInit;
+  }) => Promise<Response | undefined>;
+}) {
+  const httpRequests: Array<{ method: string; path: string; headers: Headers }> = [];
+  const unexpectedRequests: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+      const headers = new Headers(
+        init?.headers ?? (input instanceof Request ? input.headers : undefined),
+      );
+      const request = { method, path: url.pathname, headers };
+      httpRequests.push(request);
+      if (url.origin === "https://discord.com") {
+        if (method === "GET" && request.path === `/api/v10/channels/${channelId}`) {
+          return Response.json({ id: channelId, guild_id: guildId, type: 0, name: "fixture" });
+        }
+        const response = await handle({ ...request, init });
+        if (response) {
+          return response;
+        }
+      }
+      const unexpected = `Unexpected fake Discord request: ${method} ${url.pathname}`;
+      unexpectedRequests.push(unexpected);
+      throw new Error(unexpected);
+    }),
+  );
+  return { httpRequests, unexpectedRequests };
 }
