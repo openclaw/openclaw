@@ -46,6 +46,7 @@ import {
   searchPostgresMemoryKeyword,
   searchPostgresMemoryVector,
 } from "./manager-search-postgres.js";
+import type { MemoryKeywordWorkerQuery, MemoryVectorWorkerQuery } from "./manager-search-types.js";
 import { searchChunksByEmbedding } from "./manager-search-vector.js";
 import {
   searchKeywordWithFallback,
@@ -55,17 +56,6 @@ import {
 import { inspectMemoryIndexPresenceInWorker } from "./manager-status-presence.js";
 import { collectMemoryStatusSnapshot, type MemoryStatusQuery } from "./manager-status-state.js";
 
-type KeywordParameters = Omit<Parameters<typeof searchKeyword>[0], "db">;
-type PathParameters = Omit<Parameters<typeof searchPathKeyword>[0], "db">;
-export type MemoryKeywordWorkerQuery = {
-  body: KeywordParameters;
-  path: PathParameters;
-  includeRecallMetadata?: boolean;
-};
-export type MemoryVectorWorkerQuery = Omit<
-  Parameters<typeof searchChunksByEmbedding>[0],
-  "db" | "signal"
->;
 export type MemorySearchWorkerInput =
   | ForgetIndexReadInput
   | MemoryOriginReadInput

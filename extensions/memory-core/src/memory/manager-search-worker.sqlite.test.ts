@@ -11,12 +11,9 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runVectorKnnQuery, vectorToBlob } from "./manager-search-knn.test-support.js";
+import type { MemoryKeywordWorkerQuery, MemoryVectorWorkerQuery } from "./manager-search-types.js";
 import { insertKeywordFixture } from "./manager-search.test-support.js";
-import {
-  executeMemorySearchWorkerQuery,
-  type MemoryKeywordWorkerQuery,
-  type MemoryVectorWorkerQuery,
-} from "./manager-search.worker.js";
+import { executeMemorySearchWorkerQuery } from "./manager-search.worker.js";
 
 // Frozen from the unchanged direct SQLite helpers before routing these cases through
 // worker dispatch. Hash the exact SQL bytes, including whitespace and statement order.

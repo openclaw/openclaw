@@ -22,8 +22,8 @@ import {
   type MemorySearchRow,
   type SearchRowResult,
 } from "./manager-search-shared.js";
+import type { MemoryKeywordWorkerQuery, MemoryVectorWorkerQuery } from "./manager-search-types.js";
 import type { ExactPathSpecificity } from "./manager-search.js";
-import type { MemoryKeywordWorkerQuery, MemoryVectorWorkerQuery } from "./manager-search.worker.js";
 
 type SearchDatabase = {
   memory_index_chunks: MemorySearchRow & { model: string; openclaw_search: unknown };

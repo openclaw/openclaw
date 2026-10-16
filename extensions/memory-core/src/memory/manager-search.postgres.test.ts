@@ -20,11 +20,8 @@ import { mergeHybridResults } from "./hybrid.js";
 import { memoryPublicationInline } from "./manager-publication-transfer.js";
 import { bindSqliteWorkerBackend } from "./manager-publication.worker.js";
 import { memoryTextSearchSchema } from "./manager-search-schema.js";
-import {
-  executeMemorySearchWorkerQuery,
-  type MemoryKeywordWorkerQuery,
-  type MemoryVectorWorkerQuery,
-} from "./manager-search.worker.js";
+import type { MemoryKeywordWorkerQuery, MemoryVectorWorkerQuery } from "./manager-search-types.js";
+import { executeMemorySearchWorkerQuery } from "./manager-search.worker.js";
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
