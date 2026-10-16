@@ -93,7 +93,7 @@ describe("createLazyGatewayCronState", () => {
     }));
     const store = createMockCronStateForJobs({ jobs });
     const start = vi.spyOn(cron, "start");
-    cron.listPage = (opts, matchesJob) => listPage(store, opts, matchesJob);
+    cron.listPage.mockImplementation((opts, matchesJob) => listPage(store, opts, matchesJob));
     const page = await lazy.cron.listPage(
       { includeDisabled: true, limit: 1, sortBy: "name" },
       (job) => job.id === "visible",
@@ -342,13 +342,13 @@ function createParams(overrides: Partial<OpenClawConfig> = {}) {
 
 function createCronService() {
   return {
-    start: vi.fn(async () => undefined),
+    start: vi.fn<GatewayCronServiceContract["start"]>(async () => {}),
     stop: vi.fn(),
     pauseScheduling: vi.fn(),
     resumeScheduling: vi.fn(),
     status: vi.fn(async () => ({ enabled: true }) as never),
     list: vi.fn(async () => [] as never),
-    listPage: vi.fn(async () => ({ items: [], total: 0 }) as never),
+    listPage: vi.fn<GatewayCronServiceContract["listPage"]>(),
     add: vi.fn(async () => ({ ok: true }) as never),
     update: vi.fn(async () => ({ ok: true }) as never),
     updateWithPrecondition: vi.fn(async () => ({ ok: true }) as never),
