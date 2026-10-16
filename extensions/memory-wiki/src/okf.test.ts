@@ -1,8 +1,7 @@
-// Memory Wiki tests cover Open Knowledge Format import behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseWikiMarkdown } from "./markdown.js";
+import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import { importMemoryWikiOkfBundle } from "./okf.js";
 import { searchMemoryWiki } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -23,6 +22,20 @@ function getOnlyPagePath(paths: string[]): string {
     throw new Error("Expected OKF import to produce one page path.");
   }
   return pagePath;
+}
+
+async function writeConcept(file: string, title: string, body: string, type = "BigQuery Table") {
+  await fs.writeFile(file, renderWikiMarkdown({ frontmatter: { type, title }, body }), "utf8");
+}
+
+async function createImport(bundleName: string) {
+  const rootDir = await createTempDir("memory-wiki-okf-");
+  const bundlePath = path.join(rootDir, bundleName);
+  await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
+  const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+  const run = (nowMs = Date.UTC(2026, 5, 12, 10, 0, 0)) =>
+    importMemoryWikiOkfBundle({ config, bundlePath, nowMs });
+  return { rootDir, bundlePath, config, run };
 }
 
 async function writeOkfBundle(rootDir: string) {
@@ -206,8 +219,7 @@ describe("importMemoryWikiOkfBundle", () => {
   });
 
   it("prunes repository metadata and dependency subtrees", async () => {
-    const rootDir = await createTempDir("memory-wiki-okf-prune-");
-    const bundlePath = path.join(rootDir, "pruned-okf");
+    const { bundlePath, run } = await createImport("pruned-okf");
     await Promise.all([
       fs.mkdir(path.join(bundlePath, "tables"), { recursive: true }),
       fs.mkdir(path.join(bundlePath, ".git"), { recursive: true }),
@@ -219,21 +231,15 @@ describe("importMemoryWikiOkfBundle", () => {
       fs.writeFile(path.join(bundlePath, ".git", "ignored.md"), concept),
       fs.writeFile(path.join(bundlePath, "node_modules", "ignored.md"), concept),
     ]);
-    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
 
-    const result = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
+    const result = await run();
 
     expect(result.importedCount).toBe(1);
     expect(result.pagePaths).toHaveLength(1);
   });
 
   it("caps generated concept filenames for long OKF concept paths", async () => {
-    const rootDir = await createTempDir("memory-wiki-okf-long-");
-    const bundlePath = path.join(rootDir, "long-okf");
+    const { bundlePath, config, run } = await createImport("long-okf");
     const deepSegments = Array.from({ length: 40 }, (_, index) => `segment-${index}`);
     const deepDir = path.join(bundlePath, ...deepSegments);
     await fs.mkdir(deepDir, { recursive: true });
@@ -248,15 +254,8 @@ Long concept body.
 `,
       "utf8",
     );
-    const { config } = await createVault({
-      rootDir: path.join(rootDir, "vault"),
-    });
 
-    const result = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
+    const result = await run();
 
     expect(result.importedCount).toBe(1);
     const [pagePath] = result.pagePaths;
@@ -272,41 +271,12 @@ Long concept body.
   });
 
   it("removes stale concept pages when an OKF bundle drops a concept", async () => {
-    const rootDir = await createTempDir("memory-wiki-okf-remove-");
-    const bundlePath = path.join(rootDir, "removing-okf");
-    await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
+    const { bundlePath, config, run } = await createImport("removing-okf");
     const customersPath = path.join(bundlePath, "tables", "customers.md");
     const ordersPath = path.join(bundlePath, "tables", "orders.md");
-    await fs.writeFile(
-      customersPath,
-      `---
-type: BigQuery Table
-title: Customers
----
-
-Customer body.
-`,
-      "utf8",
-    );
-    await fs.writeFile(
-      ordersPath,
-      `---
-type: BigQuery Table
-title: Orders
----
-
-Order body.
-`,
-      "utf8",
-    );
-    const { config } = await createVault({
-      rootDir: path.join(rootDir, "vault"),
-    });
-    const first = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
+    await writeConcept(customersPath, "Customers", "Customer body.\n");
+    await writeConcept(ordersPath, "Orders", "Order body.\n");
+    const first = await run();
     const stalePagePath = first.pagePaths.find((pagePath) => pagePath.includes("orders"));
     expect(stalePagePath).toBeDefined();
     if (!stalePagePath) {
@@ -314,11 +284,7 @@ Order body.
     }
 
     await fs.rm(ordersPath);
-    const second = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
+    const second = await run();
 
     expect(second.importedCount).toBe(1);
     expect(second.removedCount).toBe(1);
@@ -333,47 +299,14 @@ Order body.
   });
 
   it("detects body-only changes on timestamp-shaped markdown lines", async () => {
-    const rootDir = await createTempDir("memory-wiki-okf-body-timestamp-");
-    const bundlePath = path.join(rootDir, "body-timestamp-okf");
-    await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
+    const { bundlePath, config, run } = await createImport("body-timestamp-okf");
     const conceptPath = path.join(bundlePath, "tables", "events.md");
-    await fs.writeFile(
-      conceptPath,
-      `---
-type: BigQuery Table
-title: Events
----
-
-updatedAt: 2026-06-12
-`,
-      "utf8",
-    );
-    const { config } = await createVault({
-      rootDir: path.join(rootDir, "vault"),
-    });
-    const first = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
+    await writeConcept(conceptPath, "Events", "updatedAt: 2026-06-12\n");
+    const first = await run();
     const pagePath = getOnlyPagePath(first.pagePaths);
-    await fs.writeFile(
-      conceptPath,
-      `---
-type: BigQuery Table
-title: Events
----
+    await writeConcept(conceptPath, "Events", "updatedAt: 2026-06-13\n");
 
-updatedAt: 2026-06-13
-`,
-      "utf8",
-    );
-
-    const second = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 13, 10, 0, 0),
-    });
+    const second = await run(Date.UTC(2026, 5, 13, 10, 0, 0));
 
     expect(second.updatedCount).toBe(1);
     await expect(fs.readFile(path.join(config.vault.path, pagePath), "utf8")).resolves.toContain(
@@ -382,8 +315,7 @@ updatedAt: 2026-06-13
   });
 
   it("rewrites percent-encoded OKF markdown links and preserves suffixes", async () => {
-    const rootDir = await createTempDir("memory-wiki-okf-encoded-link-");
-    const bundlePath = path.join(rootDir, "encoded-okf");
+    const { bundlePath, config, run } = await createImport("encoded-okf");
     await fs.mkdir(bundlePath, { recursive: true });
     await fs.writeFile(
       path.join(bundlePath, "BigQuery Table.md"),
@@ -407,15 +339,8 @@ See [table](BigQuery%20Table.md?view=compact#columns).
 `,
       "utf8",
     );
-    const { config } = await createVault({
-      rootDir: path.join(rootDir, "vault"),
-    });
 
-    const result = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
+    const result = await run();
 
     const linksPath = result.pagePaths.find((pagePath) => pagePath.includes("links"));
     expect(linksPath).toBeDefined();
@@ -428,83 +353,29 @@ See [table](BigQuery%20Table.md?view=compact#columns).
   });
 
   it("refuses to write imported OKF concept pages through symlinks", async () => {
-    const rootDir = await createTempDir("memory-wiki-okf-symlink-");
-    const bundlePath = path.join(rootDir, "safe-okf");
-    await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
+    const { rootDir, bundlePath, config, run } = await createImport("safe-okf");
     const conceptPath = path.join(bundlePath, "tables", "customers.md");
-    await fs.writeFile(
-      conceptPath,
-      `---
-type: BigQuery Table
-title: Customers
----
-
-Original body.
-`,
-      "utf8",
-    );
-    const { config } = await createVault({
-      rootDir: path.join(rootDir, "vault"),
-    });
-    const first = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
+    await writeConcept(conceptPath, "Customers", "Original body.\n");
+    const first = await run();
     const pagePath = getOnlyPagePath(first.pagePaths);
     const pageAbsolutePath = path.join(config.vault.path, pagePath);
     const externalTarget = path.join(rootDir, "outside.md");
     await fs.writeFile(externalTarget, "external target\n", "utf8");
     await fs.rm(pageAbsolutePath);
     await fs.symlink(externalTarget, pageAbsolutePath);
-    await fs.writeFile(
-      conceptPath,
-      `---
-type: BigQuery Table
-title: Customers
----
+    await writeConcept(conceptPath, "Customers", "Updated body.\n");
 
-Updated body.
-`,
-      "utf8",
-    );
-
-    await expect(
-      importMemoryWikiOkfBundle({
-        config,
-        bundlePath,
-        nowMs: Date.UTC(2026, 5, 12, 11, 0, 0),
-      }),
-    ).rejects.toThrow("through symlink");
+    await expect(run(Date.UTC(2026, 5, 12, 11, 0, 0))).rejects.toThrow("through symlink");
     await expect(fs.readFile(externalTarget, "utf8")).resolves.toBe("external target\n");
   });
 
   it("refuses to import OKF concept files through hardlinks", async () => {
-    const rootDir = await createTempDir("memory-wiki-okf-hardlink-");
-    const bundlePath = path.join(rootDir, "hardlink-okf");
-    await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
+    const { rootDir, bundlePath, run } = await createImport("hardlink-okf");
     const externalSource = path.join(rootDir, "outside.md");
-    await fs.writeFile(
-      externalSource,
-      `---
-type: BigQuery Table
-title: Private
----
-
-private body
-`,
-      "utf8",
-    );
+    await writeConcept(externalSource, "Private", "private body\n");
     await fs.link(externalSource, path.join(bundlePath, "tables", "private.md"));
-    const { config } = await createVault({
-      rootDir: path.join(rootDir, "vault"),
-    });
 
-    const result = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
+    const result = await run();
 
     expect(result.importedCount).toBe(0);
     expect(result.skippedCount).toBe(1);

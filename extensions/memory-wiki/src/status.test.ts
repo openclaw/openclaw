@@ -1,4 +1,3 @@
-// Memory Wiki tests cover status plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
@@ -16,17 +15,47 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
-async function resolveBridgeMissingArtifactsStatus() {
-  const config = resolveMemoryWikiConfig(
-    {
-      vaultMode: "bridge",
-      bridge: {
-        enabled: true,
-        readMemoryArtifacts: true,
-      },
-    },
-    { homedir: "/Users/tester" },
+function statusConfig(config: Parameters<typeof resolveMemoryWikiConfig>[0]) {
+  return resolveMemoryWikiConfig(config, { homedir: "/Users/tester" });
+}
+
+const statusDeps = { pathExists: async () => true, resolveCommand: async () => null };
+
+function publicArtifact(
+  workspace: string,
+  agentIds: string[],
+  kind: "memory-root" | "daily-note" = "memory-root",
+): MemoryPluginPublicArtifact {
+  const relativePath = kind === "daily-note" ? "memory/2026-07-09.md" : "MEMORY.md";
+  return {
+    kind,
+    workspaceDir: "/tmp/" + workspace,
+    relativePath,
+    absolutePath: "/tmp/" + workspace + "/" + relativePath,
+    agentIds,
+    contentType: "markdown",
+  };
+}
+
+async function writeSource(rootDir: string, name: string, title: string, fields = {}) {
+  await fs.writeFile(
+    path.join(rootDir, "sources", name + ".md"),
+    renderWikiMarkdown({
+      frontmatter: { pageType: "source", id: "source." + name, title, ...fields },
+      body: "# " + title + "\n",
+    }),
+    "utf8",
   );
+}
+
+async function resolveBridgeMissingArtifactsStatus() {
+  const config = statusConfig({
+    vaultMode: "bridge",
+    bridge: {
+      enabled: true,
+      readMemoryArtifacts: true,
+    },
+  });
 
   return resolveMemoryWikiStatus(config, {
     appConfig: {
@@ -35,19 +64,15 @@ async function resolveBridgeMissingArtifactsStatus() {
       },
     } as OpenClawConfig,
     listPublicArtifacts: async () => [],
-    pathExists: async () => true,
-    resolveCommand: async () => null,
+    ...statusDeps,
   });
 }
 
 async function resolveMissingVaultStatus() {
-  const config = resolveMemoryWikiConfig(
-    {
-      vault: { path: "/tmp/wiki" },
-      obsidian: { enabled: true, useOfficialCli: true },
-    },
-    { homedir: "/Users/tester" },
-  );
+  const config = statusConfig({
+    vault: { path: "/tmp/wiki" },
+    obsidian: { enabled: true, useOfficialCli: true },
+  });
 
   return resolveMemoryWikiStatus(config, {
     pathExists: async () => false,
@@ -57,12 +82,9 @@ async function resolveMissingVaultStatus() {
 
 describe("resolveMemoryWikiStatus", () => {
   it("warns when unsafe-local is selected without explicit private access", async () => {
-    const config = resolveMemoryWikiConfig(
-      {
-        vaultMode: "unsafe-local",
-      },
-      { homedir: "/Users/tester" },
-    );
+    const config = statusConfig({
+      vaultMode: "unsafe-local",
+    });
 
     const status = await resolveMemoryWikiStatus(config, {
       pathExists: async () => true,
@@ -73,48 +95,17 @@ describe("resolveMemoryWikiStatus", () => {
   });
 
   it("counts only artifacts owned by the resolved agent in agent scope", async () => {
-    const unresolvedConfig = resolveMemoryWikiConfig(
-      {
-        vaultMode: "bridge",
-        vault: { scope: "agent", path: "/tmp/wiki/support" },
-        bridge: { enabled: true, readMemoryArtifacts: true },
-      },
-      { homedir: "/Users/tester" },
-    );
+    const unresolvedConfig = statusConfig({
+      vaultMode: "bridge",
+      vault: { scope: "agent", path: "/tmp/wiki/support" },
+      bridge: { enabled: true, readMemoryArtifacts: true },
+    });
     const config = { ...unresolvedConfig, agentId: "support" };
     const artifacts: MemoryPluginPublicArtifact[] = [
-      {
-        kind: "memory-root",
-        workspaceDir: "/tmp/support",
-        relativePath: "MEMORY.md",
-        absolutePath: "/tmp/support/MEMORY.md",
-        agentIds: [" SUPPORT "],
-        contentType: "markdown",
-      },
-      {
-        kind: "memory-root",
-        workspaceDir: "/tmp/marketing",
-        relativePath: "MEMORY.md",
-        absolutePath: "/tmp/marketing/MEMORY.md",
-        agentIds: ["marketing"],
-        contentType: "markdown",
-      },
-      {
-        kind: "daily-note",
-        workspaceDir: "/tmp/shared",
-        relativePath: "memory/2026-07-09.md",
-        absolutePath: "/tmp/shared/memory/2026-07-09.md",
-        agentIds: ["support", "marketing"],
-        contentType: "markdown",
-      },
-      {
-        kind: "memory-root",
-        workspaceDir: "/tmp/unknown",
-        relativePath: "MEMORY.md",
-        absolutePath: "/tmp/unknown/MEMORY.md",
-        agentIds: [],
-        contentType: "markdown",
-      },
+      publicArtifact("support", [" SUPPORT "]),
+      publicArtifact("marketing", ["marketing"]),
+      publicArtifact("shared", ["support", "marketing"], "daily-note"),
+      publicArtifact("unknown", []),
     ];
 
     const status = await resolveMemoryWikiStatus(config, {
@@ -122,8 +113,7 @@ describe("resolveMemoryWikiStatus", () => {
         agents: { entries: { support: { workspace: "/tmp/support" } } },
       },
       listPublicArtifacts: async () => artifacts,
-      pathExists: async () => true,
-      resolveCommand: async () => null,
+      ...statusDeps,
     });
 
     expect(status.vaultScope).toBe("agent");
@@ -132,52 +122,20 @@ describe("resolveMemoryWikiStatus", () => {
   });
 
   it("scopes global-vault status metadata when called by an agent tool", async () => {
-    const config = resolveMemoryWikiConfig(
-      {
-        vaultMode: "bridge",
-        bridge: { enabled: true, readMemoryArtifacts: true },
-      },
-      { homedir: "/Users/tester" },
-    );
+    const config = statusConfig({
+      vaultMode: "bridge",
+      bridge: { enabled: true, readMemoryArtifacts: true },
+    });
     const artifacts: MemoryPluginPublicArtifact[] = [
-      {
-        kind: "memory-root",
-        workspaceDir: "/tmp/support",
-        relativePath: "MEMORY.md",
-        absolutePath: "/tmp/support/MEMORY.md",
-        agentIds: ["support"],
-        contentType: "markdown",
-      },
-      {
-        kind: "memory-root",
-        workspaceDir: "/tmp/marketing",
-        relativePath: "MEMORY.md",
-        absolutePath: "/tmp/marketing/MEMORY.md",
-        agentIds: ["marketing"],
-        contentType: "markdown",
-      },
-      {
-        kind: "daily-note",
-        workspaceDir: "/tmp/shared",
-        relativePath: "memory/2026-07-09.md",
-        absolutePath: "/tmp/shared/memory/2026-07-09.md",
-        agentIds: ["support", "marketing"],
-        contentType: "markdown",
-      },
-      {
-        kind: "memory-root",
-        workspaceDir: "/tmp/legacy",
-        relativePath: "MEMORY.md",
-        absolutePath: "/tmp/legacy/MEMORY.md",
-        agentIds: [],
-        contentType: "markdown",
-      },
+      publicArtifact("support", ["support"]),
+      publicArtifact("marketing", ["marketing"]),
+      publicArtifact("shared", ["support", "marketing"], "daily-note"),
+      publicArtifact("legacy", []),
     ];
     const deps = {
       appConfig: {} as OpenClawConfig,
       listPublicArtifacts: async () => artifacts,
-      pathExists: async () => true,
-      resolveCommand: async () => null,
+      ...statusDeps,
     };
 
     const agentStatus = await resolveMemoryWikiStatus(config, {
@@ -193,10 +151,7 @@ describe("resolveMemoryWikiStatus", () => {
   });
 
   it("rejects status for an unresolved agent-scoped config", async () => {
-    const config = resolveMemoryWikiConfig(
-      { vault: { scope: "agent", path: "/tmp/wiki/support" } },
-      { homedir: "/Users/tester" },
-    );
+    const config = statusConfig({ vault: { scope: "agent", path: "/tmp/wiki/support" } });
 
     await expect(
       resolveMemoryWikiStatus(config, {
@@ -225,18 +180,10 @@ describe("resolveMemoryWikiStatus", () => {
       ].join("\n"),
       "utf8",
     );
-    await fs.writeFile(
-      path.join(rootDir, "sources", "healthy.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "source", id: "source.healthy", title: "Healthy" },
-        body: "# Healthy\n",
-      }),
-      "utf8",
-    );
+    await writeSource(rootDir, "healthy", "Healthy");
 
     const status = await resolveMemoryWikiStatus(config, {
-      pathExists: async () => true,
-      resolveCommand: async () => null,
+      ...statusDeps,
     });
 
     expect(status.pageCounts.source).toBe(1);
@@ -248,58 +195,16 @@ describe("resolveMemoryWikiStatus", () => {
       prefix: "memory-wiki-status-",
       initialize: true,
     });
-    await fs.writeFile(
-      path.join(rootDir, "sources", "native.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "source", id: "source.native", title: "Native Source" },
-        body: "# Native Source\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "sources", "bridge.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.bridge",
-          title: "Bridge Source",
-          sourceType: "memory-bridge",
-        },
-        body: "# Bridge Source\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "sources", "events.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.events",
-          title: "Event Source",
-          sourceType: "memory-bridge-events",
-        },
-        body: "# Event Source\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "sources", "unsafe.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.unsafe",
-          title: "Unsafe Source",
-          sourceType: "memory-unsafe-local",
-          provenanceMode: "unsafe-local",
-        },
-        body: "# Unsafe Source\n",
-      }),
-      "utf8",
-    );
+    await writeSource(rootDir, "native", "Native Source");
+    await writeSource(rootDir, "bridge", "Bridge Source", { sourceType: "memory-bridge" });
+    await writeSource(rootDir, "events", "Event Source", { sourceType: "memory-bridge-events" });
+    await writeSource(rootDir, "unsafe", "Unsafe Source", {
+      sourceType: "memory-unsafe-local",
+      provenanceMode: "unsafe-local",
+    });
 
     const status = await resolveMemoryWikiStatus(config, {
-      pathExists: async () => true,
-      resolveCommand: async () => null,
+      ...statusDeps,
     });
 
     expect(status.pageCounts.source).toBe(4);

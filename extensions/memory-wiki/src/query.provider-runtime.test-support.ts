@@ -24,6 +24,19 @@ type ProviderRecordTestParams = {
 
 /** Registers owner selection plus provider-neutral record round-trip and caller-currency coverage. */
 export function registerProviderRecordQueryTests(params: ProviderRecordTestParams): void {
+  const createMemoryVault = () =>
+    params.createQueryVault({
+      initialize: true,
+      config: { search: { backend: "shared", corpus: "memory" } },
+    });
+  function useProvider(provider: object) {
+    params.useNativeProvider();
+    params.getActiveMemoryProviderMock.mockResolvedValue({
+      provider,
+      providerId: "knowledge",
+      adapter: "native",
+    });
+  }
   describe("shared memory owner selection", () => {
     async function createAlphaVault() {
       const { rootDir, config } = await params.createQueryVault({
@@ -67,10 +80,7 @@ export function registerProviderRecordQueryTests(params: ProviderRecordTestParam
     it.each(["search", "get"] as const)(
       "rejects %s results when cleanup revokes the caller",
       async (operation) => {
-        const { config } = await params.createQueryVault({
-          initialize: true,
-          config: { search: { backend: "shared", corpus: "memory" } },
-        });
+        const { config } = await createMemoryVault();
         let current = true;
         const reference = { providerId: "knowledge", id: "private:record" };
         const provider = {
@@ -81,12 +91,7 @@ export function registerProviderRecordQueryTests(params: ProviderRecordTestParam
             current = false;
           }),
         };
-        params.useNativeProvider();
-        params.getActiveMemoryProviderMock.mockResolvedValue({
-          provider,
-          providerId: "knowledge",
-          adapter: "native",
-        });
+        useProvider(provider);
         const input = {
           config,
           appConfig: params.createAppConfig(),
@@ -112,10 +117,7 @@ export function registerProviderRecordQueryTests(params: ProviderRecordTestParam
     );
 
     it("round-trips a record-only result with revision and citations without inventing a path", async () => {
-      const { config } = await params.createQueryVault({
-        initialize: true,
-        config: { search: { backend: "shared", corpus: "memory" } },
-      });
+      const { config } = await createMemoryVault();
       const reference = {
         providerId: "knowledge",
         id: "claim:release:42",
@@ -140,12 +142,7 @@ export function registerProviderRecordQueryTests(params: ProviderRecordTestParam
         }),
         close: vi.fn(),
       };
-      params.useNativeProvider();
-      params.getActiveMemoryProviderMock.mockResolvedValue({
-        provider,
-        providerId: "knowledge",
-        adapter: "native",
-      });
+      useProvider(provider);
       const results = await params.searchMemoryWiki({
         config,
         appConfig: params.createAppConfig(),
@@ -178,21 +175,13 @@ export function registerProviderRecordQueryTests(params: ProviderRecordTestParam
     });
 
     it("releases a denied provider read without retrying it as a path", async () => {
-      const { config } = await params.createQueryVault({
-        initialize: true,
-        config: { search: { backend: "shared", corpus: "memory" } },
-      });
+      const { config } = await createMemoryVault();
       const reference = { providerId: "knowledge", id: "private:record" };
       const provider = {
         get: vi.fn().mockRejectedValue(new Error("not authorized")),
         close: vi.fn(),
       };
-      params.useNativeProvider();
-      params.getActiveMemoryProviderMock.mockResolvedValue({
-        provider,
-        providerId: "knowledge",
-        adapter: "native",
-      });
+      useProvider(provider);
       const lookup = `memory-ref:${encodeURIComponent(JSON.stringify(reference))}`;
       await expect(
         params.getMemoryWikiPage({ config, appConfig: params.createAppConfig(), lookup }),
@@ -202,10 +191,7 @@ export function registerProviderRecordQueryTests(params: ProviderRecordTestParam
     });
 
     it("rejects revoked caller authority after search and closes the query-bound capability", async () => {
-      const { config } = await params.createQueryVault({
-        initialize: true,
-        config: { search: { backend: "shared", corpus: "memory" } },
-      });
+      const { config } = await createMemoryVault();
       let current = true;
       const assertCurrent = () => {
         if (!current) {
@@ -219,12 +205,7 @@ export function registerProviderRecordQueryTests(params: ProviderRecordTestParam
         }),
         close: vi.fn(),
       };
-      params.useNativeProvider();
-      params.getActiveMemoryProviderMock.mockResolvedValue({
-        provider,
-        providerId: "knowledge",
-        adapter: "native",
-      });
+      useProvider(provider);
       await expect(
         params.searchMemoryWiki({
           config,

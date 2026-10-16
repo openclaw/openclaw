@@ -1,9 +1,7 @@
-// Memory Wiki helper module supports test helpers behavior.
 import type {
   PluginBlobEntry,
   PluginBlobEntryInfo,
   PluginBlobStore,
-  PluginStateEntry,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
@@ -39,18 +37,7 @@ type MemoryWikiTestVault = {
   config: ResolvedMemoryWikiConfig;
 };
 
-type MemoryWikiPluginApiHarness = {
-  api: OpenClawPluginApi;
-  registerCli: ReturnType<typeof vi.fn>;
-  registerGatewayMethod: ReturnType<typeof vi.fn>;
-  registerMemoryCorpusSupplement: ReturnType<typeof vi.fn>;
-  registerMemoryPromptPreparation: ReturnType<typeof vi.fn>;
-  registerMemoryPromptSupplement: ReturnType<typeof vi.fn>;
-  registerService: ReturnType<typeof vi.fn>;
-  registerTool: ReturnType<typeof vi.fn>;
-};
-
-function createMemoryKeyedStore<T>(values = new Map<string, unknown>()) {
+export function createMemoryKeyedStore<T>(values = new Map<string, unknown>()) {
   return {
     async register(key: string, value: T) {
       values.set(key, value);
@@ -74,14 +61,11 @@ function createMemoryKeyedStore<T>(values = new Map<string, unknown>()) {
       return values.delete(key);
     },
     async entries() {
-      return [...values.entries()].map(
-        ([key, value]) =>
-          ({
-            key,
-            value: value as T,
-            createdAt: 0,
-          }) satisfies PluginStateEntry<T>,
-      );
+      return [...values.entries()].map(([key, value]) => ({
+        key,
+        value: value as T,
+        createdAt: 0,
+      }));
     },
     async clear() {
       values.clear();
@@ -225,14 +209,16 @@ export function createMemoryWikiTestHarness() {
     return { rootDir, config };
   }
 
-  function createPluginApi(): MemoryWikiPluginApiHarness {
-    const registerCli = vi.fn();
-    const registerGatewayMethod = vi.fn();
-    const registerMemoryCorpusSupplement = vi.fn();
-    const registerMemoryPromptPreparation = vi.fn();
-    const registerMemoryPromptSupplement = vi.fn();
-    const registerService = vi.fn();
-    const registerTool = vi.fn();
+  function createPluginApi() {
+    const registrations = {
+      registerCli: vi.fn(),
+      registerGatewayMethod: vi.fn(),
+      registerMemoryCorpusSupplement: vi.fn(),
+      registerMemoryPromptPreparation: vi.fn(),
+      registerMemoryPromptSupplement: vi.fn(),
+      registerService: vi.fn(),
+      registerTool: vi.fn(),
+    };
     const api = createTestPluginApi({
       id: "memory-wiki",
       name: "Memory Wiki",
@@ -245,25 +231,10 @@ export function createMemoryWikiTestHarness() {
           openBlobStore: vi.fn(<T>() => createMemoryBlobStore<T>()),
         },
       } as unknown as OpenClawPluginApi["runtime"],
-      registerCli,
-      registerGatewayMethod,
-      registerMemoryCorpusSupplement,
-      registerMemoryPromptPreparation,
-      registerMemoryPromptSupplement,
-      registerService,
-      registerTool,
+      ...registrations,
     });
 
-    return {
-      api,
-      registerCli,
-      registerGatewayMethod,
-      registerMemoryCorpusSupplement,
-      registerMemoryPromptPreparation,
-      registerMemoryPromptSupplement,
-      registerService,
-      registerTool,
-    };
+    return { api, ...registrations };
   }
 
   return {

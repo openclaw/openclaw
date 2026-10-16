@@ -1,4 +1,3 @@
-// Memory Wiki tests cover source sync plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -55,17 +54,21 @@ function createConfig(
   return resolveMemoryWikiConfig({ vaultMode, vault: { path: vaultPath } });
 }
 
+function runSync(
+  config: ReturnType<typeof createConfig>,
+  options: Omit<Parameters<typeof syncMemoryWikiImportedSources>[0], "config"> = {},
+) {
+  return syncMemoryWikiImportedSources({ config, appConfig, ...options });
+}
+
 describe("syncMemoryWikiImportedSources", () => {
   beforeEach(() => {
-    syncBridgeMock.mockReset();
-    syncUnsafeLocalMock.mockReset();
-    refreshIndexesMock.mockReset();
-    syncBridgeMock.mockResolvedValue(bridgeResult);
-    syncUnsafeLocalMock.mockResolvedValue({
+    syncBridgeMock.mockReset().mockResolvedValue(bridgeResult);
+    syncUnsafeLocalMock.mockReset().mockResolvedValue({
       ...bridgeResult,
       workspaces: 0,
     });
-    refreshIndexesMock.mockResolvedValue(refreshResult);
+    refreshIndexesMock.mockReset().mockResolvedValue(refreshResult);
   });
 
   it("does not share a deferred flight with a refreshing one", async () => {
@@ -77,13 +80,9 @@ describe("syncMemoryWikiImportedSources", () => {
       return bridgeGate.promise;
     });
 
-    const deferredSync = syncMemoryWikiImportedSources({
-      config,
-      appConfig,
-      deferIndexRefresh: true,
-    });
+    const deferredSync = runSync(config, { deferIndexRefresh: true });
     await bridgeStarted.promise;
-    const refreshing = syncMemoryWikiImportedSources({ config, appConfig });
+    const refreshing = runSync(config);
     bridgeGate.resolve(bridgeResult);
 
     await expect(refreshing).resolves.toMatchObject({ indexesRefreshed: true });
@@ -98,9 +97,9 @@ describe("syncMemoryWikiImportedSources", () => {
     const bridgeGate = deferred<typeof bridgeResult>();
     syncBridgeMock.mockReturnValueOnce(bridgeGate.promise);
 
-    const first = syncMemoryWikiImportedSources({ config: firstConfig, appConfig });
+    const first = runSync(firstConfig);
     await vi.waitFor(() => expect(syncBridgeMock).toHaveBeenCalledTimes(1));
-    const second = syncMemoryWikiImportedSources({ config: secondConfig, appConfig });
+    const second = runSync(secondConfig);
     await Promise.resolve();
 
     expect(syncBridgeMock).toHaveBeenCalledTimes(1);
@@ -115,11 +114,9 @@ describe("syncMemoryWikiImportedSources", () => {
     const refreshGate = deferred<typeof refreshResult>();
     refreshIndexesMock.mockReturnValueOnce(refreshGate.promise);
 
-    const first = syncMemoryWikiImportedSources({ config, appConfig });
+    const first = runSync(config);
     await vi.waitFor(() => expect(refreshIndexesMock).toHaveBeenCalledTimes(1));
-    const followers = Array.from({ length: 32 }, () =>
-      syncMemoryWikiImportedSources({ config, appConfig }),
-    );
+    const followers = Array.from({ length: 32 }, () => runSync(config));
     await Promise.resolve();
 
     expect(syncBridgeMock).toHaveBeenCalledTimes(1);
@@ -134,8 +131,8 @@ describe("syncMemoryWikiImportedSources", () => {
     const secondResult = { ...bridgeResult, updatedCount: 3 };
     syncBridgeMock.mockResolvedValueOnce(bridgeResult).mockResolvedValueOnce(secondResult);
 
-    await syncMemoryWikiImportedSources({ config, appConfig });
-    await expect(syncMemoryWikiImportedSources({ config, appConfig })).resolves.toMatchObject({
+    await runSync(config);
+    await expect(runSync(config)).resolves.toMatchObject({
       updatedCount: 3,
     });
 
@@ -153,7 +150,7 @@ describe("syncMemoryWikiImportedSources", () => {
     });
     await blockerEntered.promise;
 
-    const sync = syncMemoryWikiImportedSources({ config, appConfig });
+    const sync = runSync(config);
     await Promise.resolve();
     expect(syncBridgeMock).not.toHaveBeenCalled();
 
@@ -177,9 +174,9 @@ describe("syncMemoryWikiImportedSources", () => {
     const secondResult = { ...bridgeResult, pagePaths: ["sources/beta.md"] };
     syncBridgeMock.mockReturnValueOnce(firstGate.promise).mockResolvedValueOnce(secondResult);
 
-    const first = syncMemoryWikiImportedSources({ config, appConfig: firstAppConfig });
+    const first = runSync(config, { appConfig: firstAppConfig });
     await vi.waitFor(() => expect(syncBridgeMock).toHaveBeenCalledTimes(1));
-    const second = syncMemoryWikiImportedSources({ config, appConfig: secondAppConfig });
+    const second = runSync(config, { appConfig: secondAppConfig });
     await Promise.resolve();
     expect(syncBridgeMock).toHaveBeenCalledTimes(1);
 
@@ -197,9 +194,9 @@ describe("syncMemoryWikiImportedSources", () => {
     const bridgeGate = deferred<typeof bridgeResult>();
     syncBridgeMock.mockReturnValueOnce(bridgeGate.promise);
 
-    const bridge = syncMemoryWikiImportedSources({ config: bridgeConfig, appConfig });
+    const bridge = runSync(bridgeConfig);
     await vi.waitFor(() => expect(syncBridgeMock).toHaveBeenCalledTimes(1));
-    const unsafe = syncMemoryWikiImportedSources({ config: unsafeConfig, appConfig });
+    const unsafe = runSync(unsafeConfig);
     await Promise.resolve();
     expect(syncUnsafeLocalMock).not.toHaveBeenCalled();
 
@@ -217,9 +214,9 @@ describe("syncMemoryWikiImportedSources", () => {
     const secondResult = { ...bridgeResult, pagePaths: ["sources/other.md"] };
     syncBridgeMock.mockReturnValueOnce(firstGate.promise).mockResolvedValueOnce(secondResult);
 
-    const first = syncMemoryWikiImportedSources({ config: firstConfig, appConfig });
+    const first = runSync(firstConfig);
     await vi.waitFor(() => expect(syncBridgeMock).toHaveBeenCalledTimes(1));
-    const second = syncMemoryWikiImportedSources({ config: secondConfig, appConfig });
+    const second = runSync(secondConfig);
     await vi.waitFor(() => expect(syncBridgeMock).toHaveBeenCalledTimes(2));
 
     await expect(second).resolves.toMatchObject({ pagePaths: ["sources/other.md"] });
@@ -231,10 +228,8 @@ describe("syncMemoryWikiImportedSources", () => {
     const config = createConfig();
     syncBridgeMock.mockRejectedValueOnce(new Error("bridge unavailable"));
 
-    await expect(syncMemoryWikiImportedSources({ config, appConfig })).rejects.toThrow(
-      "bridge unavailable",
-    );
-    await expect(syncMemoryWikiImportedSources({ config, appConfig })).resolves.toMatchObject({
+    await expect(runSync(config)).rejects.toThrow("bridge unavailable");
+    await expect(runSync(config)).resolves.toMatchObject({
       pagePaths: bridgeResult.pagePaths,
     });
     expect(syncBridgeMock).toHaveBeenCalledTimes(2);
