@@ -633,8 +633,16 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     expect(fixture.setContextReplacementHook).toHaveBeenCalledOnce();
     const replacementHook = fixture.setContextReplacementHook.mock.calls[0]?.[0];
     expect(replacementHook).toEqual(expect.any(Function));
+    fixture.skillInstructionDeliveryMarkers.captureInvocationFingerprint(
+      "pending-skill-read",
+      "fp-generation-b",
+    );
     replacementHook?.(40, 120);
     expect(fixture.skillInstructionDeliveryCache.size).toBe(0);
+    // The compaction clear drops unconsumed markers together with the cache.
+    expect(
+      fixture.skillInstructionDeliveryMarkers.takeInvocationFingerprint("pending-skill-read"),
+    ).toBeUndefined();
     expect(fixture.order).toEqual([
       "guards",
       "stream-ready",

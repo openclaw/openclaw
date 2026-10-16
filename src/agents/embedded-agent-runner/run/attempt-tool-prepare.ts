@@ -20,7 +20,10 @@ import {
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
 import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
-import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
+import {
+  createSkillInstructionDeliveryCache,
+  createSkillInstructionDeliveryMarkers,
+} from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
@@ -189,6 +192,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   // generation so retained tool-result text cannot authorize stale coordinates.
   const computerContextEpoch: ComputerContextEpoch = { value: 0 };
   const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
+  const skillInstructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
   const toolSearchCatalogRef = toolSurfaceRuntime.toolSearchCatalogRef;
   const nestedToolActivityState = createAttemptNestedToolActivityState();
   const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
@@ -387,6 +391,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         toolConstructionPlan: toolConstructionPlan.codingToolConstructionPlan,
         computerContextEpoch,
         skillInstructionDeliveryCache,
+        skillInstructionDeliveryMarkers,
         registerRunCleanup: (cleanup) => generationCleanups.push(cleanup),
         inboundEventKind: attempt.currentInboundEventKind,
         inputProvenance: attempt.inputProvenance,
@@ -523,6 +528,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       codeModeSkills,
       computerContextEpoch,
       skillInstructionDeliveryCache,
+      skillInstructionDeliveryMarkers,
       cronCreatorToolAllowlist,
       cronCreatorToolAllowlistCaptureRef,
       effectiveToolsAllow,

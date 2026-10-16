@@ -44,6 +44,7 @@ import {
   type DiagnosticTracePropagationBridge,
   formatPropagatedDiagnosticTraceparent,
   registerDiagnosticTracePropagationBridge,
+  resetDiagnosticTracePropagationForTest,
 } from "./diagnostic-trace-propagation.js";
 
 function modelStartedEvent(runId = "run-1", callId = "call-1") {
@@ -63,6 +64,7 @@ describe("diagnostic-events", () => {
 
   afterEach(() => {
     resetDiagnosticEventsForTest();
+    resetDiagnosticTracePropagationForTest();
     vi.restoreAllMocks();
   });
 
@@ -329,6 +331,12 @@ describe("diagnostic-events", () => {
         trustedEvents.push({ event, privateData });
       });
       setDiagnosticsEnabledForProcess(enabled);
+      // The retained fingerprint rides the payload only while an
+      // exporter-owned tracing consumer is active: register one so this
+      // table keeps asserting the trusted-only routing of a live stamp.
+      const unregisterBridge = registerDiagnosticTracePropagationBridge({
+        resolveTraceContext: () => undefined,
+      });
 
       emitTrustedSkillUsedDiagnosticEvent(
         {
@@ -336,6 +344,7 @@ describe("diagnostic-events", () => {
           skillName: "Daily Brief",
           skillSource: "workspace",
           activation: "read",
+          skillFingerprint: "0f4c2a1b3d5e7f9a",
         },
         {
           skillUsage: {
@@ -348,10 +357,12 @@ describe("diagnostic-events", () => {
       await waitForDiagnosticEventsDrained();
 
       expect(JSON.stringify(publicEvents)).not.toContain(skillFile);
+      expect(JSON.stringify(publicEvents)).not.toContain("0f4c2a1b3d5e7f9a");
       expect(JSON.stringify(sharedEvents)).not.toContain(skillFile);
       expect(JSON.stringify(trustedEvents[0]?.event)).not.toContain(skillFile);
       expect(trustedEvents).toHaveLength(1);
       expect(trustedEvents[0]?.event).not.toHaveProperty("skillFile");
+      expect(trustedEvents[0]?.event).toMatchObject({ skillFingerprint: "0f4c2a1b3d5e7f9a" });
       expect(trustedEvents[0]?.privateData.skillUsage?.skillFile).toBe(skillFile);
       expect(readSkillFile).toHaveBeenCalledOnce();
       expect(metadataOnly).toHaveBeenCalledExactlyOnceWith(
@@ -360,8 +371,97 @@ describe("diagnostic-events", () => {
         {},
       );
       expect(Object.isFrozen(metadataOnly.mock.calls[0]?.[2])).toBe(true);
+      unregisterBridge();
     },
   );
+
+  it("drops a queued skill fingerprint whose tracing bridge retires before dispatch", async () => {
+    const trustedEvents: Array<{
+      event: DiagnosticEventPayload;
+      privateData: DiagnosticEventPrivateData;
+    }> = [];
+    onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      trustedEvents.push({ event, privateData });
+    });
+    setDiagnosticsEnabledForProcess(true);
+    // Emit-time admission under an active exporter-owned tracing consumer:
+    // the async queue accepts the fingerprint while tracing is live.
+    const unregisterBridge = registerDiagnosticTracePropagationBridge({
+      resolveTraceContext: () => undefined,
+    });
+    emitTrustedSkillUsedDiagnosticEvent(
+      {
+        type: "skill.used",
+        skillName: "Pond",
+        skillSource: "workspace",
+        activation: "read",
+        skillFingerprint: "ac7cc98e",
+      },
+      { skillUsage: { skillFile: "/workspace/skills/pond/SKILL.md" } },
+    );
+    // The bridge retires between queueing and the async drain: delivery
+    // re-applies the tracing gate at dispatch, so the fingerprint never
+    // reaches a listener while the skill usage event and its accounting
+    // still dispatch.
+    unregisterBridge();
+    await waitForDiagnosticEventsDrained();
+
+    expect(trustedEvents).toHaveLength(1);
+    expect(trustedEvents[0]?.event).toMatchObject({
+      type: "skill.used",
+      skillName: "Pond",
+      skillSource: "workspace",
+      activation: "read",
+    });
+    expect(trustedEvents[0]?.event).not.toHaveProperty("skillFingerprint");
+    expect(trustedEvents[0]?.privateData.skillUsage?.skillFile).toBe(
+      "/workspace/skills/pond/SKILL.md",
+    );
+  });
+
+  it("drops a queued skill fingerprint from pending-queue inspection after its tracing bridge retires", async () => {
+    const inspected: DiagnosticEventPayload[] = [];
+    setDiagnosticsEnabledForProcess(true);
+    // Upstream gates queueing on an interested consumer: register one so the
+    // skill.used payload actually enters the async queue for inspection.
+    const stopListener = onTrustedInternalDiagnosticEvent(() => {});
+    // Emit-time admission under an active exporter-owned tracing consumer:
+    // the async queue accepts the fingerprint while tracing is live.
+    const unregisterBridge = registerDiagnosticTracePropagationBridge({
+      resolveTraceContext: () => undefined,
+    });
+    emitTrustedSkillUsedDiagnosticEvent(
+      {
+        type: "skill.used",
+        skillName: "Pond",
+        skillSource: "workspace",
+        activation: "read",
+        skillFingerprint: "7f4a9c22",
+      },
+      { skillUsage: { skillFile: "/workspace/skills/pond/SKILL.md" } },
+    );
+    // The bridge retires between queueing and the drain: pending-queue
+    // inspection sees the same boundary as delivery, so the inspector copy
+    // drops the fingerprint while the queued skill usage event — and its
+    // accounting — stays intact for the drain.
+    unregisterBridge();
+    expect(
+      hasPendingInternalDiagnosticEvent((event) => {
+        inspected.push(event);
+        return event.type === "skill.used";
+      }),
+    ).toBe(true);
+    expect(inspected).toHaveLength(1);
+    expect(inspected[0]).not.toHaveProperty("skillFingerprint");
+    expect(inspected[0]).toMatchObject({
+      type: "skill.used",
+      skillName: "Pond",
+      skillSource: "workspace",
+      activation: "read",
+    });
+    stopListener();
+    await waitForDiagnosticEventsDrained();
+  });
 
   it("emits canonical security events only through the trusted security helper", () => {
     const publicEvents: DiagnosticEventPayload[] = [];

@@ -7,6 +7,7 @@ import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
+import type { SkillInstructionDeliveryMarkers } from "./agent-tools.read.js";
 import type { AgentRunClientContext, AgentRunMessageContext } from "./command/shared-types.js";
 import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
 import type { resolveConversationQuestionInputMode } from "./conversation-capability-profile.js";
@@ -201,6 +202,8 @@ export type OpenClawToolsOptions = {
   /** Prepared exec/process isolation key for this run. */
   processScopeKey?: string;
   inputProvenance?: InputProvenance;
+  /** Attempt-local delivery receipts captured by skills_read serving reads. */
+  skillInstructionDeliveryMarkers?: SkillInstructionDeliveryMarkers;
 } & OpenClawSharedToolsOptions &
   AgentRunClientContext &
   AgentRunMessageContext &

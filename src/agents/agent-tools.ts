@@ -262,6 +262,7 @@ function* assembleOpenClawCodingTools(
           skillReadResources,
           skillInstructionPaths: options?.skillUsagePaths?.map((entry) => entry.readPath),
           skillInstructionDeliveryCache: options?.skillInstructionDeliveryCache,
+          skillInstructionDeliveryMarkers: options?.skillInstructionDeliveryMarkers,
           memoryWriteProvenance,
           execDefaults: {
             ...options?.exec,
@@ -609,6 +610,9 @@ function* assembleOpenClawCodingTools(
     cwd: codingRoot,
     workspaceDir: workspaceRoot,
     ...(options?.skillsSnapshot ? { skillsSnapshot: options.skillsSnapshot } : {}),
+    ...(options?.skillInstructionDeliveryMarkers
+      ? { skillInstructionDeliveryMarkers: options.skillInstructionDeliveryMarkers }
+      : {}),
     ...(options?.skillUsagePaths ? { skillUsagePaths: options.skillUsagePaths } : {}),
     ...(sandboxRoot && sandboxFsBridge && allowWorkspaceWrites
       ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge } }

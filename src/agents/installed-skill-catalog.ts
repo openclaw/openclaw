@@ -12,6 +12,12 @@ export type InstalledSkill = CodeModeSkill & {
   assertCurrent?: () => void;
   /** The owner must bound I/O before allocating the returned content. */
   readSearchContent?: (maxBytes: number, signal?: AbortSignal) => Promise<string>;
+  /**
+   * Retained loaded-bundle identity this entry's snapshot skill carries; the
+   * skills_read serving read resolves it by lookup at the delivery boundary.
+   * Unset under sandbox, where no bundle identity is attributed.
+   */
+  bundleFingerprint?: string;
 };
 
 const MAX_QUERY_CHARS = 1_000;
