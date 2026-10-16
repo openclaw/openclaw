@@ -265,13 +265,13 @@ suite.define(() => {
         const measurement = await page.evaluate(() => ({
           tags: Object.fromEntries(window.chatBootRenderCounts),
           closedMenuItems: document.querySelectorAll(
-            'openclaw-chat-pane wa-dropdown:not([open]) wa-dropdown-item, openclaw-chat-pane [role="menu"][popover]:not(:popover-open) [role^="menuitem"]',
+            'openclaw-chat-pane [role="menu"][popover]:not(:popover-open) [role^="menuitem"]',
           ).length,
           closedMenuHosts: Array.from(
             document.querySelectorAll(
-              'openclaw-chat-pane wa-dropdown:not([open]) wa-dropdown-item, openclaw-chat-pane [role="menu"][popover]:not(:popover-open) [role^="menuitem"]',
+              'openclaw-chat-pane [role="menu"][popover]:not(:popover-open) [role^="menuitem"]',
             ),
-            (item) => item.closest('wa-dropdown, [role="menu"][popover]')?.className,
+            (item) => item.closest('[role="menu"][popover]')?.className,
           ),
         }));
         await writeFile(

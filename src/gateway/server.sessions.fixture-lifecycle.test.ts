@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi, type TestContext } from "vitest";
+import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -87,12 +88,21 @@ vi.mock("./server.js", async (importOriginal) => ({
 
 const { afterAll, afterEach, beforeEach, expect, test } =
   await vi.importActual<typeof import("vitest")>("vitest");
-const runGatewayFixtureFork = createGatewayFixtureFork(afterAll);
 await import("./server.sessions.create.worktrees.test.js");
 const consumerHooks = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
 const sessions = await import("./test/server-sessions.test-helpers.js");
 const serverHarness = await import("./server.e2e-ws-harness.js");
 const gatewayHelpers = await import("./test-helpers.server.js");
+// Prepare during collection; each isolated child keeps its own shutdown deadline.
+const fixtureWorkers = createVitestWorkerRun();
+afterAll(() => fixtureWorkers.dispose());
+try {
+  await fixtureWorkers.prepare();
+} catch (error) {
+  await fixtureWorkers.dispose();
+  throw error;
+}
+const runGatewayFixtureFork = createGatewayFixtureFork(fixtureWorkers, afterAll);
 const startHarness = serverHarness.startGatewayServerHarness;
 let env: ReturnType<typeof captureEnv>;
 beforeEach(() => {

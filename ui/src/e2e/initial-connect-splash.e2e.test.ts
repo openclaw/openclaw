@@ -658,7 +658,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       @keyframes pulse { to { opacity: .2; } }
       </style><div id="scene"></div><div id="presentation"></div>`);
     await page.locator("#presentation").evaluate((host) => {
-      // Capture consumers also select Web Awesome shadow parts. Their host's
+      // Capture consumers also select shadow content. Its host's
       // presentation affects the pixels even though parentElement stops at the root.
       const root = host.attachShadow({ mode: "open" });
       root.innerHTML = '<div id="row"><div id="pulse"></div></div>';
