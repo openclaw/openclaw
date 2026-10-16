@@ -308,7 +308,7 @@ describe("compileMemoryWikiVault", () => {
     expect(sourcePage).not.toContain("### Referenced By");
   });
 
-  it("records backlinks from shortest-path and heading wikilinks", async () => {
+  it("records backlinks from shortest-path, heading, and block wikilinks", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
       initialize: true,
@@ -327,11 +327,16 @@ describe("compileMemoryWikiVault", () => {
       frontmatter: { pageType: "concept", id: "concept.release-train", title: "Release Train" },
       body: "# Release Train\n\nSee [[entities/brad-groux#Responsibilities|Brad]].\n",
     });
+    await writePage(path.join(rootDir, "concepts", "block-reference.md"), {
+      frontmatter: { pageType: "concept", id: "concept.block-reference", title: "Block Reference" },
+      body: "# Block Reference\n\nSee [[brad-groux#^block]].\n",
+    });
 
     await compileMemoryWikiVault(config);
 
     const brad = await fs.readFile(path.join(rootDir, "entities", "brad-groux.md"), "utf8");
     expect(brad).toContain("### Referenced By");
+    expect(brad).toContain("- [[concepts/block-reference|Block Reference]]");
     expect(brad).toContain("- [[concepts/release-train|Release Train]]");
     expect(brad).toContain("- [[concepts/teams-rollout|Teams Rollout]]");
   });
