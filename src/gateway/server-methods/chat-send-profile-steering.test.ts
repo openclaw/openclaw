@@ -29,6 +29,7 @@ import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createExpectedProfileBinding } from "../expected-profile.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
+import { bindSteeringTools } from "./chat-send-authority.test-support.js";
 import {
   setClientProfile,
   setNativeIosClient,
@@ -60,9 +61,7 @@ describe("native profile-bound steering", () => {
       const fingerprint = "native-receipt-tools";
       let preparingNative = false;
       let held = false;
-      operation.bindToolAuthoritySnapshot({
-        fingerprint: () => fingerprint,
-        project: () => fingerprint,
+      bindSteeringTools(operation, fingerprint, {
         projectAsync: async () => {
           if (preparingNative && !held) {
             held = true;
@@ -72,7 +71,6 @@ describe("native profile-bound steering", () => {
           return fingerprint;
         },
       });
-      operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
       replyRunRegistry.bindSourceTurnId(operation, sourceTurnId);
       operation.setPhase("running");
       const native = createNativeSessionBindingAuthority(
@@ -175,11 +173,7 @@ describe("native profile-bound steering", () => {
       setNativeIosClient(fixture.client);
       setClientProfile(fixture.client, profile);
       const fingerprint = "native-steering-tools";
-      operation.bindToolAuthoritySnapshot({
-        fingerprint: () => fingerprint,
-        project: () => fingerprint,
-      });
-      operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
+      bindSteeringTools(operation, fingerprint);
       operation.setPhase("running");
       const entered = createDeferred();
       const release = createDeferred();
@@ -263,14 +257,12 @@ describe("native profile-bound steering", () => {
         const operation = fixture.activeRun!;
         const fingerprint = "v1-steering-tools";
         let originalOperatorAuthority: AdmittedRunOperatorAuthority | undefined;
-        operation.bindToolAuthoritySnapshot({
-          fingerprint: () => fingerprint,
+        bindSteeringTools(operation, fingerprint, {
           project: (incoming) => {
             originalOperatorAuthority = incoming.operatorAuthority;
             return fingerprint;
           },
         });
-        operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
         operation.setPhase("running");
         const write = vi.fn(async () => undefined);
         const questionCall = resolveAgentQuestionGatewayCall(write);

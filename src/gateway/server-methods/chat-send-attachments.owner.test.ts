@@ -1,6 +1,7 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { insertRegistryWorktree, updateRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -10,8 +11,10 @@ import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-ident
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readLocalWorkspaceProjection } from "../worker-environments/local-workspace-store.test-support.js";
-import { prepareChatSendAttachments } from "./chat-send-attachments.js";
-import { normalizeChatSendRequest } from "./chat-send-request.js";
+import {
+  attachmentParams,
+  prepareAttachmentFixture,
+} from "./chat-send-attachments.test-support.js";
 
 it.each(["off", "all"] as const)(
   "prepares both owners' global attachments with sandbox %s",
@@ -41,50 +44,19 @@ it.each(["off", "all"] as const)(
       for (const agentId of ["main", "work"]) {
         const bytes = `${agentId} attachment contents`;
         const fileName = "notes café 雪 🦞.txt";
-        const request = await normalizeChatSendRequest({
-          client: null,
-          params: {
+        const { result, respond } = await prepareAttachmentFixture({
+          params: attachmentParams(`media-${agentId}`, fileName, bytes, {
             agentId,
             sessionKey: "global",
-            message: "read the file",
-            idempotencyKey: `media-${agentId}`,
-            attachments: [
-              {
-                fileName,
-                mimeType: "text/plain",
-                content: Buffer.from(bytes).toString("base64"),
-              },
-            ],
-          },
-        });
-        expect(request.ok).toBe(true);
-        if (!request.ok) {
-          throw new Error(request.error);
-        }
-        const respond = vi.fn();
-        const controller = new AbortController();
-        const result = await prepareChatSendAttachments({
-          request: request.value,
+          }),
           session: {
             cfg,
             sessionKey: "global",
             agentId,
-            resolvedSessionModel: { provider: "fixture", model: "fixture" },
-            clientRunId: `media-${agentId}`,
           },
-          admission: {
-            activeRunAbort: { controller },
-            assertWorkAdmissionCurrent: () => controller.signal.throwIfAborted(),
-            cleanupAdmittedRun() {},
-          },
-          context: { logGateway: createSubsystemLogger("test/media-owner") },
-          respond,
-        } as unknown as Parameters<typeof prepareChatSendAttachments>[0]);
+        });
         expect(respond.mock.calls).toEqual([]);
-        expect(result.ok).toBe(true);
-        if (!result.ok) {
-          throw new Error("attachment preparation failed");
-        }
+        assert(result.ok === true, "attachment preparation failed");
         const media = result.value.mediaPathOffloads[0]!;
         expect(media.fileName).toBe(fileName);
         const file = path.resolve(media.workspaceDir!, media.path!);
@@ -163,45 +135,23 @@ it("stages managed session follow-ups in their projection and rejects unrelated 
           ? { spawnedBy: "agent:main:parent", spawnedWorkspaceDir: checkout }
           : {}),
       };
-      const request = await normalizeChatSendRequest({
-        client: null,
-        params: {
-          sessionKey,
-          message: "read the selection comment",
-          idempotencyKey: `managed-${selection}`,
-          attachments: [
-            {
-              fileName: "selection-comment.txt",
-              mimeType: "text/plain",
-              content: Buffer.from("Please clarify this selection.").toString("base64"),
-            },
-          ],
-        },
-      });
-      if (!request.ok) {
-        throw new Error(request.error);
-      }
-      const respond = vi.fn();
-      const controller = new AbortController();
-      const result = await prepareChatSendAttachments({
-        request: request.value,
+      const { result, respond } = await prepareAttachmentFixture({
+        params: attachmentParams(
+          `managed-${selection}`,
+          "selection-comment.txt",
+          "Please clarify this selection.",
+          { sessionKey, message: "read the selection comment" },
+        ),
         session: {
           cfg,
           sessionKey,
           agentId: "main",
           entry: { ...entry, spawnedCwd: state.workspaceDir },
-          resolvedSessionModel: { provider: "fixture", model: "fixture" },
-          clientRunId: `managed-${selection}`,
         },
-        admission: {
-          activeRunAbort: { controller, cleanup() {} },
-          admittedSessionEntry: selectedEntry,
-          assertWorkAdmissionCurrent: () => controller.signal.throwIfAborted(),
-          cleanupAdmittedRun() {},
-        },
+        admission: { admittedSessionEntry: selectedEntry },
+        abortCleanup() {},
         context: { logGateway: createSubsystemLogger("test/managed-media") },
-        respond,
-      } as unknown as Parameters<typeof prepareChatSendAttachments>[0]);
+      });
       if (selection === "unrelated" || selection === "removed") {
         expect(result.ok).toBe(false);
         expect(respond).toHaveBeenCalledWith(
@@ -215,10 +165,7 @@ it("stages managed session follow-ups in their projection and rejects unrelated 
         continue;
       }
       expect(respond.mock.calls).toEqual([]);
-      expect(result.ok).toBe(true);
-      if (!result.ok) {
-        throw new Error("managed attachment preparation failed");
-      }
+      assert(result.ok === true, "managed attachment preparation failed");
       const media = result.value.mediaPathOffloads[0]!;
       const projection = await readLocalWorkspaceProjection(worktree.id);
       expect(projection?.session_key).toBe(sessionKey);

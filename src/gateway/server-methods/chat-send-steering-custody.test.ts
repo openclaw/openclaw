@@ -52,6 +52,7 @@ import {
 } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { prepareGatewayConnectOperatorAccess } from "../server/ws-connection/connect-operator-access.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
+import { bindSteeringTools } from "./chat-send-authority.test-support.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
@@ -644,11 +645,7 @@ describe("steering input custody", () => {
         backingRun = session.prompt("Continue the original backing work.");
         const cancel = vi.fn();
         const fingerprint = "steering-commit-tools";
-        operation.bindToolAuthoritySnapshot({
-          fingerprint: () => fingerprint,
-          project: () => fingerprint,
-        });
-        operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
+        bindSteeringTools(operation, fingerprint);
         operation.setPhase("running");
         operation.attachBackend({
           kind: "embedded",

@@ -32,6 +32,7 @@ import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
+import { loadRealChatDispatch } from "./chat-send-authority.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
@@ -45,12 +46,7 @@ vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOrigina
 test.for(["accepted", "unavailable", "rejected"] as const)(
   "preserves a prestart steer through workspace preparation when late injection is %s",
   async (injection, { signal }) => {
-    const realDispatch = await vi.importActual<typeof import("../../auto-reply/dispatch.js")>(
-      "../../auto-reply/dispatch.js",
-    );
-    const realReply = await vi.importActual<typeof import("../../auto-reply/reply/get-reply.js")>(
-      "../../auto-reply/reply/get-reply.js",
-    );
+    const realDispatch = await loadRealChatDispatch();
     const workspace = await initializeRepository(tempDirs.make("openclaw-prestart-steer-"), "repo");
     testState.agentConfig = { workspace };
     const { storePath } = await createSessionStoreDir();
@@ -183,10 +179,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
           queuedSettled.resolve();
         };
       }
-      return realDispatch.dispatchInboundMessage({
-        ...params,
-        replyResolver: realReply.getReplyFromConfig,
-      });
+      return realDispatch(params);
     });
     try {
       const created = await directSessionReq<{ key: string; runId: string }>(
@@ -347,12 +340,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
 test("queues a fresh follow-up while stopped preparation still owns the reply slot", async ({
   signal,
 }) => {
-  const realDispatch = await vi.importActual<typeof import("../../auto-reply/dispatch.js")>(
-    "../../auto-reply/dispatch.js",
-  );
-  const realReply = await vi.importActual<typeof import("../../auto-reply/reply/get-reply.js")>(
-    "../../auto-reply/reply/get-reply.js",
-  );
+  const realDispatch = await loadRealChatDispatch();
   testState.agentConfig = { workspace: tempDirs.make("openclaw-stopped-preparation-") };
   const { storePath } = await createSessionStoreDir();
   const preparationStarted = createDeferred();
@@ -413,10 +401,7 @@ test("queues a fresh follow-up while stopped preparation still owns the reply sl
   dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
     const params = raw as Parameters<typeof dispatchInboundMessage>[0];
     try {
-      return await realDispatch.dispatchInboundMessage({
-        ...params,
-        replyResolver: realReply.getReplyFromConfig,
-      });
+      return await realDispatch(params);
     } finally {
       if (params.replyOptions?.runId === followupRunId) {
         followupDispatched.resolve();

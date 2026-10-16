@@ -35,6 +35,7 @@ import * as sessionAdmission from "../../sessions/session-lifecycle-admission.js
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
+import { loadRealChatDispatch } from "./chat-send-authority.test-support.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import type { RespondFn } from "./types.js";
 
@@ -106,12 +107,7 @@ it.for([
         return pending;
       });
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const realDispatch = await vi.importActual<typeof import("../../auto-reply/dispatch.js")>(
-      "../../auto-reply/dispatch.js",
-    );
-    const realReply = await vi.importActual<typeof import("../../auto-reply/reply/get-reply.js")>(
-      "../../auto-reply/reply/get-reply.js",
-    );
+    const dispatchActual = await loadRealChatDispatch();
     dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
       const params = raw as Parameters<typeof dispatchInboundMessage>[0];
       recorder = params.replyOptions?.userTurnTranscriptRecorder;
@@ -128,11 +124,7 @@ it.for([
         settled.resolve();
       };
       try {
-        return await realDispatch.dispatchInboundMessage({
-          ...params,
-          cfg: config,
-          replyResolver: realReply.getReplyFromConfig,
-        });
+        return await dispatchActual({ ...params, cfg: config });
       } finally {
         dispatched.resolve();
       }
