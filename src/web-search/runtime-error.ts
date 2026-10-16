@@ -1,3 +1,7 @@
+import {
+  buildOAuthRefreshFailureLoginCommand,
+  classifyOAuthRefreshFailureError,
+} from "../agents/auth-profiles/oauth-refresh-failure.js";
 import { isSignalTimeoutReason } from "../agents/failover/error.js";
 import { formatToolExecutionErrorMessage } from "../agents/tool-result-error.js";
 import { diagnosticHttpStatusCode } from "../infra/diagnostic-error-metadata.js";
@@ -15,9 +19,24 @@ export class WebSearchProviderError extends Error {
 
   /** Model-facing diagnostics contain no upstream response body or credentials. */
   toResult(): RunWebSearchResult {
+    const oauthFailure = classifyOAuthRefreshFailureError(this.cause);
     const status = diagnosticHttpStatusCode(this.cause);
     let message: string;
-    if (!status && isSignalTimeoutReason(this.cause)) {
+    if (oauthFailure) {
+      // Provider id and login command only: profile ids can name the signed-in account.
+      const signIn = oauthFailure.provider ? `${oauthFailure.provider} sign-in` : "sign-in";
+      const state = oauthFailure.reason
+        ? "expired and could not be refreshed"
+        : "could not be refreshed";
+      const chatLogin = buildOAuthRefreshFailureLoginCommand(oauthFailure.provider, {
+        surface: "chat",
+      });
+      message =
+        `Search failed: this search provider's ${signIn} ${state}. ` +
+        `To fix it, send \`${chatLogin}\` from a private chat or Control UI session, ` +
+        `or run \`${buildOAuthRefreshFailureLoginCommand(oauthFailure.provider)}\` on the Gateway. ` +
+        "Until then, tell the user web search is unavailable and use another route.";
+    } else if (!status && isSignalTimeoutReason(this.cause)) {
       // Only a numeric budget crosses the boundary; never parse upstream diagnostic prose.
       const timeoutMs: unknown =
         this.cause instanceof Error

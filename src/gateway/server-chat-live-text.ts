@@ -5,9 +5,11 @@ import {
   type ChatStatusEvent,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
 import {
+  appendChatCanvasBlocks,
   appendChatCanvasBlocksToMessage,
   type ChatCanvasBlock,
 } from "./chat-display-projection.canvas.js";
@@ -116,6 +118,34 @@ export function chatWireProjection(params: {
         ),
       ),
   };
+}
+
+export function projectChatTerminalMessage(params: {
+  runId: string;
+  text: string;
+  displayText?: string;
+  timestamp: number;
+  canvasBlocks: ChatCanvasBlock[];
+  idempotencyKey?: string;
+}) {
+  const { text, displayText, timestamp, canvasBlocks, runId, idempotencyKey } = params;
+  return appendChatCanvasBlocksToMessage(
+    {
+      role: "assistant",
+      content: text ? [{ type: "text", text }] : [],
+      timestamp,
+      ...(displayText === undefined
+        ? {}
+        : {
+            [ASSISTANT_DISPLAY_CONTENT_FIELD]: appendChatCanvasBlocks(
+              displayText ? [{ type: "text", text: displayText }] : [],
+              canvasBlocks,
+            ),
+          }),
+      ...(idempotencyKey ? { __openclaw: { runId, idempotencyKey } } : {}),
+    },
+    canvasBlocks,
+  );
 }
 
 export function assistantWireProjection(

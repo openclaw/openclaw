@@ -76,7 +76,7 @@ function buildClawHubPluginsParams(commandBodyNormalized: string, workspaceDir: 
   });
 }
 
-describe("chat plugin install explicit ClawHub selectors", () => {
+describe("chat plugin install ClawHub selectors", () => {
   afterEach(async () => {
     installPluginFromNpmPackArchiveMock.mockReset();
     installPluginFromNpmSpecMock.mockReset();
@@ -130,7 +130,7 @@ describe("chat plugin install explicit ClawHub selectors", () => {
           () =>
             handlePluginsCommand(
               buildClawHubPluginsParams(
-                "/plugins install clawhub:community/demo --accept-capabilities",
+                "/plugins install community/demo --accept-capabilities",
                 workspaceDir,
               ),
               true,

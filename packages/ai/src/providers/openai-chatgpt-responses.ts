@@ -861,10 +861,10 @@ function createWebSocketTransportError(message: string, cause?: Error): Error {
 }
 
 async function connectWebSocket(
-  url: string,
-  headers: Headers,
+  authority: CodexWebSocketAuthority,
   signal?: AbortSignal,
 ): Promise<WebSocketLike> {
+  const { url, headers, transportHost } = authority;
   const WebSocketCtor = await getWebSocketConstructor();
   if (!WebSocketCtor) {
     throw new Error("WebSocket transport is not available in this runtime");
@@ -878,7 +878,10 @@ async function connectWebSocket(
     let socket: WebSocketLike;
 
     try {
-      socket = new WebSocketCtor(url, { headers: wsHeaders });
+      // The cached socket outlives the turn; its native resources must not retain that turn.
+      socket = transportHost.runInDetachedAsyncContext(
+        () => new WebSocketCtor(url, { headers: wsHeaders }),
+      );
     } catch (error) {
       reject(error instanceof Error ? error : new Error(String(error)));
       return;
@@ -933,7 +936,6 @@ async function acquireWebSocket(
   entry?: CachedWebSocketConnection;
   release: (options?: { keep?: boolean }) => void;
 }> {
-  const { url, headers } = authority;
   const lease = (socket: WebSocketLike, entry?: CachedWebSocketConnection) => ({
     socket,
     entry,
@@ -953,7 +955,7 @@ async function acquireWebSocket(
     },
   });
   if (!sessionId) {
-    return lease(await connectWebSocket(url, headers, signal));
+    return lease(await connectWebSocket(authority, signal));
   }
 
   const cached = state.sessionCache.get(sessionId);
@@ -977,7 +979,7 @@ async function acquireWebSocket(
       return lease(cached.socket, cached);
     }
     if (cached.busy) {
-      return lease(await connectWebSocket(url, headers, signal));
+      return lease(await connectWebSocket(authority, signal));
     }
 
     if (!isWebSocketReusable(cached.socket)) {
@@ -987,7 +989,7 @@ async function acquireWebSocket(
     }
   }
 
-  const socket = await connectWebSocket(url, headers, signal);
+  const socket = await connectWebSocket(authority, signal);
   const entry: CachedWebSocketConnection = {
     socket,
     authority,

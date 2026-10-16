@@ -15,7 +15,7 @@ Adds Fireworks model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/fireworks-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/fireworks-provider`
+- Install route: npm or ClawHub: `@openclaw/fireworks-provider`
 
 ## Surface
 

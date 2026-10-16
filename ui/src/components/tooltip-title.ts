@@ -2,7 +2,10 @@ import "./tooltip.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { showToast } from "../lib/toast.ts";
-import { ownsHoverPreview } from "./link-reader-hovercard-registration.ts";
+import {
+  HOVER_PREVIEW_UNAVAILABLE_EVENT,
+  ownsHoverPreview,
+} from "./link-reader-hovercard-registration.ts";
 import { collectTooltipNameText, isTooltipTriggerElement } from "./tooltip-content.ts";
 import { resolveTransientContainer } from "./transient-container.ts";
 
@@ -178,7 +181,13 @@ export function installTitleTooltips(ownerDocument: Document) {
         break;
       }
     }
-    const input = event.type === "focusin" ? "focus" : "pointer";
+    const input =
+      event.type === "focusin" ||
+      (event.type === HOVER_PREVIEW_UNAVAILABLE_EVENT &&
+        event instanceof CustomEvent &&
+        event.detail === "focus")
+        ? "focus"
+        : "pointer";
     const previewOwned = ownsPreview(link);
     if (anchor === active?.anchor && previewOwned === active?.previewOwned) {
       if (active) {
@@ -279,9 +288,11 @@ export function installTitleTooltips(ownerDocument: Document) {
   };
   ownerDocument.addEventListener("pointerover", discover, true);
   ownerDocument.addEventListener("focusin", discover, true);
+  ownerDocument.addEventListener(HOVER_PREVIEW_UNAVAILABLE_EVENT, discover, true);
   return () => {
     ownerDocument.removeEventListener("pointerover", discover, true);
     ownerDocument.removeEventListener("focusin", discover, true);
+    ownerDocument.removeEventListener(HOVER_PREVIEW_UNAVAILABLE_EVENT, discover, true);
     restore();
   };
 }

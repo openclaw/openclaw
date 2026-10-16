@@ -50,6 +50,11 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Public GitHub coauthor attribution reads merge aliases, verified accounts, and
+credit preferences in one worker-owned snapshot statement. Enterprise attribution
+keeps a read transaction for its additional verified-email binding lookup. Both
+reuse profile write receipts and retain the final publication-authority check.
+
 Gateway boot history uses one `gatewayBoot.begin` writer operation to inspect
 previous boots, prune expired history, and append the current boot. The breaker
 decision excludes that new open row; a failed append preserves a successfully
@@ -1312,6 +1317,12 @@ belongs to the context and writer owners at their effect boundaries.
 Released synchronous SDK readers retain their existing owners; incognito reads
 use the memory actor.
 Direct SQLite edits without owner publication are unsupported.
+
+Embedded history expands child entries through the same asynchronous reader for
+durable and incognito parents. The memory owner supplies private children; retained
+registry hints for durable children go through the entry worker. The Gateway trusts
+the child owner's selection without repeating its parent checks. A reparenting
+after the read appears on the next lookup. There is no synchronous batch fallback.
 
 Transcript search returns its read snapshot and obtains indexing readiness from
 the projection owner. It does not reread a connection revision after awaiting

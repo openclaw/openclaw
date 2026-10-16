@@ -968,6 +968,8 @@ describe("startGatewayEventSubscriptions", () => {
     createParams,
     installHandlerFactory: (factory) => agentEventHandlerMocks.create.mockImplementation(factory),
     start: (params) => {
+      // These cases exercise a successful no-subscriber handoff, not the injected failure handler.
+      transcriptBroadcastMocks.useActualHandler = true;
       unsubs = startGatewayEventSubscriptions(params);
     },
   });

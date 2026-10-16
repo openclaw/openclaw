@@ -5,7 +5,7 @@ import {
   dismissConfirmedActionPopovers,
   isConfirmedActionPopoverFocused,
   RewindButton,
-} from "./chat-message-confirmation.ts";
+} from "./chat-message-confirmation-view.tsx";
 
 afterEach(() => {
   dismissConfirmedActionPopovers(document.body);

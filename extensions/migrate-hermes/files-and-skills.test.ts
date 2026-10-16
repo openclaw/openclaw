@@ -430,9 +430,34 @@ describe("Hermes migration file and skill items", () => {
     }
   });
 
+  it.each(["MEMORY.md", "USER.md"])(
+    "refuses malformed UTF-8 in %s without appending",
+    async (filename) => {
+      const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
+      const sourcePath = path.join(source, "memories", filename);
+      const targetPath = path.join(workspaceDir, filename);
+      const invalid = Buffer.from([0x61, 0xc3, 0x28, 0x0a]);
+      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+      await fs.writeFile(sourcePath, invalid);
+      await writeFile(targetPath, "existing memory\n");
+
+      const result = await buildHermesMigrationProvider().apply(
+        makeContext({ source, stateDir, workspaceDir, runtime: configRuntime({}) }),
+      );
+
+      expect(itemById(result.items, `memory:${filename}`)).toMatchObject({
+        status: "error",
+        reason: expect.stringContaining("UTF-8"),
+      });
+      expect(await fs.readFile(targetPath, "utf8")).toBe("existing memory\n");
+      expect(await fs.readFile(sourcePath)).toEqual(invalid);
+    },
+  );
+
   it("keeps repeated memory imports byte-identical", async () => {
     const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
-    await writeFile(path.join(source, "memories", "MEMORY.md"), "one memory\n");
+    const memory = "\uFEFFone memory 中文 🦞 and literal \uFFFD\n";
+    await writeFile(path.join(source, "memories", "MEMORY.md"), memory);
     const provider = buildHermesMigrationProvider();
     const ctx = makeContext({
       source,
@@ -443,6 +468,7 @@ describe("Hermes migration file and skill items", () => {
     });
     await provider.apply(ctx);
     const first = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+    expect(first).toBe(`\n\n<!-- Imported from Hermes: MEMORY.md -->\n\n${memory}`);
     const secondResult = await provider.apply(ctx);
     expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(first);
     expect(itemById(secondResult.items, "memory:MEMORY.md")?.status).toBe("skipped");

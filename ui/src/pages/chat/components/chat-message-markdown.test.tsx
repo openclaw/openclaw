@@ -14,7 +14,10 @@ import { renderSolidRef } from "../../../test-helpers/render-solid-ref.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
+import {
+  prepareChatMessageRender,
+  resolveMessageActionDetails,
+} from "./chat-message-markdown-view.tsx";
 import { MessageMarkdown, type MessageMarkdownProps } from "./chat-message-text-view.tsx";
 
 function MessageSection(props: MessageMarkdownProps) {

@@ -525,7 +525,6 @@ export async function maybeRestartService(params: {
             requirePluginHealth: false,
             serviceEnv: activation.serviceEnv,
             requireRunningService: true,
-            settle: { probes: 12 },
             assertCurrent,
           });
           assertCurrent();
