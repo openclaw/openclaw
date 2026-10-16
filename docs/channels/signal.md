@@ -360,7 +360,7 @@ Allowed group messages that do not mention the bot stay silent and are kept only
 
 ## Typing + read receipts
 
-- **Typing indicators**: OpenClaw sends typing signals via `signal-cli sendTyping` and refreshes them while a reply is running.
+- **Typing indicators**: OpenClaw sends typing signals via `signal-cli sendTyping` and refreshes them while a reply is running. When the reply finishes, fails, or is cancelled, OpenClaw sends an explicit stop for the same conversation, including silent replies.
 - **Read receipts**: when `channels.signal.sendReadReceipts` is true, OpenClaw forwards read receipts for allowed DMs.
 - `signal-cli` does not expose read receipts for groups.
 
