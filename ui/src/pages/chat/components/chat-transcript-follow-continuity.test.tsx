@@ -1,15 +1,15 @@
 /* @vitest-environment jsdom */
+
 import { expectDefined } from "@openclaw/normalization-core";
-import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { lockChatScroll } from "../scroll.ts";
+import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
-  mountTestTranscript,
   resetTranscriptTestDom,
   resizeObservers,
   transcriptDomState,
@@ -27,7 +27,7 @@ describe("transcript follow continuity", () => {
     const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
       kind: "content",
       key: "row:" + index,
-      content: html`<div>row ${index}</div>`,
+      content: <div>row {index}</div>,
     }));
     const { container, transcript, renderRows } = await mountTestTranscript(
       "follow-remeasure",
@@ -91,7 +91,7 @@ describe("transcript follow continuity", () => {
       const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
         kind: "content",
         key: "row:" + index,
-        content: html`<div>row ${index}</div>`,
+        content: <div>row {index}</div>,
       }));
       const { container, session, renderRows } = await mountTestTranscript(
         "smooth-no-op",
@@ -186,7 +186,7 @@ describe("transcript follow continuity", () => {
       const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
         kind: "content",
         key: "row:" + index,
-        content: html`<div>row ${index}</div>`,
+        content: <div>row {index}</div>,
       }));
       const { container } = await mountTestTranscript("follow-continuity", rows, transcript);
       Object.defineProperties(container, {
@@ -232,7 +232,7 @@ describe("transcript follow continuity", () => {
       const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
         kind: "content",
         key: "row:" + index,
-        content: html`<div>row ${index}</div>`,
+        content: <div>row {index}</div>,
       }));
       const { container, renderRows, transcript } = await mountTestTranscript(
         `typing-distance-${distance}`,
@@ -282,7 +282,7 @@ describe("transcript follow continuity", () => {
         container.scrollTo = scrollTo;
         renderRows([
           ...rows,
-          { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
+          { kind: "content", key: "presence:typing", content: <div>Typing</div> },
         ]);
         expect(scrollTo).not.toHaveBeenCalled();
         expect(container.scrollTop).toBe(readerOffset);

@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import type { JSX } from "@solidjs/web";
 import { vi } from "vitest";
 
 type NativeKeyFixture = {
@@ -11,30 +11,39 @@ type NativeKeyFixture = {
 type NativeKeyCase = readonly [
   name: string,
   key: string,
-  content: TemplateResult,
+  content: () => JSX.Element,
   controlOwned: boolean,
   fixture: NativeKeyFixture,
 ];
 
 const controls = [
-  ["input", html`<input value="Several words to edit" />`],
-  ["textarea", html`<textarea>Several words to edit</textarea>`],
-  ["editable", html`<div contenteditable="true"><span>Several words to edit</span></div>`],
+  ["input", () => <input value="Several words to edit" />],
+  ["textarea", () => <textarea>Several words to edit</textarea>],
+  [
+    "editable",
+    () => (
+      <div contenteditable="true">
+        <span>Several words to edit</span>
+      </div>
+    ),
+  ],
   [
     "select",
-    html`<select>
-      <option>First</option>
-      <option selected>Second</option>
-      <option>Third</option>
-    </select>`,
+    () => (
+      <select>
+        <option>First</option>
+        <option selected>Second</option>
+        <option>Third</option>
+      </select>
+    ),
   ],
 ] as const;
 
 export const nativeControlNavigationCases: NativeKeyCase[] = [
   ...(
     [
-      ["video", html`<video controls></video>`],
-      ["audio", html`<audio controls></audio>`],
+      ["video", () => <video controls></video>],
+      ["audio", () => <audio controls></audio>],
     ] as const
   ).flatMap(([name, content]) =>
     [

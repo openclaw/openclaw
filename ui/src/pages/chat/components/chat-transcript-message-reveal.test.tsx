@@ -1,14 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import {
   installTranscriptDomMocks,
-  mountTestTranscript,
   resetTranscriptTestDom,
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
@@ -42,12 +41,20 @@ describe("chat transcript controller", () => {
     const tail: TestContentRow = {
       kind: "content",
       key: "tail",
-      content: html`<div class="chat-bubble" data-entry-id="tail">Tail</div>`,
+      content: (
+        <div class="chat-bubble" data-entry-id="tail">
+          Tail
+        </div>
+      ),
     };
     const original: TestContentRow = {
       kind: "content",
       key: "original",
-      content: html`<div class="chat-bubble" data-entry-id="original">Original</div>`,
+      content: (
+        <div class="chat-bubble" data-entry-id="original">
+          Original
+        </div>
+      ),
     };
     const { container, session, renderRows } = await mountTestTranscript(
       "projected-reply",
@@ -98,7 +105,11 @@ describe("chat transcript controller", () => {
       const rows: TestContentRow[] = ["first", "second"].map((id) => ({
         kind: "content",
         key: id,
-        content: html`<div class="chat-bubble" data-entry-id=${id}>${id}</div>`,
+        content: (
+          <div class="chat-bubble" data-entry-id={id}>
+            {id}
+          </div>
+        ),
       }));
       const { container, session, renderRows } = await mountTestTranscript(
         `reveal-${interruption}`,

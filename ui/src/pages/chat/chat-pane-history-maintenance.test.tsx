@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
@@ -14,12 +13,12 @@ import {
 import { subscribeTranscriptScroll } from "./components/chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
-  mountTestTranscript,
   resetTranscriptTestDom,
   resizeObservers,
   transcriptDomState,
   type TestContentRow,
 } from "./components/chat-transcript.test-support.ts";
+import { mountTestTranscript } from "./test-helpers/chat-transcript-native.tsx";
 
 beforeEach(installTranscriptDomMocks);
 afterEach(() => {
@@ -62,7 +61,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
       kind: "content",
       key: `row:${index}`,
-      content: html`<div>Message ${index}</div>`,
+      content: <div>Message {index}</div>,
     }));
     const mounting = mountTestTranscript("maintenance-history", rows, props.transcript);
     await vi.advanceTimersByTimeAsync(0);

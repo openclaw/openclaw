@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import {
@@ -11,7 +10,8 @@ import {
 import {
   configureNativeKeyTarget,
   nativeControlNavigationCases,
-} from "./test-helpers/chat-scroll-input.ts";
+} from "./test-helpers/chat-scroll-input.tsx";
+import { render } from "./test-helpers/chat-transcript-native.tsx";
 
 function createFocusedPane() {
   const { pane } = createTestChatPane({
@@ -29,15 +29,15 @@ function createFocusedPane() {
 
 describe("chat pane keyboard focus", () => {
   it.each([
-    ["range", "Home", html`<input type="range" />`, false],
-    ["input", "ArrowUp", html`<input />`, false],
+    ["range", "Home", () => <input type="range" />, false],
+    ["input", "ArrowUp", () => <input />, false],
     [
       "handled widget",
       "PageUp",
-      html`<div @keydown=${(event: KeyboardEvent) => event.preventDefault()}>Widget</div>`,
+      () => <div onKeyDown={(event: KeyboardEvent) => event.preventDefault()}>Widget</div>,
       false,
     ],
-    ["transcript", "Home", html`<span>History</span>`, true],
+    ["transcript", "Home", () => <span>History</span>, true],
     ...nativeControlNavigationCases
       .filter((testCase) => {
         const [name, key] = testCase;
@@ -73,7 +73,7 @@ describe("chat pane keyboard focus", () => {
       pane.historyAutoLoadBlocked = true;
       vi.stubGlobal("IntersectionObserver", undefined);
       const thread = document.createElement("div");
-      render(content, thread);
+      render(content(), thread);
       const restorePlatform = configureNativeKeyTarget(thread.firstElementChild!, fixture);
       thread.addEventListener("keydown", (event) => pane.handleTranscriptHistoryIntent(event));
       try {

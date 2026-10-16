@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
@@ -15,7 +14,8 @@ import {
 import {
   configureNativeKeyTarget,
   nativeControlNavigationCases,
-} from "../test-helpers/chat-scroll-input.ts";
+} from "../test-helpers/chat-scroll-input.tsx";
+import { mountTestTranscript, render } from "../test-helpers/chat-transcript-native.tsx";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import {
@@ -25,7 +25,6 @@ import {
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 import {
   installTranscriptDomMocks,
-  mountTestTranscript,
   resetTranscriptTestDom,
   resizeObservers,
   transcriptDomState,
@@ -74,7 +73,7 @@ describe("chat transcript scroll ownership", () => {
       { canFollowEnd: () => false },
     );
     const rows: TestContentRow[] = [
-      { kind: "content", key: "long-run", content: html`<div>Long transcript run</div>` },
+      { kind: "content", key: "long-run", content: <div>Long transcript run</div> },
     ];
     const { container, session, renderRows } = await mountTestTranscript(paneId, rows, transcript);
     try {
@@ -180,7 +179,7 @@ describe("chat transcript scroll ownership", () => {
         { canFollowEnd: () => false, onReaderScroll },
       );
       const rows: TestContentRow[] = [
-        { kind: "content", key: "long-run", content: html`<div>Long transcript run</div>` },
+        { kind: "content", key: "long-run", content: <div>Long transcript run</div> },
       ];
       const commitRequestedUpdate = async () => {
         // TanStack queues its host notification behind updateComplete.
@@ -192,7 +191,7 @@ describe("chat transcript scroll ownership", () => {
               session.setContentReady(true);
               return session.render(
                 rows,
-                (row) => (row.kind === "content" ? row.content : nothing),
+                (row) => (row.kind === "content" ? row.content : null),
                 null,
                 false,
               );
@@ -263,7 +262,7 @@ describe("chat transcript scroll ownership", () => {
       const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
         kind: "content",
         key: `row:${index}`,
-        content: html`<div>row ${index}</div>`,
+        content: <div>row {index}</div>,
       }));
       const { container } = await mountTestTranscript(`footer-${intent}`, rows, transcript);
       try {
@@ -358,7 +357,7 @@ describe("chat transcript scroll ownership", () => {
       Array.from({ length: 20 }, (_, index): TestContentRow => ({
         kind: "content",
         key: `row:${index}`,
-        content: html`<div>row ${index}</div>`,
+        content: <div>row {index}</div>,
       })),
       transcript,
     );
@@ -420,7 +419,7 @@ describe("chat transcript scroll ownership", () => {
       Array.from({ length: 20 }, (_, index): TestContentRow => ({
         kind: "content",
         key: `row:${index}`,
-        content: html`<div>row ${index}</div>`,
+        content: <div>row {index}</div>,
       })),
       transcript,
     );
@@ -498,12 +497,12 @@ describe("chat transcript scroll ownership", () => {
     const content: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
       kind: "content",
       key: `row:${index}`,
-      content: html`<div>Row</div>`,
+      content: <div>Row</div>,
     }));
     const typing: TestContentRow = {
       kind: "content",
       key: "presence:typing",
-      content: html`<div>Typing</div>`,
+      content: <div>Typing</div>,
     };
     const { container, renderRows } = await mountTestTranscript(
       "retired-end-index",
@@ -537,7 +536,7 @@ describe("chat transcript scroll ownership", () => {
       transcriptDomState.measuredRowHeight = 120;
       const next: TestContentRow[] = [
         ...content,
-        { kind: "content", key: "peer", content: html`<div>Peer</div>` },
+        { kind: "content", key: "peer", content: <div>Peer</div> },
         typing,
       ];
       renderRows(next);
@@ -571,7 +570,7 @@ describe("chat transcript scroll ownership", () => {
     const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
       kind: "content",
       key: `row:${index}`,
-      content: html`<div>row ${index}</div>`,
+      content: <div>row {index}</div>,
     }));
     const { container, renderRows } = await mountTestTranscript(
       "measurement-reader",
@@ -639,49 +638,62 @@ describe("chat transcript scroll ownership", () => {
   });
 
   it.each([
-    ["wheel", null, nothing, false],
-    ["downward wheel", null, nothing, false],
-    ["stationary wheel", null, nothing, false],
-    ["pointer", null, nothing, false],
-    ["latest", null, nothing, false],
-    ["automatic follow", null, nothing, true],
-    ["text input", "ArrowUp", html`<input />`, true],
-    ["range input", "Home", html`<input type="range" />`, true],
-    ["range Space", " ", html`<input type="range" />`, false],
+    ["wheel", null, () => null, false],
+    ["downward wheel", null, () => null, false],
+    ["stationary wheel", null, () => null, false],
+    ["pointer", null, () => null, false],
+    ["latest", null, () => null, false],
+    ["automatic follow", null, () => null, true],
+    ["text input", "ArrowUp", () => <input />, true],
+    ["range input", "Home", () => <input type="range" />, true],
+    ["range Space", " ", () => <input type="range" />, false],
     [
       "select",
       "ArrowUp",
-      html`<select>
-        <option>One</option>
-      </select>`,
+      () => (
+        <select>
+          <option>One</option>
+        </select>
+      ),
       true,
     ],
-    ["editable child", "ArrowUp", html`<div contenteditable="true"><span>Text</span></div>`, true],
-    ["shadow input", "ArrowUp", html`<input />`, true],
-    ["button", " ", html`<button>Play</button>`, true],
-    ["button PageUp", "PageUp", html`<button>Play</button>`, false],
-    ["link Space", " ", html`<a href="#">Details</a>`, false],
+    [
+      "editable child",
+      "ArrowUp",
+      () => (
+        <div contentEditable="true">
+          <span>Text</span>
+        </div>
+      ),
+      true,
+    ],
+    ["shadow input", "ArrowUp", () => <input />, true],
+    ["button", " ", () => <button>Play</button>, true],
+    ["button PageUp", "PageUp", () => <button>Play</button>, false],
+    ["link Space", " ", () => <a href="#">Details</a>, false],
     [
       "listbox",
       "PageUp",
-      html`<select size="2">
-        <option>One</option>
-      </select>`,
+      () => (
+        <select size={2}>
+          <option>One</option>
+        </select>
+      ),
       true,
     ],
-    ["textarea", " ", html`<textarea>Text</textarea>`, true],
+    ["textarea", " ", () => <textarea>Text</textarea>, true],
     [
       "handled player",
       " ",
-      html`<div @keydown=${(event: KeyboardEvent) => event.preventDefault()}>Player</div>`,
+      () => <div onKeyDown={(event: KeyboardEvent) => event.preventDefault()}>Player</div>,
       true,
     ],
-    ["transcript text", "PageUp", html`<span>History</span>`, false],
-    ["readonly content", "End", html`<div contenteditable="false">History</div>`, false],
+    ["transcript text", "PageUp", () => <span>History</span>, false],
+    ["readonly content", "End", () => <div contentEditable="false">History</div>, false],
     // The pane keyboard suite covers native-control/platform variants.
     // Retain downward nested scrolling and media boundaries in restoration.
-    ["native video", "End", html`<video controls></video>`, true],
-    ["native audio paging", "PageDown", html`<audio controls></audio>`, false],
+    ["native video", "End", () => <video controls></video>, true],
+    ["native audio paging", "PageDown", () => <audio controls></audio>, false],
     ...nativeControlNavigationCases.filter(
       ([name, key]) => name.startsWith("Mac textarea ") && (key === "End" || key === "PageDown"),
     ),
@@ -692,7 +704,7 @@ describe("chat transcript scroll ownership", () => {
       const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
         kind: "content",
         key: `row:${index}`,
-        content: html`<div>row ${index}</div>`,
+        content: <div>row {index}</div>,
       }));
       const { container, renderRows, transcript } = await mountTestTranscript(
         `restore-${command}`,
@@ -716,7 +728,7 @@ describe("chat transcript scroll ownership", () => {
       expect(settled).not.toHaveBeenCalled();
       if (key) {
         const target = container.appendChild(document.createElement("div"));
-        render(content, target);
+        render(content(), target);
         const restorePlatform = configureNativeKeyTarget(
           expectDefined(target.firstElementChild, "native control"),
           fixture,
@@ -780,7 +792,7 @@ describe("chat transcript scroll ownership", () => {
     const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
       kind: "content",
       key: `row:${index}`,
-      content: html`<div>row ${index}</div>`,
+      content: <div>row {index}</div>,
     }));
     const { container, renderRows, transcript } = await mountTestTranscript(
       "settled-restore-input",
