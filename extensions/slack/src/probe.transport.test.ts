@@ -20,27 +20,6 @@ const TEST_ENV_KEYS = [
   "OPENCLAW_PROXY_CA_FILE",
 ] as const;
 
-const originalEnv = Object.fromEntries(
-  TEST_ENV_KEYS.map((key) => [key, process.env[key]]),
-) as Record<(typeof TEST_ENV_KEYS)[number], string | undefined>;
-
-function clearSlackTransportEnv(): void {
-  for (const key of TEST_ENV_KEYS) {
-    delete process.env[key];
-  }
-}
-
-function restoreSlackTransportEnv(): void {
-  for (const key of TEST_ENV_KEYS) {
-    const original = originalEnv[key];
-    if (original === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = original;
-    }
-  }
-}
-
 type SlackProbeTransport = {
   result: ReturnType<typeof probeSlack>;
   deadline: AbortSignal;
@@ -56,13 +35,14 @@ async function withSlackProbeTransport(
   handler: RequestListener,
   run: (transport: SlackProbeTransport) => Promise<void>,
 ): Promise<void> {
-  clearSlackTransportEnv();
+  for (const key of TEST_ENV_KEYS) {
+    vi.stubEnv(key, undefined);
+  }
   const requestArrived = createDeferred<void>();
   const bodyStarted = createDeferred<void>();
   const socketClosed = createDeferred<void>();
   const retryArrived = createDeferred<void>();
   const deadlines: AbortController[] = [];
-  const restoreMocks: Array<() => void> = [];
   const requestSignals: Array<AbortSignal | null | undefined> = [];
   const nativeSetTimeout = globalThis.setTimeout;
   const nativeClearTimeout = globalThis.clearTimeout;
@@ -76,6 +56,7 @@ async function withSlackProbeTransport(
     await withServer(
       (request, response) => {
         requests += 1;
+        request.resume();
         request.socket.once("close", () => socketClosed.resolve());
         requestArrived.resolve();
         if (requests === 2) {
@@ -84,7 +65,7 @@ async function withSlackProbeTransport(
         handler(request, response);
       },
       async (baseUrl) => {
-        process.env.SLACK_API_URL = `${baseUrl}/api/`;
+        vi.stubEnv("SLACK_API_URL", `${baseUrl}/api/`);
         vi.useFakeTimers({
           toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"],
         });
@@ -99,23 +80,20 @@ async function withSlackProbeTransport(
           );
           return deadline.signal;
         });
-        restoreMocks.push(() => timeout.mockRestore());
-        const fetchSpy = vi
-          .spyOn(runtimeFetch, "fetchWithRuntimeDispatcher")
-          .mockImplementation(async (input, init) => {
+        vi.spyOn(runtimeFetch, "fetchWithRuntimeDispatcher").mockImplementation(
+          async (input, init) => {
             requestSignals.push(init?.signal);
             const response = await realFetch(input, init);
             const readText = response.text.bind(response);
-            const textSpy = vi.spyOn(response, "text").mockImplementation(() => {
+            vi.spyOn(response, "text").mockImplementation(() => {
               body = readText();
               void body.catch(() => undefined);
               bodyStarted.resolve();
               return body;
             });
-            restoreMocks.push(() => textSpy.mockRestore());
             return response;
-          });
-        restoreMocks.push(() => fetchSpy.mockRestore());
+          },
+        );
 
         const probe = probeSlack("probe-fixture", timeoutMs);
         result = probe;
@@ -166,23 +144,19 @@ async function withSlackProbeTransport(
     try {
       await Promise.allSettled([result, body]);
     } finally {
-      for (const restore of restoreMocks.toReversed()) {
-        restore();
-      }
+      vi.restoreAllMocks();
       vi.useRealTimers();
     }
   }
 }
 
-afterEach(() => {
-  restoreSlackTransportEnv();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 describe("probeSlack real network deadlines", () => {
   it("aborts a stalled Slack request and closes its only socket", async () => {
     await withSlackProbeTransport(
       100,
-      (request) => request.resume(),
+      () => {},
       async (transport) => {
         await transport.waitForRequest();
         await vi.advanceTimersByTimeAsync(99);
@@ -198,7 +172,6 @@ describe("probeSlack real network deadlines", () => {
     await withSlackProbeTransport(
       100,
       (request, response) => {
-        request.resume();
         response.destroy();
       },
       async (transport) => {
@@ -217,7 +190,6 @@ describe("probeSlack real network deadlines", () => {
     await withSlackProbeTransport(
       1_000,
       (request, response) => {
-        request.resume();
         response.writeHead(429, {
           "content-type": "application/json",
           "retry-after": "2",
@@ -241,7 +213,6 @@ describe("probeSlack real network deadlines", () => {
     await withSlackProbeTransport(
       100,
       (request, response) => {
-        request.resume();
         response.writeHead(200, { "content-type": "application/json" });
         response.write(" ");
         const trickle = setInterval(() => response.write(" "), 25);

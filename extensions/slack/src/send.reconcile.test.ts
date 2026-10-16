@@ -73,6 +73,13 @@ async function marker(
   });
   return client.chat.postMessage.mock.calls[0]![0].metadata!;
 }
+function expectParts(metadata: MessageMetadata[], indexes: number[]) {
+  expect(metadata.map((part) => part.event_payload.openclaw_delivery_part_index)).toEqual(indexes);
+  expect(metadata.map((part) => part.event_payload.openclaw_delivery_part_count)).toEqual(
+    indexes.map(() => indexes.length),
+  );
+  expect(new Set(metadata.map((part) => part.event_payload.openclaw_delivery_id)).size).toBe(1);
+}
 beforeEach(() => {
   clients.createSlackReadClient.mockReset();
   clients.getSlackWriteClient.mockReset();
@@ -171,17 +178,11 @@ describe("Slack durable reconciliation", () => {
     );
     expect(text.join("")).toBe(`Pipeline${caption} (table)\nAccount\nAcme`);
     const metadata = fallback.map((request) => request.metadata!);
-    expect(metadata.map((part) => part.event_payload.openclaw_delivery_part_index)).toEqual([
-      0, 1, 2, 3,
-    ]);
-    expect(metadata.map((part) => part.event_payload.openclaw_delivery_part_count)).toEqual([
-      4, 4, 4, 4,
-    ]);
+    expectParts(metadata, [0, 1, 2, 3]);
     expect(metadata[0]?.event_payload).toMatchObject({ team_id: "T123" });
     for (const part of metadata.slice(1)) {
       expect(part.event_payload).not.toHaveProperty("team_id");
     }
-    expect(new Set(metadata.map((part) => part.event_payload.openclaw_delivery_id)).size).toBe(1);
     expect(sent.receipt.platformMessageIds).toEqual(ids);
     expect(onDeliveryResult.mock.calls.map(([delivery]) => delivery.messageId)).toEqual(ids);
     client.conversations.history.mockResolvedValueOnce({
@@ -216,13 +217,11 @@ describe("Slack durable reconciliation", () => {
     expect(order).toEqual(["open", "dispatch", "post"]);
   });
 
-  it.each(["missing_scope"])("checks the write token after read-token %s", async (failure) => {
+  it("checks the write token after read-token missing_scope", async () => {
     const reader = createClient();
     const writer = createClient();
     const metadata = await marker(writer, {}, "user:U123");
-    if (failure === "missing_scope") {
-      reader.conversations.history.mockRejectedValueOnce(new Error(failure));
-    }
+    reader.conversations.history.mockRejectedValueOnce(new Error("missing_scope"));
     writer.conversations.history.mockResolvedValueOnce({ messages: [{ ts, metadata }] });
     clients.createSlackReadClient.mockReturnValue(reader);
     clients.getSlackWriteClient.mockReturnValue(writer);
@@ -326,13 +325,7 @@ describe("Slack durable reconciliation", () => {
     });
     expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
     const metadata = client.chat.postMessage.mock.calls.map(([request]) => request.metadata!);
-    expect(metadata.map((part) => part.event_payload.openclaw_delivery_part_index)).toEqual([
-      0, 1, 2,
-    ]);
-    expect(metadata.map((part) => part.event_payload.openclaw_delivery_part_count)).toEqual([
-      3, 3, 3,
-    ]);
-    expect(new Set(metadata.map((part) => part.event_payload.openclaw_delivery_id)).size).toBe(1);
+    expectParts(metadata, [0, 1, 2]);
     expect(
       new Set(metadata.map((part) => part.event_payload.openclaw_delivery_signature)).size,
     ).toBe(3);

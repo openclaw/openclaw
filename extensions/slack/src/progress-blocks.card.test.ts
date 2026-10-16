@@ -12,6 +12,13 @@ const plain = (text: string) => ({
   text: { type: "plain_text", text, emoji: false },
 });
 const context = (text: string) => ({ type: "context", elements: [{ type: "mrkdwn", text }] });
+const approval = (detail: string, label = "Approval"): ChannelProgressDraftLine => ({
+  kind: "approval",
+  label,
+  text: label,
+  detail,
+  status: "requested",
+});
 const sessionLink = (text: string, url: string) => ({
   type: "actions",
   elements: [
@@ -42,13 +49,7 @@ describe("buildSlackProgressCardBlocks", () => {
           toolLine("pnpm test"),
           { ...itemLine("Tool output"), toolName: "exec" },
           { ...toolLine("failed check"), status: "exit 1" },
-          {
-            kind: "approval",
-            label: "Approval",
-            text: "Approval",
-            detail: "Run checks",
-            status: "requested",
-          },
+          approval("Run checks"),
         ],
         toolCalls: 2,
         elapsedSeconds: 12,
@@ -104,13 +105,8 @@ describe("buildSlackProgressCardBlocks", () => {
     const blocks = card({
       title: "Working",
       lines: [
-        { kind: "approval", label: "Approve deploy", status: "requested", text: "Approve deploy" },
-        {
-          kind: "approval",
-          label: "Approve restart",
-          status: "requested",
-          text: "Approve restart",
-        },
+        approval("", "Approve deploy"),
+        approval("", "Approve restart"),
         { kind: "command-output", label: "Build", status: "exit 1", text: "Build exit 1" },
         { kind: "command-output", label: "Test", status: "exit 2", text: "Test exit 2" },
       ],
@@ -192,13 +188,7 @@ describe("buildSlackProgressCardBlocks", () => {
       title: "Working",
       maxLineChars: 300,
       lines: [
-        {
-          kind: "approval",
-          label: "Approval",
-          text: "Approval required",
-          detail: "Run the command",
-          status: "requested",
-        },
+        { ...approval("Run the command"), text: "Approval required" },
         ...Array.from({ length: 50 }, (_, index) => ({
           ...progressLine(index),
           detail: "x".repeat(300),
@@ -276,13 +266,7 @@ describe("buildSlackProgressCardBlocks", () => {
     "settles approval and failure text when a card ends as %s",
     (state) => {
       const lines: ChannelProgressDraftLine[] = [
-        {
-          kind: "approval",
-          label: "Approval",
-          detail: "Run the command",
-          status: "requested",
-          text: "Approval required",
-        },
+        { ...approval("Run the command"), text: "Approval required" },
         {
           kind: "command-output",
           label: "Bash",
