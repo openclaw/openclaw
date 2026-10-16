@@ -26,6 +26,19 @@ import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 type ResponseOptions = { writeError?: Error; afterWrite?: () => void };
+type Authorization = Parameters<ArtifactTransferService["openFile"]>[0];
+type OpenFile = NonNullable<Awaited<ReturnType<ArtifactTransferService["openFile"]>>>;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const services: Array<Pick<ArtifactTransferService, "closeAll">> = [];
+const sockets: ResponseSocket[] = [];
+
+beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+afterEach(() => {
+  services.splice(0).forEach((service) => service.closeAll());
+  sockets.splice(0).forEach((socket) => socket.destroy());
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 // Exercise real HTTP response/stream completion without binding a listener.
 class ResponseSocket extends Socket {
@@ -54,6 +67,7 @@ class ResponseSocket extends Socket {
 
 function createResponse(options?: ResponseOptions) {
   const socket = new ResponseSocket(options);
+  sockets.push(socket);
   const socketErrors = vi.fn<(error: Error) => void>();
   socket.on("error", socketErrors);
   const req = new IncomingMessage(socket);
@@ -62,8 +76,60 @@ function createResponse(options?: ResponseOptions) {
   return { socket, socketErrors, req, res };
 }
 
+function interceptFile(
+  service: Pick<ArtifactTransferService, "openFile">,
+  size: number,
+  configure: (stream: ReadStream, authorization: Authorization, file: OpenFile) => void,
+  once = false,
+  required = true,
+) {
+  const open = service.openFile.bind(service);
+  const spy = vi.spyOn(service, "openFile");
+  const intercept = async (authorization: Authorization) => {
+    const file = await open(authorization);
+    if (file) {
+      const create = file.handle.createReadStream.bind(file.handle);
+      vi.spyOn(file.handle, "createReadStream")[
+        once ? "mockImplementationOnce" : "mockImplementation"
+      ]((options) => {
+        const stream = create({ ...options, highWaterMark: size });
+        configure(stream, authorization, file);
+        return stream;
+      });
+    } else if (required) {
+      throw new Error("Expected an authorized artifact");
+    }
+    return file;
+  };
+  spy[once ? "mockImplementationOnce" : "mockImplementation"](intercept);
+}
+
+function responseBytes(socket: ResponseSocket) {
+  const wire = Buffer.concat(socket.chunks).toString("utf8");
+  const boundary = wire.indexOf("\r\n\r\n");
+  return { wire, body: wire.slice(boundary + 4), headers: wire.slice(0, boundary).split("\r\n") };
+}
+
+async function makeArtifact(bytes: string | Buffer, sha256?: string) {
+  const tarballPath = path.join(tempDirs.make("openclaw-artifact-response-"), "runtime.tgz");
+  await fs.writeFile(tarballPath, bytes);
+  return {
+    tarballPath,
+    tarballBytes: Buffer.byteLength(bytes),
+    tarballSha256: sha256 ?? createHash("sha256").update(bytes).digest("hex"),
+  };
+}
+
+function expectResponse(
+  response: { res: ServerResponse; body: string },
+  statusCode: number,
+  body: string,
+  writableFinished = true,
+) {
+  expect(response).toMatchObject({ res: { statusCode, writableFinished }, body });
+}
+
 describe("artifact transfer response settlement", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const contents = "source-runtime";
   let service: ReturnType<typeof createWorkerBootstrapArtifactTransferService>;
   let artifact: { tarballPath: string; tarballSha256: string; tarballBytes: number };
@@ -75,21 +141,16 @@ describe("artifact transfer response settlement", () => {
   let rateLimiter: AuthRateLimiter | undefined;
 
   beforeEach(async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     now = 1_000;
     authorized = true;
     owner = new AbortController();
     service = createWorkerBootstrapArtifactTransferService({ now: () => now });
+    services.push(service);
     await prepareArtifact(contents);
   });
 
   async function prepareArtifact(bytes: string | Buffer) {
-    artifact = {
-      tarballPath: path.join(tempDirs.make("openclaw-artifact-response-"), "runtime.tgz"),
-      tarballSha256: createHash("sha256").update(bytes).digest("hex"),
-      tarballBytes: Buffer.byteLength(bytes),
-    };
-    await fs.writeFile(artifact.tarballPath, bytes);
+    artifact = await makeArtifact(bytes);
     ({ token, expiresAtMs } = service.prepare({
       artifact,
       isAuthorized: () => authorized,
@@ -98,11 +159,8 @@ describe("artifact transfer response settlement", () => {
   }
 
   afterEach(() => {
-    service.closeAll();
     rateLimiter?.dispose();
     rateLimiter = undefined;
-    vi.restoreAllMocks();
-    vi.useRealTimers();
   });
 
   async function serve(
@@ -129,8 +187,7 @@ describe("artifact transfer response settlement", () => {
         callback: createArtifactTransferHttpCallback(options.transfer ?? service),
         rateLimiter,
       });
-      const wire = Buffer.concat(socket.chunks).toString("utf8");
-      return { res, wire, body: wire.slice(wire.indexOf("\r\n\r\n") + 4) };
+      return { res, ...responseBytes(socket) };
     } finally {
       socket.destroy();
     }
@@ -160,9 +217,7 @@ describe("artifact transfer response settlement", () => {
 
     ({ token } = prepare());
     const completed = await serve({ transfer });
-    expect(completed.res.statusCode).toBe(200);
-    expect(completed.res.writableFinished).toBe(true);
-    expect(completed.body).toBe(contents);
+    expectResponse(completed, 200, contents);
     expect(onProgress).toHaveBeenCalled();
   });
 
@@ -183,8 +238,7 @@ describe("artifact transfer response settlement", () => {
       range: `bytes=${offset}-`,
       afterWrite: () => service.revoke(token),
     });
-    expect(res.statusCode).toBe(206);
-    expect(res.writableFinished).toBe(false);
+    expect(res).toMatchObject({ statusCode: 206, writableFinished: false });
     expect(body.length).toBeGreaterThan(0);
     expect(body.length).toBeLessThan(artifact.tarballBytes - offset);
     expect((await serve({ range: `bytes=${offset + body.length}-` })).res.statusCode).toBe(404);
@@ -197,23 +251,13 @@ describe("artifact transfer response settlement", () => {
     );
     const closing = createDeferredCore();
     const release = createDeferredCore();
-    const open = service.openFile.bind(service);
-    vi.spyOn(service, "openFile").mockImplementation(async (authorization) => {
-      const file = await open(authorization);
-      if (!file) {
-        throw new Error("Expected an authorized artifact");
-      }
-      const createReadStream = file.handle.createReadStream.bind(file.handle);
-      vi.spyOn(file.handle, "createReadStream").mockImplementation((options) =>
-        createReadStream({ ...options, highWaterMark: 1 }),
-      );
+    interceptFile(service, 1, (_stream, _authorization, file) => {
       const close = file.handle.close.bind(file.handle);
       vi.spyOn(file.handle, "close").mockImplementationOnce(async () => {
         closing.resolve();
         await release.promise;
         await close();
       });
-      return file;
     });
     const interrupted = serve({ writeError: new Error("synthetic connection reset") });
     try {
@@ -230,14 +274,11 @@ describe("artifact transfer response settlement", () => {
         range: `bytes=${received.length}-`,
         writeError: new Error("synthetic connection reset"),
       });
-      expect(resumed.res.statusCode).toBe(206);
-      expect(resumed.res.writableFinished).toBe(false);
-      expect(resumed.body).toBe(contents.slice(received.length, received.length + 1));
+      expectResponse(resumed, 206, contents.slice(received.length, received.length + 1), false);
       received += resumed.body;
     }
     const completed = await serve({ range: `bytes=${received.length}-` });
-    expect(completed.res.statusCode).toBe(206);
-    expect(completed.res.writableFinished).toBe(true);
+    expect(completed.res).toMatchObject({ statusCode: 206, writableFinished: true });
     expect(received + completed.body).toBe(contents);
   });
 
@@ -245,9 +286,7 @@ describe("artifact transfer response settlement", () => {
     for (let attempt = 1; attempt <= 256; attempt++) {
       const range = attempt % 2 === 0 ? "bytes=4-" : undefined;
       const completed = await serve({ range });
-      expect(completed.res.statusCode).toBe(range ? 206 : 200);
-      expect(completed.res.writableFinished).toBe(true);
-      expect(completed.body).toBe(range ? contents.slice(4) : contents);
+      expectResponse(completed, range ? 206 : 200, range ? contents.slice(4) : contents);
     }
     for (const range of [undefined, "bytes=4-"]) {
       const rejected = await serve({ range });
@@ -282,17 +321,12 @@ describe("artifact transfer response settlement", () => {
     async (closure) => {
       const deadline = now + workerBootstrapOperationTimeoutMs(artifact);
       const afterTenMinutes = now + 10 * 60_000 + 1;
-      const open = service.openFile.bind(service);
       const observations: boolean[] = [];
-      vi.spyOn(service, "openFile").mockImplementationOnce(async (authorization) => {
-        const file = await open(authorization);
-        if (!file) {
-          throw new Error("Expected an authorized artifact");
-        }
-        const signal = service.authorizationSignal(authorization);
-        const createReadStream = file.handle.createReadStream.bind(file.handle);
-        vi.spyOn(file.handle, "createReadStream").mockImplementationOnce((options) => {
-          const stream = createReadStream({ ...options, highWaterMark: 1 });
+      interceptFile(
+        service,
+        1,
+        (stream, authorization) => {
+          const signal = service.authorizationSignal(authorization);
           stream.on("data", () => {
             if (observations.length === 0) {
               now += 10 * 60_000 + 1;
@@ -315,20 +349,17 @@ describe("artifact transfer response settlement", () => {
               vi.advanceTimersByTime(1);
             }
           });
-          return stream;
-        });
-        return file;
-      });
+        },
+        true,
+      );
 
       const interrupted = await serve();
       expect(observations).toEqual([true, true]);
       expect(expiresAtMs).toBe(deadline);
-      expect(interrupted.res.statusCode).toBe(200);
-      expect(interrupted.wire.split("\r\n\r\n")[1]).toBe(
-        contents.slice(0, closure === "expiry" ? 2 : 1),
-      );
-      expect(interrupted.res.writableFinished).toBe(false);
-      expect(interrupted.res.destroyed).toBe(true);
+      expect(interrupted).toMatchObject({
+        res: { statusCode: 200, writableFinished: false, destroyed: true },
+        body: contents.slice(0, closure === "expiry" ? 2 : 1),
+      });
       expect(now).toBe(closure === "expiry" ? deadline : afterTenMinutes);
       expect(owner.signal.aborted).toBe(closure === "signal");
       authorized = true;
@@ -348,28 +379,8 @@ describe("artifact transfer response settlement", () => {
 });
 
 describe("artifact transfer interruption observations", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  const services: Array<ReturnType<typeof createArtifactTransferService>> = [];
-  const sockets: ResponseSocket[] = [];
-
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  });
-
-  afterEach(() => {
-    for (const service of services.splice(0)) {
-      service.closeAll();
-    }
-    for (const socket of sockets.splice(0)) {
-      socket.destroy();
-    }
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
   async function prepare(onProgress?: (bytes: number) => void, maxServes: 1 | 3 = 1) {
-    const tarballPath = path.join(tempDirs.make("openclaw-transfer-interruption-"), "bundle.tgz");
-    await fs.writeFile(tarballPath, "bundle");
+    const artifact = await makeArtifact("bundle", "b".repeat(64));
     const artifactKey = "a".repeat(64);
     const owner = new AbortController();
     let now = 1_000;
@@ -383,7 +394,7 @@ describe("artifact transfer interruption observations", () => {
     const progress = vi.fn<(bytes: number) => void>();
     const interrupted = vi.fn<(bytes: number, reason: string) => void>();
     const prepared = service.prepare({
-      artifact: { tarballPath, tarballBytes: 6, tarballSha256: "b".repeat(64) },
+      artifact,
       artifactKey,
       ttlMs: 1_000,
       maxServes,
@@ -400,39 +411,27 @@ describe("artifact transfer interruption observations", () => {
       },
       onInterrupted: interrupted,
     });
-    const openFile = service.openFile.bind(service);
     let stream: ReadStream | undefined;
-    vi.spyOn(service, "openFile").mockImplementation(async (capability) => {
-      const file = await openFile(capability);
-      if (file) {
-        const createReadStream = file.handle.createReadStream.bind(file.handle);
-        vi.spyOn(file.handle, "createReadStream").mockImplementation((options) => {
-          stream = createReadStream({ ...options, highWaterMark: 2 });
-          return stream;
-        });
-      }
-      return file;
-    });
-    let response = createResponse();
-    sockets.push(response.socket);
+    interceptFile(
+      service,
+      2,
+      (opened) => {
+        stream = opened;
+      },
+      false,
+      false,
+    );
     const callback = createArtifactTransferHttpCallback(service);
-    return {
+    const h = {
+      ...createResponse(),
       service,
       owner,
-      get socket() {
-        return response.socket;
-      },
-      get socketErrors() {
-        return response.socketErrors;
-      },
-      get res() {
-        return response.res;
-      },
       prepared,
       artifactKey,
-      tarballPath,
+      tarballPath: artifact.tarballPath,
       progress,
       interrupted,
+      authorize: () => service.authorize({ token: prepared.token, artifactKey }),
       failStream: (error: Error) => {
         if (!stream) {
           throw new Error("fixture stream has not started");
@@ -451,11 +450,10 @@ describe("artifact transfer interruption observations", () => {
         now = prepared.expiresAtMs;
       },
       async run(range?: string) {
-        if (response.res.destroyed || response.res.writableFinished) {
-          response = createResponse();
-          sockets.push(response.socket);
+        if (h.res.destroyed || h.res.writableFinished) {
+          Object.assign(h, createResponse());
         }
-        const { req, res } = response;
+        const { req, res } = h;
         if (range !== undefined) {
           req.headers.range = range;
         }
@@ -466,31 +464,19 @@ describe("artifact transfer interruption observations", () => {
         await admission.handle();
       },
     };
+    return h;
   }
 
+  type Harness = Awaited<ReturnType<typeof prepare>>;
   it.each([
-    "expired",
-    "owner cancelled",
-    "authorization lost",
-    "throwing authorization",
-    "released",
-    "shutdown",
-  ] as const)("reports partial transfer closure for %s", async (closure) => {
-    const h = await prepare(() => {
-      if (closure === "expired") {
-        h.expire();
-      } else if (closure === "owner cancelled") {
-        h.owner.abort(new Error("private cancellation detail"));
-      } else if (closure === "authorization lost" || closure === "throwing authorization") {
-        h.loseAuthority(
-          closure === "throwing authorization" ? new Error("private error") : undefined,
-        );
-      } else if (closure === "released") {
-        h.service.revoke(h.prepared.token);
-      } else {
-        h.service.closeAll();
-      }
-    }, 3);
+    ["expired", (h: Harness) => h.expire()],
+    ["owner cancelled", (h: Harness) => h.owner.abort(new Error("private cancellation detail"))],
+    ["authorization lost", (h: Harness) => h.loseAuthority()],
+    ["throwing authorization", (h: Harness) => h.loseAuthority(new Error("private error"))],
+    ["released", (h: Harness) => h.service.revoke(h.prepared.token)],
+    ["shutdown", (h: Harness) => h.service.closeAll()],
+  ] as const)("reports partial transfer closure for %s", async (closure, close) => {
+    const h = await prepare(() => close(h), 3);
     await h.run();
     expect(h.interrupted).toHaveBeenCalledExactlyOnceWith(
       2,
@@ -500,14 +486,12 @@ describe("artifact transfer interruption observations", () => {
       expect.objectContaining({ code: "ABORT_ERR" }),
     );
     h.restoreAuthority();
-    expect(
-      h.service.authorize({ token: h.prepared.token, artifactKey: h.artifactKey }),
-    ).toBeUndefined();
+    expect(h.authorize()).toBeUndefined();
   });
 
   it("records timer expiry independently of a later owner cancellation", async () => {
     const h = await prepare();
-    const admission = h.service.authorize({ token: h.prepared.token, artifactKey: h.artifactKey });
+    const admission = h.authorize();
     expect(admission).toBeDefined();
     await vi.advanceTimersByTimeAsync(1_000);
     h.owner.abort();
@@ -524,9 +508,7 @@ describe("artifact transfer interruption observations", () => {
     await expect(h.run()).resolves.toBeUndefined();
     expect(h.interrupted).toHaveBeenCalledExactlyOnceWith(2, "client disconnected");
     expect(h.socketErrors).not.toHaveBeenCalled();
-    expect(
-      h.service.authorize({ token: h.prepared.token, artifactKey: h.artifactKey }),
-    ).toBeUndefined();
+    expect(h.authorize()).toBeUndefined();
   });
 
   it.each([
@@ -539,21 +521,18 @@ describe("artifact transfer interruption observations", () => {
       await h.run(range);
       h.socket.destroy();
       h.owner.abort();
-      expect(h.res.statusCode).toBe(status);
-      const wire = Buffer.concat(h.socket.chunks).toString("utf8");
-      const headerEnd = wire.indexOf("\r\n\r\n");
-      const headers = wire.slice(0, headerEnd).split("\r\n");
+      expect(h.res).toMatchObject({ statusCode: status, writableFinished: true });
+      const { headers, body } = responseBytes(h.socket);
       expect(headers).toContain(`content-length: ${range ? "4" : "6"}`);
+      expect(headers).toContain(`x-openclaw-content-sha256: ${"b".repeat(64)}`);
+      expect(headers).toContain("accept-ranges: bytes");
       if (range) {
         expect(headers).toContain("content-range: bytes 2-5/6");
       } else {
         expect(headers.some((header) => header.startsWith("content-range:"))).toBe(false);
       }
-      expect(headers).toContain(`x-openclaw-content-sha256: ${"b".repeat(64)}`);
-      expect(headers).toContain("accept-ranges: bytes");
-      expect(wire.slice(headerEnd + 4)).toBe(range ? "ndle" : "bundle");
+      expect(body).toBe(range ? "ndle" : "bundle");
       expect(h.progress.mock.calls.flat()).toEqual(progress);
-      expect(h.res.writableFinished).toBe(true);
       expect(h.interrupted).not.toHaveBeenCalled();
       expect(h.socketErrors).not.toHaveBeenCalled();
     },
@@ -579,9 +558,7 @@ describe("artifact transfer interruption observations", () => {
     expect(h.res.writableFinished).toBe(true);
     expect(h.progress.mock.calls.flat()).toEqual([2, 4, 2, 4, 6, 2, 4, 6]);
     expect(h.interrupted).toHaveBeenCalledOnce();
-    expect(
-      h.service.authorize({ token: h.prepared.token, artifactKey: h.artifactKey }),
-    ).toBeUndefined();
+    expect(h.authorize()).toBeUndefined();
   });
 
   it("keeps the stream error cause bounded and free of paths and bearers", async () => {
@@ -604,11 +581,9 @@ describe("artifact transfer interruption observations", () => {
     const [bytes, reason] = h.interrupted.mock.calls[0]!;
     expect(bytes).toBe(2);
     expect(reason).toContain("stream error (read failed:");
-    expect(reason).not.toContain(h.prepared.token);
-    expect(reason).not.toContain(h.tarballPath);
-    expect(reason).not.toContain("private");
-    expect(reason).not.toContain("runtime.tgz");
-    expect(reason).not.toContain("\n");
+    for (const secret of [h.prepared.token, h.tarballPath, "private", "runtime.tgz", "\n"]) {
+      expect(reason).not.toContain(secret);
+    }
     expect(reason.length).toBeLessThanOrEqual(256);
   });
 });

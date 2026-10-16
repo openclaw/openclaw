@@ -27,11 +27,12 @@ const OPERATION_TOKEN = createHash("sha256").update(OPERATION_ID).digest("hex");
 const UPLOAD_FILENAME = `openclaw-upload-${BUNDLE_HASH}.tgz.${OPERATION_TOKEN}`;
 const REMOTE_TARBALL = `/home/worker/.openclaw-worker/.incoming/${UPLOAD_FILENAME}`;
 const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
-const RECEIPT_JSON = JSON.stringify({
+const RECEIPT = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: VERSION,
   protocolFeatures: ["admission-v1"],
-});
+};
+const RECEIPT_JSON = JSON.stringify(RECEIPT);
 const WORKER_CHUNK = "worker-chunk-lazy-A_1.mjs";
 const WORKER_ARTIFACT_FIXTURE: Record<string, string> = {
   ...Object.fromEntries(
@@ -112,40 +113,25 @@ async function prepareBundle(root: string, protocolFeatures: string[] = []) {
 }
 
 function runBootstrapScript(
-  artifact: WorkerInstallationArtifact,
+  argv: string[],
   remoteHome: string,
   options: Parameters<WorkerBootstrapCommandRunner>[1],
   baseEnv: typeof options.baseEnv = {},
 ) {
-  const receipt = JSON.stringify({
-    bundleHash: artifact.bundleHash,
-    openclawVersion: artifact.openclawVersion,
-    protocolFeatures: artifact.protocolFeatures,
-  });
-  const upload = path.join(
-    remoteHome,
-    ".openclaw-worker",
-    ".incoming",
-    `openclaw-upload-${artifact.bundleHash}.tgz.${OPERATION_TOKEN}`,
-  );
-  const input = typeof options.input === "string" ? options.input : "";
-  const args = input.includes("expected_receipt=$2")
-    ? [artifact.bundleHash, receipt, artifact.install, OPERATION_TOKEN]
-    : input.includes("receipt_json=$5")
-      ? [
-          artifact.install,
-          artifact.bundleHash,
-          artifact.install === "npm" ? artifact.packageSpec : "",
-          artifact.install === "npm" ? artifact.packageIntegrity : "",
-          receipt,
-          upload,
-          artifact.install === "bundle" ? artifact.tarballSha256 : "",
-        ]
-      : [artifact.bundleHash, OPERATION_TOKEN];
-  return runCommandWithTimeout(["sh", "-s", "--", ...args], {
+  // Execute the exact shell command sent to SSH, with only the remote environment substituted.
+  return runCommandWithTimeout(["sh", "-c", argv.at(-1)!], {
     ...options,
     baseEnv: { ...options.baseEnv, HOME: remoteHome, ...baseEnv },
   });
+}
+
+async function expectWorkerRuns(installRoot: string) {
+  const worker = await runCommandWithTimeout(
+    [process.execPath, path.join(installRoot, "worker.mjs")],
+    { timeoutMs: 10_000 },
+  );
+  expect(worker.code, worker.stderr).toBe(0);
+  expect(worker.stdout.trim()).toBe("worker chunks loaded");
 }
 
 describe("bootstrapWorker", () => {
@@ -287,57 +273,44 @@ describe("bootstrapWorker", () => {
       result({ code: 1, stderr: "synthetic cleanup failure" }),
     ]);
 
-    await expect(bootstrapWith(runner)).resolves.toEqual({
-      bundleHash: BUNDLE_HASH,
-      openclawVersion: VERSION,
-      protocolFeatures: ["admission-v1"],
-    });
-
+    await expect(bootstrapWith(runner)).resolves.toEqual(RECEIPT);
+    const [preflight, transfer, install] = runner.calls;
     expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "scp", "ssh", "ssh"]);
-    expect(runner.calls[0]?.argv).toContain("StrictHostKeyChecking=yes");
+    expect(preflight?.argv).toContain("StrictHostKeyChecking=yes");
     expect(runner.calls.flatMap((call) => call.argv)).not.toContain("StrictHostKeyChecking=no");
-    expect(runner.calls[1]?.argv).toContain(BUNDLE.tarballPath);
-    expect(runner.calls[1]?.argv).toContain(`worker@worker.example.com:${REMOTE_TARBALL}`);
+    expect(transfer?.argv).toEqual(
+      expect.arrayContaining([BUNDLE.tarballPath, `worker@worker.example.com:${REMOTE_TARBALL}`]),
+    );
     expect(runner.calls.flatMap((call) => call.argv).join(" ")).not.toContain(OPERATION_ID);
-    expect(runner.calls[0]?.argv.at(-1)).toContain(OPERATION_TOKEN);
-    expect(runner.calls[2]?.options.input).toContain("bootstrap-receipt.json");
-    expect(runner.calls[2]?.options.input).toContain("lock=$lock_root/$hash");
-    expect(runner.calls[2]?.options.input).toContain('ln -s "$lock_identity" "$lock"');
-    expect(runner.calls[2]?.options.input).toContain("worker bundle archive digest mismatch");
-    expect(runner.calls[2]?.options.input).toContain(
+    expect(preflight?.argv.at(-1)).toContain(OPERATION_TOKEN);
+    for (const fragment of [
+      "bootstrap-receipt.json",
+      "lock=$lock_root/$hash",
+      'ln -s "$lock_identity" "$lock"',
+      "worker bundle archive digest mismatch",
+      "worker install content does not match",
       `const artifactPaths = ${JSON.stringify(WORKER_BUNDLE_ARTIFACT_PATHS)}`,
-    );
-    expect(runner.calls[2]?.options.input).not.toContain('npm install --prefix "$staging"');
-    expect(runner.calls[2]?.options.input).toContain("worker install content does not match");
-    expect(runner.calls[2]?.options.input).toContain(
       'mv "$staging" "$install_dir"\nfinish_with_receipt',
-    );
-    expect(runner.calls[2]?.options.input).toMatch(
+    ]) {
+      expect(install?.options.input).toContain(fragment);
+    }
+    expect(install?.options.input).not.toContain('npm install --prefix "$staging"');
+    expect(install?.options.input).toMatch(
       /finish_with_receipt\(\) \{[\s\S]*?rm -f -- "\$upload"\s+printf [^\n]+ receipt/u,
     );
-    expect(runner.calls[2]?.options.input).toMatch(
-      /if receipt_matches; then\s+finish_with_receipt/u,
-    );
-    expect(runner.calls[2]?.argv.at(-1)).toContain(BUNDLE_HASH);
-    expect(runner.calls[2]?.argv.at(-1)).toContain(TARBALL_SHA256);
-    expect(runner.calls[2]?.argv.at(-1)).toContain(VERSION);
+    expect(install?.options.input).toMatch(/if receipt_matches; then\s+finish_with_receipt/u);
+    for (const value of [BUNDLE_HASH, TARBALL_SHA256, VERSION]) {
+      expect(install?.argv.at(-1)).toContain(value);
+    }
   });
 
   it.each([
-    { name: "keeps the floor for a small bundle", tarballBytes: 1, transferTimeoutMs: 600_000 },
-    {
-      name: "scales the transfer timeout for a large bundle",
-      tarballBytes: 243_000_000,
-      transferTimeoutMs: 1_944_000,
-    },
-    {
-      name: "caps the transfer timeout for an absurdly large bundle",
-      tarballBytes: Number.MAX_SAFE_INTEGER,
-      transferTimeoutMs: 3_600_000,
-    },
-  ])(
-    "$name while other phases keep the base timeout",
-    async ({ tarballBytes, transferTimeoutMs }) => {
+    ["floor", 1, 600_000],
+    ["scaled", 243_000_000, 1_944_000],
+    ["capped", Number.MAX_SAFE_INTEGER, 3_600_000],
+  ] as const)(
+    "%s transfer timeout while other phases keep the base timeout",
+    async (_name, tarballBytes, transferTimeoutMs) => {
       const baseTimeoutMs = 600_000;
       const runner = fakeRunner([
         result({ stdout: tagged("install", REMOTE_TARBALL) }),
@@ -352,16 +325,18 @@ describe("bootstrapWorker", () => {
           { artifact: { ...BUNDLE, tarballBytes } },
           { timeoutMs: baseTimeoutMs },
         ),
-      ).resolves.toEqual(JSON.parse(RECEIPT_JSON));
+      ).resolves.toEqual(RECEIPT);
 
       const [preflight, transfer, install] = runner.calls;
-      expect(preflight?.options.timeoutMs).toBeLessThanOrEqual(baseTimeoutMs);
-      expect(preflight?.options.timeoutMs).toBeGreaterThanOrEqual(baseTimeoutMs - 100);
       expect(transfer?.argv[0]).toBe("scp");
-      expect(transfer?.options.timeoutMs).toBeLessThanOrEqual(transferTimeoutMs);
-      expect(transfer?.options.timeoutMs).toBeGreaterThanOrEqual(transferTimeoutMs - 100);
-      expect(install?.options.timeoutMs).toBeLessThanOrEqual(baseTimeoutMs);
-      expect(install?.options.timeoutMs).toBeGreaterThanOrEqual(baseTimeoutMs - 100);
+      for (const [call, limit] of [
+        [preflight, baseTimeoutMs],
+        [transfer, transferTimeoutMs],
+        [install, baseTimeoutMs],
+      ] as const) {
+        expect(call?.options.timeoutMs).toBeLessThanOrEqual(limit);
+        expect(call?.options.timeoutMs).toBeGreaterThanOrEqual(limit - 100);
+      }
     },
   );
 
@@ -455,37 +430,27 @@ describe("bootstrapWorker", () => {
     expect(runner.calls.map((call) => commandPort(call.argv))).toEqual(ports);
   });
 
-  it("fails with provider setup guidance when Node.js is missing", async () => {
-    const runner = fakeRunner([
-      result({
-        code: 42,
-        stderr: "OPENCLAW_WORKER_NODE_MISSING\n",
-      }),
-      result(),
-    ]);
-
-    await expect(bootstrapWith(runner)).rejects.toThrow("install Node in the provider setup phase");
-    expect(runner.calls).toHaveLength(2);
-  });
-
-  it("fails with provider setup guidance when Node.js is unsupported", async () => {
-    const runner = fakeRunner([
-      result({
-        code: 45,
-        stderr: "OPENCLAW_WORKER_NODE_UNSUPPORTED: v24.14.1\n",
-      }),
-      result(),
-    ]);
-
-    await expect(bootstrapWith(runner)).rejects.toThrow(
+  it.each([
+    [42, "OPENCLAW_WORKER_NODE_MISSING\n", "install Node in the provider setup phase"],
+    [
+      45,
+      "OPENCLAW_WORKER_NODE_UNSUPPORTED: v24.14.1\n",
       "Node 24.16.0+ or 26.1.0+ with WAL-reset-safe SQLite",
-    );
-    expect(runner.calls).toHaveLength(2);
-    expect(runner.calls[0]?.options.input).toContain(
-      `const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};`,
-    );
-    expect(runner.calls[0]?.options.input).toContain("SELECT sqlite_version() AS version");
-  });
+    ],
+  ] as const)(
+    "reports provider setup guidance for Node.js failure %s",
+    async (code, stderr, error) => {
+      const runner = fakeRunner([result({ code, stderr }), result()]);
+      await expect(bootstrapWith(runner)).rejects.toThrow(error);
+      expect(runner.calls).toHaveLength(2);
+      if (code === 45) {
+        expect(runner.calls[0]?.options.input).toContain(
+          `const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};`,
+        );
+        expect(runner.calls[0]?.options.input).toContain("SELECT sqlite_version() AS version");
+      }
+    },
+  );
 
   registerBootstrapRuntimeProbeTests({
     bootstrapWorker,
@@ -556,11 +521,7 @@ describe("bootstrapWorker", () => {
   });
 
   it("rejects a stale remote receipt instead of synthesizing the expected fields", async () => {
-    const staleReceipt = JSON.stringify({
-      bundleHash: BUNDLE_HASH,
-      openclawVersion: "2026.7.10",
-      protocolFeatures: ["admission-v1"],
-    });
+    const staleReceipt = JSON.stringify({ ...RECEIPT, openclawVersion: "2026.7.10" });
     const runner = fakeRunner([result({ stdout: tagged("current", staleReceipt) }), result()]);
 
     await expect(bootstrapWith(runner)).rejects.toThrow("receipt does not match");
@@ -577,7 +538,6 @@ describe("bootstrapWorker", () => {
         result({ code: 255, stderr: "selected port changed" }),
         result(),
       ],
-      commands: ["ssh", "scp", "ssh", "ssh"],
       cleanupPorts: [2222, 22],
     },
     {
@@ -589,19 +549,18 @@ describe("bootstrapWorker", () => {
         result({ code: 1, stderr: "install rejected" }),
         result(),
       ],
-      commands: ["ssh", "scp", "ssh", "ssh"],
       cleanupPorts: [2222],
     },
   ])(
     "does not retry fallback after a non-255 $phase failure and cleans up the upload",
-    async ({ phase, phaseCommand, responses, commands, cleanupPorts }) => {
+    async ({ phase, phaseCommand, responses, cleanupPorts }) => {
       const runner = fakeRunner(responses);
 
       await expect(bootstrapWith(runner, { ssh: { ...SSH, fallbackPorts: [22] } })).rejects.toThrow(
         `Worker bootstrap ${phase} failed`,
       );
 
-      expect(runner.calls.map((call) => call.argv[0])).toEqual(commands);
+      expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "scp", "ssh", "ssh"]);
       const phaseCalls = runner.calls.filter((call) =>
         phaseCommand === "scp"
           ? call.argv[0] === "scp"
@@ -650,14 +609,11 @@ describe("bootstrapWorker", () => {
       await withTestDir({ prefix: "openclaw-worker-bootstrap-script-" }, async (root) => {
         const remoteHome = path.join(root, "remote-home");
         const artifact = await prepareBundle(root, ["admission-v1"]);
+        const installRoot = path.join(remoteHome, ".openclaw-worker", artifact.bundleHash);
         const fakeBin = path.join(root, "fake-bin");
         await fs.mkdir(fakeBin);
         await fs.writeFile(path.join(fakeBin, "tar"), "#!/bin/sh\nexit 255\n", { mode: 0o755 });
-        const receiptJson = JSON.stringify({
-          bundleHash: artifact.bundleHash,
-          openclawVersion: VERSION,
-          protocolFeatures: ["admission-v1"],
-        });
+        const receiptJson = JSON.stringify({ ...RECEIPT, bundleHash: artifact.bundleHash });
         const staleStaging = path.join(
           remoteHome,
           ".openclaw-worker",
@@ -703,7 +659,7 @@ describe("bootstrapWorker", () => {
           if (isInstall) {
             installAttempts += 1;
           }
-          const shellResult = await runBootstrapScript(artifact, remoteHome, options, {
+          const shellResult = await runBootstrapScript(argv, remoteHome, options, {
             PATH: useFailingTar
               ? `${fakeBin}:${options.baseEnv?.PATH ?? ""}`
               : options.baseEnv?.PATH,
@@ -724,39 +680,21 @@ describe("bootstrapWorker", () => {
         };
 
         const bootstrapRequest = { ssh: { ...SSH, fallbackPorts: [22] }, artifact };
-        await expect(
-          bootstrapWorker(bootstrapRequest, { resolveIdentity, runCommand }),
-        ).rejects.toThrow("Worker bootstrap preflight failed (exit 255)");
+        const run = (request: Partial<WorkerBootstrapRequest> = bootstrapRequest) =>
+          bootstrapWith({ runCommand }, request);
+        await expect(run()).rejects.toThrow("Worker bootstrap preflight failed (exit 255)");
         expect(preflightPaths).toHaveLength(2);
         await expect(fs.stat(preflightPaths[0]!)).rejects.toMatchObject({ code: "ENOENT" });
 
         syntheticPreflightFailures = 1;
-        await expect(
-          bootstrapWorker(bootstrapRequest, { resolveIdentity, runCommand }),
-        ).resolves.toEqual(JSON.parse(receiptJson));
+        await expect(run()).resolves.toEqual(JSON.parse(receiptJson));
 
-        const installedWorker = await runCommandWithTimeout(
-          [
-            process.execPath,
-            path.join(remoteHome, ".openclaw-worker", artifact.bundleHash, "worker.mjs"),
-          ],
-          { timeoutMs: 10_000 },
-        );
-        expect(installedWorker.code, installedWorker.stderr).toBe(0);
-        expect(installedWorker.stdout.trim()).toBe("worker chunks loaded");
+        await expectWorkerRuns(installRoot);
 
-        const tamperedDependency = path.join(
-          remoteHome,
-          ".openclaw-worker",
-          artifact.bundleHash,
-          "node_modules",
-          "tampered.js",
-        );
+        const tamperedDependency = path.join(installRoot, "node_modules", "tampered.js");
         await fs.mkdir(path.dirname(tamperedDependency), { recursive: true });
         await fs.writeFile(tamperedDependency, "export const trusted = false;\n");
-        await expect(
-          bootstrapWorker(bootstrapRequest, { resolveIdentity, runCommand }),
-        ).resolves.toEqual(JSON.parse(receiptJson));
+        await expect(run()).resolves.toEqual(JSON.parse(receiptJson));
         await expect(fs.stat(tamperedDependency)).rejects.toMatchObject({ code: "ENOENT" });
 
         const operationUpload = preflightPaths[0]!;
@@ -769,9 +707,7 @@ describe("bootstrapWorker", () => {
         const staleTime = new Date(Date.now() - 61 * 60_000);
         await fs.utimes(staleUpload, staleTime, staleTime);
         const cleanupAttemptsBeforeCurrent = cleanupAttempts;
-        await expect(
-          bootstrapWorker({ ssh: SSH, artifact }, { resolveIdentity, runCommand }),
-        ).resolves.toEqual(JSON.parse(receiptJson));
+        await expect(run({ ssh: SSH, artifact })).resolves.toEqual(JSON.parse(receiptJson));
         expect(cleanupAttempts).toBe(cleanupAttemptsBeforeCurrent);
 
         expect(transfers).toBe(2);
@@ -788,64 +724,36 @@ describe("bootstrapWorker", () => {
         await expect(fs.stat(staleStaging)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(fs.lstat(staleLock)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(
-          fs.readFile(
-            path.join(
-              remoteHome,
-              ".openclaw-worker",
-              artifact.bundleHash,
-              "bootstrap-receipt.json",
-            ),
-            "utf8",
-          ),
+          fs.readFile(path.join(installRoot, "bootstrap-receipt.json"), "utf8"),
         ).resolves.toBe(`${receiptJson}\n`);
       });
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "fails closed instead of following a poisoned incoming directory",
-    async () => {
+  it.skipIf(process.platform === "win32").each(["incoming", "root"] as const)(
+    "refuses a poisoned bootstrap %s without modifying its target",
+    async (poisoned) => {
       await withTestDir({ prefix: "openclaw-worker-bootstrap-path-" }, async (root) => {
         const remoteHome = path.join(root, "remote-home");
         const unrelated = path.join(root, "unrelated");
         const bootstrapRoot = path.join(remoteHome, ".openclaw-worker");
-        await fs.mkdir(bootstrapRoot, { recursive: true });
-        await fs.mkdir(unrelated);
-        await fs.writeFile(path.join(unrelated, "sentinel"), "keep");
-        await fs.symlink(unrelated, path.join(bootstrapRoot, ".incoming"));
-        const runCommand: WorkerBootstrapCommandRunner = async (_argv, options) => {
-          return runBootstrapScript(BUNDLE, remoteHome, options);
+        const link =
+          poisoned === "incoming" ? path.join(bootstrapRoot, ".incoming") : bootstrapRoot;
+        const sentinel =
+          poisoned === "incoming"
+            ? path.join(unrelated, "sentinel")
+            : path.join(unrelated, ".incoming", UPLOAD_FILENAME);
+        await fs.mkdir(path.dirname(link), { recursive: true });
+        await fs.mkdir(path.dirname(sentinel), { recursive: true });
+        await fs.writeFile(sentinel, "keep");
+        await fs.symlink(unrelated, link);
+        const runCommand: WorkerBootstrapCommandRunner = async (argv, options) => {
+          return runBootstrapScript(argv, remoteHome, options);
         };
-
-        await expect(
-          bootstrapWorker({ ssh: SSH, artifact: BUNDLE }, { resolveIdentity, runCommand }),
-        ).rejects.toThrow("unsafe worker bootstrap directory");
-        await expect(fs.readFile(path.join(unrelated, "sentinel"), "utf8")).resolves.toBe("keep");
-      });
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "does not follow a poisoned bootstrap root during terminal cleanup",
-    async () => {
-      await withTestDir({ prefix: "openclaw-worker-bootstrap-cleanup-root-" }, async (root) => {
-        const remoteHome = path.join(root, "remote-home");
-        const unrelated = path.join(root, "unrelated");
-        const incoming = path.join(unrelated, ".incoming");
-        const upload = path.join(incoming, UPLOAD_FILENAME);
-        await fs.mkdir(remoteHome);
-        await fs.mkdir(incoming, { recursive: true });
-        await fs.writeFile(upload, "keep");
-        await fs.symlink(unrelated, path.join(remoteHome, ".openclaw-worker"));
-
-        const runCommand: WorkerBootstrapCommandRunner = async (_argv, options) => {
-          return runBootstrapScript(BUNDLE, remoteHome, options);
-        };
-
-        await expect(
-          bootstrapWorker({ ssh: SSH, artifact: BUNDLE }, { resolveIdentity, runCommand }),
-        ).rejects.toThrow("unsafe worker bootstrap directory");
-        await expect(fs.readFile(upload, "utf8")).resolves.toBe("keep");
+        await expect(bootstrapWith({ runCommand })).rejects.toThrow(
+          "unsafe worker bootstrap directory",
+        );
+        await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("keep");
       });
     },
   );
@@ -900,20 +808,18 @@ describe("bootstrapWorker", () => {
         });
         const installRoot = path.join(remoteHome, ".openclaw-worker", bundle.bundleHash);
         let installAttempts = 0;
-        const runCommand: WorkerBootstrapCommandRunner = async (_argv, options) => {
+        const runCommand: WorkerBootstrapCommandRunner = async (argv, options) => {
           const isInstall =
             typeof options.input === "string" && options.input.includes("receipt_json=$5");
           if (isInstall) {
             installAttempts += 1;
           }
-          return runBootstrapScript(artifact, remoteHome, options, {
+          return runBootstrapScript(argv, remoteHome, options, {
             PATH: `${fakeBin}:${options.baseEnv?.PATH ?? ""}`,
           });
         };
-
-        await expect(
-          bootstrapWorker({ ssh: SSH, artifact }, { resolveIdentity, runCommand }),
-        ).resolves.toEqual(JSON.parse(receiptJson));
+        const run = () => bootstrapWith({ runCommand }, { artifact });
+        await expect(run()).resolves.toEqual(JSON.parse(receiptJson));
         expect(installAttempts).toBe(1);
         expect((await fs.readdir(installRoot)).toSorted()).toEqual(
           ["bootstrap-receipt.json", ...Object.keys(WORKER_ARTIFACT_FIXTURE)].toSorted(),
@@ -928,22 +834,13 @@ describe("bootstrapWorker", () => {
           fs.readFile(path.join(installRoot, "bootstrap-receipt.json"), "utf8"),
         ).resolves.toBe(`${receiptJson}\n`);
 
-        await expect(
-          bootstrapWorker({ ssh: SSH, artifact }, { resolveIdentity, runCommand }),
-        ).resolves.toEqual(JSON.parse(receiptJson));
+        await expect(run()).resolves.toEqual(JSON.parse(receiptJson));
         expect(installAttempts).toBe(1);
 
         await fs.writeFile(path.join(installRoot, WORKER_CHUNK), "export {};\n");
-        await expect(
-          bootstrapWorker({ ssh: SSH, artifact }, { resolveIdentity, runCommand }),
-        ).resolves.toEqual(JSON.parse(receiptJson));
+        await expect(run()).resolves.toEqual(JSON.parse(receiptJson));
         expect(installAttempts).toBe(2);
-        const installedWorker = await runCommandWithTimeout(
-          [process.execPath, path.join(installRoot, "worker.mjs")],
-          { timeoutMs: 10_000 },
-        );
-        expect(installedWorker.code, installedWorker.stderr).toBe(0);
-        expect(installedWorker.stdout.trim()).toBe("worker chunks loaded");
+        await expectWorkerRuns(installRoot);
       });
     },
   );

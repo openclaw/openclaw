@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
@@ -5,7 +6,7 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import * as sessionAccess from "../../config/sessions/session-accessor.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerTunnelHandle } from "./tunnel-contract.js";
+import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -14,10 +15,10 @@ import {
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
+  createWorkerTurnTunnel,
   credential,
-  measureLaunchTurn,
-  readLaunchToolNames,
   placements,
+  reconcileUnchangedLocalWorkspace,
   root,
   seedActivePlacement,
   sessionTarget,
@@ -30,25 +31,14 @@ import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation
 import { reconcileWorkspaceAfterTurn as reconcileWorkspaceAfterTurnCore } from "./workspace-result-finalize.js";
 import * as resultStaging from "./workspace-result-staging.js";
 
-function reconcileWorkspaceAfterTurn(
-  params: Parameters<typeof reconcileWorkspaceAfterTurnCore>[0],
-) {
-  return withWorkerTurnTranscriptDatabase(
-    { ...params.transcriptTarget, sessionTarget: params.transcriptTarget },
-    {
-      assertCurrent() {},
-      prepareAuthority: () => params.placements.prepareTurnClaimAuthority(params.turnClaim),
-    },
-    (transcriptTarget) => reconcileWorkspaceAfterTurnCore({ ...params, transcriptTarget }),
-  );
-}
-
 afterAll(closeStateDatabaseForTest);
 
 // Pause only the physical admission boundary, without holding a native database lock.
 vi.mock("../../agents/sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: vi.fn(),
 }));
+
+type Effect = { mock: { calls: unknown[][] } };
 
 function deferTranscriptWrite() {
   const entered = createDeferred();
@@ -58,7 +48,31 @@ function deferTranscriptWrite() {
     await release.promise;
     return write();
   });
-  return { entered, release };
+  return {
+    release,
+    async wait(operation: Promise<unknown>, ...effects: Effect[]) {
+      expect(await Promise.race([entered.promise.then(() => "queued"), operation])).toBe("queued");
+      expectUnwritten(...effects);
+    },
+  };
+}
+
+function expectUnwritten(...effects: Effect[]) {
+  expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
+  expect(effects.map((effect) => effect.mock.calls)).toEqual(effects.map(() => []));
+}
+
+function patchEntry(patch: { activeWriterRunId?: string; lifecycleRevision?: string }) {
+  return sessionAccess.patchSessionEntryCore(sessionTarget, () => patch);
+}
+
+function deleteEntry(expectedSessionId: string) {
+  return sessionAccess.deleteSessionEntryLifecycle({
+    ...sessionTarget,
+    archiveTranscript: false,
+    target: { canonicalKey: sessionTarget.sessionKey, storeKeys: [sessionTarget.sessionKey] },
+    expectedSessionId,
+  });
 }
 
 describe("cloud transcript write admission", () => {
@@ -74,14 +88,12 @@ describe("cloud transcript write admission", () => {
     async (change) => {
       await seedActivePlacement();
       const input = turn();
-      await sessionAccess.patchSessionEntryCore(sessionTarget, () => ({
+      await patchEntry({
         activeWriterRunId: input.runId,
         lifecycleRevision: "initial-lifecycle",
-      }));
+      });
       const entry = sessionAccess.loadSessionEntry(sessionTarget);
-      if (!entry) {
-        throw new Error("expected current session entry");
-      }
+      assert(entry, "expected current session entry");
       const fencedTarget = {
         ...sessionTarget,
         expectedWriterRunId: input.runId,
@@ -89,22 +101,15 @@ describe("cloud transcript write admission", () => {
       };
       const gate = deferTranscriptWrite();
       const notified = vi.fn();
-      const launch = vi.fn(async () => {
-        throw new Error("fixture reached worker launch");
-      });
+      const launch = vi
+        .fn<() => Promise<never>>()
+        .mockRejectedValue(new Error("fixture reached worker launch"));
       const environment = attachedEnvironment();
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand: vi.fn(),
-        measureLaunchTurn,
-        readLaunchToolNames,
+      const tunnel = createWorkerTurnTunnel({
         launchTurn: launch,
         quiesceWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
-        syncWorkspace: vi.fn(),
-        stop: vi.fn(),
-      };
+      });
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,
         environments: {
@@ -122,43 +127,24 @@ describe("cloud transcript write admission", () => {
           { ...input, sessionTarget: fencedTarget, onUserMessagePersisted: notified },
           vi.fn(),
           undefined,
-          () => {
-            if (!runCurrent) {
-              throw new Error("fixture run closed");
-            }
-          },
+          () => assert(runCurrent, "fixture run closed"),
         )
         .catch((error: unknown) => error);
       try {
-        expect(await Promise.race([gate.entered.promise.then(() => "queued"), operation])).toBe(
-          "queued",
-        );
-        expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
-        expect(notified).not.toHaveBeenCalled();
-        expect(launch).not.toHaveBeenCalled();
+        await gate.wait(operation, notified, launch);
         if (change === "run") {
           runCurrent = false;
         } else if (change === "claim") {
           const placement = placements.get(SESSION_ID);
           const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
-          if (!claim) {
-            throw new Error("expected current worker claim");
-          }
+          assert(claim, "expected current worker claim");
           await placements.releaseTurn(claim);
         } else if (change === "environment") {
           environment.ownerEpoch += 1;
         } else if (change === "missing") {
-          await sessionAccess.deleteSessionEntryLifecycle({
-            ...sessionTarget,
-            archiveTranscript: false,
-            target: {
-              canonicalKey: sessionTarget.sessionKey,
-              storeKeys: [sessionTarget.sessionKey],
-            },
-            expectedSessionId: entry.sessionId,
-          });
+          await deleteEntry(entry.sessionId);
         } else if (change === "writer" || change === "lifecycle") {
-          await sessionAccess.patchSessionEntryCore(sessionTarget, () =>
+          await patchEntry(
             change === "writer"
               ? { activeWriterRunId: "replacement-run" }
               : { lifecycleRevision: "replacement-lifecycle" },
@@ -171,13 +157,10 @@ describe("cloud transcript write admission", () => {
           expect(SessionManager.open(sessionTarget).getBranch()).toMatchObject([
             { type: "message", message: { role: "user" } },
           ]);
-          expect(notified).toHaveBeenCalledOnce();
-          expect(launch).toHaveBeenCalledOnce();
+          expect([notified.mock.calls.length, launch.mock.calls.length]).toEqual([1, 1]);
         } else {
           expect(outcome).toBeInstanceOf(Error);
-          expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
-          expect(notified).not.toHaveBeenCalled();
-          expect(launch).not.toHaveBeenCalled();
+          expectUnwritten(notified, launch);
         }
       } finally {
         gate.release.resolve();
@@ -199,9 +182,7 @@ describe("cloud transcript write admission", () => {
     async ({ change, cleared }) => {
       await seedActivePlacement("remote-exec");
       const placement = placements.get(SESSION_ID);
-      if (placement?.state !== "active") {
-        throw new Error("expected active placement");
-      }
+      assert(placement?.state === "active", "expected active placement");
       const turnClaim = await placements.claimTurn({
         ...sessionTarget,
         owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
@@ -217,35 +198,26 @@ describe("cloud transcript write admission", () => {
         });
         vi.spyOn(resultStaging, "deleteStagedWorkerWorkspaceResult").mockResolvedValue();
       }
-      await sessionAccess.patchSessionEntryCore(sessionTarget, () => ({
-        activeWriterRunId: turnClaim.runId,
-      }));
+      await patchEntry({ activeWriterRunId: turnClaim.runId });
       const entry = sessionAccess.loadSessionEntry(sessionTarget);
-      if (!entry) {
-        throw new Error("expected current session entry");
-      }
+      assert(entry, "expected current session entry");
       const gate = deferTranscriptWrite();
       const publish = vi.fn();
-      const tunnel: WorkerTunnelHandle = {
+      const tunnel: WorkerWorkspaceTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
         reconcileWorkspace: async (request) => {
-          if (request.source.kind !== "local" || !request.source.stagedResult) {
-            throw new Error("expected local staged result");
-          }
+          assert(
+            request.source.kind === "local" && request.source.stagedResult,
+            "expected local staged result",
+          );
           if (!cleared) {
             await request.source.stagedResult.record(request.source.stagedResult.ref);
           }
-          await request.source.journal.commit(MANIFEST_REF);
           return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-            publishStagedResult: async () => {},
-            discardPreparedStagedResult: async () => {},
+            ...(await reconcileUnchangedLocalWorkspace(request)),
             getAppliedWorkspaceResult: () => ({
               manifestRef: MANIFEST_REF,
               manifest: { version: 1, baseCommit: null, entries: [] },
@@ -257,62 +229,52 @@ describe("cloud transcript write admission", () => {
         syncWorkspace: vi.fn(),
         stop: vi.fn(),
       };
-      const operation = reconcileWorkspaceAfterTurn({
-        placement,
-        placements,
-        turnClaim,
-        workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-        workspace: { kind: "local", path: root },
-        transcriptTarget: { ...sessionTarget, expectedWriterRunId: turnClaim.runId },
-        tunnel,
-        publishAcceptedWorkspace: publish,
-      }).catch((error: unknown) => error);
+      const target = { ...sessionTarget, expectedWriterRunId: turnClaim.runId };
+      const operation = withWorkerTurnTranscriptDatabase(
+        { ...target, sessionTarget: target },
+        {
+          assertCurrent() {},
+          prepareAuthority: () => placements.prepareTurnClaimAuthority(turnClaim),
+        },
+        (transcriptTarget) =>
+          reconcileWorkspaceAfterTurnCore({
+            placement,
+            placements,
+            turnClaim,
+            transcriptTarget,
+            tunnel,
+            workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+            workspace: { kind: "local", path: root },
+            publishAcceptedWorkspace: publish,
+          }),
+      ).catch((error: unknown) => error);
       try {
-        expect(await Promise.race([gate.entered.promise.then(() => "queued"), operation])).toBe(
-          "queued",
-        );
-        expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
-        expect(publish).not.toHaveBeenCalled();
+        await gate.wait(operation, publish);
         expect(placements.validateWorkspaceResultClaim(turnClaim)).toBe(true);
         if (change === "draining") {
           await placements.startWorkspaceResultDrain(turnClaim);
         } else if (change === "claim") {
           vi.spyOn(placements, "validateWorkspaceResultClaim").mockReturnValue(false);
         } else if (change === "missing") {
-          await sessionAccess.deleteSessionEntryLifecycle({
-            ...sessionTarget,
-            archiveTranscript: false,
-            target: {
-              canonicalKey: sessionTarget.sessionKey,
-              storeKeys: [sessionTarget.sessionKey],
-            },
-            expectedSessionId: entry.sessionId,
-          });
+          await deleteEntry(entry.sessionId);
         } else if (change === "writer") {
-          await sessionAccess.patchSessionEntryCore(sessionTarget, () => ({
-            activeWriterRunId: "replacement-run",
-          }));
+          await patchEntry({ activeWriterRunId: "replacement-run" });
         }
         gate.release.resolve();
         const outcome = await operation;
         if (change === "current" || change === "draining") {
-          if (cleared) {
-            expect(outcome).toBeUndefined();
-          } else {
-            expect(outcome).toMatchObject({ paths: ["src/local.ts"] });
-          }
+          expect(outcome).toEqual(
+            cleared ? undefined : expect.objectContaining({ paths: ["src/local.ts"] }),
+          );
+          const customType = `cloud-workspace-conflict${cleared ? "-cleared" : ""}`;
           expect(SessionManager.open(sessionTarget).getBranch()).toMatchObject([
-            {
-              type: "custom_message",
-              customType: cleared ? "cloud-workspace-conflict-cleared" : "cloud-workspace-conflict",
-            },
+            { type: "custom_message", customType },
           ]);
           expect(publish).toHaveBeenCalledOnce();
           expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
         } else {
           expect(outcome).toBeInstanceOf(Error);
-          expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
-          expect(publish).not.toHaveBeenCalled();
+          expectUnwritten(publish);
           expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }
       } finally {
