@@ -107,7 +107,69 @@ export function captureSidebarSnapshotModel(
       mainKey: agents.mainKey,
       scope: agents.scope,
     },
-    roster: bootRoster,
+    roster: {
+      agentId: bootRoster.agentId,
+      groups: [...bootRoster.groups],
+      groupSettings: bootRoster.groupSettings.map(({ name, position }) => ({ name, position })),
+      sectionOrder: [...bootRoster.sectionOrder],
+      result: {
+        ts: bootRoster.result.ts,
+        path: bootRoster.result.path,
+        count: bootRoster.result.count,
+        defaults: {
+          model: bootRoster.result.defaults.model,
+          modelProvider: bootRoster.result.defaults.modelProvider,
+          contextTokens: bootRoster.result.defaults.contextTokens,
+        },
+        sessions: bootRoster.result.sessions.map((row) => ({
+          key: row.key,
+          kind: row.kind,
+          sessionId: row.sessionId,
+          agentId: row.agentId,
+          label: row.label,
+          autoLabel: row.autoLabel,
+          icon: row.icon,
+          color: row.color,
+          channel: row.channel,
+          displayName: row.displayName,
+          derivedTitle: row.derivedTitle,
+          lastMessagePreview: row.lastMessagePreview,
+          updatedAt: row.updatedAt,
+          category: row.category,
+          pinned: row.pinned,
+          archived: row.archived,
+          hasBoard: row.hasBoard,
+          boardFace: row.boardFace,
+          boardPresentation: row.boardPresentation,
+          workspaceDir: row.workspaceDir,
+          spawnedWorkspaceDir: row.spawnedWorkspaceDir,
+          spawnedCwd: row.spawnedCwd,
+          execNode: row.execNode,
+          execCwd: row.execCwd,
+          deviceFolder: row.deviceFolder
+            ? { deviceId: row.deviceFolder.deviceId, path: row.deviceFolder.path }
+            : undefined,
+          worktree: row.worktree
+            ? { id: row.worktree.id, branch: row.worktree.branch, repoRoot: row.worktree.repoRoot }
+            : undefined,
+          repository: row.repository
+            ? { url: row.repository.url, ref: row.repository.ref, branch: row.repository.branch }
+            : undefined,
+          thinkingLevel: row.thinkingLevel,
+          model: row.model,
+          modelProvider: row.modelProvider,
+          owner: row.owner
+            ? {
+                actor: {
+                  type: row.owner.actor.type,
+                  id: row.owner.actor.id,
+                  label: row.owner.actor.label,
+                },
+              }
+            : undefined,
+        })),
+      },
+    },
     mode: host.sidebarAgentsMode,
     navigationView: host.navigationView,
     pages: snapshotSessions(
@@ -157,7 +219,11 @@ export function captureSidebarSnapshotModel(
     peoplePresenceFilter: host.people.presenceFilter,
     offlineUsers: (host.peopleView?.directory()?.result?.profiles ?? [])
       .filter((profile) => !profile.mergedInto)
-      .map(profilePresenceViewer),
+      .map((profile) => ({
+        ...displayUser(profilePresenceViewer(profile)),
+        watchedSessions: [],
+        entries: [],
+      })),
     ownerId: host.sessionOwnerFilterId,
     involvingMe: host.sessionInvolvingMeFilterActive,
     footer: context.gateway.snapshot.selfUser

@@ -64,7 +64,10 @@ export function snapshotSections(
               type: section.personOwner.type,
               id: section.personOwner.id,
               label: section.personOwner.label,
-              identity: section.personOwner.identity,
+              identity:
+                section.personOwner.identity?.type === "profile"
+                  ? { type: "profile" as const, id: section.personOwner.identity.id }
+                  : undefined,
             }
           : undefined,
         project: section.project
