@@ -7,8 +7,8 @@ import {
   UpdateScheduleStateSchema,
 } from "../../../packages/gateway-protocol/src/schema/config.js";
 import type { GatewayHelloOk } from "../api/gateway.ts";
-import { i18n } from "../i18n/index.ts";
 import type { UpdateScheduleState } from "../api/types.ts";
+import { i18n } from "../i18n/index.ts";
 import {
   projectUpdateSentinel,
   projectUpdateStatusResponse,
