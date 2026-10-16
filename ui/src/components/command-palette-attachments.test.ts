@@ -4,7 +4,11 @@ import { createComponent, createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { CommandPaletteLoading } from "../app/app-shell-command-palette-loading-view.tsx";
-import { createCommandPaletteLoading } from "../app/app-shell-command-palette-loading.ts";
+import { ShellCommandPaletteOwner } from "../app/app-shell-command-palette-loading.ts";
+import {
+  COMMAND_PALETTE_ELEMENT,
+  LazyCustomElementRequestController,
+} from "../app/lazy-custom-element.ts";
 import { createWebPushCapability } from "../app/web-push.ts";
 import * as toast from "../lib/toast.ts";
 import * as payloads from "../pages/chat/attachment-payload-store.ts";
@@ -36,9 +40,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function createLoading(host: Parameters<typeof createCommandPaletteLoading>[0] = {}) {
+function createLoading(
+  host: Pick<ConstructorParameters<typeof ShellCommandPaletteOwner>[0], "context"> = {},
+) {
   const { state, dispose } = createRoot((disposeRoot) => ({
-    state: createCommandPaletteLoading(host),
+    state: new ShellCommandPaletteOwner(
+      {
+        ...host,
+        commandPaletteElement: COMMAND_PALETTE_ELEMENT,
+        lazyCustomElements: new LazyCustomElementRequestController({ requestUpdate: () => {} }),
+        chatNavigationOptions: () => undefined,
+        navigate: () => {},
+      },
+      { request: () => {}, clear: () => {}, cancel: () => {}, pending: () => false },
+    ).loading,
     dispose: disposeRoot,
   }));
   onTestFinished(dispose);

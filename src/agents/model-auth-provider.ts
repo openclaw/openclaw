@@ -352,11 +352,16 @@ export async function resolveApiKeyForProviderCore(input: {
         store,
         profileId: undefined,
         lockedProfile: true,
-      }) //
-        .catch(() => {
-          params.signal?.throwIfAborted();
-          return result;
-        });
+      }).catch((error: unknown) => {
+        params.signal?.throwIfAborted();
+        if (
+          error instanceof OAuthRefreshFailureError ||
+          error instanceof SecretSurfaceUnavailableError
+        ) {
+          throw error;
+        }
+        return result;
+      });
     }
     return result;
   }

@@ -4,7 +4,6 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { RouteLocation } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 // mock-isolation: Observe page bindings without registering the real pane tag and starting its domain owners.
@@ -36,7 +35,7 @@ import {
   setViewerPresenceContext,
   stubMatchMedia,
 } from "./chat-page.test-support.ts";
-import { ChatPage, ChatPageView } from "./chat-page.ts";
+import { ChatPage } from "./chat-page.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const WORK_SESSION_KEY = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
@@ -139,14 +138,14 @@ describe("chat page split layout host", () => {
   });
 
   it.each([false, true])(
-    "derives mobile chrome after direct Solid attachment (onboarding=%s)",
+    "derives mobile chrome for the registered page host (onboarding=%s)",
     async (onboarding) => {
       stubMatchMedia(true);
       const container = document.body.appendChild(document.createElement("div"));
       container.className = onboarding ? "shell shell--onboarding" : "shell";
       const { context } = createChatPageNavigationContext();
       const view = mountSolid(
-        () => createComponent(ChatPageView, { context, data: { sessionKey: "main" } }),
+        () => Object.assign(new ChatPage(), { context, data: { sessionKey: "main" } }),
         { container },
       );
       try {
