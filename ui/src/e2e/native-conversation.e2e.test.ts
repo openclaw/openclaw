@@ -29,6 +29,9 @@ type ConversationTestWindow = Window &
   };
 const messages = (page: Page) =>
   page.evaluate(() => (window as ConversationTestWindow).conversationMessages);
+const lastMessage = async (page: Page, type: string) =>
+  (await messages(page)).findLast((message) => message.type === type);
+const sessionContext = (name: string) => ({ agentId: "main", sessionKey: `agent:main:${name}` });
 async function installConversationHost(page: Page, features?: string[]) {
   await page.addInitScript((requestedFeatures) => {
     Object.assign(window, {
@@ -129,6 +132,9 @@ async function headerLeadingInset(page: Page) {
     return leading.getBoundingClientRect().left - header.getBoundingClientRect().left;
   });
 }
+
+const navigate = (page: Page, name: string, requestId: string) =>
+  command(page, "navigate", sessionContext(name), requestId);
 
 suite.define(() => {
   it("keeps a single web conversation with in-page native navigation and Dashboard handoff", async () => {
@@ -286,14 +292,9 @@ suite.define(() => {
         .locator(".chat-thread-inner")
         .getByText("Web composer verified.", { exact: true })
         .waitFor();
-      await command(
-        page,
-        "navigate",
-        { agentId: "main", sessionKey: "agent:main:next" },
-        "navigate-1",
-      );
+      await navigate(page, "next", "navigate-1");
       await expect
-        .poll(async () => (await messages(page)).findLast((message) => message.type === "state"))
+        .poll(async () => lastMessage(page, "state"))
         .toMatchObject({ context: { agentId: "main", sessionKey: "agent:main:next" } });
       const navigationMessages = await messages(page);
       const navigationResult = navigationMessages.findIndex(
@@ -320,16 +321,12 @@ suite.define(() => {
       );
       await linkedConversation.click();
       await expect
-        .poll(async () =>
-          (await messages(page)).findLast((message) => message.type === "route-changed"),
-        )
+        .poll(async () => lastMessage(page, "route-changed"))
         .toMatchObject({ agentId: "main", sessionKey: "agent:main:linked" });
       const conversationUrl = page.url();
       await pane.getByRole("link", { name: "Settings", exact: true }).click();
       await expect
-        .poll(async () =>
-          (await messages(page)).findLast((message) => message.type === "open-dashboard"),
-        )
+        .poll(async () => lastMessage(page, "open-dashboard"))
         .toMatchObject({ path: "/settings", search: "?section=general" });
       expect(page.url()).toBe(conversationUrl);
       for (const response of ["rejected", "throw"] as const) {
@@ -352,23 +349,13 @@ suite.define(() => {
       );
       await command(page, "presentation", { visible: false, active: false }, "hide");
       await expect.poll(() => pane.getAttribute("aria-hidden")).toBe("true");
-      await command(
-        page,
-        "navigate",
-        { agentId: "main", sessionKey: "agent:main:next" },
-        "hidden-navigate",
-      );
+      await navigate(page, "next", "hidden-navigate");
       await command(page, "presentation", { visible: true, active: false }, "show-inactive");
       await expect.poll(() => pane.getAttribute("aria-hidden")).toBe("false");
       expect(await composer.isVisible()).toBe(true);
-      await command(
-        page,
-        "navigate",
-        { agentId: "main", sessionKey: "agent:main:linked" },
-        "inactive-navigate",
-      );
+      await navigate(page, "linked", "inactive-navigate");
       await expect
-        .poll(async () => (await messages(page)).findLast((message) => message.type === "state"))
+        .poll(async () => lastMessage(page, "state"))
         .toMatchObject({ context: { agentId: "main", sessionKey: "agent:main:linked" } });
       expect(await pane.getAttribute("aria-hidden")).toBe("false");
       expect(await composer.isVisible()).toBe(true);
@@ -410,9 +397,8 @@ suite.define(() => {
         "focus-composer",
         "session-facts-v1",
       ]);
-      const latestFacts = async () =>
-        (await messages(page)).findLast((message) => message.type === "session-facts");
-      const sessionB = { agentId: "main", sessionKey: "agent:main:draft-b" };
+      const latestFacts = () => lastMessage(page, "session-facts");
+      const sessionB = sessionContext("draft-b");
       await command(page, "navigate", sessionB, "draft-b");
       const privateDraft = "Only the web composer may read this unsent draft.";
       await composer.fill(privateDraft);
@@ -421,12 +407,7 @@ suite.define(() => {
           { ...sessionB, hasComposerDraft: true, outboxAttentionCount: 0 },
         ]),
       });
-      await command(
-        page,
-        "navigate",
-        { agentId: "main", sessionKey: "agent:main:main" },
-        "show-a-with-b-draft",
-      );
+      await navigate(page, "main", "show-a-with-b-draft");
       expect(await composer.inputValue()).toBe("");
       expect(await latestFacts()).toMatchObject({
         sessions: expect.arrayContaining([
@@ -477,7 +458,7 @@ suite.define(() => {
   it("opens the selected session's web actions before acknowledging and leaves execution in web", async () => {
     await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
       await installConversationHost(page, ["session-actions-v1"]);
-      const sessionB = { agentId: "main", sessionKey: "agent:main:worker-b" };
+      const sessionB = sessionContext("worker-b");
       const gateway = await installMockGateway(page, {
         featureMethods: [
           ...defaultControlUiFeatureMethods,
@@ -544,7 +525,7 @@ suite.define(() => {
           ),
         ),
       ).toEqual({ requestId: "open-worker-b", expanded: "true" });
-      expect((await messages(page)).findLast((message) => message.type === "state")).toMatchObject({
+      expect(await lastMessage(page, "state")).toMatchObject({
         context: sessionB,
       });
       const menu = pane.locator("openclaw-chat-header-session-menu");
@@ -572,12 +553,7 @@ suite.define(() => {
         key: sessionB.sessionKey,
         agentId: sessionB.agentId,
       });
-      await command(
-        page,
-        "navigate",
-        { agentId: "main", sessionKey: "agent:main:main" },
-        "navigate-during-reclaim",
-      );
+      await navigate(page, "main", "navigate-during-reclaim");
       await gateway.resolveDeferred("sessions.reclaim", { ok: true });
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(1);
       expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);

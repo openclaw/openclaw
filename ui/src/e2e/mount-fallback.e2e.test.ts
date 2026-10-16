@@ -14,6 +14,9 @@ const indexHtmlPath = path.resolve(
 const renderEvent = "openclaw-control-ui-rendered";
 const loadCountKey = "openclaw.control-ui-e2e.mount-fallback-loads";
 const renderCountKey = "openclaw.control-ui-e2e.mount-fallback-renders";
+const pageOptions = { serviceWorkers: "block", viewport: { height: 900, width: 1280 } } as const;
+const counter = (page: Page, key: string) =>
+  page.evaluate((storageKey) => sessionStorage.getItem(storageKey), key);
 let syntheticModuleRenders = false;
 
 async function startRegisteredElementFixture(): Promise<ControlUiE2eServer> {
@@ -73,6 +76,12 @@ async function addLifecycleCounters(page: Page): Promise<void> {
   );
 }
 
+async function prepareClock(page: Page) {
+  await addLifecycleCounters(page);
+  await page.clock.install();
+  await pauseVirtualClock(page);
+}
+
 async function exhaustMountRecovery(page: Page): Promise<void> {
   // Every document gets a fresh grace period; only three recovery navigations
   // are allowed before a broken bundle must leave the terminal fallback visible.
@@ -83,9 +92,7 @@ async function exhaustMountRecovery(page: Page): Promise<void> {
     expect(new URL(response!.url()).searchParams.get("openclaw_mount_recovery")).toBe(
       String(recovery),
     );
-    expect(await page.evaluate((key) => sessionStorage.getItem(key), loadCountKey)).toBe(
-      String(recovery + 1),
-    );
+    expect(await counter(page, loadCountKey)).toBe(String(recovery + 1));
   }
   await page.clock.runFor(12_001);
   await page.getByRole("heading", { name: "Control UI did not start" }).waitFor();
@@ -93,7 +100,7 @@ async function exhaustMountRecovery(page: Page): Promise<void> {
     "A fresh page still could not start the Control UI",
   );
   await page.clock.runFor(60_000);
-  expect(await page.evaluate((key) => sessionStorage.getItem(key), loadCountKey)).toBe("4");
+  expect(await counter(page, loadCountKey)).toBe("4");
 }
 
 const registeredElementSuite = createControlUiE2eSuite({
@@ -111,7 +118,7 @@ registeredElementSuite.define(() => {
       const release = createDeferred();
       let moduleRequests = 0;
       await registeredElementSuite.withPage(
-        { serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+        pageOptions,
         async ({ page }) => {
           await addLifecycleCounters(page);
           await page.route("**/src/main.ts", async (route) => {
@@ -140,18 +147,16 @@ registeredElementSuite.define(() => {
           await page.clock.runFor(12_001);
 
           await page.getByRole("heading", { name: "Control UI is still loading" }).waitFor();
-          expect(await page.evaluate((key) => sessionStorage.getItem(key), loadCountKey)).toBe("1");
+          expect(await counter(page, loadCountKey)).toBe("1");
           await page.getByRole("button", { name: "Keep waiting" }).click();
           await page.clock.runFor(12_001);
           expect(moduleRequests).toBe(1);
-          expect(await page.evaluate((key) => sessionStorage.getItem(key), loadCountKey)).toBe("1");
+          expect(await counter(page, loadCountKey)).toBe("1");
 
           release.resolve();
           await page.getByText("Application rendered", { exact: true }).waitFor();
           expect(await page.locator("#openclaw-mount-fallback").isHidden()).toBe(true);
-          expect(await page.evaluate((key) => sessionStorage.getItem(key), renderCountKey)).toBe(
-            "1",
-          );
+          expect(await counter(page, renderCountKey)).toBe("1");
           expect(new URL(page.url()).searchParams.get("session")).toBe("synthetic-session");
           expect(new URL(page.url()).hash).toBe("#synthetic-fragment");
         },
@@ -162,84 +167,75 @@ registeredElementSuite.define(() => {
 
   it("shows the fallback when registration never produces an application render", async () => {
     syntheticModuleRenders = false;
-    await registeredElementSuite.withPage(
-      { serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
-      async ({ page }) => {
-        await addLifecycleCounters(page);
-        await page.clock.install();
-        await pauseVirtualClock(page);
-        await page.goto(registeredElementSuite.server.baseUrl, { waitUntil: "domcontentloaded" });
-        await page.waitForFunction(() => customElements.get("openclaw-app") !== undefined);
+    await registeredElementSuite.withPage(pageOptions, async ({ page }) => {
+      await prepareClock(page);
+      await page.goto(registeredElementSuite.server.baseUrl, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => customElements.get("openclaw-app") !== undefined);
 
-        expect(await page.locator("openclaw-app").textContent()).toBe("");
-        expect(
-          await page.evaluate((key) => sessionStorage.getItem(key), renderCountKey),
-        ).toBeNull();
+      expect(await page.locator("openclaw-app").textContent()).toBe("");
+      expect(await counter(page, renderCountKey)).toBeNull();
 
-        await exhaustMountRecovery(page);
+      await exhaustMountRecovery(page);
 
-        await page.getByRole("heading", { name: "Control UI did not start" }).waitFor();
-        expect(await page.getByRole("button", { name: "Try again" }).isVisible()).toBe(true);
-        expect(await page.getByRole("button", { name: "Keep waiting" }).isVisible()).toBe(true);
-        expect(
-          await page.evaluate((key) => sessionStorage.getItem(key), renderCountKey),
-        ).toBeNull();
+      await page.getByRole("heading", { name: "Control UI did not start" }).waitFor();
+      expect(await page.getByRole("button", { name: "Try again" }).isVisible()).toBe(true);
+      expect(await page.getByRole("button", { name: "Keep waiting" }).isVisible()).toBe(true);
+      expect(await counter(page, renderCountKey)).toBeNull();
 
-        const drag = await page.evaluate(() => {
-          const fallback = document.getElementById("openclaw-mount-fallback")!;
-          const press = (target: Element, button = 0, handled = false) => {
-            const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button });
-            if (handled) {
-              event.preventDefault();
-            }
-            target.dispatchEvent(event);
-            return event.defaultPrevented;
-          };
-          const withoutBridge = press(fallback);
-          const messages: unknown[] = [];
-          Object.defineProperty(window, "webkit", {
-            configurable: true,
-            value: {
-              messageHandlers: {
-                openclawWindowDrag: { postMessage: (message: unknown) => messages.push(message) },
-              },
-            },
-          });
-          try {
-            const background = press(fallback);
-            const panel = [
-              ".mount-fallback__panel",
-              ".mount-fallback__panel h1",
-              "#openclaw-mount-retry",
-              "#openclaw-mount-wait",
-            ].map((selector) => press(fallback.querySelector(selector)!));
-            const secondary = press(fallback, 2);
-            press(fallback, 0, true);
-            return { withoutBridge, background, panel, secondary, messages };
-          } finally {
-            Reflect.deleteProperty(window, "webkit");
+      const drag = await page.evaluate(() => {
+        const fallback = document.getElementById("openclaw-mount-fallback")!;
+        const press = (target: Element, button = 0, handled = false) => {
+          const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button });
+          if (handled) {
+            event.preventDefault();
           }
+          target.dispatchEvent(event);
+          return event.defaultPrevented;
+        };
+        const withoutBridge = press(fallback);
+        const messages: unknown[] = [];
+        Object.defineProperty(window, "webkit", {
+          configurable: true,
+          value: {
+            messageHandlers: {
+              openclawWindowDrag: { postMessage: (message: unknown) => messages.push(message) },
+            },
+          },
         });
-        expect(drag).toEqual({
-          withoutBridge: false,
-          background: true,
-          panel: [false, false, false, false],
-          secondary: false,
-          messages: [{ type: "window-drag" }],
-        });
+        try {
+          const background = press(fallback);
+          const panel = [
+            ".mount-fallback__panel",
+            ".mount-fallback__panel h1",
+            "#openclaw-mount-retry",
+            "#openclaw-mount-wait",
+          ].map((selector) => press(fallback.querySelector(selector)!));
+          const secondary = press(fallback, 2);
+          press(fallback, 0, true);
+          return { withoutBridge, background, panel, secondary, messages };
+        } finally {
+          Reflect.deleteProperty(window, "webkit");
+        }
+      });
+      expect(drag).toEqual({
+        withoutBridge: false,
+        background: true,
+        panel: [false, false, false, false],
+        secondary: false,
+        messages: [{ type: "window-drag" }],
+      });
 
-        syntheticModuleRenders = true;
-        await Promise.all([
-          page.waitForNavigation({ waitUntil: "domcontentloaded" }),
-          page.getByRole("button", { name: "Try again" }).click(),
-        ]);
-        await page.getByText("Application rendered", { exact: true }).waitFor();
-        await page.clock.runFor(12_001);
+      syntheticModuleRenders = true;
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: "domcontentloaded" }),
+        page.getByRole("button", { name: "Try again" }).click(),
+      ]);
+      await page.getByText("Application rendered", { exact: true }).waitFor();
+      await page.clock.runFor(12_001);
 
-        expect(await page.locator("#openclaw-mount-fallback").isHidden()).toBe(true);
-        expect(await page.evaluate((key) => sessionStorage.getItem(key), renderCountKey)).toBe("1");
-      },
-    );
+      expect(await page.locator("#openclaw-mount-fallback").isHidden()).toBe(true);
+      expect(await counter(page, renderCountKey)).toBe("1");
+    });
   });
 });
 
@@ -250,37 +246,32 @@ const runtimeFailureSuite = createControlUiE2eSuite({
 
 runtimeFailureSuite.define(() => {
   it("does not complete startup when application runtime creation throws", async () => {
-    await runtimeFailureSuite.withPage(
-      { serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
-      async ({ page }) => {
-        await addLifecycleCounters(page);
-        await page.addInitScript(() => {
-          const browserGetComputedStyle = globalThis.getComputedStyle.bind(globalThis);
-          Object.defineProperty(globalThis, "getComputedStyle", {
-            configurable: true,
-            value: (element: Element, pseudoElement?: string | null) => {
-              if (element === document.documentElement) {
-                throw new Error("forced application runtime creation failure");
-              }
-              return browserGetComputedStyle(element, pseudoElement);
-            },
-          });
+    await runtimeFailureSuite.withPage(pageOptions, async ({ page }) => {
+      await addLifecycleCounters(page);
+      await page.addInitScript(() => {
+        const browserGetComputedStyle = globalThis.getComputedStyle.bind(globalThis);
+        Object.defineProperty(globalThis, "getComputedStyle", {
+          configurable: true,
+          value: (element: Element, pseudoElement?: string | null) => {
+            if (element === document.documentElement) {
+              throw new Error("forced application runtime creation failure");
+            }
+            return browserGetComputedStyle(element, pseudoElement);
+          },
         });
-        await page.clock.install();
-        await pauseVirtualClock(page);
-        const failed = page.waitForEvent("pageerror", {
-          predicate: (error) => error.message === "forced application runtime creation failure",
-        });
-        await page.goto(runtimeFailureSuite.server.baseUrl, { waitUntil: "domcontentloaded" });
-        await failed;
+      });
+      await page.clock.install();
+      await pauseVirtualClock(page);
+      const failed = page.waitForEvent("pageerror", {
+        predicate: (error) => error.message === "forced application runtime creation failure",
+      });
+      await page.goto(runtimeFailureSuite.server.baseUrl, { waitUntil: "domcontentloaded" });
+      await failed;
 
-        await exhaustMountRecovery(page);
+      await exhaustMountRecovery(page);
 
-        await page.getByRole("heading", { name: "Control UI did not start" }).waitFor();
-        expect(
-          await page.evaluate((key) => sessionStorage.getItem(key), renderCountKey),
-        ).toBeNull();
-      },
-    );
+      await page.getByRole("heading", { name: "Control UI did not start" }).waitFor();
+      expect(await counter(page, renderCountKey)).toBeNull();
+    });
   });
 });

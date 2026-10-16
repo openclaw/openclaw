@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { serveCompanion } from "./native-desktop.test-support.ts";
+import { nativeForm } from "./native-form.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native desktop appearance E2E" });
 const schemes = ["light", "dark"] as const;
@@ -219,19 +220,20 @@ suite.define(() => {
       await suite.withPage(
         { colorScheme, viewport: { width: 560, height: 900 } },
         async ({ page }) => {
+          const form = nativeForm(page);
           const native = await installNative(page);
           await page.goto(`${suite.server.baseUrl}companion/index.html`);
           await page.getByRole("heading", { name: "Welcome to OpenClaw" }).waitFor();
           await expectAppearance(page, colorScheme);
           await page.getByRole("button", { name: "Get started" }).click();
           await page.getByRole("button", { name: /On another computer/ }).click();
-          const connect = page.getByRole("button", { name: "Connect to Gateway", exact: true });
+          const connect = form.button("Connect to Gateway");
           await connect.click();
           await page.getByRole("status").filter({ hasText: "Enter a Gateway URL" }).waitFor();
           expect(await native.requests("connect_remote_gateway")).toEqual([]);
-          const url = page.getByLabel("Gateway URL", { exact: true });
-          const token = page.getByLabel("Gateway token", { exact: true });
-          const password = page.getByLabel("Gateway password", { exact: true });
+          const url = form.field("Gateway URL");
+          const token = form.field("Gateway token");
+          const password = form.field("Gateway password");
           await url.fill("https://gateway.example.test");
           await token.fill("draft-token");
           for (const scheme of schemes) {
@@ -241,9 +243,9 @@ suite.define(() => {
             expect(await token.getAttribute("type")).toBe("password");
             await expectControlsFit(page);
           }
-          await page.getByRole("button", { name: "Show credential", exact: true }).click();
+          await form.button("Show credential").click();
           expect(await token.getAttribute("type")).toBe("text");
-          await page.getByLabel("Authentication", { exact: true }).selectOption("password");
+          await form.field("Authentication").selectOption("password");
           expect(await token.inputValue()).toBe("");
           expect(await token.isDisabled()).toBe(true);
           expect(await password.getAttribute("type")).toBe("password");
@@ -268,16 +270,14 @@ suite.define(() => {
               },
             },
           ]);
-          await page.getByRole("button", { name: "SSH tunnel", exact: true }).click();
-          await page
-            .getByLabel("SSH target", { exact: true })
-            .fill("operator@gateway.example.test");
-          await page.getByLabel("Gateway port", { exact: true }).fill("0");
+          await form.button("SSH tunnel").click();
+          await form.field("SSH target").fill("operator@gateway.example.test");
+          await form.field("Gateway port").fill("0");
           await connect.click();
           await page.getByRole("status").filter({ hasText: "between 1 and 65535" }).waitFor();
           expect(await native.requests("connect_remote_gateway")).toHaveLength(1);
-          await page.getByLabel("Gateway port", { exact: true }).fill("18789");
-          await page.getByLabel("Gateway port", { exact: true }).press("Enter");
+          await form.field("Gateway port").fill("18789");
+          await form.field("Gateway port").press("Enter");
           await page
             .getByRole("status")
             .filter({ hasText: "Opening the remote dashboard" })
@@ -307,29 +307,28 @@ suite.define(() => {
       await suite.withPage(
         { colorScheme, viewport: { width: 560, height: 900 } },
         async ({ page }) => {
+          const form = nativeForm(page);
           const native = await installNative(page);
           await page.goto(`${suite.server.baseUrl}companion/index.html?mode=remoteError`);
           await page.getByRole("heading", { name: "Connection needs attention" }).waitFor();
           await expectAppearance(page, colorScheme);
-          await page.getByRole("button", { name: "Retry", exact: true }).click();
-          await page
-            .getByText("The saved Gateway is still unavailable.", { exact: true })
-            .waitFor();
+          await form.button("Retry").click();
+          await form.text("The saved Gateway is still unavailable.").waitFor();
           expect(await native.requests("bootstrap")).toEqual([
             { command: "bootstrap", params: { remoteRetry: true } },
           ]);
-          await page.getByRole("button", { name: "Edit connection", exact: true }).click();
+          await form.button("Edit connection").click();
           await expect
-            .poll(() => page.getByLabel("Gateway URL", { exact: true }).inputValue())
+            .poll(() => form.field("Gateway URL").inputValue())
             .toBe("https://saved.example.test");
-          const credential = page.getByLabel("Gateway token", { exact: true });
+          const credential = form.field("Gateway token");
           expect(await credential.inputValue()).toBe("");
           await credential.fill("replacement-draft");
           await expectAppearance(page, colorScheme === "light" ? "dark" : "light");
           expect(await credential.inputValue()).toBe("replacement-draft");
           expect(await credential.getAttribute("type")).toBe("password");
           await expectControlsFit(page);
-          await page.getByRole("button", { name: "Back", exact: true }).click();
+          await form.button("Back").click();
           expect(await native.requests("close_connection_settings")).toHaveLength(1);
           expect(await native.requests("connect_remote_gateway")).toEqual([]);
           expect(await native.requests("gateway_action")).toEqual([]);
@@ -344,43 +343,38 @@ suite.define(() => {
       await suite.withPage(
         { colorScheme, viewport: { width: 400, height: 900 } },
         async ({ page }) => {
+          const form = nativeForm(page);
           const native = await installNative(page);
           await page.goto(`${suite.server.baseUrl}companion/index.html?mode=missingCli`);
           await page.getByRole("heading", { name: "OpenClaw needs the CLI" }).waitFor();
-          await page.getByLabel("Release channel", { exact: true }).selectOption("beta");
+          await form.field("Release channel").selectOption("beta");
           await expectAppearance(page, colorScheme);
           await expectControlsFit(page);
-          await page.getByRole("button", { name: "Install OpenClaw", exact: true }).click();
+          await form.button("Install OpenClaw").click();
           await page.getByRole("heading", { name: "OpenClaw needs attention" }).waitFor();
           expect(await native.requests("install_cli")).toEqual([
             { command: "install_cli", params: { channel: "beta" } },
           ]);
-          expect(await page.getByLabel("Release channel", { exact: true }).inputValue()).toBe(
-            "beta",
-          );
-          expect(
-            await page.getByRole("button", { name: "Install OpenClaw", exact: true }).isEnabled(),
-          ).toBe(true);
+          expect(await form.field("Release channel").inputValue()).toBe("beta");
+          expect(await form.button("Install OpenClaw").isEnabled()).toBe(true);
           await expectAppearance(page, colorScheme);
           await page.goto(`${suite.server.baseUrl}companion/index.html?mode=stopped`);
-          await page.getByRole("button", { name: "Start Gateway", exact: true }).waitFor();
+          await form.button("Start Gateway").waitFor();
           await expectAppearance(page, colorScheme);
-          await page.getByRole("button", { name: "Start Gateway", exact: true }).click();
+          await form.button("Start Gateway").click();
           expect(await native.requests("gateway_action")).toEqual([
             { command: "gateway_action", params: { action: "start" } },
           ]);
           await page.goto(`${suite.server.baseUrl}companion/index.html?mode=reconnecting`);
-          await page.getByRole("heading", { name: "Reconnecting", exact: true }).waitFor();
+          await form.heading("Reconnecting").waitFor();
           await native.emit("updater://ready", { version: "1.2.3" });
-          await page.getByRole("button", { name: "Restart to update", exact: true }).waitFor();
+          await form.button("Restart to update").waitFor();
           await expectAppearance(page, colorScheme);
           await expectControlsFit(page);
-          await page.getByRole("button", { name: "Restart to update", exact: true }).click();
+          await form.button("Restart to update").click();
           expect(await native.requests("relaunch")).toHaveLength(1);
-          await page.getByRole("button", { name: "Dismiss update notice", exact: true }).click();
-          expect(
-            await page.getByRole("button", { name: "Restart to update", exact: true }).isVisible(),
-          ).toBe(false);
+          await form.button("Dismiss update notice").click();
+          expect(await form.button("Restart to update").isVisible()).toBe(false);
         },
       );
     },
@@ -392,6 +386,7 @@ suite.define(() => {
       await suite.withPage(
         { colorScheme, reducedMotion: "reduce", viewport: { width: 400, height: 560 } },
         async ({ page }) => {
+          const form = nativeForm(page);
           const native = await installNative(page);
           await page.goto(`${suite.server.baseUrl}companion/quickchat.html`);
           const message = page.getByRole("textbox", { name: "Quick Chat message", exact: true });
@@ -400,7 +395,7 @@ suite.define(() => {
           await native.emit("quickchat:shown", {});
           await expect.poll(() => native.identityPending()).toBe(true);
           await message.fill("Please summarize the project notes.");
-          await page.getByRole("button", { name: "Choose agent", exact: true }).click();
+          await form.button("Choose agent").click();
           for (const scheme of schemes) {
             await expectAppearance(page, scheme, ".composer", "#message");
             await expectAppearance(page, scheme, "#agent-menu", ".agent-option-name");
@@ -416,10 +411,8 @@ suite.define(() => {
           expect(await native.requests("quickchat_select_agent")).toEqual([
             { command: "quickchat_select_agent", params: { agentId: "writer" } },
           ]);
-          await page
-            .getByRole("button", { name: "Quick Chat shortcut settings", exact: true })
-            .click();
-          await page.getByRole("button", { name: "Press new shortcut", exact: true }).click();
+          await form.button("Quick Chat shortcut settings").click();
+          await form.button("Press new shortcut").click();
           await page.keyboard.press("Control+Shift+K");
           await expect
             .poll(() => page.locator("#shortcut-value").textContent())
@@ -429,7 +422,7 @@ suite.define(() => {
           ]);
           await expectControlsFit(page);
           await page.keyboard.press("Escape");
-          await page.getByRole("button", { name: "Send message", exact: true }).click();
+          await form.button("Send message").click();
           await page.getByRole("region", { name: "Agent reply", exact: true }).waitFor();
           expect(await native.requests("quickchat_send")).toEqual([
             {
@@ -453,32 +446,24 @@ suite.define(() => {
               content: [{ type: "text", text: "The project is ready." }],
             },
           });
-          await page.getByText("The project is ready.", { exact: true }).waitFor();
+          await form.text("The project is ready.").waitFor();
           await native.releaseIdentity();
           expect(await message.getAttribute("placeholder")).toBe(
             "Message Writing assistant for long project names",
           );
-          expect(await page.getByText("The project is ready.", { exact: true }).isVisible()).toBe(
-            true,
-          );
+          expect(await form.text("The project is ready.").isVisible()).toBe(true);
           await expect.poll(() => message.getAttribute("readonly")).toBeNull();
           await message.fill("A follow-up draft");
           await message.press("Shift+Enter");
           await page.keyboard.type("with another line");
-          expect(
-            await page.getByRole("button", { name: "Choose agent", exact: true }).isDisabled(),
-          ).toBe(true);
+          expect(await form.button("Choose agent").isDisabled()).toBe(true);
           for (const scheme of schemes) {
             await expectAppearance(page, scheme, ".composer", "#reply-text");
-            expect(await page.getByText("The project is ready.", { exact: true }).isVisible()).toBe(
-              true,
-            );
+            expect(await form.text("The project is ready.").isVisible()).toBe(true);
             expect(await message.getAttribute("readonly")).toBeNull();
-            expect(
-              await page.getByRole("button", { name: "Send message", exact: true }).isDisabled(),
-            ).toBe(true);
+            expect(await form.button("Send message").isDisabled()).toBe(true);
           }
-          await page.getByRole("button", { name: "Collapse reply", exact: true }).click();
+          await form.button("Collapse reply").click();
           await expect.poll(() => page.locator("#reply").isVisible()).toBe(false);
           await native.emit("quickchat:chat-event", {
             ...reply,
@@ -486,19 +471,13 @@ suite.define(() => {
             deltaText: " The next step is review.",
           });
           expect(await message.inputValue()).toBe("A follow-up draft\nwith another line");
-          await page.getByRole("button", { name: "Expand reply", exact: true }).click();
-          await page
-            .getByText("The project is ready. The next step is review.", { exact: true })
-            .waitFor();
+          await form.button("Expand reply").click();
+          await form.text("The project is ready. The next step is review.").waitFor();
           expect(await message.inputValue()).toBe("A follow-up draft\nwith another line");
           expect(await page.locator("#composer textarea").count()).toBe(1);
           expect(await native.requests("quickchat_send")).toHaveLength(1);
           await native.emit("quickchat:chat-event", { ...reply, state: "final" });
-          await expect
-            .poll(() =>
-              page.getByRole("button", { name: "Choose agent", exact: true }).isDisabled(),
-            )
-            .toBe(false);
+          await expect.poll(() => form.button("Choose agent").isDisabled()).toBe(false);
           await expect.poll(() => message.getAttribute("readonly")).toBeNull();
           await message.fill("A follow-up draft");
           await native.emit("quickchat:gateway-state", {
@@ -507,9 +486,7 @@ suite.define(() => {
             notice: "Gateway unavailable. Reconnecting…",
           });
           await page.getByRole("alert").filter({ hasText: "Gateway unavailable" }).waitFor();
-          expect(
-            await page.getByRole("button", { name: "Send message", exact: true }).isDisabled(),
-          ).toBe(true);
+          expect(await form.button("Send message").isDisabled()).toBe(true);
           expect(await message.inputValue()).toBe("A follow-up draft");
           await expectControlsFit(page);
         },
@@ -522,6 +499,7 @@ suite.define(() => {
       await suite.withPage(
         { colorScheme, reducedMotion: "reduce", viewport: { width: 640, height: 520 } },
         async ({ page }) => {
+          const form = nativeForm(page);
           const native = await installNative(page);
           await page.goto(`${suite.server.baseUrl}companion/quickchat.html`);
           const message = page.getByRole("textbox", { name: "Quick Chat message", exact: true });
@@ -530,7 +508,7 @@ suite.define(() => {
           await native.emit("quickchat:shown", {});
           await expect.poll(() => native.identityPending()).toBe(true);
           await message.fill("Summarize the project.");
-          await page.getByRole("button", { name: "Send message", exact: true }).click();
+          await form.button("Send message").click();
           const reply = {
             gatewayGeneration: 1,
             runId: "reply-1",
@@ -543,7 +521,7 @@ suite.define(() => {
             deltaText: "Ready.",
             message: { role: "assistant", content: [{ type: "text", text: "Ready." }] },
           });
-          await page.getByText("Ready.", { exact: true }).waitFor();
+          await form.text("Ready.").waitFor();
           await expect.poll(() => message.getAttribute("readonly")).toBeNull();
           await message.fill("Keep this draft.");
           await native.releaseIdentity(true);
@@ -552,17 +530,11 @@ suite.define(() => {
             state: "delta",
             deltaText: " Still connected.",
           });
-          await page.getByText("Ready. Still connected.", { exact: true }).waitFor();
+          await form.text("Ready. Still connected.").waitFor();
           expect(await message.inputValue()).toBe("Keep this draft.");
-          expect(
-            await page.getByRole("button", { name: "Send message", exact: true }).isDisabled(),
-          ).toBe(true);
+          expect(await form.button("Send message").isDisabled()).toBe(true);
           await native.emit("quickchat:chat-event", { ...reply, state: "final" });
-          await expect
-            .poll(() =>
-              page.getByRole("button", { name: "Send message", exact: true }).isDisabled(),
-            )
-            .toBe(false);
+          await expect.poll(() => form.button("Send message").isDisabled()).toBe(false);
         },
       );
     },

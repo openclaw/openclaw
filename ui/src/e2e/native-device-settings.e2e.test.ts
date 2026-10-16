@@ -10,6 +10,7 @@ import {
   createTauriDeviceSettingsSnapshot,
 } from "../test-helpers/native-device-settings.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { nativeForm } from "./native-form.test-support.ts";
 import { installNativeEmbed, installNativeWebChrome } from "./native-nav.test-support.ts";
 
 type DeviceSettingsTestWindow = Window & {
@@ -17,6 +18,14 @@ type DeviceSettingsTestWindow = Window & {
   nativeDeviceSettingsMessages?: unknown[];
   nativeDeviceSettingsReplies?: Array<(snapshot: NativeDeviceSettingsSnapshot) => void>;
 };
+
+const settingMessages = (page: Page) =>
+  page.evaluate(() => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages);
+async function expectSetting(page: Page, key: string, value: unknown) {
+  await expect.poll(() => settingMessages(page)).toContainEqual({ type: "set", key, value });
+}
+const captureDevice = (page: Page, directory: string, file: string, fullPage = false) =>
+  page.screenshot({ animations: "disabled", fullPage, path: path.join(directory, file) });
 
 async function installDeviceSettingsBridge(page: Page, snapshot: NativeDeviceSettingsSnapshot) {
   if (snapshot.device.platform === "macos") {
@@ -83,10 +92,7 @@ suite.define(() => {
         await installMockGateway(page, { operatorScopes: ["operator.read"] });
         await page.goto(`${suite.server.baseUrl}settings/device`);
         await page.getByText(/only available inside the OpenClaw app/).waitFor();
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, "before.png"),
-        });
+        await captureDevice(page, artifactDir, "before.png");
 
         const snapshot = createTauriDeviceSettingsSnapshot("linux");
         await installDeviceSettingsBridge(page, snapshot);
@@ -99,20 +105,13 @@ suite.define(() => {
           await page.locator('.settings-sidebar a[href="/settings/device/permissions"]').count(),
         ).toBe(0);
         expect(await devicePage.getByText("This computer", { exact: true }).count()).toBe(1);
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, "after.png"),
-        });
+        await captureDevice(page, artifactDir, "after.png");
 
         await devicePage
           .locator(".settings-row__title")
           .filter({ hasText: /^Desktop sharing$/ })
           .click();
-        await expect
-          .poll(() =>
-            page.evaluate(() => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages),
-          )
-          .toContainEqual({ type: "set", key: "capabilities.desktopSharingEnabled", value: false });
+        await expectSetting(page, "capabilities.desktopSharingEnabled", false);
         await replyToDeviceSetting(page, {
           ...snapshot,
           revision: 2,
@@ -167,11 +166,7 @@ suite.define(() => {
           ).toBe(true);
           const capture = async (stage: string) => {
             if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-              await page.screenshot({
-                animations: "disabled",
-                fullPage: false,
-                path: path.join(artifactDir, `${stage}-375x812-${colorScheme}.png`),
-              });
+              await captureDevice(page, artifactDir, `${stage}-375x812-${colorScheme}.png`, false);
             }
           };
           await capture("01-ios-device");
@@ -179,13 +174,7 @@ suite.define(() => {
           await capture("02-ios-device-panels");
           await appearance.scrollIntoViewIfNeeded();
           await appearance.selectOption("dark");
-          await expect
-            .poll(() =>
-              page.evaluate(
-                () => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages,
-              ),
-            )
-            .toContainEqual({ type: "set", key: "app.appearance", value: "dark" });
+          await expectSetting(page, "app.appearance", "dark");
           snapshot.app = { ...snapshot.app, appearance: "dark" };
           await replyToDeviceSetting(page, snapshot);
           await expect.poll(() => appearance.inputValue()).toBe("dark");
@@ -220,6 +209,7 @@ suite.define(() => {
         recordVideo: { dir: artifactDir, size: viewport },
       },
       async ({ page }) => {
+        const form = nativeForm(page);
         const snapshot = createNativeDeviceSettingsSnapshot();
         await installDeviceSettingsBridge(page, snapshot);
         await installMockGateway(page, { operatorScopes: ["operator.read"] });
@@ -235,8 +225,7 @@ suite.define(() => {
         const dockIcon = devicePage.getByRole("switch", { name: "Show Dock icon", exact: true });
         await expect.poll(() => dockIcon.isChecked()).toBe(true);
         expect(await dockIcon.isDisabled()).toBe(false);
-        const messages = () =>
-          page.evaluate(() => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages);
+        const messages = () => settingMessages(page);
         await expect.poll(messages).toContainEqual({ type: "status" });
 
         const sharing = devicePage.getByRole("switch", { name: "Desktop sharing", exact: true });
@@ -249,21 +238,13 @@ suite.define(() => {
           .locator(".settings-row__title")
           .filter({ hasText: /^Desktop sharing$/ });
         await sharingLabel.click();
-        await expect.poll(messages).toContainEqual({
-          type: "set",
-          key: "capabilities.desktopSharingEnabled",
-          value: false,
-        });
+        await expectSetting(page, "capabilities.desktopSharingEnabled", false);
         snapshot.capabilities.desktopSharingEnabled = false;
         await replyToDeviceSetting(page, snapshot);
         await expect.poll(() => sharing.isChecked()).toBe(false);
         expect(await computerControl.isChecked()).toBe(true);
         await sharingLabel.click();
-        await expect.poll(messages).toContainEqual({
-          type: "set",
-          key: "capabilities.desktopSharingEnabled",
-          value: true,
-        });
+        await expectSetting(page, "capabilities.desktopSharingEnabled", true);
         snapshot.capabilities.desktopSharingEnabled = true;
         await replyToDeviceSetting(page, snapshot);
         await expect.poll(() => sharing.isChecked()).toBe(true);
@@ -276,18 +257,14 @@ suite.define(() => {
           ),
         );
         await iconStyle.selectOption("origami");
-        await expect
-          .poll(messages)
-          .toContainEqual({ type: "set", key: "app.iconStyle", value: "origami" });
+        await expectSetting(page, "app.iconStyle", "origami");
         snapshot.app.iconStyle!.selectedId = "origami";
 
         await devicePage
           .locator(".settings-row__title")
           .filter({ hasText: /^Show Dock icon$/ })
           .click();
-        await expect
-          .poll(messages)
-          .toContainEqual({ type: "set", key: "app.showDockIcon", value: false });
+        await expectSetting(page, "app.showDockIcon", false);
         snapshot.app.showDockIcon = false;
         snapshot.app.quickChatShortcut = "⌘⇧Space";
         await replyToDeviceSetting(page, snapshot);
@@ -295,11 +272,7 @@ suite.define(() => {
         await devicePage.getByText("⌘⇧Space", { exact: true }).waitFor();
         await expect.poll(() => dockIcon.isChecked()).toBe(false);
         await expect.poll(() => iconStyle.inputValue()).toBe("origami");
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, "01-this-mac.png"),
-        });
+        await captureDevice(page, artifactDir, "01-this-mac.png", true);
 
         await sidebar.locator('a[href="/settings/device/permissions"]').click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/device/permissions");
@@ -313,14 +286,10 @@ suite.define(() => {
         await expect
           .poll(messages)
           .toContainEqual({ type: "request-permission", id: "notifications" });
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, "02-permissions.png"),
-        });
+        await captureDevice(page, artifactDir, "02-permissions.png", true);
 
         await sidebar.locator('a[href="/settings/updates"]').click();
-        await page.getByRole("button", { name: "Check for Updates…", exact: true }).click();
+        await form.button("Check for Updates…").click();
         await expect.poll(messages).toContainEqual({ type: "check-for-updates" });
       },
     );
@@ -398,8 +367,7 @@ suite.define(() => {
         const devicePage = page.locator("openclaw-device-page");
         const sidebar = page.locator(".settings-sidebar");
         const profile = devicePage.getByRole("textbox", { name: "Target profile", exact: true });
-        const messages = () =>
-          page.evaluate(() => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages);
+        const messages = () => settingMessages(page);
         const revisit = async () => {
           await sidebar.locator('a[href="/settings/device/permissions"]').click();
           await page.locator("openclaw-device-permissions-page").waitFor();
@@ -417,31 +385,26 @@ suite.define(() => {
         };
 
         await addDomain("cancelled.example.com");
-        await expect.poll(messages).toContainEqual({
-          type: "set",
-          key: "browser.cookieSync.domains",
-          value: ["example.com", "cancelled.example.com"],
-        });
+        await expectSetting(page, "browser.cookieSync.domains", [
+          "example.com",
+          "cancelled.example.com",
+        ]);
         await revisit();
         const cancelledDomain = devicePage.getByRole("button", {
           name: "Remove cancelled.example.com",
           exact: true,
         });
         await cancelledDomain.waitFor();
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, "01-pending-cookie-consent.png"),
-        });
+        await captureDevice(page, artifactDir, "01-pending-cookie-consent.png");
         // Cancel returns the native owner's unchanged snapshot, without a matching-value ACK.
         await replyToDeviceSetting(page, snapshot);
         await expect.poll(() => cancelledDomain.count()).toBe(0);
 
         await addDomain("approved.example.com");
-        await expect.poll(messages).toContainEqual({
-          type: "set",
-          key: "browser.cookieSync.domains",
-          value: ["example.com", "approved.example.com"],
-        });
+        await expectSetting(page, "browser.cookieSync.domains", [
+          "example.com",
+          "approved.example.com",
+        ]);
         snapshot.browser.cookieSync.domains.push("approved.example.com");
         await replyToDeviceSetting(page, snapshot);
 
@@ -452,10 +415,7 @@ suite.define(() => {
         await replyToDeviceSetting(page, snapshot);
         await expect.poll(() => profile.inputValue()).toBe("default");
         await expect.poll(() => cancelledDomain.count()).toBe(0);
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, "02-cancelled-cookie-consent.png"),
-        });
+        await captureDevice(page, artifactDir, "02-cancelled-cookie-consent.png");
 
         await profile.fill("first-profile");
         await profile.press("Tab");
@@ -468,10 +428,7 @@ suite.define(() => {
         snapshot.browser.cookieSync.targetProfile = "second-profile";
         await replyToDeviceSetting(page, snapshot);
         await expect.poll(() => profile.inputValue()).toBe("second-profile");
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, "03-confirmed-newer-draft.png"),
-        });
+        await captureDevice(page, artifactDir, "03-confirmed-newer-draft.png");
 
         // An external update must be visible once the latest request has settled.
         snapshot.browser.cookieSync.targetProfile = "external-profile";
