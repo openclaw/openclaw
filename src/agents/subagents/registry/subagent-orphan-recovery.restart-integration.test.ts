@@ -47,6 +47,7 @@ import {
   registerAbsentChildRestoreOwnershipTest,
   registerMissingStorageRecoveryTests,
   registerRawChildRestoreOwnershipTest,
+  restartRegistry,
 } from "./subagent-orphan-recovery.raw-owner.test-support.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -84,6 +85,11 @@ registerMissingStorageRecoveryTests();
 describe("subagent orphan recovery — faithful restart path", () => {
   const fixture = useSubagentRestartRecoveryFixture({ reuseDatabaseWorkers: true });
   const { activateGatewayRuntime, dispatchAgent, gatewayRuntime } = fixture;
+  const writeSession = (
+    params: Omit<Parameters<typeof writeSubagentSessionEntry>[0], "stateDir" | "agentId">,
+  ) => writeSubagentSessionEntry({ stateDir: fixture.stateDir, agentId: "main", ...params });
+  const readSession = (sessionKey: string) =>
+    loadExactSessionEntry({ agentId: "main", sessionKey })?.entry;
 
   it("recovers a raw child key using its recorded owner without borrowing another agent's session", async () => {
     const childSessionKey = "global";
@@ -102,10 +108,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         },
       );
     }
-    const mainBefore = loadExactSessionEntry({
-      agentId: "main",
-      sessionKey: childSessionKey,
-    })?.entry;
+    const mainBefore = readSession(childSessionKey);
     const entry = makeRunRecord({
       runId,
       childSessionKey,
@@ -132,9 +135,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     expect(await result.sessionEffects?.isCurrent()).toBe(true);
     expect(await result.recoveryCurrent?.prepare()).toBe(true);
     expect(warn).not.toHaveBeenCalled();
-    expect(loadExactSessionEntry({ agentId: "main", sessionKey: childSessionKey })?.entry).toEqual(
-      mainBefore,
-    );
+    expect(readSession(childSessionKey)).toEqual(mainBefore);
     expect(dispatchAgent).not.toHaveBeenCalled();
     const ownerless = await recoverInterruptedSubagentRow({
       entry: { ...entry, childAgentId: undefined },
@@ -209,9 +210,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         await activateGatewayRuntime();
         await fixture.settle();
         for (const entry of records) {
-          expect(
-            loadExactSessionEntry({ agentId: "main", sessionKey: entry.childSessionKey })?.entry,
-          ).toMatchObject({
+          expect(readSession(entry.childSessionKey)).toMatchObject({
             status: "interrupted",
             abortedLastRun: true,
             endedAt: expect.any(Number),
@@ -475,9 +474,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       const childSessionKey = "agent:main:subagent:interrupted-commit-race";
       const sessionId = "interrupted-commit-race-session";
       const lifecycleRevision = "interrupted-commit-race-revision";
-      const storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
+      const storePath = await writeSession({
         sessionKey: childSessionKey,
         defaultSessionId: sessionId,
         lifecycleRevision,
@@ -544,9 +541,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       const runId = "saved-terminal-replay";
       const childSessionKey = "agent:main:subagent:saved-terminal-replay";
       const sessionId = "saved-terminal-replay-session";
-      const storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
+      const storePath = await writeSession({
         sessionKey: childSessionKey,
         defaultSessionId: sessionId,
         lifecycleRevision: "saved-terminal-revision",
@@ -669,9 +664,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       const now = Date.now();
       const childSessionKey = "agent:main:subagent:fresh-aborted";
       const runId = "run-fresh-aborted";
-      const storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
+      const storePath = await writeSession({
         sessionKey: childSessionKey,
         sessionId: "sess-fresh-aborted",
         lifecycleRevision: "fresh-aborted-revision",
@@ -732,9 +725,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       const nextRunId = "held-hidden-cleanup-successor";
       const sessionId = "held-hidden-cleanup-visible";
       const lifecycleRevision = "held-hidden-cleanup-revision";
-      const storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
+      const storePath = await writeSession({
         sessionKey: childSessionKey,
         defaultSessionId: sessionId,
         lifecycleRevision,
@@ -832,9 +823,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     const childSessionKey = "agent:main:subagent:retired-accepted";
     const runId = "run-retired-accepted";
     const priorLifecycleGeneration = getAgentEventLifecycleGeneration();
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
+    const storePath = await writeSession({
       sessionKey: childSessionKey,
       sessionId: "sess-retired-accepted",
       updatedAt: now,
@@ -864,11 +853,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     await addSubagentRunForTests(record);
 
     await fixture.settle();
-    await resetSubagentRegistryForTests({ persist: false });
-    rotateAgentEventLifecycleGeneration();
-    await initSubagentRegistry();
-    await activateGatewayRuntime();
-    await fixture.settle();
+    await restartRegistry(fixture);
     await testing.sweepOnceForTests();
 
     expect(dispatchAgent).not.toHaveBeenCalled();
@@ -894,11 +879,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     });
     expect(persisted?.execution.restartRecovery).toBeUndefined();
 
-    await resetSubagentRegistryForTests({ persist: false });
-    rotateAgentEventLifecycleGeneration();
-    await initSubagentRegistry();
-    await activateGatewayRuntime();
-    await fixture.settle();
+    await restartRegistry(fixture);
     await testing.sweepOnceForTests();
 
     const restoredAgain = subagentRuns.get(runId);
@@ -939,9 +920,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     await addSubagentRunForTests(staleRecord);
     await addSubagentRunForTests(freshRecord);
 
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
+    await writeSession({
       sessionKey: childSessionKey,
       sessionId: "sess-shared-generation",
       updatedAt: now,

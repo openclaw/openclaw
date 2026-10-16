@@ -33,6 +33,26 @@ import {
   type useSubagentRestartRecoveryFixture,
 } from "./subagent-restart-recovery.test-support.js";
 
+export async function restartRegistry(
+  fixture: ReturnType<typeof useSubagentRestartRecoveryFixture>,
+) {
+  await resetSubagentRegistryForTests({ persist: false });
+  rotateAgentEventLifecycleGeneration();
+  await initSubagentRegistry();
+  await fixture.activateGatewayRuntime();
+  await fixture.settle();
+}
+
+function recoverWithoutGateway(entry: SubagentRunRecord, warn = vi.fn()) {
+  return recoverInterruptedSubagentRow({
+    entry,
+    runId: entry.runId,
+    gatewayRuntime: undefined,
+    isCurrent: () => true,
+    warn,
+  });
+}
+
 export function registerAbsentChildRestoreOwnershipTest() {
   it("settles a restarted absent child without reading or recreating storage", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -51,13 +71,7 @@ export function registerAbsentChildRestoreOwnershipTest() {
       const warn = vi.fn();
       const sql = observeMainThreadSql();
       try {
-        const result = await recoverInterruptedSubagentRow({
-          entry,
-          runId: entry.runId,
-          gatewayRuntime: undefined,
-          isCurrent: () => true,
-          warn,
-        });
+        const result = await recoverWithoutGateway(entry, warn);
         expect(result).toMatchObject({ status: "terminal", suppressSessionEffects: true });
         if (result.status !== "terminal") {
           throw new Error("Expected absent actor recovery to settle the interrupted run");
@@ -102,14 +116,7 @@ export function registerMissingStorageRecoveryTests() {
           childSessionIdentity: { sessionId: "lost-session", lifecycleRevision: "lost-revision" },
           execution: { status: "interrupted", startedAt: Date.now() - 1_000 },
         });
-        const recover = (candidate: SubagentRunRecord) =>
-          recoverInterruptedSubagentRow({
-            entry: candidate,
-            runId: candidate.runId,
-            gatewayRuntime: undefined,
-            isCurrent: () => true,
-            warn: vi.fn(),
-          });
+        const recover = recoverWithoutGateway;
         expect(existsSync(databasePath)).toBe(false);
         expect(
           memorySessionActorOwners.read({ agentId: "main", path: databasePath }),
@@ -223,7 +230,6 @@ export function registerRawChildRestoreOwnershipTest(
     await resetSubagentRegistryForTests({ persist: false });
     rotateAgentEventLifecycleGeneration();
     expect(subagentRuns.has(runId)).toBe(false);
-
     await initSubagentRegistry();
     await activateGatewayRuntime();
     await fixture.settle();
@@ -296,11 +302,7 @@ export function registerRawChildRestoreOwnershipTest(
       })?.entry;
       await addSubagentRunForTests(entry);
       await fixture.settle();
-      await resetSubagentRegistryForTests({ persist: false });
-      rotateAgentEventLifecycleGeneration();
-      await initSubagentRegistry();
-      await activateGatewayRuntime();
-      await fixture.settle();
+      await restartRegistry(fixture);
       await testing.sweepOnceForTests();
       const settled = loadSubagentRegistryFromSqlite().get(entry.runId);
       expect(settled).toMatchObject({
@@ -319,11 +321,7 @@ export function registerRawChildRestoreOwnershipTest(
         loadExactSessionEntry({ agentId: "main", sessionKey: entry.childSessionKey })?.entry,
       ).toEqual(replacement);
       const endedAt = settled?.execution.endedAt;
-      await resetSubagentRegistryForTests({ persist: false });
-      rotateAgentEventLifecycleGeneration();
-      await initSubagentRegistry();
-      await activateGatewayRuntime();
-      await fixture.settle();
+      await restartRegistry(fixture);
       expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.execution.endedAt).toBe(endedAt);
       expect(dispatchAgent).not.toHaveBeenCalled();
     },

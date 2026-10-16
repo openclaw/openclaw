@@ -73,6 +73,17 @@ async function updateRun(runId: string, update: (draft: SubagentRunRecord) => vo
   });
 }
 
+async function markCancelled(runId: string) {
+  await updateRun(runId, (draft) => {
+    draft.execution = {
+      status: "terminal",
+      endedAt: 1,
+      outcome: { status: "error", error: "cancelled" },
+    };
+    draft.endedReason = "subagent-killed";
+  });
+}
+
 function rejectNextRegistryWrite(message: string): void {
   const execute = stateWorker.runOpenClawStateWorkerOperation;
   let reject = true;
@@ -114,6 +125,32 @@ function registration(
     expectsCompletionMessage: true,
     ...overrides,
   };
+}
+
+function operatorFixture(profileName: string, attachAccess = true) {
+  const context = createContext();
+  const resolveGatewayContext = () => context;
+  context.resolveGatewayContext = resolveGatewayContext;
+  const client = createOperatorClient({ profileName, scopes: ["operator.write"] });
+  const revoked = new AbortController();
+  const sourceAuthority = {
+    signal: revoked.signal,
+    assertCurrent: () => revoked.signal.throwIfAborted(),
+  };
+  if (attachAccess) {
+    client.internal = { operatorAccessAuthority: sourceAuthority };
+  }
+  return { context, resolveGatewayContext, client, revoked, sourceAuthority };
+}
+
+async function retainedOperatorFixture(profileName: string) {
+  const fixture = operatorFixture(profileName, false);
+  const source = expectDefined(
+    await operatorCapture.captureGatewayOperatorRunAuthority(fixture),
+    "operator registration source",
+  );
+  fixture.client.internal = { operatorRunAuthority: source.authority };
+  return { ...fixture, source };
 }
 
 beforeEach(() => {
@@ -306,26 +343,8 @@ describe("registered completion source custody", () => {
   it("keeps a committed registration restricted when its operator source expires before ACK", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       config.setRuntimeConfigSnapshot({});
-      const context = createContext();
-      const resolveGatewayContext = () => context;
-      context.resolveGatewayContext = resolveGatewayContext;
-      const client = createOperatorClient({
-        profileName: "late-registration-source",
-        scopes: ["operator.write"],
-      });
-      const revoked = new AbortController();
-      const source = await operatorCapture.captureGatewayOperatorRunAuthority({
-        client,
-        context,
-        sourceAuthority: {
-          signal: revoked.signal,
-          assertCurrent: () => revoked.signal.throwIfAborted(),
-        },
-      });
-      if (!source) {
-        throw new Error("Expected an operator registration source");
-      }
-      client.internal = { operatorRunAuthority: source.authority };
+      const { context, resolveGatewayContext, client, revoked, source } =
+        await retainedOperatorFixture("late-registration-source");
       const params = registration("late-source-registration", {
         gatewayContextResolver: resolveGatewayContext,
       });
@@ -421,20 +440,8 @@ describe("registered completion source custody", () => {
             { sessionId, updatedAt: Date.now() },
           );
         }
-        const context = createContext();
+        const { context, client, revoked } = operatorFixture("registered-final-delivery");
         context.getRuntimeConfig = () => cfg;
-        context.resolveGatewayContext = () => context;
-        const client = createOperatorClient({
-          profileName: "registered-final-delivery",
-          scopes: ["operator.write"],
-        });
-        const revoked = new AbortController();
-        client.internal = {
-          operatorAccessAuthority: {
-            signal: revoked.signal,
-            assertCurrent: () => revoked.signal.throwIfAborted(),
-          },
-        };
         const terminal = createDeferredCore<unknown>();
         const beforeSend = createDeferredCore();
         const releaseSend = createDeferredCore();
@@ -656,20 +663,12 @@ describe("registered completion source custody", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         let cfg: OpenClawConfig = { session: { store: state.path("original.sqlite") } };
         config.setRuntimeConfigSnapshot(cfg);
-        const context = createContext();
+        const {
+          context,
+          client,
+          revoked: sourceController,
+        } = operatorFixture("preparing-registration");
         context.getRuntimeConfig = () => cfg;
-        context.resolveGatewayContext = () => context;
-        const client = createOperatorClient({
-          profileName: "preparing-registration",
-          scopes: ["operator.write"],
-        });
-        const sourceController = new AbortController();
-        client.internal = {
-          operatorAccessAuthority: {
-            signal: sourceController.signal,
-            assertCurrent: () => sourceController.signal.throwIfAborted(),
-          },
-        };
         const requesterSessionKey = "agent:main:main";
         const originalPath = resolvePhysicalSessionStorePath(
           { sessionKey: requesterSessionKey, agentId: "main" },
@@ -800,23 +799,8 @@ describe("registered completion source custody", () => {
   ] as const)("outlives execution and closes on %s", async (ending) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       config.setRuntimeConfigSnapshot({});
-      const context = createContext();
-      const resolveGatewayContext = () => context;
-      context.resolveGatewayContext = resolveGatewayContext;
-      const client = createOperatorClient({
-        profileName: "completion-owner",
-        scopes: ["operator.write"],
-      });
-      const revoked = new AbortController();
-      const source = (await operatorCapture.captureGatewayOperatorRunAuthority({
-        client,
-        context,
-        sourceAuthority: {
-          signal: revoked.signal,
-          assertCurrent: () => revoked.signal.throwIfAborted(),
-        },
-      }))!;
-      client.internal = { operatorRunAuthority: source.authority };
+      const { context, resolveGatewayContext, client, revoked, source } =
+        await retainedOperatorFixture("completion-owner");
       try {
         const register = (runId = "child", actor = client) =>
           withPluginRuntimeGatewayRequestScope(
@@ -870,14 +854,7 @@ describe("registered completion source custody", () => {
           });
         } else if (ending === "cancelled-by-another-operator") {
           revoked.abort(new Error("operator revoked"));
-          await updateRun(entry.runId, (draft) => {
-            draft.execution = {
-              status: "terminal",
-              endedAt: 1,
-              outcome: { status: "error", error: "cancelled" },
-            };
-            draft.endedReason = "subagent-killed";
-          });
+          await markCancelled(entry.runId);
           const observer = createOperatorClient({
             profileName: "cancellation-owner",
             scopes: ["operator.write"],
@@ -896,14 +873,7 @@ describe("registered completion source custody", () => {
             createOperatorClient({ profileName: "other-owner", scopes: ["operator.write"] }),
           );
           const other = subagentRuns.get("other")!;
-          await updateRun(other.runId, (draft) => {
-            draft.execution = {
-              status: "terminal",
-              endedAt: 1,
-              outcome: { status: "error", error: "cancelled" },
-            };
-            draft.endedReason = "subagent-killed";
-          });
+          await markCancelled(other.runId);
           expect(() =>
             subagentRuns.runWithCompletionBatchAuthority([entry, other], () => "wrong caller"),
           ).toThrow(/incompatible operator authority/);
@@ -918,14 +888,7 @@ describe("registered completion source custody", () => {
               subagentRuns.runWithCompletionBatchAuthority([entry, other], () => "stale"),
             ).toThrow(/authority/);
           } else {
-            await updateRun(other.runId, (draft) => {
-              draft.execution = {
-                status: "terminal",
-                endedAt: 1,
-                outcome: { status: "error", error: "cancelled" },
-              };
-              draft.endedReason = "subagent-killed";
-            });
+            await markCancelled(other.runId);
             subagentRuns.runWithCompletionBatchAuthority([other, entry], () =>
               expect(
                 getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
