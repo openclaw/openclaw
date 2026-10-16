@@ -150,6 +150,36 @@ export async function runInstalledLifecycle(
     }
     return output;
   };
+  const jsonCli = async (task: Task, args: string[], expectedExit = 0) =>
+    JSON.parse(await cli(task, args, expectedExit));
+  const gateway = (task: Task, ...args: string[]) => cli(task, ["gateway", ...args, "--json"]);
+  const readStatus = (task: Task) => jsonCli(task, ["gateway", "status", "--json"]);
+  const inspection = {
+    doctor: async (task: Task, expectedExit = 1) =>
+      doctorReportSchema
+        .extend({ ok: z.literal(expectedExit === 0) })
+        .parse(
+          await jsonCli(
+            task,
+            [
+              "doctor",
+              "--lint",
+              "--deep",
+              "--only",
+              "core/doctor/gateway-services/extra",
+              "--severity-min",
+              "info",
+              "--json",
+            ],
+            expectedExit,
+          ),
+        ),
+    deepStatus: (task: Task) => jsonCli(task, ["gateway", "status", "--deep", "--json"]),
+    lifetime,
+    admissions,
+    admissionPath,
+  };
+  const { doctor } = inspection;
   const awaitReadiness = async (task: Task, phase: string) => {
     const { deadlineMs } = resolveGatewayStartupTiming();
     const started = performance.now();
@@ -167,27 +197,6 @@ export async function runInstalledLifecycle(
     assert.deepEqual(readiness, { healthz: 200, readyz: 200 });
     await recordProgress(`${phase}:ready`);
   };
-  const doctor = async (task: Task, expectedExit = 1) =>
-    doctorReportSchema
-      .extend({ ok: z.literal(expectedExit === 0) })
-      .parse(
-        JSON.parse(
-          await cli(
-            task,
-            [
-              "doctor",
-              "--lint",
-              "--deep",
-              "--only",
-              "core/doctor/gateway-services/extra",
-              "--severity-min",
-              "info",
-              "--json",
-            ],
-            expectedExit,
-          ),
-        ),
-      );
   const cleanupTask = (
     task: Pick<Task, "rootDir" | "stateDir" | "scriptPath" | "taskName">,
     probePath: string,
@@ -266,15 +275,7 @@ export async function runInstalledLifecycle(
     });
     await fs.writeFile(admissionPath, JSON.stringify(admissions, null, 2));
     // Both published CLIs support these options; 9.3 has no --runtime-path.
-    await cli(task, [
-      "gateway",
-      "install",
-      "--runtime",
-      "node",
-      "--port",
-      String(gatewayPort),
-      "--json",
-    ]);
+    await gateway(task, "install", "--runtime", "node", "--port", String(gatewayPort));
     // Installation acknowledges activation; the service owner has not checked readiness yet.
     await awaitReadiness(task, `${role}-startup`);
     return task;
@@ -284,9 +285,7 @@ export async function runInstalledLifecycle(
     expected: Awaited<ReturnType<typeof readInstalledBuildIdentity>>,
     definition: "published" | "candidate",
   ) => {
-    const value = installedStatusSchema.parse(
-      JSON.parse(await cli(task, ["gateway", "status", "--json"])),
-    );
+    const value = installedStatusSchema.parse(await readStatus(task));
     assert.equal(value.rpc.server.version, expected.version);
     assert.equal(value.rpc.server.buildId, expected.buildId);
     assert.equal(value.gateway.version, expected.version);
@@ -407,15 +406,10 @@ export async function runInstalledLifecycle(
       await recordProgress("peer-after-update:hash-verified");
       observations.peerPreserved = true;
       observations.startupSiblings = await inspectInstalledStartupSiblings({
+        ...inspection,
         selected,
         launcher: peer,
         expectedStatus: after,
-        doctor,
-        deepStatus: async (task) =>
-          JSON.parse(await cli(task, ["gateway", "status", "--deep", "--json"])),
-        lifetime,
-        admissions,
-        admissionPath,
       });
       if (key === "2026.9.4") {
         observations.startupAliasBuildRefusal = await inspectInstalledStartupAliasBuildRefusal({
@@ -424,7 +418,7 @@ export async function runInstalledLifecycle(
           peer,
           expectedSelected: after,
           expectedPeer: peerAfter,
-          readStatus: async (task) => JSON.parse(await cli(task, ["gateway", "status", "--json"])),
+          readStatus,
           commands,
           signal,
           lifetime,
@@ -434,9 +428,9 @@ export async function runInstalledLifecycle(
           recordProgress,
         });
       }
-      await cli(peer, ["gateway", "stop", "--force", "--json"]);
+      await gateway(peer, "stop", "--force");
       await owners.waitForLoopbackPortRelease(peer.gatewayPort);
-      await cli(peer, ["gateway", "uninstall", "--json"]);
+      await gateway(peer, "uninstall");
     }
     // The packaged candidate must reach its real strict inspection preview, not exit-zero skip.
     const preview = async (task: Task = selected) =>
@@ -461,22 +455,17 @@ export async function runInstalledLifecycle(
         recordProgress,
       });
       observations.startupSiblings = await inspectInstalledStartupSiblings({
+        ...inspection,
         selected,
         launcher: selected,
         expectedStatus: before,
-        doctor,
-        deepStatus: async (task) =>
-          JSON.parse(await cli(task, ["gateway", "status", "--deep", "--json"])),
-        lifetime,
-        admissions,
-        admissionPath,
       });
     }
     const beforeRestartPid = candidateStatus.service.runtime.pid;
     const beforeRestartXml = await readTaskXml(selected.taskName);
     assert.ok(beforeRestartXml);
     const restartIdentity = await readInstalledBuildIdentity(installRoot, input.candidate.version);
-    await cli(selected, ["gateway", "restart", "--json"]);
+    await gateway(selected, "restart");
     await waitForProcessExit(beforeRestartPid);
     await awaitReadiness(selected, "candidate-restart");
     const restarted = await status(selected, restartIdentity, "candidate");
@@ -496,9 +485,10 @@ export async function runInstalledLifecycle(
       healthy.notes.some((note) => note.includes("Gateway service inspection is unavailable")),
       false,
     );
-    await cli(selected, ["gateway", "stop", "--force", "--json"]);
+    await gateway(selected, "stop", "--force");
     await owners.waitForLoopbackPortRelease(selected.gatewayPort);
     observations.selectedStartupFallback = await inspectInstalledSelectedStartupFallback({
+      ...inspection,
       ...(key === "2026.9.4"
         ? {
             observeFingerprint: async () => {
@@ -526,13 +516,7 @@ export async function runInstalledLifecycle(
         : {}),
       selected,
       expectedCommand: candidateStatus.service.command.programArguments,
-      doctor,
-      deepStatus: async (task) =>
-        JSON.parse(await cli(task, ["gateway", "status", "--deep", "--json"])),
       canBindLoopbackPort: owners.canBindLoopbackPort,
-      lifetime,
-      admissions,
-      admissionPath,
     });
     if (key === "2026.9.3") {
       assert.ok(authorityPeerRoot);
@@ -602,7 +586,7 @@ export async function runInstalledLifecycle(
       throw previewFailure;
     }
     assert.deepEqual(await fs.readFile(selected.configPath), configBeforePreview);
-    await cli(selected, ["gateway", "uninstall", "--json"]);
+    await gateway(selected, "uninstall");
     assert.equal(probeScheduledTaskExists(selected.taskName), false);
     if (key === "fresh") {
       assert.deepEqual(await hashInstall(installRoot), initial.installed);
