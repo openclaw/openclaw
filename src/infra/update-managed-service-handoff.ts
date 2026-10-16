@@ -1980,6 +1980,7 @@ export async function transferManagedServiceUpdateHandoff(
   child.unref();
   unrefHandoffPipe(child.stdin);
   unrefHandoffPipe(child.stdout);
+  child.channel?.unref();
   return true;
 }
 

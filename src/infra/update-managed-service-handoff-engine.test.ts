@@ -1,13 +1,18 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForDead, waitForFile } from "../../test/helpers/process-wait.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { updateExecutorEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { installDatabaseEngineSelection } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
@@ -70,6 +75,79 @@ it("recognizes an offline PostgreSQL anchor through its inspection worker", asyn
   db.close();
   await expect(resolveManagedHandoffStateEngine(env)).resolves.toBe("postgres");
 });
+
+itUnix(
+  "lets the PostgreSQL parent exit naturally while its transferred helper is busy",
+  async ({ signal }) => {
+    const root = await fs.realpath(tempDirs.make("handoff-parent-exit-"));
+    const release = path.join(root, "release-updater");
+    const transferred = path.join(root, "transferred.json");
+    const updater = path.join(root, "updater.mjs");
+    await fs.writeFile(
+      updater,
+      `
+    import fs from "node:fs";
+    while (!fs.existsSync(${JSON.stringify(release)})) await new Promise(resolve => setTimeout(resolve, 10));
+    process.stdout.write(JSON.stringify({ status: "skipped", mode: "npm", reason: "already-current" }));
+  `,
+    );
+    await fs.mkdir(path.join(root, "state"));
+    const db = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
+    db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
+    db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, ?, ?)").run(
+      "exit-fixture",
+      "postgres",
+      "exit_fixture",
+    );
+    db.close();
+    const parentScript = path.join(root, "parent.mjs");
+    await fs.writeFile(
+      parentScript,
+      `
+    import fs from "node:fs";
+    import assert from "node:assert/strict";
+    const { registerSealedRuntime } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.sealedRegistry).href)});
+    registerSealedRuntime({ json5: undefined, resolveSecureTempRoot: () => ${JSON.stringify(root)} });
+    const handoff = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.handoff).href)});
+    const result = await handoff.startManagedServiceUpdateHandoff({
+      root: ${JSON.stringify(root)}, execPath: process.execPath, argv1: ${JSON.stringify(updater)},
+      env: process.env, restartDrainTimeoutMs: 300000, meta: {},
+    });
+    assert.equal(result.status, "started");
+    assert(await handoff.transferManagedServiceUpdateHandoff({ kind: "managed-update-handoff", ...result }));
+    fs.writeFileSync(${JSON.stringify(transferred)}, JSON.stringify(result));
+  `,
+    );
+    const { spawn } =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const parent = spawn(resolveTestNodeExecPath(), [parentScript], {
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: root,
+        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    parent.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const closed = once(parent, "close");
+    let helperPid: number | undefined;
+    try {
+      await waitForFile(transferred, signal);
+      helperPid = JSON.parse(await fs.readFile(transferred, "utf8")).pid;
+      expect(await withinTest(closed, signal), stderr).toEqual([0, null]);
+    } finally {
+      // Release the real updater even when a referenced IPC channel prevents parent exit.
+      await fs.writeFile(release, "finish");
+      await closed;
+      if (helperPid) {
+        await waitForDead(helperPid, AbortSignal.timeout(30_000));
+      }
+    }
+  },
+);
 
 itUnix("restores a SQLite runtime that has no engine-aware sentinel method", async () => {
   // The installed recovery fixture intentionally has no new operation export.
