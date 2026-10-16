@@ -21,10 +21,14 @@ const configWithPrimary = (primary: string): OpenClawConfig => ({
       vllm: {
         baseUrl: "http://127.0.0.1:1/v1",
         api: "openai-completions",
-        models: [
-          { id: "model-a", name: "model-a" },
-          { id: "model-b", name: "model-b" },
-        ],
+        models: ["model-a", "model-b"].map((id) => ({
+          id,
+          name: id,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          maxTokens: 1024,
+        })),
       },
     },
   },
