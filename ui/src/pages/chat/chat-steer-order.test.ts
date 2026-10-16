@@ -12,7 +12,6 @@ import { handleAgentEvent } from "./tool-stream.ts";
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.unstubAllGlobals();
 });
 
 it.each(["tool", "item"] as const)(
@@ -38,8 +37,8 @@ it.each(["tool", "item"] as const)(
         ...(replace ? { replace } : {}),
         message: { role: "assistant", content },
       });
-    const accept = (message: unknown) =>
-      applySessionMessagePayload(state, { message }, true, {
+    const accept = (payload: unknown) =>
+      applySessionMessagePayload(state, payload, true, {
         kind: "live",
         activeRunId: "active-run",
       });
@@ -121,10 +120,7 @@ it.each(["tool", "item"] as const)(
       __openclaw: { id: "saved-answer", seq: 3, runId: "active-run" },
     };
     emitReply("", false, true);
-    applySessionMessagePayload(state, { runId: "active-run", message: savedAnswer }, true, {
-      kind: "live",
-      activeRunId: "active-run",
-    });
+    accept({ runId: "active-run", message: savedAnswer });
     expect(rows()).toEqual(before);
     const steer = {
       role: "user",
@@ -137,7 +133,7 @@ it.each(["tool", "item"] as const)(
         steerTargetRunId: "active-run",
       },
     };
-    accept(steer);
+    accept({ message: steer });
     expect(rows()).toEqual([...before, steer.content]);
     history.messages = [original, beforeTool, savedAnswer, steer];
     history.inFlightRun!.text = "";
@@ -166,7 +162,7 @@ it.each(["tool", "item"] as const)(
         idempotencyKey: "steer-run-2:user",
       },
     };
-    accept(secondSteer);
+    accept({ message: secondSteer });
     const accepted = [...continued.slice(0, -1), secondSteer.content, "Continued."];
     expect(rows()).toEqual(accepted);
     history.messages = [original, beforeTool, savedAnswer, steer, afterTool, secondSteer];

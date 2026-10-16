@@ -18,36 +18,52 @@ const user = (sendId: string, sender: string, seq: number) => ({
   timestamp: seq * 10,
   __openclaw: { id: sendId, seq, idempotencyKey: sendId + ":user", ...person(sender) },
 });
+const assistant = (content: string, timestamp: number, id: string, seq: number) => ({
+  role: "assistant",
+  content,
+  timestamp,
+  __openclaw: { id, seq, runId: "active" },
+});
+function input(id: string, runId: string, content: string, acceptedAt = 30, details: object = {}) {
+  return {
+    id,
+    runId,
+    acceptedAt,
+    state: "queued" as const,
+    message: {
+      role: "user",
+      content,
+      timestamp: acceptedAt,
+      __openclaw: { id: `pending:${id}` },
+      ...details,
+    },
+  };
+}
 const history = [user("earlier", "writer", 1), user("active", "reader", 2)];
-const pending = {
-  id: "pending-peer",
-  runId: "peer",
-  acceptedAt: 30,
-  state: "queued",
-  message: {
-    role: "user",
-    content: "Peer follow-up",
-    timestamp: 30,
-    __openclaw: { id: "pending:pending-peer", ...person("writer") },
-  },
-} as const;
-function props(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProps {
-  return createProps({
-    paneId: "live-final",
-    sessionKey: "agent:main:live-final",
-    messages: history,
-    stream: "The answer being read.",
-    streamStartedAt: 21,
-    runId: "active",
-    runWorking: true,
-    pendingInputs: [pending],
-    ...overrides,
-  });
+const pending = input("pending-peer", "peer", "Peer follow-up", 30, {
+  __openclaw: { id: "pending:pending-peer", ...person("writer") },
+});
+const staleInput = () => ({
+  ...pending,
+  acceptedAt: 5,
+  message: { ...pending.message, timestamp: 5 },
+});
+function build(overrides: Partial<BuildChatItemsProps> = {}) {
+  return buildChatItems(
+    createProps({
+      paneId: "live-final",
+      sessionKey: "agent:main:live-final",
+      messages: history,
+      stream: "The answer being read.",
+      streamStartedAt: 21,
+      runId: "active",
+      runWorking: true,
+      pendingInputs: [pending],
+      ...overrides,
+    }),
+  );
 }
 const settled = { stream: null, runId: null, runWorking: false };
-function build(overrides: Partial<BuildChatItemsProps> = {}) {
-  return buildChatItems(props(overrides));
-}
 function project(overrides: Partial<BuildChatItemsProps> = {}) {
   return coalesceAgentRunFrames(coalesceStreamRuns(build(overrides)));
 }
@@ -98,18 +114,7 @@ describe("live terminal continuity with pending collaborators", () => {
         sendAttempts: 1,
         sendState: "sending" as const,
       };
-      const accepted = {
-        ...pending,
-        id: "active-input",
-        runId: "active",
-        acceptedAt: 20,
-        message: {
-          role: "user",
-          content: local.text,
-          timestamp: 20,
-          __openclaw: { id: "pending:active-input" },
-        },
-      };
+      const accepted = input("active-input", "active", local.text, 20);
       for (const pendingInputs of [[], [accepted], [accepted, pending]]) {
         if (!localQueue && pendingInputs.length === 0) {
           continue;
@@ -136,17 +141,19 @@ describe("live terminal continuity with pending collaborators", () => {
         ? { kind: "internal_system", sourceTool: "main_session_restart_recovery" }
         : undefined;
       const pendingInputs = [{ ...pending, message: { ...pending.message, provenance } }];
-      const before = project({ pendingInputs });
-      const after = project({
-        messages: [...history, completed()],
-        pendingInputs,
-        ...settled,
-      });
-      const frames = [before, after].map((items) => {
+      const frames = [
+        project({ pendingInputs }),
+        project({
+          messages: [...history, completed()],
+          pendingInputs,
+          ...settled,
+        }),
+      ].map((items) => {
         const runFrames = items.filter((item) => item.kind === "agent-run-frame");
-        expect(runFrames).toHaveLength(1);
+        expect(runFrames).toEqual([
+          expect.objectContaining({ runId: "active", boundaryId: "send:active" }),
+        ]);
         const frame = runFrames[0]!;
-        expect(frame).toMatchObject({ runId: "active", boundaryId: "send:active" });
         const peer = items.findIndex((item) =>
           item.kind === "notice"
             ? item.key.includes("peer")
@@ -172,12 +179,7 @@ describe("live terminal continuity with pending collaborators", () => {
   it.each(["visible history", "hidden trailing row", "canonical late terminal"])(
     "keeps authoritative order with %s before older custody",
     (shape) => {
-      const canonical = {
-        role: "assistant",
-        content: "Canonical later output",
-        timestamp: 40,
-        __openclaw: { id: "canonical", seq: 4, runId: "active" },
-      };
+      const canonical = assistant("Canonical later output", 40, "canonical", 4);
       const lateTerminal = shape === "canonical late terminal";
       if (lateTerminal) {
         rememberLiveTerminalRun(canonical, "active");
@@ -187,7 +189,7 @@ describe("live terminal continuity with pending collaborators", () => {
         : shape === "hidden trailing row"
           ? [...history, { role: "assistant", content: "", timestamp: 40 }]
           : history;
-      const stale = { ...pending, acceptedAt: 5, message: { ...pending.message, timestamp: 5 } };
+      const stale = staleInput();
       const items = project({
         messages,
         pendingInputs: [lateTerminal ? pending : stale],
@@ -219,21 +221,14 @@ describe("live terminal continuity with pending collaborators", () => {
     "keeps earlier %s automation before a newly submitted message and its canonical receipt",
     (state) => {
       const automation = {
-        ...pending,
-        id: "earlier-automation",
-        runId: "automation-run",
-        state,
-        message: {
-          role: "user",
-          content: "Earlier scheduled maintenance",
-          timestamp: 30,
+        ...input("earlier-automation", "automation-run", "Earlier scheduled maintenance", 30, {
           provenance: { kind: "inter_session", sourceTool: "sessions_send" },
           senderSession: {
             sessionKey: "agent:main:cron:maintenance:run:earlier",
             label: "Scheduled maintenance",
           },
-          __openclaw: { id: "pending:earlier-automation" },
-        },
+        }),
+        state,
       };
       const submitted = user("New follow-up", "reader", 4);
       const submitting = {
@@ -249,48 +244,29 @@ describe("live terminal continuity with pending collaborators", () => {
           ? "Delivery interrupted. This saved agent update is not scheduled to retry."
           : "This agent update was cancelled before delivery.";
       const originalRows = ["earlier", "active", "Earlier scheduled maintenance", disposition];
-      for (const { overrides, expected } of [
-        { overrides: {}, expected: originalRows },
+      const check = (overrides: Partial<BuildChatItemsProps>, expected = originalRows) =>
+        expect(
+          visibleRows(build({ pendingInputs: [automation], ...settled, ...overrides })),
+        ).toEqual(expected);
+      check({});
+      check({ queue: [submitting] }, [...originalRows, "New follow-up"]);
+      check(
         {
-          overrides: { queue: [submitting] },
-          expected: [...originalRows, "New follow-up"],
+          messages: [...history, submitted],
+          queue: [submitting],
+          pendingInputs: [automation, staleInput()],
         },
-        {
-          overrides: {
-            messages: [...history, submitted],
-            queue: [submitting],
-            pendingInputs: [
-              automation,
-              { ...pending, acceptedAt: 5, message: { ...pending.message, timestamp: 5 } },
-            ],
-          },
-          expected: [...originalRows, "New follow-up", "Peer follow-up"],
-        },
-      ]) {
-        const items = build({
-          pendingInputs: [automation],
-          ...settled,
-          ...overrides,
-        });
-        expect(visibleRows(items)).toEqual(expected);
-      }
+        [...originalRows, "New follow-up", "Peer follow-up"],
+      );
     },
   );
   it.each([false, true])(
     "indexes stream anchors in presentation order (earlier commentary: %s)",
     (withCommentary) => {
-      const commentary = {
-        role: "assistant",
-        phase: "commentary",
-        content: "Earlier work",
-        timestamp: 21,
-        __openclaw: { id: "commentary", seq: 3, runId: "active" },
-      };
+      const commentary = { ...assistant("Earlier work", 21, "commentary", 3), phase: "commentary" };
       const latest = {
-        ...commentary,
-        content: "Continuing work",
-        timestamp: 22,
-        __openclaw: { id: "latest-commentary", seq: 4, runId: "active" },
+        ...assistant("Continuing work", 22, "latest-commentary", 4),
+        phase: "commentary",
       };
       const items = project({
         messages: withCommentary ? [...history, commentary, latest] : history,
