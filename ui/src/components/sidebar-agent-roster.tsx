@@ -4,6 +4,8 @@ import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
@@ -12,6 +14,7 @@ import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+import { showToast } from "../lib/toast.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import {
   renderSessionListFrame,
@@ -25,6 +28,7 @@ import {
   renderSidebarSessionIndicators,
 } from "./app-sidebar-session-row-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { showConfirmDialog } from "./confirm-dialog.ts";
 import { SidebarPinnedAgent } from "./sidebar-pinned-agent.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
@@ -175,6 +179,34 @@ export function SidebarAgentRoster(props: RosterProps) {
     }
     setCollapsedAgents(next);
   };
+  const canDeleteAgent = (id: string) =>
+    (roster.context().agents.state.agentsList?.agents.filter((agent) => agent.kind !== "system")
+      .length ?? 0) > 1 &&
+    canCallGatewayMethod(roster.context().gateway.snapshot, "agents.delete", "operator.admin") &&
+    roster.cards().some((agent) => agent.id === id);
+  const deleteAgent = async (agent: { id: string; name: string }) => {
+    const context = roster.context();
+    const client = context.gateway.snapshot.client;
+    if (!client || !canDeleteAgent(agent.id)) {
+      return;
+    }
+    const confirmed = await showConfirmDialog({
+      message: t("agentsHome.deleteAgentConfirm", { agent: agent.name }),
+      details: t("agentsHome.deleteAgentDetails"),
+      confirmLabel: t("common.delete"),
+      danger: true,
+    });
+    if (!confirmed || context.gateway.snapshot.client !== client || !canDeleteAgent(agent.id)) {
+      return;
+    }
+    try {
+      await client.request("agents.delete", { agentId: agent.id, deleteFiles: true });
+    } catch (error) {
+      showToast({ message: formatUiError(error) });
+    } finally {
+      await context.agents.refreshList();
+    }
+  };
   const agentMenu = (card: () => { id: string; name: string }) => (
     <Menu
       id={`sidebar-agent-roster-${card().id}`}
@@ -202,12 +234,15 @@ export function SidebarAgentRoster(props: RosterProps) {
             });
             break;
           }
-          case "main":
-            roster.host().openMainSession(card().id);
+          case "new-session":
+            roster.host().requestOpenNewSession(card().id);
             break;
           case "sessions":
             roster.context().agentSelection.setScope(card().id);
             roster.host().onNavigate?.("sessions");
+            break;
+          case "delete":
+            void deleteAgent(card());
             break;
           case "collapse-others":
             setCollapsedAgents(
@@ -229,14 +264,15 @@ export function SidebarAgentRoster(props: RosterProps) {
           icon: <Icon name="pin" />,
         },
         {
-          id: "main",
-          label: t("agentsHome.openMainChat"),
+          id: "new-session",
+          label: t("agentsHome.createNewSession"),
           class: "sidebar-customize-menu__item",
-          icon: <Icon name="messageSquare" />,
+          icon: <Icon name="plus" />,
+          disabled: !roster.host().readNewSessionAccess().allowed,
         },
         {
           id: "sessions",
-          label: t("agentsHome.allSessions"),
+          label: t("agentsHome.viewSessions"),
           class: "sidebar-customize-menu__item",
           icon: <Icon name="listTree" />,
         },
@@ -245,6 +281,14 @@ export function SidebarAgentRoster(props: RosterProps) {
           label: t("agentsHome.collapseOthers"),
           class: "sidebar-customize-menu__item",
           icon: <Icon name="foldVertical" />,
+        },
+        {
+          id: "delete",
+          label: t("common.delete"),
+          class: "sidebar-customize-menu__item",
+          icon: <Icon name="trash" />,
+          variant: "danger",
+          disabled: !canDeleteAgent(card().id),
         },
       ]}
     />

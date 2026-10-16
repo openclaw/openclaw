@@ -410,6 +410,21 @@ openclaw-sidebar-agent-roster {
   z-index: auto;
 }
 
+.sidebar-agent-roster__menu .oc-menu {
+  min-width: 190px;
+}
+
+.sidebar-agent-roster__menu .oc-menu-item__icon {
+  width: 16px;
+  height: 16px;
+  margin-inline-end: 0;
+}
+
+.sidebar-agent-roster__menu .oc-menu-item__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
 .sidebar-agent-roster__menu .sidebar-customize-menu__item::part(checkmark) {
   display: none;
 }

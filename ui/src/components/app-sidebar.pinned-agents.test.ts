@@ -9,6 +9,10 @@ import {
   session,
   settleRoster,
 } from "../test-helpers/app-sidebar-cases/roster.test-support.ts";
+import {
+  gatewayHelloForMethods,
+  SESSION_MUTATION_TEST_METHODS,
+} from "../test-helpers/gateway-methods.ts";
 
 it("pins an agent above the roster, preserves the other agents, and unpins through its menu", async () => {
   const { sidebar, context, provider } = await mountRoster(roster, [
@@ -99,4 +103,74 @@ it("keeps every configured pin available and ignores unavailable saved agents", 
     sidebar.querySelector('[data-pinned-agent="main"] [slot="content"]')?.textContent,
   ).toContain("No assistant reply yet");
   expect(context.navigation.snapshot.pinnedAgentIds).toContain("missing");
+});
+
+it("offers agent-specific session actions and confirms agent deletion", async () => {
+  const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
+  const onOpenNewSession = vi.fn();
+  const onNavigate = vi.fn();
+  sidebar.onOpenNewSession = onOpenNewSession;
+  sidebar.onNavigate = onNavigate;
+  context.agents.refreshList = vi.fn(async () => context.agents.state.agentsList);
+  gatewayHarness.publish({
+    hello: gatewayHelloForMethods([...SESSION_MUTATION_TEST_METHODS, "agents.delete"]),
+  });
+  sidebar.sidebarAgentsMode = "roster";
+  await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
+  await settleRoster(sidebar);
+
+  const openMenu = async () => {
+    sidebar.querySelector<HTMLButtonElement>('button[aria-label="Options for Harbor"]')!.click();
+    await vi.waitFor(() =>
+      expect(sidebar.querySelector('[data-value="new-session"]')).not.toBeNull(),
+    );
+  };
+  await openMenu();
+  expect(sidebar.querySelector('[data-value="new-session"]')?.textContent).toContain(
+    "Create new session",
+  );
+  expect(sidebar.querySelector('[data-value="sessions"]')?.textContent).toContain("View sessions");
+  expect(sidebar.querySelector('[data-value="delete"]')?.textContent).toContain("Delete");
+  sidebar.querySelector<HTMLElement>('[data-value="new-session"]')!.click();
+  expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("main");
+
+  await openMenu();
+  sidebar.querySelector<HTMLElement>('[data-value="sessions"]')!.click();
+  expect(context.agentSelection.state.selectedId).toBe("main");
+  expect(onNavigate).toHaveBeenCalledWith("sessions");
+
+  await openMenu();
+  sidebar.querySelector<HTMLElement>('[data-value="delete"]')!.click();
+  await vi.waitFor(() =>
+    expect(document.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+      "Delete Harbor?",
+    ),
+  );
+  const modal = document.querySelector("openclaw-modal-dialog")!;
+  const cancel = [...modal.querySelectorAll("button")].find(
+    (button) => button.textContent === "Cancel",
+  )!;
+  cancel.click();
+  expect(request).not.toHaveBeenCalledWith("agents.delete", expect.anything());
+
+  const previousRequest = request.getMockImplementation()!;
+  request.mockImplementation((...args) =>
+    args[0] === "agents.delete"
+      ? Promise.resolve({ ok: true, agentId: "main", removedBindings: 0 })
+      : previousRequest(...args),
+  );
+  await openMenu();
+  sidebar.querySelector<HTMLElement>('[data-value="delete"]')!.click();
+  await vi.waitFor(() => expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull());
+  const confirm = [
+    ...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
+  ].find((button) => button.textContent === "Delete")!;
+  confirm.click();
+  await vi.waitFor(() => {
+    expect(request).toHaveBeenCalledWith("agents.delete", {
+      agentId: "main",
+      deleteFiles: true,
+    });
+    expect(context.agents.refreshList).toHaveBeenCalledOnce();
+  });
 });

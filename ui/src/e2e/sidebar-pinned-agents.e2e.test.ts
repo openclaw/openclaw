@@ -112,6 +112,19 @@ suite.define(() => {
             await captureSidebarUiProof(suite, page, `row-${width}-${state}.png`);
           }
           await menu.press("ArrowDown");
+          const newSession = sidebar.getByRole("menuitem", { name: "Create new session" });
+          const viewSessions = sidebar.getByRole("menuitem", { name: "View sessions" });
+          const deleteAgent = sidebar.getByRole("menuitem", { name: "Delete", exact: true });
+          expect(await newSession.locator("svg").count()).toBe(1);
+          expect(await viewSessions.locator("svg").count()).toBe(1);
+          expect(await deleteAgent.locator("svg").count()).toBe(1);
+          for (const item of [newSession, viewSessions, deleteAgent]) {
+            expect(await item.locator("svg").evaluate((icon) => getComputedStyle(icon).width)).toBe(
+              "16px",
+            );
+          }
+          expect(await deleteAgent.getAttribute("data-variant")).toBe("danger");
+          await captureSidebarUiProof(suite, page, `menu-${width}.png`);
           await sidebar.getByRole("menuitem", { name: "Pin", exact: true }).click();
           const pinned = sidebar.locator('[data-pinned-agent="main"]');
           const link = pinned.getByRole("link", { name: "Harbor", exact: true });
@@ -121,27 +134,35 @@ suite.define(() => {
           expect(await sidebar.locator('[data-agent-group="research"]').isVisible()).toBe(true);
           expect(await pinned.locator(".sidebar-agent-roster__preview").count()).toBe(0);
           const card = pinned.locator(".tooltip-surface[popover]:popover-open");
+          const content = pinned.locator(".sidebar-pinned-agent__card");
           for (const state of ["hover", "focus"] as const) {
-            await page.keyboard.press("Escape");
+            await page.mouse.move(-1, -1);
             await link.evaluate((element) => element.blur());
+            await expect.poll(() => card.count()).toBe(0);
             if (state === "hover") {
               await page.mouse.move(-1, -1);
               await link.hover();
             } else {
               await page.mouse.move(-1, -1);
-              await link.focus();
+              await pinned.getByRole("button", { name: "Options for Harbor" }).focus();
+              await page.keyboard.press("Shift+Tab");
+              expect(await link.evaluate((element) => element === document.activeElement)).toBe(
+                true,
+              );
             }
             await card.waitFor({ state: "visible" });
-            expect(await card.textContent()).toContain(assistantReply);
-            expect(await card.textContent()).not.toContain("A newer user question");
+            await content.waitFor({ state: "visible" });
+            expect(await content.textContent()).toContain(assistantReply);
+            expect(await content.textContent()).not.toContain("A newer user question");
             expect(await link.getAttribute("aria-describedby")).toBeTruthy();
             const bounds = (await card.boundingBox())!;
             expect(bounds.x).toBeGreaterThanOrEqual(0);
             expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
             await captureSidebarUiProof(suite, page, `pin-${width}-${state}.png`);
+            await page.keyboard.press("Escape");
+            await expect.poll(() => card.count()).toBe(0);
+            expect(await sidebar.isVisible()).toBe(true);
           }
-          await page.keyboard.press("Escape");
-          await expect.poll(() => card.count()).toBe(0);
           await pinned.getByRole("button", { name: "Options for Harbor" }).press("ArrowDown");
           await sidebar.getByRole("menuitem", { name: "Unpin", exact: true }).click();
           await row.waitFor({ state: "visible" });
