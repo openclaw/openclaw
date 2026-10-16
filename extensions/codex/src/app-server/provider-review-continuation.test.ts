@@ -17,6 +17,12 @@ const findings = {
   explanation: "Review the intended operation.",
   continuation: { message: "  Use the approved target only.\n" },
 };
+const runtime = {
+  provider: "openai",
+  model: "test-model",
+  runtimeId: "codex",
+  api: "openai-chatgpt-responses",
+};
 const latest = (): CodexThreadTurnsListResponse => ({
   data: [
     {
@@ -43,43 +49,35 @@ function fixture() {
       throw new Error("revoked");
     }
   };
-  // The host's session tests own real issuance and durable comparison.
-  const host = {
-    read: vi.fn<ProviderReviewAcknowledgment["read"]>(),
-    assertRuntime: vi.fn<ProviderReviewAcknowledgment["assertRuntime"]>(),
-    acceptNativeTurn: vi.fn<ProviderReviewAcknowledgment["acceptNativeTurn"]>(),
-  };
-  const methods: Pick<ProviderReviewAcknowledgment, "read" | "assertRuntime" | "acceptNativeTurn"> =
-    host;
-  const acknowledgment = Object.freeze(methods) as ProviderReviewAcknowledgment;
   const snapshot: ReviewSnapshot = {
     phase,
     review: {
       id: "review-1",
       sessionId,
       runId: "failed-run",
-      provider: "openai",
-      model: "test-model",
-      runtimeId: "codex",
-      api: "openai-chatgpt-responses",
+      ...runtime,
       nativeThreadId: "native-thread",
       nativeTurnId: "failed-turn",
       review: findings,
     },
   };
-  host.read.mockImplementation(() => {
-    assertCurrent();
-    return { ...snapshot, phase };
-  });
-  host.assertRuntime.mockImplementation((params) => {
-    params.assertCurrent();
-    return Promise.resolve();
-  });
-  host.acceptNativeTurn.mockImplementation((accepted) => {
-    accepted.assertCurrent?.();
-    phase = "accepted";
-    return Promise.resolve();
-  });
+  // The host's session tests own real issuance and durable comparison.
+  const host = {
+    read: vi.fn<ProviderReviewAcknowledgment["read"]>(() => {
+      assertCurrent();
+      return { ...snapshot, phase };
+    }),
+    assertRuntime: vi.fn<ProviderReviewAcknowledgment["assertRuntime"]>((params) => {
+      params.assertCurrent();
+      return Promise.resolve();
+    }),
+    acceptNativeTurn: vi.fn<ProviderReviewAcknowledgment["acceptNativeTurn"]>((accepted) => {
+      accepted.assertCurrent?.();
+      phase = "accepted";
+      return Promise.resolve();
+    }),
+  };
+  const acknowledgment = Object.freeze(host) as ProviderReviewAcknowledgment;
   const request = vi.fn().mockResolvedValue(latest());
   let notificationHandler: ((notification: CodexServerNotification) => unknown) | undefined;
   const dispose = vi.fn(() => {
@@ -105,7 +103,6 @@ function fixture() {
     },
   };
   return {
-    acknowledgment,
     host,
     phase: () => phase,
     request,
@@ -154,14 +151,7 @@ describe("native provider review continuation", () => {
     });
     await expect(continuation?.accept("new-turn")).rejects.toThrow("has not dispatched");
     expect(f.host.acceptNativeTurn).not.toHaveBeenCalled();
-    expect(f.host.assertRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        model: "test-model",
-        runtimeId: "codex",
-        api: "openai-chatgpt-responses",
-      }),
-    );
+    expect(f.host.assertRuntime).toHaveBeenCalledWith(expect.objectContaining(runtime));
     continuation?.dispatch();
     expect(f.dispose).toHaveBeenCalledOnce();
     expect(() => continuation?.dispatch()).toThrow("already dispatched");
