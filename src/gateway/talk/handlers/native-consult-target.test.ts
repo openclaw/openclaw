@@ -109,6 +109,40 @@ const context = {
   logGateway: { warn: vi.fn() },
 } as unknown as GatewayRequestContext;
 
+function expectOk(respond: ReturnType<typeof vi.fn>, result: unknown = expect.any(Object)) {
+  expect(respond).toHaveBeenCalledWith(true, result, undefined);
+}
+
+function expectDenied(respond: ReturnType<typeof vi.fn>, details: Record<string, unknown>) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(details));
+}
+
+function makeConsultBridge(submitToolResult = () => undefined) {
+  return {
+    connect: async () => undefined,
+    sendAudio: () => undefined,
+    setMediaTimestamp: () => undefined,
+    handleBargeIn: () => undefined,
+    submitToolResult,
+    acknowledgeMark: () => undefined,
+    close: () => undefined,
+    isConnected: () => true,
+  };
+}
+
+function registerRun(runId: string, sessionId: string, sessionKey = "global", agentId = "voice") {
+  return registerChatAbortController({
+    chatAbortControllers: context.chatAbortControllers,
+    runId,
+    sessionId,
+    sessionKey,
+    agentId,
+    ownerConnId: client.connId,
+    timeoutMs: 60_000,
+    kind: "chat-send",
+  });
+}
+
 async function dispatch(
   method: string,
   params: Record<string, unknown>,
@@ -174,16 +208,7 @@ beforeEach(async () => {
       providerInstructions = request.instructions;
       callback = request.runAgentConsult;
       browserControl = request.gatewayControl;
-      browserControl?.bindBridge({
-        connect: async () => undefined,
-        sendAudio: () => undefined,
-        setMediaTimestamp: () => undefined,
-        handleBargeIn: () => undefined,
-        submitToolResult: submitProviderResult,
-        acknowledgeMark: () => undefined,
-        close: () => undefined,
-        isConnected: () => true,
-      });
+      browserControl?.bindBridge(makeConsultBridge(submitProviderResult));
       return {
         provider: "synthetic-voice",
         transport: "webrtc",
@@ -195,16 +220,7 @@ beforeEach(async () => {
       relayRequest = request;
       providerInstructions = request.instructions;
       callback = request.runAgentConsult;
-      return {
-        connect: async () => undefined,
-        sendAudio: () => undefined,
-        setMediaTimestamp: () => undefined,
-        handleBargeIn: () => undefined,
-        submitToolResult: () => undefined,
-        acknowledgeMark: () => undefined,
-        close: () => undefined,
-        isConnected: () => true,
-      };
+      return makeConsultBridge();
     },
   };
   Object.defineProperty(provider, Symbol.for("openclaw.internal.realtime-voice-provider.v1"), {
@@ -252,7 +268,7 @@ async function createRelayCall(params: Record<string, unknown> = {}) {
     brain: "agent-consult",
     ...params,
   });
-  expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+  expectOk(respond);
   const sessionId = (respond.mock.calls[0]![1] as { sessionId: string }).sessionId;
   const record = getUnifiedTalkSession(sessionId);
   if (record.kind !== "realtime-relay") {
@@ -261,90 +277,73 @@ async function createRelayCall(params: Record<string, unknown> = {}) {
   return { sessionId, target: record.sessionTarget };
 }
 
-it.each([undefined])(
-  "retains the opaque relay owner when Talk defaults change (key=%s)",
-  async (sessionKey) => {
-    config.session = { scope: "global" };
-    const { sessionId } = await createRelayCall();
-    expect(providerInstructions).toBe(REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS);
-    await replaceSessionEntry(
-      { agentId: "primary", sessionKey: "global" },
-      {
-        sessionId: "private-primary",
-        updatedAt: 1,
-        visibility: "draft",
-        createdActor: { type: "human", source: "profile", id: "another-person" },
-      },
-    );
-    config = { ...config, talk: { agentId: "primary" } };
-    setRuntimeConfigSnapshot(config);
-    expect(
-      await dispatch("talk.session.steer", {
-        sessionId,
-        ...(sessionKey ? { sessionKey } : {}),
-        text: "status",
-        mode: "status",
-      }),
-    ).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ mode: "status", sessionKey: "global" }),
-      undefined,
-    );
-  },
-);
+it("retains the opaque relay owner when Talk defaults change without a key", async () => {
+  config.session = { scope: "global" };
+  const { sessionId } = await createRelayCall();
+  expect(providerInstructions).toBe(REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS);
+  await replaceSessionEntry(
+    { agentId: "primary", sessionKey: "global" },
+    {
+      sessionId: "private-primary",
+      updatedAt: 1,
+      visibility: "draft",
+      createdActor: { type: "human", source: "profile", id: "another-person" },
+    },
+  );
+  config = { ...config, talk: { agentId: "primary" } };
+  setRuntimeConfigSnapshot(config);
+  expectOk(
+    await dispatch("talk.session.steer", {
+      sessionId,
+      text: "status",
+      mode: "status",
+    }),
+    expect.objectContaining({ mode: "status", sessionKey: "global" }),
+  );
+});
 
-it.each([undefined])(
-  "enforces the retained relay's sharing policy (key=%s)",
-  async (sessionKey) => {
-    await replaceSessionEntry(
-      { agentId: "voice", sessionKey: "agent:voice:main" },
-      {
-        sessionId: "shared-before-call",
-        updatedAt: 1,
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: "another-person" },
-      },
-    );
-    const { sessionId, target } = await createRelayCall();
-    const scope = {
-      agentId: target.agentId,
-      sessionKey: target.canonicalKey,
-      storePath: target.storePath,
-    };
-    await replaceSessionEntry(scope, {
-      ...loadSessionEntry(scope)!,
-      visibility: "read-only",
-    });
-    expect(
-      await dispatch("talk.session.steer", {
-        sessionId,
-        ...(sessionKey ? { sessionKey } : {}),
-        text: "status",
-        mode: "status",
-      }),
-    ).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
-      }),
-    );
-  },
-);
+it("enforces the retained relay's sharing policy without a key", async () => {
+  await replaceSessionEntry(
+    { agentId: "voice", sessionKey: "agent:voice:main" },
+    {
+      sessionId: "shared-before-call",
+      updatedAt: 1,
+      visibility: "shared",
+      createdActor: { type: "human", source: "profile", id: "another-person" },
+    },
+  );
+  const { sessionId, target } = await createRelayCall();
+  const scope = {
+    agentId: target.agentId,
+    sessionKey: target.canonicalKey,
+    storePath: target.storePath,
+  };
+  await replaceSessionEntry(scope, {
+    ...loadSessionEntry(scope)!,
+    visibility: "read-only",
+  });
+  expectDenied(
+    await dispatch("talk.session.steer", {
+      sessionId,
+      text: "status",
+      mode: "status",
+    }),
+    {
+      details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
+    },
+  );
+});
 
 it("rejects retained relay mapping changes even when the physical store is unchanged", async () => {
   const { sessionId } = await createRelayCall();
   config = { ...config, session: { mainKey: "home" } };
   setRuntimeConfigSnapshot(config);
-  expect(
+  expectDenied(
     await dispatch("talk.session.steer", { sessionId, text: "status", mode: "status" }),
-  ).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
+    {
       code: "INVALID_REQUEST",
       message: expect.stringContaining("non-canonical persisted row"),
-    }),
+    },
   );
 });
 
@@ -366,26 +365,13 @@ it("fences an opaque relay record replaced after authorization", async () => {
   await entered.promise;
   rememberUnifiedTalkSession(sessionId, { ...getUnifiedTalkSession(sessionId) });
   release.resolve();
-  expect(await pending).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      details: expect.objectContaining({ code: "SESSION_MUTATION_AUTHORIZATION_CHANGED" }),
-    }),
-  );
+  expectDenied(await pending, {
+    details: expect.objectContaining({ code: "SESSION_MUTATION_AUTHORIZATION_CHANGED" }),
+  });
 });
 
 function registerOwnedEmbeddedRun(runId: string, sessionId: string) {
-  const registration = registerChatAbortController({
-    chatAbortControllers: context.chatAbortControllers,
-    runId,
-    sessionId,
-    sessionKey: "global",
-    agentId: "voice",
-    ownerConnId: client.connId,
-    timeoutMs: 60_000,
-    kind: "chat-send",
-  });
+  const registration = registerRun(runId, sessionId);
   const abort = vi.fn();
   setActiveEmbeddedRun(
     sessionId,
@@ -541,18 +527,9 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
     brain: "agent-consult",
     capabilities: ["gateway-control-v1"],
   });
-  expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+  expectOk(respond);
   const sessionId = loadSessionEntry({ agentId: "voice", sessionKey: "global" })!.sessionId;
-  const registration = registerChatAbortController({
-    chatAbortControllers: context.chatAbortControllers,
-    runId: "queued-talk",
-    sessionId,
-    sessionKey: "global",
-    agentId: "voice",
-    ownerConnId: client.connId,
-    timeoutMs: 60_000,
-    kind: "chat-send",
-  });
+  const registration = registerRun("queued-talk", sessionId);
   const operation = replyRunRegistry.begin({
     sessionKey: "global",
     sessionId,
@@ -598,12 +575,9 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
         mode: "status",
       }),
     ).toMatchObject({ active: true, sessionId: resolvedSessionId });
-    expect(
+    expectOk(
       await dispatch("talk.client.steer", { sessionKey: "main", text: "status", mode: "status" }),
-    ).toHaveBeenCalledWith(
-      true,
       expect.objectContaining({ active: true, sessionId: resolvedSessionId }),
-      undefined,
     );
     const abortUnrelated = vi.fn();
     const unrelated = {
@@ -622,12 +596,9 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
     } finally {
       clearActiveEmbeddedRun(resolvedSessionId, unrelated, "global");
     }
-    expect(
+    expectOk(
       await dispatch("talk.client.steer", { sessionKey: "main", text: "cancel", mode: "cancel" }),
-    ).toHaveBeenCalledWith(
-      true,
       expect.objectContaining({ ok: true, aborted: true, sessionId: resolvedSessionId }),
-      undefined,
     );
     expect(operation.abortSignal.aborted).toBe(true);
     expect(mocks.runEmbeddedAgent).not.toHaveBeenCalled();
@@ -720,7 +691,7 @@ it("restores bounded relay history after the original voice provider finishes cl
     await closeStarted.promise;
     expect(requests).toHaveLength(1);
     finishClose.resolve();
-    expect(await closing).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expectOk(await closing, { ok: true });
 
     const storedSessionId = loadSessionEntry({
       agentId: original.target.agentId,
@@ -836,16 +807,7 @@ it.for(["status", "cancelled", "successor"] as const)(
         caller.abort(new Error("Pending native consult cancelled"));
       } else {
         context.chatAbortControllers.delete(runId);
-        successor = registerChatAbortController({
-          chatAbortControllers: context.chatAbortControllers,
-          runId,
-          sessionId: "successor-session",
-          sessionKey: target.canonicalKey,
-          agentId: target.agentId,
-          ownerConnId: client.connId,
-          timeoutMs: 60_000,
-          kind: "chat-send",
-        });
+        successor = registerRun(runId, "successor-session", target.canonicalKey, target.agentId);
       }
       resume.resolve();
       if (phase === "status") {

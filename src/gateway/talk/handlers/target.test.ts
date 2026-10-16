@@ -75,6 +75,15 @@ const browserSession = {
   clientSecret: "synthetic-offer-token",
   offerUrl: "/test/voice/offer",
 };
+const voiceScope = { agentId: "voice", sessionKey: "agent:voice:main" };
+
+function expectRejected(respond: ReturnType<typeof vi.fn>, code = "INVALID_REQUEST") {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code }));
+}
+
+function expectCreated(respond: ReturnType<typeof vi.fn>) {
+  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
+}
 
 let state: OpenClawTestState;
 let releaseProfileCatalog: (() => void) | undefined;
@@ -168,32 +177,24 @@ afterEach(async () => {
 });
 
 describe("Talk target preparation through Gateway authorization", () => {
-  it.each(["main"])("uses the configured Talk owner for %s", async (sessionKey) => {
-    const respond = await dispatch("talk.client.create", {
-      ...createParams,
-      ...(sessionKey ? { sessionKey } : {}),
-    });
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
+  it("uses the configured Talk owner for main", async () => {
+    const respond = await dispatch("talk.client.create", { ...createParams, sessionKey: "main" });
+    expectCreated(respond);
     expect(createBrowserSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "voice" }),
     );
-    expect(
-      loadSessionEntry({ agentId: "voice", sessionKey: "agent:voice:main" })?.sessionId,
-    ).toBeTruthy();
+    expect(loadSessionEntry(voiceScope)?.sessionId).toBeTruthy();
   });
 
   it.each(["read-only", "draft", "incognito"] as const)(
     "applies %s restrictions to bare and omitted create targets",
     async (restriction) => {
-      await replaceSessionEntry(
-        { agentId: "voice", sessionKey: "agent:voice:main" },
-        {
-          sessionId: "private-session",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "another-person" },
-          ...(restriction === "incognito" ? { incognito: true } : { visibility: restriction }),
-        },
-      );
+      await replaceSessionEntry(voiceScope, {
+        sessionId: "private-session",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: "another-person" },
+        ...(restriction === "incognito" ? { incognito: true } : { visibility: restriction }),
+      });
       for (const method of ["talk.client.create", "talk.session.create"]) {
         for (const sessionKey of ["main", undefined]) {
           const respond = await dispatch(method, {
@@ -202,11 +203,7 @@ describe("Talk target preparation through Gateway authorization", () => {
             transport: method === "talk.client.create" ? "webrtc" : "gateway-relay",
             ...(sessionKey ? { sessionKey } : {}),
           });
-          expect(respond).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({ code: "INVALID_REQUEST" }),
-          );
+          expectRejected(respond);
         }
       }
       expect(createBrowserSession).not.toHaveBeenCalled();
@@ -240,7 +237,7 @@ describe("Talk target preparation through Gateway authorization", () => {
       ...createParams,
       sessionKey: scope.sessionKey,
     });
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
+    expectCreated(respond);
     const createdSessionId = loadSessionEntry({ ...scope, storePath: selected.path })?.sessionId;
     expect(createdSessionId).toBeTruthy();
     expect(createdSessionId).not.toBe("unsuffixed-decoy");
@@ -259,7 +256,7 @@ describe("Talk target preparation through Gateway authorization", () => {
     config.agents!.defaults = { sessionStore: { agentId } };
     const params = Object.freeze({ ...createParams, sessionKey: voiceKey });
     const respond = await dispatch("talk.client.create", params);
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
+    expectCreated(respond);
     const { voiceSessionId } = respond.mock.calls[0]![1] as { voiceSessionId: string };
     expect(clientVoiceSessionTesting.readRecord(agentId, voiceSessionId)?.sessionKey).toBe(
       voiceKey,
@@ -282,9 +279,7 @@ describe("Talk target preparation through Gateway authorization", () => {
     expect(
       readSessionTranscriptMessageEvents({ ...scope, sessionId: stored!.sessionId }),
     ).toHaveLength(1);
-    expect(
-      await dispatch("talk.client.close", { sessionKey: "global", voiceSessionId }),
-    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "INVALID_REQUEST" }));
+    expectRejected(await dispatch("talk.client.close", { sessionKey: "global", voiceSessionId }));
     expect(
       await dispatch("talk.client.close", { sessionKey: voiceKey, voiceSessionId }),
     ).toHaveBeenCalledWith(true, { ok: true }, undefined);
@@ -301,11 +296,7 @@ describe("Talk target preparation through Gateway authorization", () => {
       voiceSessionId: "relay-call",
       origin: "relay",
     });
-    expect(await dispatch("talk.client.close", params)).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectRejected(await dispatch("talk.client.close", params));
     expect(clientVoiceSessionTesting.readRecord("voice", "relay-call")?.status).toBe("open");
   });
 
@@ -318,11 +309,7 @@ describe("Talk target preparation through Gateway authorization", () => {
         ...createParams,
         sessionKey: "agent:voice:main",
       });
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
+      expectRejected(respond);
       expect(createBrowserSession).not.toHaveBeenCalled();
       expect(mocks.bootstrap).not.toHaveBeenCalled();
     },
@@ -349,24 +336,15 @@ describe("Talk target preparation through Gateway authorization", () => {
         config = { ...config, talk: { agentId: "primary" } };
         setRuntimeConfigSnapshot(config);
       } else {
-        await replaceSessionEntry(
-          { agentId: "voice", sessionKey: "agent:voice:main" },
-          {
-            sessionId: "concurrent-session",
-            updatedAt: 1,
-            ...(change === "incognito"
-              ? { incognito: true }
-              : { visibility: "read-only" as const }),
-          },
-        );
+        await replaceSessionEntry(voiceScope, {
+          sessionId: "concurrent-session",
+          updatedAt: 1,
+          ...(change === "incognito" ? { incognito: true } : { visibility: "read-only" as const }),
+        });
       }
       gate.resolve(browserSession);
       const respond = await pending;
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
+      expectRejected(respond);
       expect(cancelBrowserSession).toHaveBeenCalledOnce();
       expect(
         loadSessionEntry({ agentId: "primary", sessionKey: "agent:primary:main" }),
@@ -375,9 +353,7 @@ describe("Talk target preparation through Gateway authorization", () => {
         loadSessionEntry({ agentId: "voice", sessionKey: "agent:voice:changed" }),
       ).toBeUndefined();
       if (change !== "sharing" && change !== "incognito") {
-        expect(
-          loadSessionEntry({ agentId: "voice", sessionKey: "agent:voice:main" }),
-        ).toBeUndefined();
+        expect(loadSessionEntry(voiceScope)).toBeUndefined();
       }
     },
   );
@@ -399,24 +375,15 @@ describe("Talk target preparation through Gateway authorization", () => {
         },
       };
       if (restriction !== "agent") {
-        await replaceSessionEntry(
-          { agentId: "voice", sessionKey: "agent:voice:main" },
-          {
-            sessionId: "host-session",
-            updatedAt: 1,
-            visibility: "shared",
-            createdActor: { type: "human", source: "profile", id: "another-person" },
-          },
-        );
+        await replaceSessionEntry(voiceScope, {
+          sessionId: "host-session",
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: "another-person" },
+        });
       }
       const respond = await dispatch("talk.client.create", createParams);
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: restriction === "hidden" ? "INVALID_REQUEST" : "FORBIDDEN",
-        }),
-      );
+      expectRejected(respond, restriction === "hidden" ? "INVALID_REQUEST" : "FORBIDDEN");
       expect(createBrowserSession).not.toHaveBeenCalled();
       expect(mocks.bootstrap).not.toHaveBeenCalled();
     },
@@ -436,43 +403,35 @@ describe("Talk target preparation through Gateway authorization", () => {
     config = { ...config, talk: { agentId: "primary" } };
     setRuntimeConfigSnapshot(config);
     gate.resolve();
-    expect(await pending).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectRejected(await pending);
     for (const agentId of ["voice", "primary"]) {
       expect(loadSessionEntry({ agentId, sessionKey: `agent:${agentId}:main` })).toBeUndefined();
     }
   });
 
-  it.each([undefined])(
-    "passes the authorized %s target into relay creation",
-    async (sessionKey) => {
-      config.session = { scope: "global" };
-      const respond = await dispatch("talk.session.create", {
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        ...(sessionKey ? { sessionKey } : {}),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ sessionId: "test-relay" }),
-        undefined,
-      );
-      expect(mocks.createRelay).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionTarget: expect.objectContaining({
-            agentId: "voice",
-            canonicalKey: "global",
-            sessionKey: sessionKey ?? "agent:voice:main",
-          }),
+  it("passes the authorized omitted target into relay creation", async () => {
+    config.session = { scope: "global" };
+    const respond = await dispatch("talk.session.create", {
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionId: "test-relay" }),
+      undefined,
+    );
+    expect(mocks.createRelay).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionTarget: expect.objectContaining({
+          agentId: "voice",
+          canonicalKey: "global",
+          sessionKey: voiceScope.sessionKey,
         }),
-      );
-      expect(loadSessionEntry({ agentId: "voice", sessionKey: "global" })?.sessionId).toBeTruthy();
-    },
-  );
+      }),
+    );
+    expect(loadSessionEntry({ agentId: "voice", sessionKey: "global" })?.sessionId).toBeTruthy();
+  });
 
   it("keeps keyless transcription independent of Talk agent selection", async () => {
     delete config.talk;
@@ -491,22 +450,19 @@ describe("Talk target preparation through Gateway authorization", () => {
     );
     expect(mocks.bootstrap).not.toHaveBeenCalled();
     expect(createBrowserSession).not.toHaveBeenCalled();
-    expect(loadSessionEntry({ agentId: "voice", sessionKey: "agent:voice:main" })).toBeUndefined();
+    expect(loadSessionEntry(voiceScope)).toBeUndefined();
   });
 
   it.each(["sharing", "incognito", "replacement", "owner"] as const)(
     "rechecks %s after session preparation and before committing the voice call",
     async (change) => {
       if (change === "sharing") {
-        await replaceSessionEntry(
-          { agentId: "voice", sessionKey: "agent:voice:main" },
-          {
-            sessionId: "existing-shared-session",
-            updatedAt: 1,
-            visibility: "shared",
-            createdActor: { type: "human", source: "profile", id: "another-person" },
-          },
-        );
+        await replaceSessionEntry(voiceScope, {
+          sessionId: "existing-shared-session",
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: "another-person" },
+        });
       }
       const createVoice = clientVoiceSession.createOrResumeClientVoiceSession;
       let changedBeforeVoiceCommit = false;
@@ -539,11 +495,7 @@ describe("Talk target preparation through Gateway authorization", () => {
         voiceSessionId: "provisional",
       });
       expect(changedBeforeVoiceCommit).toBe(true);
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
+      expectRejected(respond);
       expect(clientVoiceSessionTesting.readRecord("voice", "provisional")).toBeUndefined();
       expect(cancelBrowserSession).toHaveBeenCalledOnce();
     },
@@ -562,14 +514,12 @@ describe("Talk target preparation through Gateway authorization", () => {
         },
       },
     };
-    expect(await dispatch("talk.client.create", createParams)).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining(browserSession),
-      undefined,
-    );
-    expect(
-      loadSessionEntry({ agentId: "voice", sessionKey: "agent:voice:main" })?.createdActor,
-    ).toEqual({ type: "human", source: "profile", id: client.authenticatedUserProfile?.profileId });
+    expectCreated(await dispatch("talk.client.create", createParams));
+    expect(loadSessionEntry(voiceScope)?.createdActor).toEqual({
+      type: "human",
+      source: "profile",
+      id: client.authenticatedUserProfile?.profileId,
+    });
   });
 
   it("rejects a default-owner change while profile preparation is awaited", async () => {
@@ -585,11 +535,7 @@ describe("Talk target preparation through Gateway authorization", () => {
     config = { ...config, talk: { agentId: "primary" } };
     setRuntimeConfigSnapshot(config);
     gate.resolve(undefined);
-    expect(await pending).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectRejected(await pending);
     for (const agentId of ["voice", "primary"]) {
       expect(loadSessionEntry({ agentId, sessionKey: `agent:${agentId}:main` })).toBeUndefined();
     }

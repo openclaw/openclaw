@@ -67,43 +67,23 @@ describe("realtime relay finalization", () => {
     await state.cleanup();
   });
   it.each([
-    { providerAsync: true, fails: false, changeState: false, createRecord: true },
-    { providerAsync: true, fails: true, changeState: false, createRecord: true },
-    { providerAsync: false, fails: false, changeState: false, createRecord: true },
-    { providerAsync: false, fails: true, changeState: false, createRecord: true },
-    { providerAsync: true, fails: false, changeState: true, createRecord: true },
-    { providerAsync: true, fails: false, changeState: true, createRecord: false },
-    { providerAsync: true, fails: false, changeState: true, createRecord: false, cold: true },
-    {
-      providerAsync: true,
-      fails: false,
-      changeState: true,
-      createRecord: true,
-      permitFails: true,
-    },
-    {
-      providerAsync: true,
-      fails: false,
-      changeState: true,
-      createRecord: false,
-      cold: true,
-      sourceFails: true,
-    },
-    {
-      providerAsync: true,
-      fails: false,
-      changeState: true,
-      createRecord: false,
-      cold: true,
-      silent: true,
-    },
+    {},
+    { fails: true },
+    { providerAsync: false },
+    { providerAsync: false, fails: true },
+    { changeState: true },
+    { changeState: true, createRecord: false },
+    { changeState: true, createRecord: false, cold: true },
+    { changeState: true, permitFails: true },
+    { changeState: true, createRecord: false, cold: true, sourceFails: true },
+    { changeState: true, createRecord: false, cold: true, silent: true },
   ])(
-    "settles relay close (async=$providerAsync, failure=$fails, changed state=$changeState, existing record=$createRecord, cold=$cold, silent=$silent, source failure=$sourceFails, permit failure=$permitFails)",
+    "settles relay close with overrides %j",
     async ({
-      providerAsync,
-      fails,
-      changeState,
-      createRecord,
+      providerAsync = true,
+      fails = false,
+      changeState = false,
+      createRecord = true,
       cold = false,
       silent = false,
       sourceFails = false,
@@ -127,12 +107,15 @@ describe("realtime relay finalization", () => {
       }
       const failure = new Error("provider cleanup failed");
       let request: RealtimeVoiceBridgeCreateRequest | undefined;
+      const finalTranscripts = () => {
+        request?.onTranscript?.("user", "check my task", true);
+        request?.onTranscript?.("assistant", "final words", true);
+      };
       const close = vi.fn(() => {
         if (providerAsync) {
           return completion.promise;
         }
-        request?.onTranscript?.("user", "check my task", true);
-        request?.onTranscript?.("assistant", "final words", true);
+        finalTranscripts();
         if (fails) {
           throw failure;
         }
@@ -221,8 +204,7 @@ describe("realtime relay finalization", () => {
             setTestEnvValue("OPENCLAW_STATE_DIR", successorStateDir);
           }
           if (!silent) {
-            request?.onTranscript?.("user", "check my task", true);
-            request?.onTranscript?.("assistant", "final words", true);
+            finalTranscripts();
           }
         } finally {
           env.restore();
@@ -279,19 +261,13 @@ describe("realtime relay finalization", () => {
         silent || sourceFails || permitFails
           ? []
           : [
+              ["user", "check my task"],
+              ["assistant", "final words"],
+            ].map(([role, text]) =>
               expect.objectContaining({
-                message: expect.objectContaining({
-                  role: "user",
-                  content: [{ type: "text", text: "check my task" }],
-                }),
+                message: expect.objectContaining({ role, content: [{ type: "text", text }] }),
               }),
-              expect.objectContaining({
-                message: expect.objectContaining({
-                  role: "assistant",
-                  content: [{ type: "text", text: "final words" }],
-                }),
-              }),
-            ],
+            ),
       );
       if (successorStateDir) {
         expect(
