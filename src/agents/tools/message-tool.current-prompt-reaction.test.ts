@@ -16,9 +16,9 @@ import { listSessionReactions } from "../../config/sessions/session-reaction-sto
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCurrentPromptReaction } from "../../gateway/current-prompt-reaction.js";
 import {
-  resolveMessageActionTurnAuthorization,
-  resolveMessageActionTurnCapability,
-  revokeMessageActionTurnCapability,
+  resolveMessageActionTurnAuthorization as authorization,
+  resolveMessageActionTurnCapability as capability,
+  revokeMessageActionTurnCapability as revoke,
 } from "../../gateway/message-action-turn-capability.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -29,7 +29,7 @@ import {
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission as prepareRun } from "../admitted-run-context.js";
 import { createCodeModeTools, applyCodeModeCatalog } from "../code-mode.js";
 import { isDeliveredMessageToolOnlySourceReplyResult } from "../embedded-agent-message-tool-source-reply.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
@@ -49,15 +49,15 @@ const EXTERNAL_TARGET = {
 };
 type Recorder = ReturnType<typeof createUserTurnTranscriptRecorder>;
 type ToolOptions = NonNullable<Parameters<typeof createMessageTool>[0]>;
-function required<T>(value: T | undefined, message: string): T {
+function required<T>(value: T | undefined): T {
   if (value === undefined) {
-    throw new Error(message);
+    throw new Error("Expected fixture value");
   }
   return value;
 }
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
-let run: ReturnType<typeof prepareSystemAgentRunAdmission>;
+let run: ReturnType<typeof prepareRun>;
 let recorder: Recorder;
 let caller: ReturnType<typeof createAdmittedGatewayToolCallerIdentity>;
 let scope: { agentId: string; sessionKey: string; sessionId: string };
@@ -96,13 +96,13 @@ beforeEach(async () => {
   });
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   recorder = prompt("Please check this", { id: "human", name: "Human" });
-  run = prepareSystemAgentRunAdmission(config, runId, scope.agentId, "reaction-test");
+  run = prepareRun(config, runId, scope.agentId, "reaction-test");
   caller = await admitCaller(run);
   bindSource(recorder);
   token = mintForRecorder(recorder, runId);
 });
 afterEach(() => {
-  revokeMessageActionTurnCapability(token);
+  revoke(token);
   run.close();
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
@@ -173,7 +173,7 @@ function mintTurn(
 }
 
 function mintForRecorder(input: Recorder, executionRunId: string) {
-  return required(mintTurn(input, executionRunId), "Expected a recorder-owned reaction capability");
+  return required(mintTurn(input, executionRunId));
 }
 
 function tool(overrides: ToolOptions = {}) {
@@ -204,7 +204,7 @@ function execute(args: Record<string, unknown>, selected = tool(), identity = ca
 }
 async function persist() {
   await recorder.persistApproved();
-  return required(recorder.getAdmissionReceipt(), "fixture prompt was not committed").entryId;
+  return required(recorder.getAdmissionReceipt()).entryId;
 }
 
 function expectNoReaction(sessionId = scope.sessionId) {
@@ -217,10 +217,15 @@ function reactions(sessionId = scope.sessionId) {
   return listSessionReactions(scope, { sessionId });
 }
 
-function prompt(text: string, sender?: { id: string; name: string }) {
+function prompt(
+  text: string,
+  sender?: { id: string; name: string },
+  pendingInputSources?: Recorder[],
+) {
   return createUserTurnTranscriptRecorder({
     input: { text, ...(sender && { sender }) },
     target: { ...scope, sessionEntry: undefined },
+    pendingInputSources,
   });
 }
 
@@ -249,7 +254,7 @@ it.each(["webchat", "discord"])(
     });
     expect(definition(nextRun)).toBe(definition(admitted));
     expect(Check(nextRun.parameters, { action: "react", emoji: "👍" })).toBe(true);
-    revokeMessageActionTurnCapability(token);
+    revoke(token);
     expect(definition(tool({ currentChannelProvider }))).toBe(definition(admitted));
     expect(external).not.toHaveBeenCalled();
   },
@@ -393,15 +398,15 @@ it("rolls back a reaction when its capability expires at SQLite commit", async (
   await persist();
   const selected = tool();
   const lookup = { ...scope, runId, token };
-  const serializedContext = resolveMessageActionTurnCapability(lookup);
+  const serializedContext = capability(lookup);
   expect(serializedContext).not.toHaveProperty("currentPromptReaction");
   expect(() => structuredClone(serializedContext)).not.toThrow();
-  expect(resolveMessageActionTurnAuthorization(lookup)).not.toHaveProperty("currentPromptReaction");
+  expect(authorization(lookup)).not.toHaveProperty("currentPromptReaction");
   let commitRequests = 0;
   const probe = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
     if (request.stage === "commit") {
       commitRequests++;
-      revokeMessageActionTurnCapability(token);
+      revoke(token);
     }
     return admit(request, grant);
   });
@@ -416,7 +421,7 @@ it("rolls back a reaction when its capability expires at SQLite commit", async (
 
 it.each([
   ["run close", () => run.close()],
-  ["revocation", () => revokeMessageActionTurnCapability(token)],
+  ["revocation", () => revoke(token)],
   ["expiry", () => vi.spyOn(Date, "now").mockReturnValue(Number.MAX_SAFE_INTEGER)],
 ] as const)("fences retained tools after %s", async (_reason, invalidate) => {
   await persist();
@@ -437,21 +442,14 @@ it("binds queued execution to its own recorder and new run without inheriting re
   await queued.persistApproved();
   const queuedId = queued.getAdmissionReceipt()?.entryId;
   const queuedRunId = runId + "-queued";
-  const queuedAdmission = prepareSystemAgentRunAdmission(
-    config,
-    queuedRunId,
-    scope.agentId,
-    "queued-reaction-test",
-  );
+  const queuedAdmission = prepareRun(config, queuedRunId, scope.agentId, "queued-reaction-test");
   const queuedCaller = await admitCaller(queuedAdmission);
   expect(mintTurn(queued, queuedRunId, {}, true)).toBeUndefined();
   const queuedToken = mintForRecorder(queued, queuedRunId);
   try {
+    expect(capability({ ...scope, runId: queuedRunId, token })).toBeUndefined();
     expect(
-      resolveMessageActionTurnCapability({ ...scope, runId: queuedRunId, token }),
-    ).toBeUndefined();
-    expect(
-      resolveMessageActionTurnAuthorization({ ...scope, runId: queuedRunId, token: queuedToken })
+      authorization({ ...scope, runId: queuedRunId, token: queuedToken })
         ?.assertDashboardReadCurrent,
     ).toBeUndefined();
     const selected = tool({ runId: queuedRunId, messageActionTurnCapability: queuedToken });
@@ -463,7 +461,7 @@ it("binds queued execution to its own recorder and new run without inheriting re
       "Original prompt authority revoked",
     );
   } finally {
-    revokeMessageActionTurnCapability(queuedToken);
+    revoke(queuedToken);
     queuedAdmission.close();
   }
 });
@@ -471,11 +469,7 @@ it("binds queued execution to its own recorder and new run without inheriting re
 it("retains authenticated source custody when the queue collects inputs", async () => {
   const second = prompt("Second");
   bindSource(second);
-  const collected = createUserTurnTranscriptRecorder({
-    input: { text: "Collected input" },
-    target: { ...scope, sessionEntry: undefined },
-    pendingInputSources: [recorder, second],
-  });
+  const collected = prompt("Collected input", undefined, [recorder, second]);
   expect(readUserTurnPromptReactionSource(collected)).toBeDefined();
   await collected.persistApproved();
   const collectedToken = mintForRecorder(collected, runId);
@@ -486,7 +480,7 @@ it("retains authenticated source custody when the queue collects inputs", async 
       changed: true,
     });
   } finally {
-    revokeMessageActionTurnCapability(collectedToken);
+    revoke(collectedToken);
   }
 });
 
@@ -499,8 +493,8 @@ it("moves a retained tool to a steered prompt only after native transcript consu
   await execute({}, selected);
   expect(reactions()[originalId]).toBeDefined();
   expect(steered.getAdmissionReceipt()).toBeUndefined();
-  const prepared = required(await steered.resolveMessage(), "Expected prepared steering message");
-  const original = required(recorder.getAdmissionReceipt(), "Expected original committed prompt");
+  const prepared = required(await steered.resolveMessage());
+  const original = required(recorder.getAdmissionReceipt());
   const target = { ...scope, storePath: original.storePath };
   const manager = guardSessionManager(await SessionManager.openAsync(target, state.workspaceDir), {
     ...scope,

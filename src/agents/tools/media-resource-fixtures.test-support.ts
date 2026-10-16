@@ -1,23 +1,47 @@
 import { vi } from "vitest";
-import { admitMediaHandle } from "../media-generation-activity.test-support.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  admitMediaHandle,
+  resetGeneratedMediaTaskActivityForTests,
+} from "../media-generation-activity.test-support.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import { prepareConfiguredRuntimeFacts } from "../prepared-model-runtime.configured-catalog.js";
 import type { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import type { imageGenerationTaskLifecycle } from "./media-generate-background.js";
 
-export function waitForMediaPhase(phase: Promise<unknown>, work: Promise<unknown>) {
+export function phase() {
+  const entered = createDeferredCore();
+  const released = createDeferredCore();
+  return {
+    entered: entered.promise,
+    release: () => released.resolve(),
+    pause: async () => {
+      entered.resolve();
+      await released.promise;
+    },
+  };
+}
+
+export function waitForPhase(entered: Promise<unknown>, work: Promise<unknown>) {
   return Promise.race([
-    phase,
+    entered,
     work.then(() => {
       throw new Error("Media work settled before the expected phase");
     }),
   ]);
 }
 
-export function mediaResourceSnapshot(
-  prepared: Awaited<ReturnType<typeof prepareWorkspaceBuildGroup>>,
-) {
+export function reset() {
+  vi.restoreAllMocks();
+  resetRecentMediaGenerationDuplicateGuardsForTests();
+  resetGeneratedMediaTaskActivityForTests();
+  clearPluginMetadataLifecycleCaches();
+}
+
+export function snapshot(prepared: Awaited<ReturnType<typeof prepareWorkspaceBuildGroup>>) {
   const facts = prepared.agentFacts[0]!;
   const catalog = prepareConfiguredRuntimeFacts({
     agentFacts: facts,
@@ -41,7 +65,7 @@ export function mediaResourceSnapshot(
   });
 }
 
-export function mockAdmittedMediaTask(
+export function admitTask(
   lifecycle: typeof imageGenerationTaskLifecycle,
   requesterSessionKey: string,
 ) {
