@@ -42,6 +42,8 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
   let stopGateway: (() => void) | undefined;
   let retiredHello: ApplicationGateway["snapshot"]["hello"] | undefined;
 
+  let cancelCapture: (() => void) | undefined;
+
   function subscribe(listener: () => void): () => void {
     listeners.add(listener);
     return () => listeners.delete(listener);
@@ -55,7 +57,19 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
 
   function connect(): void {
     store.connect();
+    const flush = () => flushCapture();
+    const hide = () => {
+      if (document.visibilityState === "hidden") {
+        flush();
+      }
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", hide);
     cleanup = [
+      () => {
+        window.removeEventListener("pagehide", flush);
+        document.removeEventListener("visibilitychange", hide);
+      },
       subscribeSnapshotInvalidation((event) => {
         if (scope && sidebarSnapshotInvalidationMatches(sidebarSnapshotScopeKey(scope), event)) {
           clearDisplay();
@@ -152,6 +166,27 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
   }
 
   function capture(): void {
+    if (!cleanup.length || cancelCapture) {
+      return;
+    }
+    // Coalesce live events before building the projection, not just before the IDB write.
+    const timer = globalThis.setTimeout(() => {
+      if (typeof globalThis.requestIdleCallback === "function") {
+        const idle = globalThis.requestIdleCallback(() => flushCapture(), { timeout: 1000 });
+        cancelCapture = () => globalThis.cancelIdleCallback(idle);
+      } else {
+        flushCapture();
+      }
+    }, 500);
+    cancelCapture = () => globalThis.clearTimeout(timer);
+  }
+
+  function flushCapture(): void {
+    if (!cancelCapture) {
+      return;
+    }
+    cancelCapture();
+    cancelCapture = undefined;
     if (
       !cleanup.length ||
       pending ||
@@ -225,6 +260,8 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
   }
 
   function clearDisplay(): void {
+    cancelCapture?.();
+    cancelCapture = undefined;
     generation += 1;
     pending = saved = false;
     serialized = null;

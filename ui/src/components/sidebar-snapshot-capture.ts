@@ -11,19 +11,22 @@ import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import {
-  parseSidebarSnapshot,
   snapshotSections,
   snapshotSessions,
   type SidebarSnapshotModel,
 } from "./sidebar-snapshot-model.ts";
 
-function displayUser(user: AuthenticatedUser | null | undefined) {
-  return user
-    ? {
-        ...user,
-        identity: user.identity?.type === "profile" ? user.identity : undefined,
-      }
-    : null;
+function displayUser(user: AuthenticatedUser) {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    avatarUrl: user.avatarUrl,
+    identity:
+      user.identity?.type === "profile"
+        ? { type: "profile" as const, id: user.identity.id }
+        : undefined,
+  };
 }
 
 export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
@@ -99,7 +102,7 @@ export function captureSidebarSnapshotModel(
     snapshotSubtitle: resolveSidebarSessionRowSubtitle(host, row),
   });
   const sessions = snapshotSessions(rows, presentation);
-  return parseSidebarSnapshot({
+  return {
     routingDefaults: {
       mainKey: agents.mainKey,
       scope: agents.scope,
@@ -128,7 +131,15 @@ export function captureSidebarSnapshotModel(
     }),
     sessions,
     ...snapshotSections(sections, host.collapsedSessionSections, presentation),
-    cards: roster.cards,
+    cards: roster.cards.map(({ id, name, mainKey, avatar, textAvatar, role, model }) => ({
+      id,
+      name,
+      mainKey,
+      avatar,
+      textAvatar,
+      role,
+      model,
+    })),
     collapsedAgentIds:
       loadSettings(context.gateway.connection.gatewayUrl).sidebarCollapsedAgentIds ?? [],
     plugins,
@@ -149,7 +160,9 @@ export function captureSidebarSnapshotModel(
       .map(profilePresenceViewer),
     ownerId: host.sessionOwnerFilterId,
     involvingMe: host.sessionInvolvingMeFilterActive,
-    footer: displayUser(context.gateway.snapshot.selfUser),
+    footer: context.gateway.snapshot.selfUser
+      ? displayUser(context.gateway.snapshot.selfUser)
+      : null,
     brand: readSidebarBrandPresentation(host),
-  });
+  };
 }
