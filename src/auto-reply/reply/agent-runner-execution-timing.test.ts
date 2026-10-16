@@ -21,6 +21,7 @@ import {
 } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
+const executeAgentTurn = await getRawExecuteAgentTurnForTest();
 type TranscriptStart = Awaited<
   ReturnType<typeof transcriptWatermarks.readSessionTranscriptStartAsync>
 >;
@@ -35,7 +36,6 @@ const transcriptStartFor = (generation: string, maxSeq = 11) => ({
 const completed = (text = "done") => ({ payloads: [{ text }], meta: {} });
 
 it("settles the turn's attribution before model-routing hooks run", async () => {
-  const executeAgentTurn = await getRawExecuteAgentTurnForTest();
   const capture = createDeferred();
   const entered = createDeferred();
   const hook = vi.fn(async () => undefined);
@@ -70,7 +70,6 @@ it("settles the turn's attribution before model-routing hooks run", async () => 
 });
 
 it("announces a remote native run before its worker starts writing replies", async () => {
-  const executeAgentTurn = await getRawExecuteAgentTurnForTest();
   const onAgentRunStart = vi.fn();
   const finishObservation = vi.fn(() => {
     throw new Error("synthetic timing sink failure");
@@ -86,17 +85,15 @@ it("announces a remote native run before its worker starts writing replies", asy
   const prepare = vi
     .spyOn(transcriptWatermarks, "readSessionTranscriptStartAsync")
     .mockResolvedValue(transcriptStart);
-  let startsBeforeReply = -1;
   state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
     await params.onExecutionStarted?.({ backend: "cloud-worker" });
     params.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
-    startsBeforeReply = onAgentRunStart.mock.calls.length;
+    expect(onAgentRunStart).toHaveBeenCalledOnce();
     return completed("worker answer");
   });
   try {
     const result = await executeAgentTurn(turn);
     expect(result.outcome.kind).toBe("settled");
-    expect(startsBeforeReply).toBe(1);
     expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(transcriptStart);
     expect(finishObservation).toHaveBeenCalledOnce();
   } finally {
@@ -107,7 +104,6 @@ it("announces a remote native run before its worker starts writing replies", asy
 it.each(["settled", "pending"] as const)(
   "uses the starting fallback candidate's facts after a prior %s preparation",
   async (preparationState) => {
-    const executeAgentTurn = await getRawExecuteAgentTurnForTest();
     const onAgentRunStart = vi.fn();
     const fallbackModel = "claude-opus-4-6";
     const pendingObservations = new Set<number>();
@@ -140,9 +136,8 @@ it.each(["settled", "pending"] as const)(
       .mockResolvedValue(currentStart);
     const preparationFailure = new Error("candidate failed before visible execution");
     let retiredEvent = Promise.resolve();
-    let startsBeforeCurrentPhase = -1;
-    state.runEmbeddedAgentMock.mockImplementationOnce(
-      async (params: RunEmbeddedAgentInternalParams) => {
+    state.runEmbeddedAgentMock
+      .mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
         if (preparationState === "pending") {
           retiredEvent = Promise.resolve(
             params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } }),
@@ -152,20 +147,17 @@ it.each(["settled", "pending"] as const)(
           await params.onExecutionStarted?.();
         }
         throw preparationFailure;
-      },
-    );
-    state.runEmbeddedAgentMock.mockImplementationOnce(
-      async (params: RunEmbeddedAgentInternalParams) => {
+      })
+      .mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
         const currentPreparation = params.onExecutionStarted?.();
         expect([...pendingObservations]).toEqual(preparationState === "pending" ? [1, 2] : [2]);
         retiredRead.resolve(priorStart);
         await retiredEvent;
         await currentPreparation;
-        startsBeforeCurrentPhase = onAgentRunStart.mock.calls.length;
+        expect(onAgentRunStart).not.toHaveBeenCalled();
         params.onExecutionPhase?.({ phase: "model_call_started" });
         return completed();
-      },
-    );
+      });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       await expect(
         params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
@@ -184,7 +176,6 @@ it.each(["settled", "pending"] as const)(
     try {
       const result = await executeAgentTurn(turn);
       expect(result.outcome.kind).toBe("settled");
-      expect(startsBeforeCurrentPhase).toBe(0);
       expect(onAgentRunStart).toHaveBeenCalledTimes(1);
       expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(currentStart);
       expect(pendingObservations.size).toBe(0);
@@ -196,7 +187,6 @@ it.each(["settled", "pending"] as const)(
 );
 
 it("keeps native start facts when an earlier event's preparation settles late", async () => {
-  const executeAgentTurn = await getRawExecuteAgentTurnForTest();
   const onAgentRunStart = vi.fn();
   const entered = createDeferred();
   const fallback = createDeferred<TranscriptStart>();
@@ -235,7 +225,6 @@ it("keeps native start facts when an earlier event's preparation settles late", 
 it.each(["embedded preparation", "fallback preparation"])(
   "times %s failure between successful turns without borrowing the previous start",
   async (failureBoundary) => {
-    const executeAgentTurn = await getRawExecuteAgentTurnForTest();
     let now = 1_000_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     const session: InternalSessionEntry = { sessionId: "session", updatedAt: now };

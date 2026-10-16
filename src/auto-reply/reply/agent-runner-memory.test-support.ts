@@ -1,17 +1,38 @@
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
-import type { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
+import type { ModelFallbackRunOptions } from "../../agents/model-fallback-attempt.js";
+import type { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import type { MemoryFlushPlan } from "../../plugins/registry-contribution-types.js";
-import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 
 export type { RunEmbeddedAgentInternalParams as EmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 export type { CompactEmbeddedAgentSessionRuntimeParams as CompactEmbeddedAgentSessionParams } from "../../agents/embedded-agent-runner/compact.types.js";
+
+export function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId: "session", updatedAt: Date.now(), ...overrides };
+}
+
+export function createFreshSessionEntry(overrides: Partial<SessionEntry>): SessionEntry {
+  return createSessionEntry({ totalTokensFresh: true, totalTokensVersion: 1, ...overrides });
+}
+
+export function createFlushSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return createFreshSessionEntry({ totalTokens: 80_000, compactionCount: 1, ...overrides });
+}
+
+export function modelRoutingProvenance(
+  requestedProvider: string,
+  requestedModel: string,
+  stage: ModelFallbackAttemptProvenance["stage"] = "initial",
+): ModelFallbackAttemptProvenance {
+  return { requestedProvider, requestedModel, stage };
+}
 
 export async function seedMemoryAccountingTranscript(
   scope: SessionTranscriptRuntimeTarget,
@@ -27,30 +48,28 @@ export async function seedMemoryAccountingTranscript(
     __openclaw: { senderIsOwner: true },
   };
   transcript.appendMessage(user);
-  const networkResult = {
-    role: "toolResult" as const,
+  transcript.appendMessage({
+    role: "toolResult",
     toolCallId: "network-read",
     toolName: "read",
     isError: false,
-    content: [{ type: "text" as const, text: "untrusted page" }],
+    content: [{ type: "text", text: "untrusted page" }],
     timestamp: 2,
-    __openclaw: { resultContentSource: "network" as const },
-  };
-  transcript.appendMessage(networkResult);
-  const answer = {
-    ...makeAssistantMessageFixture({
+    __openclaw: { resultContentSource: "network" },
+  });
+  transcript.appendMessage(
+    makeAssistantMessageFixture({
       content: [{ type: "text", text: "network-derived answer" }],
       stopReason: "stop",
       errorMessage: undefined,
+      usage: {
+        ...makeAssistantMessageFixture().usage,
+        input: 78_000,
+        output: 100,
+        totalTokens: 78_100,
+      },
     }),
-    usage: {
-      ...makeAssistantMessageFixture().usage,
-      input: 78_000,
-      output: 100,
-      totalTokens: 78_100,
-    },
-  };
-  transcript.appendMessage(answer);
+  );
   if (newUser) {
     transcript.appendMessage({ ...user, content: "Save my own notes", timestamp: 3 });
   }
@@ -77,66 +96,42 @@ export function createModifiedMemoryFlushPlan(overrides: Partial<FileFlushPlan>)
   return { ...createMemoryFlushPlan(), ...overrides };
 }
 
-export type ModelFallbackParams = {
-  provider?: string;
-  model?: string;
-  abortSignal?: AbortSignal;
-  agentId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  fallbacksOverride?: unknown[];
-  requestedRouteResolution?: "raw" | "resolved";
-  userLockedAuthProfileId?: string;
-  resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
-  prepareAgentHarnessRuntime?: (params: {
-    provider: string;
-    model: string;
-    agentHarnessRuntimeOverride?: string;
-  }) => Promise<void> | void;
+export type ModelFallbackParams = Omit<
+  Parameters<typeof runWithModelFallback<EmbeddedAgentRunResult>>[0],
+  "run"
+> & {
   run: (
     provider: string,
     model: string,
-    options: {
-      allowTransientCooldownProbe?: boolean;
-      isFinalFallbackAttempt?: boolean;
-      modelRoutingProvenance: ModelFallbackAttemptProvenance;
-    },
+    options: ModelFallbackRunOptions,
   ) => Promise<EmbeddedAgentRunResult>;
 };
 
-export function createMemoryRunEntryMockImplementation(deps: {
-  runWithModelFallback: (params: ModelFallbackParams) => Promise<unknown>;
-  ensureSelectedAgentHarnessPlugin: typeof ensureSelectedAgentHarnessPlugin;
-}) {
+export async function runInitialMemoryFallback({ provider, model, run }: ModelFallbackParams) {
+  return {
+    result: await run(provider, model, {
+      modelRoutingProvenance: modelRoutingProvenance(provider, model),
+    }),
+    provider,
+    model,
+    attempts: [],
+  };
+}
+
+type MemoryFallbackResult = Awaited<ReturnType<typeof runInitialMemoryFallback>> & {
+  outcome?: "completed" | "exhausted";
+};
+
+export function createMemoryRunEntryMockImplementation(
+  runWithModelFallback: (params: ModelFallbackParams) => Promise<MemoryFallbackResult>,
+) {
   return async (params: Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0]) => {
     const assistantErrorTranscript = createAssistantErrorTranscript();
-    const fallbackResult = (await deps.runWithModelFallback({
+    const fallbackResult = await runWithModelFallback({
       ...params.selection,
       ...params.identity,
       abortSignal: params.abortSignal,
-      resolveAgentHarnessRuntimeOverride: params.harness.resolveRuntimeOverride,
-      prepareAgentHarnessRuntime: async ({
-        provider,
-        model,
-        agentHarnessRuntimeOverride,
-      }: {
-        provider: string;
-        model: string;
-        agentHarnessRuntimeOverride?: string;
-      }) => {
-        await deps.ensureSelectedAgentHarnessPlugin({
-          config: params.selection.cfg,
-          provider,
-          modelId: model,
-          agentId: params.identity.agentId,
-          sessionKey: params.harness.sessionKey,
-          agentHarnessId: agentHarnessRuntimeOverride,
-          agentHarnessRuntimeOverride,
-          workspaceDir: params.harness.workspaceDir,
-          pluginRegistry: requireActivePluginRegistry(),
-        });
-      },
-      run: (provider: string, model: string, options: Parameters<ModelFallbackParams["run"]>[2]) =>
+      run: (provider, model, options) =>
         params.runCandidate(provider, model, {
           agentHarnessRuntimeOverride: params.harness.resolveRuntimeOverride(provider, model),
           assistantErrorTranscript,
@@ -148,13 +143,7 @@ export function createMemoryRunEntryMockImplementation(deps: {
           contextEngineLogicalTurnLease: {} as never,
           onContextEngineTurnCandidate: () => {},
         }),
-    })) as {
-      outcome?: "completed" | "exhausted";
-      result: EmbeddedAgentRunResult;
-      provider: string;
-      model: string;
-      attempts: [];
-    };
+    });
     return {
       ...fallbackResult,
       outcome: fallbackResult.outcome ?? ("completed" as const),

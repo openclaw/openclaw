@@ -516,6 +516,9 @@ describe("runMemoryFlushIfNeeded", () => {
         model: "fallback",
         attempts: [],
       };
+      sessionStore,
+      sessionKey,
+      storePath,
     });
     const result = await runDefaultMemoryFlush(sessionEntry, {
       followupRun: {
@@ -527,9 +530,6 @@ describe("runMemoryFlushIfNeeded", () => {
         }),
         operatorAuthority,
       },
-      sessionStore,
-      sessionKey,
-      storePath,
     });
     expect(result.outcome).toBe("completed");
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
@@ -607,13 +607,13 @@ describe("runMemoryFlushIfNeeded", () => {
         },
       ],
       meta: {},
+      sessionStore,
+      storePath,
     });
     const followupRun = createTestFollowupRun();
 
     const result = await runDefaultMemoryFlush(sessionEntry, {
       followupRun,
-      sessionStore,
-      storePath,
     });
 
     expect(requireModelFallbackCall().userLockedAuthProfileId).toBeUndefined();
@@ -723,12 +723,12 @@ describe("runMemoryFlushIfNeeded", () => {
   it("marks flush as completed after MAX_FLUSH_FAILURES to break retry loop", async () => {
     const { sessionEntry, storePath } = await storedFlush({
       memoryFlush: { kind: "failed", failureCount: TEST_MAX_FLUSH_FAILURES - 1 },
+      storePath,
     });
     runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider crashed during flush"));
 
     const result = await runDefaultMemoryFlush(sessionEntry, {
       defaultModel: "anthropic/claude-opus-4-7",
-      storePath,
     });
 
     const persisted = loadMainSessionEntry(storePath);
@@ -1921,6 +1921,7 @@ describe("runMemoryFlushIfNeeded", () => {
       model: "claude-opus-4-6",
       sessionId: "session",
       sessionKey,
+      replyOperation: createReplyOperation(),
     });
 
     const flushResult = await runDefaultMemoryFlush(sessionEntry, {
@@ -1928,7 +1929,6 @@ describe("runMemoryFlushIfNeeded", () => {
       followupRun,
       sessionKey,
       storePath,
-      replyOperation: createReplyOperation(),
     });
     const preflightEntry = await runDefaultPreflight(sessionEntry, {
       cfg,
