@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../src/state/openclaw-state-schema.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
@@ -173,28 +173,26 @@ function writeHistoricalCopiedStateFixture(stateDir: string): void {
   }
 }
 
-describe("doctor copied-state migration", () => {
-  it(
-    "repairs the retained 2026.6.1-beta.1 shared state before gateway readiness",
-    { timeout: 180_000 },
-    async () => {
-      const instance = await createOpenClawTestInstance({ name: "doctor-copied-state" });
-      try {
-        writeHistoricalCopiedStateFixture(instance.stateDir);
+it(
+  "repairs the retained 2026.6.1-beta.1 shared state before gateway readiness",
+  { timeout: 180_000 },
+  async () => {
+    const instance = await createOpenClawTestInstance({ name: "doctor-copied-state" });
+    try {
+      writeHistoricalCopiedStateFixture(instance.stateDir);
 
-        const doctor = await instance.cli(
-          ["doctor", "--fix", "--non-interactive", "--yes", "--no-workspace-suggestions"],
-          { timeoutMs: 120_000 },
-        );
+      const doctor = await instance.cli(
+        ["doctor", "--fix", "--non-interactive", "--yes", "--no-workspace-suggestions"],
+        { timeoutMs: 120_000 },
+      );
 
-        expect(doctor.code, `${doctor.stdout}\n${doctor.stderr}`).toBe(0);
-        expect(`${doctor.stdout}\n${doctor.stderr}`).not.toContain(
-          "Failed migrating shared state database schema",
-        );
-        await instance.startGateway();
-      } finally {
-        await instance.cleanup();
-      }
-    },
-  );
-});
+      expect(doctor.code, `${doctor.stdout}\n${doctor.stderr}`).toBe(0);
+      expect(`${doctor.stdout}\n${doctor.stderr}`).not.toContain(
+        "Failed migrating shared state database schema",
+      );
+      await instance.startGateway();
+    } finally {
+      await instance.cleanup();
+    }
+  },
+);

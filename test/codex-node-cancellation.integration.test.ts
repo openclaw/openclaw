@@ -33,6 +33,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
 });
 
 const tempDirs: string[] = [];
+const wait = <T>(work: PromiseLike<T>, message: string) => withTestTimeout(work, 5_000, message);
 
 afterEach(async () => {
   resetPluginRuntimeStateForTest();
@@ -56,9 +57,7 @@ describe.skipIf(skipBrokerTests)("registered Codex node cancellation settlement"
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
     const pluginConfig = { sessionCatalog: { enabled: false } };
-    const config = {
-      plugins: { entries: { codex: { enabled: true, config: pluginConfig } } },
-    };
+    const config = { plugins: { entries: { codex: { enabled: true, config: pluginConfig } } } };
     const registry = createPluginRegistry({
       runtime: createPluginRuntimeMock({ config: { current: () => config } }),
       logger: { info() {}, warn() {}, error() {}, debug() {} },
@@ -91,6 +90,13 @@ describe.skipIf(skipBrokerTests)("registered Codex node cancellation settlement"
     const remotes: Array<ReturnType<SpawnBrokerHost["spawnExeca"]>> = [];
     const invocations: Promise<unknown>[] = [];
     const failures: unknown[] = [];
+    const retainFailure = async (work: () => Promise<unknown>) => {
+      try {
+        await work();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
     let brokerStopped = false;
     const resumeBroker = () => {
       if (brokerStopped && broker.pid !== undefined) {
@@ -154,16 +160,14 @@ describe.skipIf(skipBrokerTests)("registered Codex node cancellation settlement"
         (value) => ({ kind: "resolved" as const, value }),
         (error: unknown) => ({ kind: "rejected" as const, error }),
       );
-      const remote = await withTestTimeout(
+      const remote = await wait(
         remoteRequested.promise,
-        5_000,
         "registered command did not reach the broker",
       );
       expect(remote.child.pid).toBeUndefined();
       controller.abort(new Error("node invocation canceled"));
-      await withTestTimeout(
+      await wait(
         bufferedReturned.promise,
-        5_000,
         "buffered execution did not expose its bounded cancellation result",
       );
       expect(
@@ -172,20 +176,14 @@ describe.skipIf(skipBrokerTests)("registered Codex node cancellation settlement"
       await expect(invoke("retry")).rejects.toThrow("already has an active resume turn");
 
       resumeBroker();
-      await withTestTimeout(remote.child.waitForClose(), 5_000, "late native child did not close");
+      await wait(remote.child.waitForClose(), "late native child did not close");
       expect(remote.child.pid).toBeDefined();
       expect(isPidDefinitelyDead(remote.child.pid!)).toBe(true);
-      expect(
-        await withTestTimeout(outcome, 5_000, "registered cancellation did not settle"),
-      ).toMatchObject({
+      expect(await wait(outcome, "registered cancellation did not settle")).toMatchObject({
         kind: "rejected",
         error: { message: "node invocation canceled" },
       });
-      const retry = await withTestTimeout(
-        invoke("retry"),
-        5_000,
-        "session remained reserved after cleanup",
-      );
+      const retry = await wait(invoke("retry"), "session remained reserved after cleanup");
       expect(JSON.parse(retry ?? "null")).toMatchObject({
         ok: true,
         sessionId: "cleanup-fixture-session",
@@ -195,46 +193,26 @@ describe.skipIf(skipBrokerTests)("registered Codex node cancellation settlement"
       failures.push(error);
     } finally {
       controller.abort();
-      try {
+      await retainFailure(async () => {
         resumeBroker();
         const cleanup = await Promise.allSettled(
           remotes.map(async (remote) => {
-            await withTestTimeout(
-              remote.child.ready(),
-              5_000,
-              "cleanup could not obtain late PID",
-            ).catch(() => undefined);
-            remote.child.kill("SIGKILL");
-            await withTestTimeout(remote.result, 5_000, "fixture process did not settle").catch(
+            await wait(remote.child.ready(), "cleanup could not obtain late PID").catch(
               () => undefined,
             );
-            await withTestTimeout(
-              remote.child.waitForClose(),
-              5_000,
-              "fixture child did not close",
-            );
+            remote.child.kill("SIGKILL");
+            await wait(remote.result, "fixture process did not settle").catch(() => undefined);
+            await wait(remote.child.waitForClose(), "fixture child did not close");
           }),
         );
         failures.push(
           ...cleanup.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
         );
-      } catch (error) {
-        failures.push(error);
-      }
-      try {
-        await broker.close();
-      } catch (error) {
-        failures.push(error);
-      }
-      try {
-        await withTestTimeout(
-          Promise.allSettled(invocations),
-          5_000,
-          "registered invocations did not settle",
-        );
-      } catch (error) {
-        failures.push(error);
-      }
+      });
+      await retainFailure(() => broker.close());
+      await retainFailure(() =>
+        wait(Promise.allSettled(invocations), "registered invocations did not settle"),
+      );
     }
     if (failures.length > 0) {
       throw new AggregateError(failures, "registered cancellation fixture failed");

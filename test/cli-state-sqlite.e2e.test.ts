@@ -1,4 +1,3 @@
-// SQLite CLI E2E tests cover startup and target ownership before offline maintenance.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -108,17 +107,9 @@ describe("SQLite CLI maintenance ownership", () => {
       const result = runDoctorCli(["--state-sqlite", "compact", "--json"], env);
 
       expect(result.status, result.stderr || result.stdout).toBe(0);
-      const report = JSON.parse(result.stdout.trim()) as {
-        after: { autoVacuum: number; freelistPages: number };
-        before: { freelistPages: number };
-        integrityCheck: string;
-        skipped: boolean;
-      };
+      const report = JSON.parse(result.stdout.trim()) as { before: { freelistPages: number } };
       expect(report).toMatchObject({
-        after: {
-          autoVacuum: 2,
-          freelistPages: 0,
-        },
+        after: { autoVacuum: 2, freelistPages: 0 },
         integrityCheck: "ok",
         skipped: false,
       });
@@ -127,41 +118,69 @@ describe("SQLite CLI maintenance ownership", () => {
     });
   }, 90_000);
 
-  it.skipIf(process.platform === "win32")(
-    "rejects hard-linked shared-state SQLite sidecars before compaction",
-    async () => {
-      await withCliHome("openclaw-state-sqlite-sidecar-cli-", async (tempHome, _stateDir, env) => {
-        const database = openOpenClawStateDatabase({ env });
-        const walPath = `${database.path}-wal`;
-        const externalWalPath = path.join(tempHome, "external-state", "openclaw.sqlite-wal");
-        try {
-          seedCommittedWal(database);
-          fs.mkdirSync(path.dirname(externalWalPath), { recursive: true });
-          fs.linkSync(walPath, externalWalPath);
-          const externalWalBefore = fs.readFileSync(externalWalPath);
-          expect(externalWalBefore.byteLength).toBeGreaterThan(0);
-
-          const result = runDoctorCli(["--state-sqlite", "compact", "--json"], env);
-
-          expectRejected(result, "hard-linked path");
-          expect(fs.readFileSync(externalWalPath)).toEqual(externalWalBefore);
-        } finally {
-          closeOpenClawStateDatabase();
-        }
-      });
+  describe.each(["shared-state", "configured-session"] as const)(
+    "%s sidecar ownership",
+    (owner) => {
+      it.skipIf(owner === "shared-state" && process.platform === "win32")(
+        "rejects hard-linked WALs before destructive maintenance",
+        async () => {
+          await withCliHome("openclaw-sidecar-cli-", async (tempHome, stateDir, baseEnv) => {
+            const shared = owner === "shared-state";
+            const storePath = path.join(tempHome, "external-sessions", "sessions.json");
+            const sqlitePath = path.join(path.dirname(storePath), "openclaw-agent.sqlite");
+            const configPath = path.join(stateDir, "openclaw.json");
+            if (!shared) {
+              fs.mkdirSync(path.dirname(storePath), { recursive: true });
+              fs.mkdirSync(stateDir, { recursive: true });
+              fs.writeFileSync(storePath, "{}\n", "utf8");
+              fs.writeFileSync(
+                configPath,
+                JSON.stringify({ session: { store: storePath } }),
+                "utf8",
+              );
+            }
+            const env = shared ? baseEnv : { ...baseEnv, OPENCLAW_CONFIG_PATH: configPath };
+            const database = shared
+              ? openOpenClawStateDatabase({ env })
+              : openOpenClawAgentDatabase({ agentId: "main", env, path: sqlitePath });
+            const externalWalPath = path.join(
+              tempHome,
+              "external-alias",
+              path.basename(database.path) + "-wal",
+            );
+            try {
+              seedCommittedWal(database);
+              fs.mkdirSync(path.dirname(externalWalPath), { recursive: true });
+              fs.linkSync(`${database.path}-wal`, externalWalPath);
+              const before = fs.readFileSync(externalWalPath);
+              expect(before.byteLength).toBeGreaterThan(0);
+              expectRejected(
+                runDoctorCli(
+                  [shared ? "--state-sqlite" : "--session-sqlite", "compact", "--json"],
+                  env,
+                ),
+                "hard-linked path",
+              );
+              expect(fs.readFileSync(externalWalPath)).toEqual(before);
+            } finally {
+              if (shared) {
+                closeOpenClawStateDatabase();
+              } else {
+                closeOpenClawAgentDatabaseByPath(sqlitePath);
+              }
+            }
+          });
+        },
+        90_000,
+      );
     },
-    90_000,
   );
 
   it("rejects destructive explicit session stores outside the active state owner", async () => {
     await withCliHome("openclaw-session-sqlite-cli-", async (tempHome, _stateDir, env) => {
       const externalStorePath = path.join(
         tempHome,
-        "external-state",
-        "agents",
-        "main",
-        "sessions",
-        "sessions.json",
+        "external-state/agents/main/sessions/sessions.json",
       );
 
       const result = runDoctorCli(
@@ -174,100 +193,42 @@ describe("SQLite CLI maintenance ownership", () => {
     });
   }, 90_000);
 
-  it("rejects hard-linked SQLite sidecars before destructive maintenance", async () => {
-    await withCliHome("openclaw-session-sqlite-sidecar-cli-", async (tempHome, stateDir, env) => {
-      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-      const sqlitePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-      const externalWalPath = path.join(tempHome, "external-state", "openclaw-agent.sqlite-wal");
-      fs.mkdirSync(path.dirname(storePath), { recursive: true });
-      fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
-      fs.mkdirSync(path.dirname(externalWalPath), { recursive: true });
-      fs.writeFileSync(storePath, "{}\n", "utf8");
-      fs.writeFileSync(externalWalPath, "external wal\n", "utf8");
-      fs.linkSync(externalWalPath, `${sqlitePath}-wal`);
-
-      const result = runDoctorCli(
-        ["--session-sqlite", "compact", "--session-sqlite-store", storePath, "--json"],
-        env,
-      );
-
-      expectRejected(result, "hard-linked path");
-      expect(fs.readFileSync(externalWalPath, "utf8")).toBe("external wal\n");
-    });
-  }, 90_000);
-
-  it.skipIf(process.platform === "win32")(
-    "rejects symbolic-linked SQLite sidecars before destructive maintenance",
-    async () => {
-      await withCliHome(
-        "openclaw-session-sqlite-symlink-sidecar-cli-",
-        async (_tempHome, stateDir, env) => {
-          const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-          const sqlitePath = path.join(
-            stateDir,
-            "agents",
-            "main",
-            "agent",
-            "openclaw-agent.sqlite",
-          );
-          const targetPath = path.join(stateDir, "agents", "main", "agent", "sidecar-target");
-          fs.mkdirSync(path.dirname(storePath), { recursive: true });
-          fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
-          fs.writeFileSync(storePath, "{}\n", "utf8");
-          fs.writeFileSync(targetPath, "owned target\n", "utf8");
-          fs.symlinkSync(targetPath, `${sqlitePath}-wal`);
-
-          const result = runDoctorCli(
-            ["--session-sqlite", "compact", "--session-sqlite-store", storePath, "--json"],
-            env,
-          );
-
-          expectRejected(result, "symbolic-link path");
-          expect(fs.readFileSync(targetPath, "utf8")).toBe("owned target\n");
-        },
-      );
-    },
-    90_000,
-  );
-
-  it("rejects hard-linked SQLite sidecars discovered through configured session stores", async () => {
-    await withTempHome(
-      async (tempHome) => {
-        const stateDir = path.join(tempHome, ".openclaw");
-        const storePath = path.join(tempHome, "external-sessions", "sessions.json");
-        const sqlitePath = path.join(path.dirname(storePath), "openclaw-agent.sqlite");
-        const externalWalPath = path.join(tempHome, "external-alias", "openclaw-agent.sqlite-wal");
-        const configPath = path.join(stateDir, "openclaw.json");
-        fs.mkdirSync(path.dirname(storePath), { recursive: true });
-        fs.mkdirSync(path.dirname(externalWalPath), { recursive: true });
-        fs.mkdirSync(stateDir, { recursive: true });
-        fs.writeFileSync(storePath, "{}\n", "utf8");
-        fs.writeFileSync(configPath, JSON.stringify({ session: { store: storePath } }), "utf8");
-        const env = cliEnv(tempHome, { OPENCLAW_CONFIG_PATH: configPath });
-
-        const database = openOpenClawAgentDatabase({
-          agentId: "main",
-          env,
-          path: sqlitePath,
-        });
-        const walPath = `${sqlitePath}-wal`;
-        try {
-          seedCommittedWal(database);
-          fs.linkSync(walPath, externalWalPath);
-          const externalWalBefore = fs.readFileSync(externalWalPath);
-          expect(externalWalBefore.byteLength).toBeGreaterThan(0);
-
-          const result = runDoctorCli(["--session-sqlite", "compact", "--json"], env);
-
-          expectRejected(result, "hard-linked path");
-          expect(fs.readFileSync(externalWalPath)).toEqual(externalWalBefore);
-        } finally {
-          closeOpenClawAgentDatabaseByPath(sqlitePath);
-        }
+  describe.each(["hard", "symbolic"] as const)("%s-linked session sidecars", (link) => {
+    it.skipIf(link === "symbolic" && process.platform === "win32")(
+      "rejects destructive maintenance without changing the target",
+      async () => {
+        await withCliHome(
+          "openclaw-session-sqlite-sidecar-cli-",
+          async (tempHome, stateDir, env) => {
+            const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+            const agentDir = path.join(stateDir, "agents", "main", "agent");
+            const sqlitePath = path.join(agentDir, "openclaw-agent.sqlite");
+            const targetPath =
+              link === "hard"
+                ? path.join(tempHome, "external-state", "openclaw-agent.sqlite-wal")
+                : path.join(agentDir, "sidecar-target");
+            const contents = link === "hard" ? "external wal\n" : "owned target\n";
+            fs.mkdirSync(path.dirname(storePath), { recursive: true });
+            fs.mkdirSync(agentDir, { recursive: true });
+            fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+            fs.writeFileSync(storePath, "{}\n", "utf8");
+            fs.writeFileSync(targetPath, contents, "utf8");
+            const linkSidecar = link === "hard" ? fs.linkSync : fs.symlinkSync;
+            linkSidecar(targetPath, `${sqlitePath}-wal`);
+            expectRejected(
+              runDoctorCli(
+                ["--session-sqlite", "compact", "--session-sqlite-store", storePath, "--json"],
+                env,
+              ),
+              `${link === "hard" ? "hard-linked" : "symbolic-link"} path`,
+            );
+            expect(fs.readFileSync(targetPath, "utf8")).toBe(contents);
+          },
+        );
       },
-      { prefix: "openclaw-configured-session-sqlite-sidecar-cli-" },
+      90_000,
     );
-  }, 90_000);
+  });
 
   it.skipIf(process.platform === "win32")(
     "keeps Git backup failures useful through the shipped CLI",

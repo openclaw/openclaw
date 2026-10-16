@@ -24,6 +24,7 @@ import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 it("lets admitted TypeSafe work finish after opt-out while preserving independent final-I/O guards", async () => {
   const loading = createDeferredCore();
   const release = createDeferredCore();
+  const proposed = { status: "proposed", shouldPruneTools: true };
   // Prepare the real client outside the request deadline; suspend only its lazy import.
   const original = await vi.importActual("../extensions/typesafe/src/client.js");
   vi.doMock("../extensions/typesafe/src/client.js", async () => {
@@ -54,12 +55,13 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
         });
       }),
   });
-  const config = (decisionAssistance: boolean): OpenClawConfig => ({
-    agents: {
-      defaults: { experimental: { decisionAssistance }, decisionModel: "typesafe/kev-latest" },
-    },
+  const config = (
+    decisionAssistance: boolean,
+    { hostname = "localhost", decisionModel = "typesafe/kev-latest" } = {},
+  ): OpenClawConfig => ({
+    agents: { defaults: { experimental: { decisionAssistance }, decisionModel } },
     plugins: {
-      entries: { typesafe: { config: { baseUrl: "http://localhost:" + server.claim.port } } },
+      entries: { typesafe: { config: { baseUrl: `http://${hostname}:${server.claim.port}` } } },
     },
   });
   const builder = createTestPluginRegistry(
@@ -67,6 +69,10 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
       config: { current: () => getRuntimeConfigSnapshot() ?? config(true) },
     }),
   );
+  const publish = (cfg: OpenClawConfig) => {
+    setRuntimeConfigSnapshot(cfg);
+    return cfg;
+  };
   const record = createPluginRecord({
     id: "typesafe",
     source: "/bundled/typesafe/index.ts",
@@ -101,8 +107,7 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     );
     builder.registry.plugins.push(record);
     setActivePluginRegistry(builder.registry);
-    const initial = config(true);
-    setRuntimeConfigSnapshot(initial);
+    const initial = publish(config(true));
     // Keep host policy initialization outside the 500 ms consumer budget;
     // the suspended import and DNS below exercise admission, not cold setup.
     resolveProviderHttpRequestConfigWithOriginTrust({
@@ -112,29 +117,16 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     });
     const pending = turn(initial);
     await loading.promise;
-    const disabledConfig = config(false);
-    setRuntimeConfigSnapshot(disabledConfig);
+    const disabledConfig = publish(config(false));
     release.resolve();
     const admitted = await pending;
     const admittedRequests = requests;
     const skipped = await turn(disabledConfig);
     expect(skipped).toMatchObject({ status: "skipped", shouldPruneTools: false });
     expect(requests).toBe(admittedRequests);
-    const allowedConfig = config(true);
-    setRuntimeConfigSnapshot(allowedConfig);
-    const allowed = await turn(allowedConfig);
-    console.info(
-      JSON.stringify({
-        admittedRequests,
-        allowedRequests: requests - admittedRequests,
-        admitted: admitted.status,
-        nextTurn: skipped.status,
-        allowed: allowed.status,
-      }),
-    );
-    expect(allowed).toMatchObject({ status: "proposed", shouldPruneTools: true });
+    expect(await turn(publish(config(true)))).toMatchObject(proposed);
     expect(requests - admittedRequests).toBe(1);
-    expect(admitted).toMatchObject({ status: "proposed", shouldPruneTools: true });
+    expect(admitted).toMatchObject(proposed);
     expect(admittedRequests).toBe(1);
 
     // Hold real DNS preparation. Labs opt-out permits admitted I/O; independent
@@ -144,8 +136,7 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     for (const change of ["optout", "model", "authority", "provider-config", "secrets"] as const) {
       const resolving = createDeferredCore();
       const resolved = createDeferredCore();
-      setRuntimeConfigSnapshot(config(true));
-      const localConfig = getRuntimeConfigSnapshot()!;
+      const localConfig = publish(config(true));
       const before = requests;
       const originalError = new Error("synthetic authority closed");
       const intercepted = vi
@@ -183,38 +174,23 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
         if (change === "authority") {
           authorityError = originalError;
         } else if (change === "provider-config") {
-          setRuntimeConfigSnapshot({
-            ...localConfig,
-            plugins: {
-              entries: {
-                typesafe: { config: { baseUrl: "http://127.0.0.1:" + server.claim.port } },
-              },
-            },
-          });
+          setRuntimeConfigSnapshot(config(true, { hostname: "127.0.0.1" }));
         } else if (change === "secrets") {
           clearSecretsRuntimeSnapshotState();
           setRuntimeConfigSnapshot(localConfig);
         } else {
-          setRuntimeConfigSnapshot({
-            ...localConfig,
-            agents: {
-              defaults: {
-                ...localConfig.agents!.defaults,
-                ...(change === "model"
-                  ? { decisionModel: "typesafe/changed-model" }
-                  : { experimental: { decisionAssistance: false } }),
-              },
-            },
-          });
+          setRuntimeConfigSnapshot(
+            change === "model"
+              ? config(true, { decisionModel: "typesafe/changed-model" })
+              : config(false),
+          );
         }
         resolved.resolve();
         const outcome = await captured;
         if (change === "authority") {
           expect(outcome).toEqual({ error: originalError });
         } else if (change === "optout") {
-          expect(outcome).toMatchObject({
-            result: { status: "proposed", shouldPruneTools: true },
-          });
+          expect(outcome).toMatchObject({ result: proposed });
         } else {
           expect(outcome).toMatchObject({
             result: {
@@ -232,18 +208,13 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
             activeRequests: 0,
           });
         }
-        console.info(
-          JSON.stringify({ preparationRevocation: change, requests: requests - before }),
-        );
       } finally {
         resolved.resolve();
         authorityError = undefined;
         intercepted.mockRestore();
       }
     }
-    const optedOut = config(false);
-    setRuntimeConfigSnapshot(optedOut);
-    const explicit = createDecisionTool("main", { config: optedOut });
+    const explicit = createDecisionTool("main", { config: publish(config(false)) });
     expect(explicit).not.toBeNull();
     const beforeExplicit = requests;
     const evaluation = await explicit!.execute("explicit", {
@@ -255,7 +226,6 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     });
     expect(evaluation.details).toMatchObject({ status: "ok" });
     expect(requests - beforeExplicit).toBe(1);
-    console.info(JSON.stringify({ explicitLabsOffRequests: requests - beforeExplicit }));
   } finally {
     release.resolve();
     prepareDecisionProviderReload(builder.registry, new Set([record.id]));

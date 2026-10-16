@@ -44,14 +44,33 @@ const channels = [current, sibling].map((id) => ({
 }));
 const voice = { guild_id: guildId, user_id: userId, channel_id: sibling, session_id: "fixture" };
 const events = [{ id: "100000000000000006", guild_id: guildId, name: "Planning" }];
+const getRequest = (path: string) => ({ method: "GET", path });
+const activeThreadsPath = `/guilds/${guildId}/threads/active`;
+const thread = (id: string, parent_id: string, name: string) => ({
+  id,
+  type: guildPublicThreadType,
+  guild_id: guildId,
+  parent_id,
+  name,
+});
+const allowedThread = thread(allowedThreadId, current, "Allowed thread");
+
+function metadataRead(
+  action: ChannelMessageActionContext["action"],
+  gate: keyof DiscordActionConfig,
+  path: string,
+  result: unknown,
+  params: Record<string, unknown> = { guildId },
+) {
+  return { action, gate, path, result, params };
+}
 
 const metadataReads = [
-  {
-    action: "permissions",
-    gate: "permissions",
-    params: { channelId: sibling },
-    path: "/users/%40me",
-    result: {
+  metadataRead(
+    "permissions",
+    "permissions",
+    "/users/%40me",
+    {
       ok: true,
       permissions: {
         channelId: sibling,
@@ -62,62 +81,36 @@ const metadataReads = [
         channelType: 0,
       },
     },
-  },
-  {
-    action: "member-info",
-    gate: "memberInfo",
-    params: { guildId, userId },
-    path: `/guilds/${guildId}/members/${userId}`,
-    result: { ok: true, member },
-  },
-  {
-    action: "role-info",
-    gate: "roleInfo",
-    params: { guildId },
-    path: `/guilds/${guildId}/roles`,
-    result: { ok: true, roles: [role] },
-  },
-  {
-    action: "emoji-list",
-    gate: "reactions",
-    params: { guildId },
-    path: `/guilds/${guildId}/emojis`,
-    result: {
-      ok: true,
-      emojis: [
-        { name: "alpha", identifier: "alpha:1", animated: true },
-        { name: "beta", identifier: "beta:2" },
-      ],
-    },
-  },
-  {
-    action: "channel-list",
-    gate: "channelInfo",
-    params: { guildId },
-    path: `/guilds/${guildId}/channels`,
-    result: { ok: true, channels },
-  },
-  {
-    action: "voice-status",
-    gate: "voiceStatus",
-    params: { guildId, userId },
-    path: `/guilds/${guildId}/voice-states/${userId}`,
-    result: { ok: true, voice },
-  },
-  {
-    action: "event-list",
-    gate: "events",
-    params: { guildId },
-    path: `/guilds/${guildId}/scheduled-events`,
-    result: { ok: true, events },
-  },
-] satisfies Array<{
-  action: ChannelMessageActionContext["action"];
-  gate: keyof DiscordActionConfig;
-  params: Record<string, unknown>;
-  path: string;
-  result: unknown;
-}>;
+    { channelId: sibling },
+  ),
+  metadataRead(
+    "member-info",
+    "memberInfo",
+    `/guilds/${guildId}/members/${userId}`,
+    { ok: true, member },
+    { guildId, userId },
+  ),
+  metadataRead("role-info", "roleInfo", `/guilds/${guildId}/roles`, { ok: true, roles: [role] }),
+  metadataRead("emoji-list", "reactions", `/guilds/${guildId}/emojis`, {
+    ok: true,
+    emojis: [
+      { name: "alpha", identifier: "alpha:1", animated: true },
+      { name: "beta", identifier: "beta:2" },
+    ],
+  }),
+  metadataRead("channel-list", "channelInfo", `/guilds/${guildId}/channels`, {
+    ok: true,
+    channels,
+  }),
+  metadataRead(
+    "voice-status",
+    "voiceStatus",
+    `/guilds/${guildId}/voice-states/${userId}`,
+    { ok: true, voice },
+    { guildId, userId },
+  ),
+  metadataRead("event-list", "events", `/guilds/${guildId}/scheduled-events`, { ok: true, events }),
+];
 
 async function createFixture() {
   const discord: DiscordConfig = {
@@ -170,32 +163,14 @@ async function createFixture() {
     ],
     [`/guilds/${guildId}/channels`, { body: channels }],
     [
-      `/guilds/${guildId}/threads/active`,
+      activeThreadsPath,
       {
         body: {
           threads: [
-            {
-              id: allowedThreadId,
-              type: guildPublicThreadType,
-              guild_id: guildId,
-              parent_id: current,
-              name: "Allowed thread",
-            },
-            {
-              id: siblingThreadId,
-              type: guildPublicThreadType,
-              guild_id: guildId,
-              parent_id: sibling,
-              name: "Sibling thread",
-            },
+            allowedThread,
+            thread(siblingThreadId, sibling, "Sibling thread"),
             { id: unknownThreadId, name: "Unknown parent" },
-            {
-              id: deniedThreadId,
-              type: guildPublicThreadType,
-              guild_id: guildId,
-              parent_id: current,
-              name: "Disabled child thread",
-            },
+            thread(deniedThreadId, current, "Disabled child thread"),
             {
               id: missingGuildThreadId,
               type: guildPublicThreadType,
@@ -334,10 +309,7 @@ describe("registered Discord metadata reads", () => {
     };
   };
   const expectNoActiveInventory = () => {
-    expect(fixture.requests).not.toContainEqual({
-      method: "GET",
-      path: `/guilds/${guildId}/threads/active`,
-    });
+    expect(fixture.requests).not.toContainEqual(getRequest(activeThreadsPath));
   };
   beforeEach(async () => {
     fixture = await createFixture();
@@ -357,29 +329,12 @@ describe("registered Discord metadata reads", () => {
       const result = await dispatch("thread-list", { guildId, channelId });
       expect(result?.details).toMatchObject({ ok: true, returnedCount: 1 });
       expect((result?.details as { threads?: unknown })?.threads).toEqual({
-        threads: [
-          {
-            id: allowedThreadId,
-            type: guildPublicThreadType,
-            guild_id: guildId,
-            parent_id: current,
-            name: "Allowed thread",
-          },
-        ],
+        threads: [allowedThread],
         members: [{ id: allowedThreadId }],
       });
-      expect(fixture.requests).toContainEqual({
-        method: "GET",
-        path: `/guilds/${guildId}/threads/active`,
-      });
-      expect(fixture.requests).not.toContainEqual({
-        method: "GET",
-        path: `/channels/${allowedThreadId}`,
-      });
-      expect(fixture.requests).not.toContainEqual({
-        method: "GET",
-        path: `/channels/${deniedThreadId}`,
-      });
+      expect(fixture.requests).toContainEqual(getRequest(activeThreadsPath));
+      expect(fixture.requests).not.toContainEqual(getRequest(`/channels/${allowedThreadId}`));
+      expect(fixture.requests).not.toContainEqual(getRequest(`/channels/${deniedThreadId}`));
       expect(fixture.requests.every((request) => request.method === "GET")).toBe(true);
     },
   );
@@ -392,35 +347,29 @@ describe("registered Discord metadata reads", () => {
     expectNoActiveInventory();
   });
 
-  it("rejects malformed active inventory rather than returning unfiltered data", async () => {
-    allowCurrentThreads();
-    fixture.routes.set(`/guilds/${guildId}/threads/active`, {
-      body: { threads: [{ id: allowedThreadId, parent_id: current }] },
-    });
-
-    await expect(dispatch("thread-list", { guildId, channelId: current })).rejects.toThrow(
-      "Unexpected Discord response for active thread list.",
-    );
-  });
-
-  it.each(["unavailable", "mismatched"])(
-    "rejects %s parent metadata before fetching the guild inventory",
+  it.each(["malformed", "unavailable", "mismatched"])(
+    "rejects %s active-thread metadata",
     async (metadata) => {
-      fixture.discord.guilds = {
-        [guildId]: { channels: { [current]: { enabled: true } } },
-      };
+      allowCurrentThreads();
       if (metadata === "unavailable") {
         fixture.routes.delete(`/channels/${current}`);
       } else {
-        fixture.routes.set(`/channels/${current}`, {
-          body: { ...channels[0], guild_id: sibling },
+        fixture.routes.set(metadata === "malformed" ? activeThreadsPath : `/channels/${current}`, {
+          body:
+            metadata === "malformed"
+              ? { threads: [{ id: allowedThreadId, parent_id: current }] }
+              : { ...channels[0], guild_id: sibling },
         });
       }
 
       await expect(dispatch("thread-list", { guildId, channelId: current })).rejects.toThrow(
-        "Discord active thread parent metadata is unavailable.",
+        metadata === "malformed"
+          ? "Unexpected Discord response for active thread list."
+          : "Discord active thread parent metadata is unavailable.",
       );
-      expectNoActiveInventory();
+      if (metadata !== "malformed") {
+        expectNoActiveInventory();
+      }
     },
   );
 
@@ -452,12 +401,7 @@ describe("registered Discord metadata reads", () => {
         `channel:${dmId}`,
         mismatch === "account"
           ? { requesterAccountId: "other" }
-          : {
-              toolContext: {
-                ...fixture.dmContext.toolContext,
-                currentChannelProvider: "slack",
-              },
-            },
+          : { toolContext: { ...fixture.dmContext.toolContext, currentChannelProvider: "slack" } },
       ),
     ).rejects.toThrow("exact current conversation");
     expect(fixture.requests).toEqual([]);
@@ -602,9 +546,7 @@ describe("registered Discord metadata reads", () => {
       dispatch(
         "role-info",
         { guildId, conversationReadOrigin: "direct-operator" },
-        {
-          toolContext: { currentChannelProvider: "discord" },
-        },
+        { toolContext: { currentChannelProvider: "discord" } },
       ),
     ).rejects.toThrow("current provider and account context");
     expect(fixture.requests).toEqual([]);
