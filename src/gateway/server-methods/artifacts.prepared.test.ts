@@ -214,7 +214,7 @@ it("keeps disconnected managed reads current for session visibility and profile 
               reader: {
                 agents: "*" as const,
                 sessions: { others: "view" as const },
-                scopes: ["operator.read"],
+                scopes: ["operator.sessions.read"],
               },
               denied: { agents: "*" as const, sessions: { others: "none" as const }, scopes: [] },
             },
@@ -322,7 +322,7 @@ it("keeps disconnected managed reads current for session visibility and profile 
           connections.push(connection);
           const client = createOperatorWsClient({
             connId: `managed-${change}`,
-            scopes: ["operator.read"],
+            scopes: ["operator.sessions.read"],
             socket: { close: vi.fn() },
           });
           client.connectionSignal = connection.signal;
