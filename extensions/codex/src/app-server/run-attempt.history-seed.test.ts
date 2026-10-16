@@ -3,7 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
-import { buildCodexSelectedHistoryItems } from "./context-engine-history.js";
+import { buildCodexSelectedHistoryItems } from "./context-engine-history-items.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
 import {
   assistantMessage,
