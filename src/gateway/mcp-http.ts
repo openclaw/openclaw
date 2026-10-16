@@ -35,6 +35,7 @@ import {
   registerMcpLoopbackClientGrantRevocationListener,
   revokeMcpLoopbackClientGrantsForRuntime,
 } from "./mcp-grant-store.js";
+import { resolveMcpLoopbackInstructions } from "./mcp-http.instructions.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
   getActiveMcpLoopbackRuntime,
@@ -353,6 +354,11 @@ async function startMcpLoopbackServer(
             stopKeepalive = keepMcpResponseAlive(res, "application/json", "\n");
           }
           const responses: object[] = [];
+          const serverInstructions = resolveMcpLoopbackInstructions({
+            sessionId: requestContext.sessionId,
+            sessionKey: requestContext.sessionKey,
+            tools: scopedTools.tools,
+          });
           for (const [messageIndex, message] of messages.entries()) {
             if (!isJsonRpcRequest(message)) {
               responses.push(
@@ -383,6 +389,7 @@ async function startMcpLoopbackServer(
                   message,
                   tools: scopedTools.tools,
                   toolSchema: scopedTools.toolSchema,
+                  ...(serverInstructions ? { serverInstructions } : {}),
                   hookContext: {
                     agentId: scopedTools.agentId,
                     config: cfg,

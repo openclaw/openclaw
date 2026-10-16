@@ -41,6 +41,8 @@ export type McpServerCatalog = {
   marketplace?: string;
   title?: string;
   icons?: McpAppIcon[];
+  /** Server-level usage guidance from the upstream initialize result (sanitized). */
+  instructions?: string;
   settings?: McpAppSettingsCapability;
   toolCount: number;
   resources?: {
