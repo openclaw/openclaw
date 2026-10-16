@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
+import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
@@ -184,6 +185,7 @@ export async function cancelRequesterSettleWake(
               rearmGeneration: wake.rearmGeneration,
             });
           }
+          revokeGoalContinuationReturn(published);
           releaseRequesterSettleWakeBatch(context, [published], wake.rearmGeneration);
         },
       },
@@ -509,7 +511,7 @@ export function scheduleRequesterSettleWake(
                       outcome,
                     );
                     if (committed) {
-                      onCommitted?.();
+                      await onCommitted?.();
                     }
                     return committed;
                   },

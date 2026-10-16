@@ -8,6 +8,7 @@ import {
 } from "../../../routing/session-key.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { removeQueuedItemsByRef } from "../../../utils/queue-helpers.js";
+import { revokeGoalContinuationReturns } from "../goal-continuation-return.js";
 import { clearFollowupDrainCallback } from "./drain.js";
 import { completeFollowupRuns } from "./lifecycle.js";
 import { FOLLOWUP_QUEUES, followupQueueSources } from "./state.js";
@@ -105,7 +106,13 @@ export function prepareSessionFollowupCleanup(params: {
       return 0;
     }
     consumed = true;
-    let removed = 0;
+    let removed = revokeGoalContinuationReturns((source) => {
+      if (!matchesSessionFollowupRun(source, { ...params, sessionId })) {
+        return false;
+      }
+      params.assertCurrent();
+      return true;
+    });
     for (const key of keys) {
       params.assertCurrent();
       const queue = FOLLOWUP_QUEUES.get(key);

@@ -204,7 +204,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
           }
         },
       });
-      onCommitted?.();
+      await onCommitted?.();
     });
     return {
       completeBatch,

@@ -154,8 +154,8 @@ describe("requester settle dispatch deadline", () => {
       expect(completeBatch).toHaveBeenCalledWith([child], 1, delivered, expect.any(Function));
       expect(append).not.toHaveBeenCalled();
       const onCommitted = completeBatch.mock.calls[0]![3]!;
-      onCommitted();
-      onCommitted();
+      await onCommitted();
+      await onCommitted();
       expect(append).toHaveBeenCalledExactlyOnceWith(delivered.finalAssistantVisibleText);
       await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(false);
       expect(deliver).toHaveBeenCalledOnce();
@@ -545,9 +545,9 @@ describe("requester settle dispatch deadline", () => {
     deliver.mockImplementation(sendSubagentAnnounceDirectly);
     const completeBatch = vi.fn<
       Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0]["completeBatch"]
-    >((_batch, _generation, _delivery, onCommitted) => {
+    >(async (_batch, _generation, _delivery, onCommitted) => {
       child.requesterSettleWake = undefined;
-      onCommitted?.();
+      await onCommitted?.();
     });
     const wakeParams = {
       isSourceCurrent: () => true,

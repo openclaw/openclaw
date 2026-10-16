@@ -204,7 +204,7 @@ it.each([false, true])(
               }
             },
           });
-          onCommitted?.();
+          await onCommitted?.();
         },
       }),
     ).toBe(false);

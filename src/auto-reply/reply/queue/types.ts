@@ -172,7 +172,7 @@ export type FollowupRun = {
     settle: (accepted: boolean) => void;
   };
   /** Internal Goal nudge; admission must still observe this exact active Goal. */
-  goalContinuation?: import("../goal-continuation.js").GoalContinuation;
+  goalContinuation?: import("../goal-continuation.types.js").GoalContinuation;
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
   /** This continuation owes last-resort feedback if it also stalls, including claimed input. */

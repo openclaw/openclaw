@@ -1,8 +1,10 @@
+import { finishGoalContinuationSettlement } from "../../../auto-reply/reply/goal-continuation-return.js";
 import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
 import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import { finalizeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
@@ -17,7 +19,7 @@ export type RequesterSettleWakeBatchCallbacks = {
     batch: readonly SubagentRunRecord[],
     rearmGeneration?: number,
     delivery?: SubagentAnnounceDeliveryResult,
-    onCommitted?: () => void,
+    onCommitted?: () => void | Promise<void>,
   ) => void | Promise<void>;
 };
 
@@ -209,4 +211,40 @@ export function resolveRequesterSettlePolicy(
   // requester choose silence.
   const requireVisibleReply = requesterYielded && !hasPrivateRows;
   return { privateRows, requireVisibleReply, parentOnly, requesterBinding, admissionMarker };
+}
+
+/** One claim owns terminal batch publication and its same-process reply/Goal returns. */
+export function createRequesterSettleBatchCompletion(params: {
+  claim: () => boolean;
+  complete: RequesterSettleWakeBatchCallbacks["completeBatch"];
+  requesterAgentId: string | undefined;
+  requesterSessionKey: string;
+  pause: boolean;
+}) {
+  return async (
+    batch: readonly SubagentRunRecord[],
+    state: RequesterSettleWakeBatchState,
+    delivery?: SubagentAnnounceDeliveryResult,
+    requesterSessionId?: string,
+  ): Promise<void> => {
+    if (!params.claim()) {
+      return;
+    }
+    await params.complete(batch, state.rearmGeneration, delivery, async () => {
+      finalizeRequesterFinalAttachment({
+        requesterAgentId: params.requesterAgentId,
+        requesterSessionKey: params.requesterSessionKey,
+        requesterSessionId,
+        batchRunIds: batch.map((entry) => entry.runId).toSorted(),
+        rearmGeneration: state.rearmGeneration,
+        requesterYieldBatch: state.requesterYieldBatch,
+        pause: params.pause,
+        delivered: delivery?.delivered,
+        finalAssistantVisibleText: delivery?.finalAssistantVisibleText,
+      });
+      if (!params.pause) {
+        await finishGoalContinuationSettlement(batch, delivery?.delivered === true);
+      }
+    });
+  };
 }

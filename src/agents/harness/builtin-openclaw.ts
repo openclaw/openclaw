@@ -1,3 +1,4 @@
+import { readGoalContinuationContext } from "../../auto-reply/reply/goal-continuation-return.js";
 import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runHostPreparedIsolatedCompletion } from "../host-prepared-isolated-completion.js";
@@ -85,11 +86,18 @@ export function createOpenClawAgentHarness(): AgentHarnessV2 {
   const harness: AgentHarnessV2 = {
     ...BUILTIN_AGENT_HARNESS_METADATA,
     supportsTurnScopedToolRestrictions: true,
-    runAttempt: (params) =>
-      runEmbeddedAttempt({
+    runAttempt: (params) => {
+      const currentInboundContext = readGoalContinuationContext({
+        runId: params.runId,
+        sessionKey: params.sessionKey,
+        currentInboundContext: params.currentInboundContext,
+      });
+      return runEmbeddedAttempt({
         ...(params as EmbeddedRunAttemptParams),
+        ...(currentInboundContext ? { currentInboundContext } : {}),
         supportsTurnScopedToolRestrictions: harnessSupportsTurnScopedToolRestrictions(harness),
-      }),
+      });
+    },
     runIsolatedCompletionV2: runHostPreparedIsolatedCompletion,
     finalizeSettledTurn: async ({ attempt }) => {
       // Preserve only transcript/model transport state. The operation-specific

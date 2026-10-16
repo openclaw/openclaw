@@ -39,6 +39,10 @@ import type {
   RespondFn,
 } from "./server-methods/types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import {
+  registerGoalChildSettlementCases,
+  waitForGoalChatModelRun,
+} from "./server.chat-goal-child-settlement.test-support.js";
 import { registerGoalAutomaticContinuationCases } from "./server.chat-goal-continuation.test-support.js";
 import {
   createGoalChatStartRequest,
@@ -85,12 +89,26 @@ const client: GatewayClient = {
 };
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let context: GatewayRequestContext;
+let suiteContext: GatewayRequestContext;
 let storePath: string;
 let modelStarted = createDeferred();
 let modelRelease: Promise<void> = Promise.resolve();
 
 beforeAll(async () => {
-  harness = await createGatewaySuiteHarness();
+  const kernelModule = await import("./server-kernel.js");
+  const createKernel = kernelModule.createGatewayKernel;
+  const capture = vi
+    .spyOn(kernelModule, "createGatewayKernel")
+    .mockImplementation(async (...args) => {
+      const kernel = await createKernel(...args);
+      suiteContext = kernel.gatewayRequestContext;
+      return kernel;
+    });
+  try {
+    harness = await createGatewaySuiteHarness();
+  } finally {
+    capture.mockRestore();
+  }
 });
 
 afterAll(async () => {
@@ -219,49 +237,25 @@ function expectNoDispatch() {
 }
 
 async function waitForModelRun(count = 1) {
-  await Promise.race([
-    modelStarted.promise,
-    getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] }),
-  ]);
-  expect(context.logGateway.error).not.toHaveBeenCalled();
-  let failureDiagnostic: string | undefined;
-  if (runEmbeddedAgent.mock.calls.length !== count) {
-    const entry = loadSessionEntry(scope());
-    failureDiagnostic = JSON.stringify({
-      warningCount: vi.mocked(context.logGateway.warn).mock.calls.length,
-      abortControllers: context.chatAbortControllers.size,
-      admissionScopes: [...sessionLifecycle.collectActiveSessionWorkAdmissions()]
-        .filter(([, identities]) => identities.has(sessionKey))
-        .slice(0, 5)
-        .map(([activeScope, identities]) => ({
-          file: path.basename(activeScope),
-          matchesExpected: activeScope === storePath,
-          identityCount: identities.size,
-          includesExpectedSessionId: identities.has(sessionId),
-        })),
-      dedupe: [...context.dedupe]
-        .filter(([key]) => key.startsWith("chat:"))
-        .slice(0, 5)
-        .map(([key, cached]) => ({
-          key,
-          ok: cached.ok,
-          status: isRecord(cached.payload) ? cached.payload.status : undefined,
-          error: cached.error && { code: cached.error.code, message: cached.error.message },
-        })),
-      entry: entry && {
-        sessionId: entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
-        status: entry.status,
-        lastRunId: entry.lastRunId,
-        abortedLastRun: entry.abortedLastRun,
-      },
-    });
-  }
-  expect(runEmbeddedAgent.mock.calls, failureDiagnostic).toHaveLength(count);
+  await waitForGoalChatModelRun({
+    scope: scope(),
+    context,
+    modelStarted: modelStarted.promise,
+    runEmbeddedAgent,
+    count,
+  });
 }
 
 describe("Goal chat admission and continuation", () => {
   registerGoalAutomaticContinuationCases(scope, runEmbeddedAgent, rpc, goalStart, userMessages);
+  registerGoalChildSettlementCases({
+    scope,
+    runEmbeddedAgent,
+    context: () => suiteContext,
+    client,
+    goalStart,
+    userMessages,
+  });
 
   registerGoalChatRestartSettlementCase({
     scope,

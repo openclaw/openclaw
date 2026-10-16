@@ -26,7 +26,7 @@ import {
   type FollowupRunnerParams,
 } from "./followup-turn-admission.js";
 import { executeFollowupTurn } from "./followup-turn-execution.js";
-import { enqueueGoalContinuation } from "./goal-continuation.js";
+import { enqueueGoalContinuation, createGoalContinuationReturn } from "./goal-continuation.js";
 import {
   completeFollowupRunLifecycle,
   FollowupRunDeferredError,
@@ -186,12 +186,33 @@ export function createFollowupRunner(
       operation = turn.operation;
       const initialGoalId = turn.session.current()?.goal?.id;
       retainReplyOperationUntilComplete(operation);
-      const execution = await executeFollowupTurn({
-        turn,
-        defaults,
-        onToolResult: (payload) => deliverProgress(turn, [payload], "tool"),
-        onCompactionNoticePayload: (payload) => deliverProgress(turn, [payload], "block"),
-      });
+      const runWithGoalReturn = createGoalContinuationReturn(
+        turn.session.kind === "session" && turn.session.storePath && initialGoalId
+          ? {
+              base: turn.queued,
+              initialGoalId,
+              expectedSession: turn.session.current()!,
+              sessionKey: turn.session.key,
+              storePath: turn.session.storePath,
+              queueKey: turn.queued.run.sessionKey ?? turn.session.key,
+              settings: resolveQueueSettings({
+                cfg: turn.config,
+                sessionEntry: turn.session.current(),
+                channel: turn.queued.originatingChannel,
+              }),
+              operation: turn.operation,
+              runFollowup,
+            }
+          : undefined,
+      );
+      const execution = await runWithGoalReturn(() =>
+        executeFollowupTurn({
+          turn,
+          defaults,
+          onToolResult: (payload) => deliverProgress(turn, [payload], "tool"),
+          onCompactionNoticePayload: (payload) => deliverProgress(turn, [payload], "block"),
+        }),
+      );
       // A closed execution result is terminal queue work. Commit consumption
       // before accounting/delivery so their failures cannot replay model or tool effects.
       disposition = { kind: "consumed" };
@@ -237,35 +258,37 @@ export function createFollowupRunner(
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
         onObservedReplyDelivery,
       };
-      const { decision, accounting: completedAccounting } = await withAgentTurnCompletion(
-        {
-          agentId: turn.queued.run.agentId,
-          storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
-          sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
-          entry: turn.session.current(),
-          writer:
-            execution.execution.outcome.kind === "settled"
-              ? execution.execution.outcome.sessionWriter
-              : undefined,
-          operation: turn.operation,
-          publish: (entry) => turn.session.publish(entry),
-        },
-        async (turnCompletion) => {
-          const accounting = await accountFollowupTurn({
-            turn,
-            defaults,
-            execution,
-            completion: turnCompletion,
-          });
-          const resolved = await resolveFollowupDeliveryDecision({
-            turn,
-            execution: execution.execution,
-            accounting,
-            opts: deliveryOpts,
-          });
-          await turnCompletion?.complete();
-          return { decision: resolved, accounting };
-        },
+      const { decision, accounting: completedAccounting } = await runWithGoalReturn(() =>
+        withAgentTurnCompletion(
+          {
+            agentId: turn.queued.run.agentId,
+            storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+            sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
+            entry: turn.session.current(),
+            writer:
+              execution.execution.outcome.kind === "settled"
+                ? execution.execution.outcome.sessionWriter
+                : undefined,
+            operation: turn.operation,
+            publish: (entry) => turn.session.publish(entry),
+          },
+          async (turnCompletion) => {
+            const accounting = await accountFollowupTurn({
+              turn,
+              defaults,
+              execution,
+              completion: turnCompletion,
+            });
+            const resolved = await resolveFollowupDeliveryDecision({
+              turn,
+              execution: execution.execution,
+              accounting,
+              opts: deliveryOpts,
+            });
+            await turnCompletion?.complete();
+            return { decision: resolved, accounting };
+          },
+        ),
       );
       if (decision.kind === "deliver") {
         for (const payload of decision.payloads) {

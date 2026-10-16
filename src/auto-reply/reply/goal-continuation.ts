@@ -5,13 +5,13 @@ import type { SessionEntryCohortReader } from "../../config/sessions/session-ent
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
+import { createGoalContinuationReturnScope } from "./goal-continuation-return.js";
+import type { GoalContinuation } from "./goal-continuation.types.js";
+import { refreshActiveGoalContext } from "./inbound-meta.js";
+import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
 import { isFollowupRunAborted, type FollowupRun, type QueueSettings } from "./queue/types.js";
 import { runAfterReplyOperationClear, type ReplyOperation } from "./reply-run-registry.js";
-
-export type GoalContinuation = Pick<SessionEntry, "sessionId" | "lifecycleRevision"> & {
-  goalId: string;
-};
 
 export function isGoalContinuationCurrent(
   continuation: GoalContinuation,
@@ -46,7 +46,7 @@ function isGoalContinuationOutcome(result: EmbeddedAgentRunResult): boolean {
 }
 
 /** Queue custody, not a second scheduler, owns every automatic Goal turn. */
-export async function enqueueGoalContinuation(params: {
+type GoalContinuationParams = {
   base: FollowupRun;
   result: EmbeddedAgentRunResult;
   initialGoalId?: string;
@@ -58,9 +58,13 @@ export async function enqueueGoalContinuation(params: {
   settings: QueueSettings;
   sourceRunId: string;
   operation: ReplyOperation;
+  isCurrent?: () => boolean;
   runFollowup: (run: FollowupRun) => Promise<void>;
-}): Promise<boolean> {
+};
+
+export async function enqueueGoalContinuation(params: GoalContinuationParams): Promise<boolean> {
   const eligible = () =>
+    params.isCurrent?.() !== false &&
     !params.operation.abortSignal.aborted &&
     params.operation.result?.kind !== "failed" &&
     params.operation.result?.kind !== "aborted" &&
@@ -83,10 +87,10 @@ export async function enqueueGoalContinuation(params: {
     undefined,
     params.reader,
   );
-  params.base.operatorAuthority?.assertCurrent();
   if (!eligible() || !entry?.goal) {
     return false;
   }
+  params.base.operatorAuthority?.assertCurrent();
   const continuation: GoalContinuation = {
     ...params.expectedSession,
     goalId: params.initialGoalId ?? entry.goal.id,
@@ -166,4 +170,44 @@ export async function enqueueGoalContinuation(params: {
     });
   }
   return enqueued;
+}
+
+/** The queue owner retains a return address only while an admitted Goal lends the turn to children. */
+export function createGoalContinuationReturn(
+  params: Omit<GoalContinuationParams, "result" | "sourceRunId"> | undefined,
+): <T>(run: () => T) => T {
+  if (!params?.initialGoalId) {
+    return (run) => run();
+  }
+  const continuation: GoalContinuation = {
+    sessionId: params.expectedSession.sessionId,
+    lifecycleRevision: params.expectedSession.lifecycleRevision,
+    goalId: params.initialGoalId,
+  };
+  return createGoalContinuationReturnScope({
+    base: params.base,
+    sessionKey: params.sessionKey,
+    continuation,
+    operation: params.operation,
+    context: (entry, existing) =>
+      isGoalContinuationCurrent(continuation, entry)
+        ? refreshActiveGoalContext(existing, entry)
+        : undefined,
+    async resume({ base, runId, result, isCurrent }) {
+      if (
+        await enqueueGoalContinuation({
+          ...params,
+          base,
+          expectedSession: continuation,
+          initialGoalId: continuation.goalId,
+          result,
+          sourceRunId: runId,
+          reader: undefined,
+          isCurrent,
+        })
+      ) {
+        scheduleFollowupDrain(params.queueKey, params.runFollowup);
+      }
+    },
+  });
 }
