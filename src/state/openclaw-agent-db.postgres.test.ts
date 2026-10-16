@@ -8,7 +8,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { TranscriptTurnBoundary } from "../config/sessions/transcript-entry-anchor.js";
 import type { ContextEngine } from "../context-engine/types.js";
-import { admitStoreSearch } from "../infra/database-engine/adapters.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
@@ -35,6 +34,8 @@ async function loadOwners() {
     inspection,
     authBootstrap,
     authOwnership,
+    reconcile,
+    lifecycle,
   ] = await Promise.all([
     import("./openclaw-agent-db.js"),
     import("./openclaw-agent-db-readonly.js"),
@@ -51,6 +52,8 @@ async function loadOwners() {
     import("./openclaw-agent-schema-inspection-worker.js"),
     import("../agents/auth-profiles/shared-store-bootstrap-async.js"),
     import("../agents/auth-profiles/path-resolve.js"),
+    import("../config/sessions/session-transcript-reconcile.js"),
+    import("../config/sessions/session-accessor.sqlite-lifecycle.js"),
   ]);
   return {
     openOpenClawAgentDatabase: database.openOpenClawAgentDatabase,
@@ -61,6 +64,7 @@ async function loadOwners() {
     retainOpenClawAgentDatabaseReadOnly: readonly.retainOpenClawAgentDatabaseReadOnly,
     upsertSessionEntryCore: sessions.upsertSessionEntryCore,
     appendTranscriptMessage: transcripts.appendTranscriptMessage,
+    appendTranscriptEvent: transcripts.appendTranscriptEvent,
     prepareSessionTranscriptHydration: hydration.prepareSessionTranscriptHydration,
     openContextEngineTurnOutboxWorkerStore: outbox.openContextEngineTurnOutboxWorkerStore,
     drainContextEngineTurnOutbox: drain.drainContextEngineTurnOutbox,
@@ -69,10 +73,12 @@ async function loadOwners() {
     writeAuthProfileJsonCell: authWrite.writeAuthProfileJsonCell,
     cleanupSessionStateForTest: cleanup.cleanupSessionStateForTest,
     searchSessionTranscripts: search.searchSessionTranscripts,
-    searchSessionTranscriptsReadOnlySync: search.searchSessionTranscriptsReadOnlySync,
     createAgentSchemaInspectionWorker: inspection.createAgentSchemaInspectionWorker,
     prepareFreshSharedAuthStoreWriteAsync: authBootstrap.prepareFreshSharedAuthStoreWriteAsync,
     resolveSharedAuthStoreOwnership: authOwnership.resolveSharedAuthStoreOwnership,
+    waitForSessionTranscriptIndexReconcile: reconcile.waitForSessionTranscriptIndexReconcile,
+    reconcileSessionTranscriptIndexes: reconcile.reconcileSessionTranscriptIndexes,
+    deleteSessionEntryLifecycle: lifecycle.deleteSessionEntryLifecycle,
   };
 }
 
@@ -131,6 +137,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     installDatabaseEngineSelection({ input: { connection: connection!, schemaPrefix: prefix } });
     client = new pg.Client({ connectionString: connection });
     await client.connect();
+    await client.query("CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public");
   });
   beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
 
@@ -258,26 +265,18 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       hydrated.snapshot.events.filter((event) => isRecord(event) && event.type === "message"),
     ).toHaveLength(7);
     expect(
-      admitStoreSearch(
-        {
-          databasePath: target.storePath,
-          input: { connection: connection!, schemaPrefix: prefix },
-        },
-        {},
-      ),
+      await owners.searchSessionTranscripts({ ...target, query: "progress", env: process.env }),
     ).toMatchObject({
-      fullText: null,
-      vector: null,
-      diagnostics: [expect.stringContaining("PostgreSQL search capabilities are unavailable")],
+      hits: [
+        {
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          role: "assistant",
+          snippet: expect.stringContaining("progress"),
+        },
+      ],
+      indexing: false,
     });
-    const search = { ...target, query: "first", env: process.env };
-    await expect(owners.searchSessionTranscripts(search)).rejects.toMatchObject({
-      name: "DatabaseSearchCapabilityUnavailableError",
-      code: "DATABASE_SEARCH_CAPABILITY_UNAVAILABLE",
-    });
-    expect(() => owners.searchSessionTranscriptsReadOnlySync(search)).toThrow(
-      "PostgreSQL fullText search is unavailable",
-    );
     const database = withEngineStoreAdmission(() =>
       openOpenClawAgentDatabase({ agentId: "actor" }),
     );
@@ -373,6 +372,90 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       (await client.query(`SELECT count(*) FROM "${facts.namespace}".context_engine_turn_outbox`))
         .rows,
     ).toEqual([{ count: "0" }]);
+  });
+
+  it("searches active branches through the worker with session and role filters and lifecycle deletion", async () => {
+    const target = {
+      agentId: "actor",
+      sessionId: "search-branch",
+      sessionKey: "agent:actor:search-branch",
+      storePath: path.join(root, "agents", "actor", "sessions", "sessions.json"),
+      env: process.env,
+    };
+    const sibling = {
+      ...target,
+      sessionId: "search-sibling",
+      sessionKey: "agent:actor:search-sibling",
+    };
+    for (const scope of [target, sibling]) {
+      await owners.upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    }
+    await owners.appendTranscriptMessage(target, {
+      eventId: "search-user",
+      parentId: null,
+      message: { role: "user", content: "searchable alpha origin" },
+    });
+    await owners.appendTranscriptMessage(target, {
+      eventId: "search-assistant",
+      parentId: "search-user",
+      message: { role: "assistant", content: "searchable beta abandoned" },
+    });
+    await owners.appendTranscriptMessage(sibling, {
+      eventId: "search-sibling-user",
+      message: { role: "user", content: "searchable survivor" },
+    });
+    const search = {
+      agentId: target.agentId,
+      storePath: target.storePath,
+      env: process.env,
+      query: "searchable",
+      sessionKeys: [target.sessionKey, sibling.sessionKey],
+    };
+    expect((await owners.searchSessionTranscripts({ ...search, role: "assistant" })).hits).toEqual([
+      expect.objectContaining({ messageId: "search-assistant" }),
+    ]);
+    expect(
+      (await owners.searchSessionTranscripts({ ...search, sessionId: sibling.sessionId })).hits,
+    ).toEqual([expect.objectContaining({ messageId: "search-sibling-user" })]);
+    expect(
+      (await owners.searchSessionTranscripts({ ...search, sessionKeys: [target.sessionKey] })).hits
+        .map((hit) => hit.messageId)
+        .toSorted(),
+    ).toEqual(["search-assistant", "search-user"]);
+    await owners.appendTranscriptEvent(target, {
+      type: "leaf",
+      id: "search-leaf",
+      parentId: "search-assistant",
+      targetId: "search-user",
+    });
+    expect((await owners.searchSessionTranscripts({ ...search, query: "beta" })).hits).toEqual([]);
+    const options = { agentId: target.agentId, env: process.env };
+    await owners.waitForSessionTranscriptIndexReconcile(options);
+    if ((await owners.searchSessionTranscripts(search)).indexing) {
+      await owners.reconcileSessionTranscriptIndexes(options);
+    }
+    expect(await owners.searchSessionTranscripts({ ...search, query: "alpha" })).toMatchObject({
+      hits: [expect.objectContaining({ messageId: "search-user" })],
+      indexing: false,
+    });
+    expect((await owners.searchSessionTranscripts({ ...search, query: "beta" })).hits).toEqual([]);
+    const removal = {
+      ...target,
+      target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+      archiveTranscript: false,
+      deleteTranscriptWithoutArchive: true,
+    };
+    await owners.upsertSessionEntryCore(sibling, { previousSessionId: target.sessionId });
+    expect(await owners.deleteSessionEntryLifecycle(removal)).toMatchObject({ deleted: true });
+    expect((await owners.searchSessionTranscripts({ ...search, query: "alpha" })).hits).toEqual([
+      expect.objectContaining({ sessionId: target.sessionId, messageId: "search-user" }),
+    ]);
+    await owners.upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 2 });
+    await owners.upsertSessionEntryCore(sibling, { previousSessionId: undefined });
+    expect(await owners.deleteSessionEntryLifecycle(removal)).toMatchObject({ deleted: true });
+    expect((await owners.searchSessionTranscripts(search)).hits).toEqual([
+      expect.objectContaining({ sessionId: sibling.sessionId, messageId: "search-sibling-user" }),
+    ]);
   });
 
   it("reads persisted auth through the selected owner and agent worker", async () => {

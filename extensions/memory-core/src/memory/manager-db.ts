@@ -234,7 +234,7 @@ export function openMemoryDatabaseReadOnlyAtPath(
   allowExtension: boolean,
   agentId: string,
 ) {
-  requireMemorySearchCapability(dbPath);
+  requireMemorySearchCapability();
   const opened = openOpenClawAgentDatabaseReadOnly(
     { agentId, path: dbPath },
     { allowExtension, lifecycle: "agent" },

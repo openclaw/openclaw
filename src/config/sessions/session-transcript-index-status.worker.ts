@@ -1,6 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { RawBuilder } from "kysely";
-import { DatabaseSearchCapabilityUnavailableError } from "../../infra/database-engine/search-capabilities.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   createSqliteQueryCache,
@@ -23,7 +22,11 @@ import {
   installSqliteTempTrackingSchema,
 } from "../../infra/sqlite-schema-facts.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import { selectSessionTranscriptIndexStatus } from "./session-transcript-index.js";
+import {
+  deleteOrphanedTranscriptIndexRowsInTransaction,
+  listSessionsNeedingTranscriptIndexReconcile,
+  selectSessionTranscriptIndexStatus,
+} from "./session-transcript-index.js";
 
 const projectionTables = [
   "session_transcript_active_events",
@@ -181,11 +184,17 @@ export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
   /** Clean fast receipts need no traversal history. */
   traversal?: { schemaVersion: number; completedTraversals: number };
 } {
-  if (isPostgresSqlConnection(db)) {
-    throw new DatabaseSearchCapabilityUnavailableError("fullText");
-  }
   if (!db.isTransaction) {
     throw new Error("Transcript projection status requires its writer transaction");
+  }
+  if (isPostgresSqlConnection(db)) {
+    deleteOrphanedTranscriptIndexRowsInTransaction(db);
+    const sessionIds = listSessionsNeedingTranscriptIndexReconcile(db, MAX_SESSIONS + 1);
+    return {
+      sessionIds: sessionIds.slice(0, MAX_SESSIONS),
+      hasMore: sessionIds.length > MAX_SESSIONS,
+      traversalComplete: true,
+    };
   }
   const siblingWriteRevision = readSqliteDatabaseSiblingWriteRevision(db);
   const schema = getAdmittedSqliteSchemaFacts(db);

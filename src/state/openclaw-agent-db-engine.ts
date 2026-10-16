@@ -4,7 +4,7 @@ import { openEngineStore } from "../infra/database-engine/open.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import type { PostgresSqlConnection } from "../infra/sql-connection.js";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { VERSION } from "../version.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
@@ -12,7 +12,9 @@ import {
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-metadata.js";
 import { assertCurrentAgentSchemaMetadata } from "./openclaw-agent-db-schema-read.js";
+import { agentTranscriptSearchSchema } from "./openclaw-agent-search-schema.js";
 import { agentPostgresRuntime } from "./postgres-schema.generated/agent-runtime.js";
+import { agentSearchPostgresRuntime } from "./postgres-schema.generated/agent-search-runtime.js";
 
 export function agentEngineInput() {
   return getDatabaseEngineSelection()?.input;
@@ -22,7 +24,8 @@ const agentEngineSchema = {
   id: "agent",
   version: OPENCLAW_AGENT_SCHEMA_VERSION,
   sqlite: "",
-  postgres: agentPostgresRuntime.sql,
+  postgres: `${agentPostgresRuntime.sql}\n${agentSearchPostgresRuntime.sql}`,
+  search: agentTranscriptSearchSchema,
   // PostgreSQL agent storage is unshipped; only the current bootstrap is admitted.
   postgresMigrations: [],
 };
@@ -63,6 +66,8 @@ function admitAgentPostgres(
   if (getPostgresPhysicalFacts(db)?.version !== OPENCLAW_AGENT_SCHEMA_VERSION) {
     throw new Error("Agent database has no current PostgreSQL schema admission");
   }
+  // Nested worker writes must see the identity anchor's completed native admission.
+  admitSqliteSchema(db.anchor);
 }
 
 /** The existing agent owner retains the anchor and all execution/close custody. */

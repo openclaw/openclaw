@@ -75,9 +75,10 @@ The supported PostgreSQL families are:
   provider; their discovery and custody belong to the Matrix account-root lane.
 - **Agent databases:** fresh agent stores, including shared-main auth and explicit
   agent directories, use the selected engine through the existing agent workers.
-  Transcript payloads are stored as plain JSON on PostgreSQL. Full-text and vector
-  search are unavailable: capabilities are `null` with an admission diagnostic,
-  and search requests fail with `DATABASE_SEARCH_CAPABILITY_UNAVAILABLE`.
+  Transcript payloads are stored as plain JSON on PostgreSQL. Transcript text search
+  uses the engine's admitted full-text capability and requires `unaccent`.
+  Memory indexing remains unavailable until the memory owner supports PostgreSQL;
+  requests fail with `DATABASE_SEARCH_CAPABILITY_UNAVAILABLE`.
   Existing SQLite agent stores cannot switch engines; agent ports and backup
   providers are not available yet. PostgreSQL agent schemas support current-version
   bootstrap only and reject schema drift before exposing the store.
@@ -115,9 +116,9 @@ Do not remove existing data to switch engines.
 ## Search on PostgreSQL
 
 The experimental engine search contract supports native PostgreSQL full text,
-literal trigram contains, and exact cosine search. This is engine-level support;
-agent memory and session transcript physical storage still follow the support
-matrix above. It does not enable PostgreSQL for an unported store.
+literal trigram contains, and exact cosine search. Agent transcript text search
+uses this contract; agent memory still follows the support matrix above.
+It does not enable PostgreSQL for an unported store.
 
 For a store that declares search indexes, install these extensions in the
 database before opening it. The default extension namespace is `public`:
@@ -140,9 +141,9 @@ administrator. The runtime role needs `CREATE` in the store schema, or database
 tables, indexes, functions, and text-search configuration.
 
 The existing explicit keyword-only memory setting is `memory.search.provider: "none"`
-(or the corresponding agent-specific override). During the agent storage cutover,
-the memory owner maps that setting to the keyword-only engine schema, which requires no pgvector
-extension and exposes no vector capability. Disabling only the native vector
+(or the corresponding agent-specific override). The engine's keyword-only schema
+requires no pgvector extension and exposes no vector capability. The memory owner's
+PostgreSQL integration is pending; this setting does not yet enable memory indexing. Disabling only the native vector
 index is not a PostgreSQL JavaScript-scan fallback. An embedding-provider failure
 does not silently authorize keyword-only PostgreSQL admission.
 

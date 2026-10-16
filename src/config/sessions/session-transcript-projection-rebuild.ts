@@ -7,7 +7,7 @@ import {
   iterateSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -399,17 +399,21 @@ export function deletePreparedSessionTranscriptProjectionChunkInTransaction(
 ): ProjectionDeleteChunkResult {
   // Active rows use their session index; FTS deletion uses its indexed identity owner.
   const kysely = getProjectionKysely(db);
+  const identity = isPostgresSqlConnection(db) ? "event_seq" : "rowid";
   const active = Number(
     executeSqliteQuerySync(
       db,
       kysely
         .deleteFrom("session_transcript_active_events")
+        .$if(isPostgresSqlConnection(db), (query) =>
+          query.where("session_id", "=", params.sessionId),
+        )
         .where(
-          "rowid",
+          identity,
           "in",
           kysely
             .selectFrom("session_transcript_active_events")
-            .select("rowid")
+            .select(identity)
             .where("session_id", "=", params.sessionId)
             .limit(params.maxRowsPerTable),
         ),

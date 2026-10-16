@@ -1,5 +1,4 @@
 import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
-import { requireDatabaseSearchCapability } from "../../infra/database-engine/search-capabilities.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -12,6 +11,7 @@ import {
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 
 type TranscriptFtsDatabase = Pick<DB, "session_transcript_fts_rows"> & {
   session_transcript_fts: Omit<DB["session_transcript_fts"], "timestamp"> & {
@@ -29,13 +29,39 @@ type TranscriptFtsEntry = {
 
 /** Insert both projection records in the caller's synchronous write transaction. */
 export function createSessionTranscriptFtsInserter(db: EngineConnection, sessionId: string) {
-  if (isPostgresSqlConnection(db)) {
-    return (_entry: TranscriptFtsEntry): void => {};
-  }
   const kysely = getNodeSqliteKysely<TranscriptFtsDatabase>(db);
-  const search = admitStoreSearch(db, {
-    text: { transcript: { table: "session_transcript_fts", fields: ["text"] } },
-  });
+  if (isPostgresSqlConnection(db)) {
+    const insert = prepareSqliteQuerySync<TranscriptFtsEntry>(db, (parameter) =>
+      kysely
+        .with("inserted", (query) =>
+          query
+            .insertInto("session_transcript_fts_rows")
+            .values({
+              session_id: sessionId,
+              message_id: parameter((entry) => entry.messageId),
+            })
+            .returning("id"),
+        )
+        .insertInto("session_transcript_fts")
+        .columns(["rowid", "text", "session_id", "message_id", "role", "timestamp"])
+        .expression((query) =>
+          query
+            .selectFrom("inserted")
+            .select((eb) => [
+              "id",
+              parameter((entry) => entry.text).as("text"),
+              eb.val(sessionId).as("session_id"),
+              parameter((entry) => entry.messageId).as("message_id"),
+              parameter((entry) => entry.role).as("role"),
+              parameter((entry) => entry.timestamp).as("timestamp"),
+            ]),
+        ),
+    );
+    return (entry: TranscriptFtsEntry): void => {
+      withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => insert(entry));
+    };
+  }
+  const search = admitStoreSearch(db, agentTranscriptSearchSchema);
   if (!search.fullText) {
     throw new Error(search.diagnostics.join("; "));
   }
@@ -70,9 +96,6 @@ export function deleteSessionTranscriptFtsRowsInTransaction(
   sessionIds: string | readonly string[],
   options: { messageIds?: readonly string[]; maxRows?: number } = {},
 ): number {
-  if (isPostgresSqlConnection(db)) {
-    return 0;
-  }
   const kysely = getNodeSqliteKysely<TranscriptFtsDatabase>(db);
   let selected = kysely.selectFrom("session_transcript_fts_rows").select("id");
   selected =
@@ -104,9 +127,6 @@ export function deleteSessionTranscriptFtsRowsInTransaction(
 
 /** Stream only one session's FTS content without scanning other sessions' payloads. */
 export function selectSessionTranscriptFtsRows(db: EngineConnection, sessionId: string) {
-  if (!admitStoreSearch(db, {}).fullText) {
-    requireDatabaseSearchCapability("postgres", "fullText");
-  }
   const kysely = getNodeSqliteKysely<TranscriptFtsDatabase>(db);
   return kysely
     .selectFrom("session_transcript_fts")

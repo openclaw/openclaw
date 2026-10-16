@@ -9,6 +9,10 @@ import { MessagePort, parentPort, threadId, workerData } from "node:worker_threa
 import zlib from "node:zlib";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  installDatabaseEngineSelection,
+  type DatabaseEngineSelection,
+} from "../../infra/database-engine/context.js";
+import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
@@ -407,6 +411,13 @@ async function runArchiveSession(
 }
 
 if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") {
+  // SAFETY: The paired archive owner captures this immutable private boot selection.
+  const { databaseEngineSelection } = workerData as {
+    databaseEngineSelection?: DatabaseEngineSelection;
+  };
+  if (databaseEngineSelection) {
+    installDatabaseEngineSelection(databaseEngineSelection);
+  }
   if (!parentPort) {
     throw new Error("SQLite transcript archive worker requires a parent port");
   }

@@ -120,7 +120,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
     // A reply confirms module evaluation without opening an index or loading a provider.
     return { kind: "prewarm" };
   }
-  requireMemorySearchCapability(request.databasePath);
+  requireMemorySearchCapability();
   if (request.kind === "presence") {
     // This pre-manager probe also recognizes shipped memory-only databases.
     return { kind: "presence", present: inspectMemoryIndexPresenceInWorker(request.databasePath) };

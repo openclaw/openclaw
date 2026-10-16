@@ -607,8 +607,12 @@ function selectSessionsNeedingTranscriptIndexReconcile(db: EngineConnection) {
  * that gained rows without index state (doctor imports), and watermarks
  * behind the newest row. Ordered for deterministic reconcile passes.
  */
-export function listSessionsNeedingTranscriptIndexReconcile(db: EngineConnection): string[] {
-  const rows = executeSqliteQuerySync(db, selectSessionsNeedingTranscriptIndexReconcile(db)).rows;
+export function listSessionsNeedingTranscriptIndexReconcile(
+  db: EngineConnection,
+  limit?: number,
+): string[] {
+  const query = selectSessionsNeedingTranscriptIndexReconcile(db);
+  const rows = executeSqliteQuerySync(db, limit === undefined ? query : query.limit(limit)).rows;
   return rows.flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
 }
 
