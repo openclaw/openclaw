@@ -8,8 +8,7 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { MessageGroup } from "./chat-message-group-view.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 
-// These text-only histories never resolve media. Keep its file-store dependency
-// out of the jsdom module graph, and fail if the fixture starts using that path.
+// mock-isolation: Text-only histories must not load media storage into jsdom; fail if used.
 vi.mock("../../../../../src/media/media-reference.js", () => ({
   parseInboundMediaUri: () => {
     throw new Error("Unexpected media URI in text-only context history");
