@@ -251,9 +251,10 @@ export function createSqliteWalCheckpoint(
     if (observation.error !== undefined) {
       options.onCheckpointError?.(sizeError);
     }
-    // Frequent checkpoint ticks expect readers to block some passes; only the
-    // reclaim cadence reports them, the health snapshot still records every one.
-    if ((busy || observation.warning) && !quiet) {
+    // Frequent checkpoint ticks expect readers to block some passes; only an
+    // observation that reaches the warning policy reports them, while the
+    // health snapshot still records every blocked pass.
+    if (observation.warning && !quiet) {
       const label = options.databaseLabel ?? "sqlite database";
       options.onCheckpointError?.(
         new Error(

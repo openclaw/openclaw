@@ -773,7 +773,7 @@ describe("sqlite WAL maintenance", () => {
     expect(db["prepare"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
   });
 
-  it("reports a busy checkpoint result as incomplete", () => {
+  it("keeps a single busy checkpoint result quiet while recording it as incomplete", () => {
     const db = createMockDb();
     const onCheckpointError = vi.fn();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
@@ -795,9 +795,9 @@ describe("sqlite WAL maintenance", () => {
     });
 
     expect(maintenance.checkpoint()).toBe(false);
-    expect(onCheckpointError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "test-db WAL checkpoint TRUNCATE remained busy" }),
-    );
+    expect(maintenance.health).toMatchObject({ state: "blocked", consecutiveBlocked: 1 });
+    // A single blocked pass is expected contention, not an operator-facing failure.
+    expect(onCheckpointError).not.toHaveBeenCalled();
   });
 
   it("reports checkpoint errors without throwing from background maintenance", () => {

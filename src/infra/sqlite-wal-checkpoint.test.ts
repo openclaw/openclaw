@@ -414,4 +414,99 @@ describe("SQLite WAL checkpoint observations", () => {
       }
     }
   });
+  it("reports a blocked checkpoint only once it reaches the warning policy", () => {
+    const databasePath = path.join(tempDirs.make("openclaw-wal-warn-policy-"), "state.sqlite");
+    const database = openNodeSqliteDatabase(databasePath);
+    database.exec("PRAGMA journal_mode=WAL; CREATE TABLE events(value TEXT)");
+    const reader = openNodeSqliteDatabase(databasePath);
+    const onCheckpointError = vi.fn();
+    const owner = createSqliteWalCheckpoint(
+      database,
+      { databaseLabel: "fixture-db", databasePath, onCheckpointError },
+      64 * 1024 * 1024,
+    );
+    try {
+      expect(owner.checkpoint("TRUNCATE")).toBe(true);
+      reader.exec("BEGIN");
+      reader.prepare("SELECT value FROM events").all();
+      database.exec("INSERT INTO events VALUES ('retained')");
+
+      // A first blocked pass is expected contention: health records it, operators are not paged.
+      expect(owner.checkpoint("TRUNCATE")).toBe(false);
+      expect(owner.health).toMatchObject({
+        state: "blocked",
+        consecutiveBlocked: 1,
+        warning: false,
+      });
+      expect(onCheckpointError).not.toHaveBeenCalled();
+
+      // A second consecutive blocked pass reaches the warning policy and reports once.
+      expect(owner.checkpoint("TRUNCATE")).toBe(false);
+      expect(owner.health).toMatchObject({ consecutiveBlocked: 2, warning: true });
+      expect(onCheckpointError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: "fixture-db WAL checkpoint TRUNCATE remained busy",
+        }),
+      );
+
+      // Recovery resets the streak, so the next isolated blocked pass is quiet again.
+      reader.exec("ROLLBACK");
+      expect(owner.checkpoint("TRUNCATE")).toBe(true);
+      expect(owner.health).toMatchObject({ state: "complete", consecutiveBlocked: 0 });
+      onCheckpointError.mockClear();
+      reader.exec("BEGIN");
+      reader.prepare("SELECT value FROM events").all();
+      database.exec("INSERT INTO events VALUES ('again')");
+      expect(owner.checkpoint("TRUNCATE")).toBe(false);
+      expect(owner.health).toMatchObject({ consecutiveBlocked: 1, warning: false });
+      expect(onCheckpointError).not.toHaveBeenCalled();
+    } finally {
+      if (reader.isTransaction) {
+        reader.exec("ROLLBACK");
+      }
+      reader.close();
+      database.close();
+    }
+  });
+
+  it("reports a first blocked checkpoint when the retained WAL exceeds its ceiling", () => {
+    const databasePath = path.join(tempDirs.make("openclaw-wal-warn-size-"), "state.sqlite");
+    const database = openNodeSqliteDatabase(databasePath);
+    database.exec("PRAGMA journal_mode=WAL; CREATE TABLE payload(data BLOB)");
+    const reader = openNodeSqliteDatabase(databasePath);
+    const onCheckpointError = vi.fn();
+    const owner = createSqliteWalCheckpoint(
+      database,
+      { databaseLabel: "fixture-db", databasePath, onCheckpointError },
+      1024,
+    );
+    try {
+      expect(owner.checkpoint("TRUNCATE")).toBe(true);
+      reader.exec("BEGIN");
+      reader.prepare("SELECT data FROM payload").all();
+      database.exec("INSERT INTO payload VALUES (zeroblob(4194304))");
+      const walBytes = fs.statSync(`${databasePath}-wal`).size;
+      const databaseBytes = fs.statSync(databasePath).size;
+      expect(walBytes).toBeGreaterThan(Math.max(2 * databaseBytes, 1024));
+
+      // Oversized retained WAL is a real operator signal on the very first blocked pass.
+      expect(owner.checkpoint("TRUNCATE")).toBe(false);
+      expect(owner.health).toMatchObject({
+        state: "blocked",
+        consecutiveBlocked: 1,
+        warning: true,
+      });
+      expect(onCheckpointError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: "fixture-db WAL checkpoint TRUNCATE remained busy",
+        }),
+      );
+    } finally {
+      if (reader.isTransaction) {
+        reader.exec("ROLLBACK");
+      }
+      reader.close();
+      database.close();
+    }
+  });
 });
