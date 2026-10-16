@@ -5,8 +5,6 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentEntriesWithSource } from "../agents/agent-roster.js";
-import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   hasAnyAuthProfileStoreSource,
@@ -41,7 +39,6 @@ import {
   loadProviderPolicyArtifacts,
 } from "../plugins/provider-public-artifacts.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../utils.js";
 import type { probeGatewayMemoryStatus } from "./doctor-gateway-health.js";
@@ -573,61 +570,21 @@ async function inspectMemorySearchHealthForAgent(
   }
   const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
   const envVar = resolvePrimaryMemoryProviderEnvVar(provider);
-  const fallback = resolved.fallback && resolved.fallback !== "none" ? resolved.fallback : null;
-  const providerSetting = resolveMemorySearchProviderSetting(cfg, agentId);
-  const reindex = formatCliCommand(`openclaw memory index --force --agent ${agentId}`);
 
   report(
     [
       `Memory search provider is set to "${provider}" but no API key was found.`,
-      `Semantic recall will not work without a valid API key.`,
-      providerSetting.explicit
-        ? `${fallback ? `If the "${fallback}" fallback is unavailable too, memory` : "Memory"} search and sync both stop for this agent because its provider is set explicitly: memory_search returns an unavailable result and new and changed memory files are not indexed until embeddings work again.`
-        : `If ${fallback ? `the "${fallback}" fallback is unavailable too and ` : ""}this agent already has a vector index, memory sync also stops to protect it: new and changed memory files are not indexed, not even for keyword search, until embeddings work again.`,
+      "Without working primary or fallback embeddings, memory sync stops for explicitly configured providers or existing vector indexes; new and changed memory files are not indexed.",
       gatewayProbeWarning ? gatewayProbeWarning : null,
       "",
       "Fix (pick one):",
       `- Set ${envVar} in your environment`,
       `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
-      providerSetting.settable
-        ? `- Keyword-only recall without a key: ${formatCliCommand(`openclaw config set ${providerSetting.path} none`)}, then ${reindex}`
-        : `- Keyword-only recall without a key: set ${providerSetting.path} to "none", then ${reindex}`,
-      `- To disable: ${formatCliCommand("openclaw config set memory.search.enabled false")}`,
+      `- For keyword-only recall without a key, set memory.search.provider to "none" for this agent (including any agent override), then run ${formatCliCommand(`openclaw memory index --force --agent ${agentId}`)}`,
       "",
-      `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+      `Then rerun: ${formatCliCommand("openclaw doctor")}`,
     ].join("\n"),
   );
-}
-
-/** The config setting that decides this agent's memory provider: its own override, or the global one. */
-function resolveMemorySearchProviderSetting(
-  cfg: OpenClawConfig,
-  agentId: string,
-): { path: string; settable: boolean; explicit: boolean } {
-  const agentProvider = resolveAgentConfig(cfg, agentId)?.memory?.search?.provider;
-  // Documented Memory Core contract: an explicitly named remote provider fails closed;
-  // unset or legacy "auto" keeps keyword recall (docs/reference/memory-config.md).
-  const configured = (agentProvider ?? cfg.memory?.search?.provider)?.trim();
-  const explicit = Boolean(configured) && configured !== "auto";
-  if (agentProvider === undefined) {
-    return { path: "memory.search.provider", settable: true, explicit };
-  }
-  const id = normalizeAgentId(agentId);
-  const listed = listAgentEntriesWithSource(cfg).find(
-    ({ entry }) => normalizeAgentId(entry.id) === id,
-  );
-  if (listed?.source.kind === "entries") {
-    return {
-      path: `agents.entries.${listed.source.key}.memory.search.provider`,
-      settable: true,
-      explicit,
-    };
-  }
-  return {
-    path: `memory.search.provider of the agents.list entry "${agentId}"`,
-    settable: false,
-    explicit,
-  };
 }
 
 function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
