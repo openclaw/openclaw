@@ -85,7 +85,7 @@ function renderNativeAssistantReply(
   }
   const rendered = {
     ...assistant,
-    content: assistant.content.map((block) => (block.type === "text" ? { ...block } : block)),
+    content: assistant.content.map((block) => ({ ...block })),
   };
   if (rawText !== preparedText) {
     // Map the prepared range before directives consume bytes from the native parts.

@@ -195,14 +195,25 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
   it.each([
     { parts: ["First part.", "Second part.\nNO_REPLY"], expected: "First part.\nSecond part." },
+    {
+      type: "input_text",
+      parts: ["First part.", "Second part.\nNO_REPLY"],
+      expected: "First part.\nSecond part.",
+    },
+    {
+      type: "output_text",
+      parts: ["First part.", "Second part.\nNO_REPLY"],
+      expected: "First part.\nSecond part.",
+    },
     { parts: ["First part.", "Second part.\nNO_", "REPLY"], expected: "First part.\nSecond part." },
     { parts: ["```text\nNO_REPLY", "```\nNO_REPLY"], expected: "```text\nNO_REPLY\n```" },
   ])(
-    "preserves earlier segment boundaries after trailing cleanup: $parts",
-    ({ parts, expected }) => {
-      const earlier = makeAgentAssistantMessage({
-        content: parts.map((text) => ({ type: "text", text })),
-      });
+    "preserves earlier segment source and boundaries after trailing cleanup: $type $parts",
+    ({ parts, expected, type = "text" }) => {
+      const earlier = {
+        ...makeAgentAssistantMessage(),
+        content: parts.map((text) => ({ type, text })),
+      } as AssistantMessage;
       const current = makeAgentAssistantMessage({
         content: [{ type: "text", text: "Final answer." }],
       });
@@ -216,6 +227,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         assistantMessageIndex: 2,
       });
       expect(payloads.map((payload) => payload.text)).toEqual([expected, "Final answer."]);
+      expect(earlier.content).toEqual(parts.map((text) => ({ type, text })));
     },
   );
 
