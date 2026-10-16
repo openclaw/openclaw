@@ -449,7 +449,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       expect(
         evaluateWorkflowExpression(
           workflow.jobs["plugin-prerelease-extension-shard"]["timeout-minutes"],
-          { eventName: "workflow_dispatch", matrix: { test_runtime_policy: runtimePolicy } },
+          {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            matrix: { test_runtime_policy: runtimePolicy },
+          },
         ),
       ).toBe(runtimePolicy === "dual-all" ? 120 : 60);
     },

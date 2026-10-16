@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.js";
 import {
   evaluateWorkflowCondition,
@@ -7,6 +7,8 @@ import {
   readCiWorkflow,
   type WorkflowStep,
 } from "./ci-workflow.test-support.js";
+
+afterEach(() => vi.unstubAllEnvs());
 
 const fixture = {
   bundledPlanner: true,
@@ -86,6 +88,7 @@ function nodeRows(outputs: Record<string, string>) {
 
 describe("dispatch-only runtime trials", () => {
   it.each(defaults)("preserves every default $name manifest byte", (scenario) => {
+    vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-compatible");
     const outputs = manifest({ ...fixture, ...scenario });
     expect(manifestDigest(outputs)).toBe(scenario.digest);
   });

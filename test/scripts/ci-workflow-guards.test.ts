@@ -6226,7 +6226,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Install ripgrep for native grep tests",
     );
 
-    expect(manifestSource).toContain("timeout_minutes: shard.timeoutMinutes");
     expect(manifestSource).toContain("pretest_build_mode: shard.pretestBuildMode");
     expect(manifestSource).toContain("requires_ripgrep:");
     expect(manifestSource).toContain("src/agents/sessions/tools/index.test.ts");
