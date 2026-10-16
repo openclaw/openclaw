@@ -9,9 +9,7 @@ import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import { emptyLegacyContent } from "../../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
@@ -28,7 +26,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
-import { renderChat } from "./chat-view-render.test-support.ts";
+import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 import {
   installTranscriptDomMocks,
@@ -45,7 +43,7 @@ describe("chat pane assistant identity snapshots", () => {
     const container = document.createElement("div");
     const draw = () => {
       pane.render();
-      renderPaneLegacyContent(renderChat(pane.chatProps!), container);
+      renderChatPropsInto(container, pane.chatProps!, pane.context);
     };
     try {
       draw();
@@ -72,7 +70,7 @@ describe("chat pane assistant identity snapshots", () => {
       draw();
       expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
     } finally {
-      renderPaneLegacyContent(emptyLegacyContent, container);
+      disposeChatView(container);
       resetTranscriptTestDom();
     }
   });
@@ -179,7 +177,7 @@ describe("chat pane assistant identity snapshots", () => {
     pane.connectedClient = null;
     pane.sessionKey = "global";
     pane.render = () => ({
-      layout: emptyLegacyContent,
+      layout: null,
       capabilityDialogs: undefined,
       providerReviewSource: undefined,
     });
@@ -366,7 +364,7 @@ describe("chat pane approval requester identity", () => {
     const container = document.body.appendChild(createApplicationContextProvider(context));
     const redraw = vi.fn(() => {
       pane.render();
-      renderPaneLegacyContent(renderChat(pane.chatProps!), container);
+      renderChatPropsInto(container, pane.chatProps!, pane.context);
     });
     state.requestUpdate = redraw;
     const publications: Array<[GatewaySessionRow | undefined, string]> = [
@@ -412,7 +410,7 @@ describe("chat pane approval requester identity", () => {
       expect(decideApproval).toHaveBeenCalledExactlyOnceWith("allow-once", approval.id, approval);
     } finally {
       cancelChatStreamRenderFrame(state);
-      renderPaneLegacyContent(emptyLegacyContent, container);
+      disposeChatView(container);
       container.remove();
     }
   });
@@ -565,7 +563,7 @@ describe("global chat pane feature ownership", () => {
       const container = document.body.appendChild(createApplicationContextProvider(context));
       const draw = async () => {
         await pane.updateComplete;
-        renderPaneLegacyContent(renderChat(pane.chatProps!), container);
+        renderChatPropsInto(container, pane.chatProps!, pane.context);
         if (container.querySelector("openclaw-chat-question-card")) {
           await questionPanelIn(container);
         }
@@ -622,7 +620,7 @@ describe("global chat pane feature ownership", () => {
         await draw();
         expect(container.querySelector(".chat-question-summary, .chat-inline-approval")).toBeNull();
       } finally {
-        renderPaneLegacyContent(emptyLegacyContent, container);
+        disposeChatView(container);
         container.remove();
       }
     },

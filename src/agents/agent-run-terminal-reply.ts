@@ -32,7 +32,7 @@ export type PreparedAgentRunTerminalReply = {
   terminalReply: AgentRunTerminalReplySnapshot;
 };
 
-/** Classifies raw final text, then strips one literal leading silence line before rendering. */
+/** Classifies raw final text, then removes one standalone edge control line before rendering. */
 export function prepareAgentRunTerminalReply(params: {
   rawText?: string;
 }): PreparedAgentRunTerminalReply {
@@ -40,7 +40,9 @@ export function prepareAgentRunTerminalReply(params: {
   if (isSilentReplyText(rawText)) {
     return { text: "", terminalReply: { disposition: "silent" } };
   }
-  const text = rawText.startsWith("NO_REPLY\n") ? rawText.slice("NO_REPLY\n".length) : rawText;
+  const text = rawText.startsWith("NO_REPLY\n")
+    ? rawText.slice("NO_REPLY\n".length)
+    : rawText.replace(/[\r\n]\s*NO_REPLY\s*$/u, "");
   return {
     text,
     terminalReply: sanitizeAgentRunTerminalReply(text),

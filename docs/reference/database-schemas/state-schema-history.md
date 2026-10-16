@@ -46,10 +46,25 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 22      | Portable ACP resume columns and explicit approval, cron, execution-decision, and Skill Workshop cursor identities                                                                                                                                                                                                                              | Unreleased          |
 | 23      | Persisted normalized meeting-transcript start timestamps and chronological index                                                                                                                                                                                                                                                               | Unreleased          |
 | 24      | Retained task indexes replaced with runtime/run lookup and ordered Cron history indexes                                                                                                                                                                                                                                                        | Unreleased          |
+| 25      | Original operator restriction retained for recovered subagent completions; metadata-only downgrade fence                                                                                                                                                                                                                                       | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 25
+
+Schema 25 fences the optional `operatorRecoverySource` in retained subagent JSON.
+Recovery re-admits the original parent/operator source under current policy and
+requester ownership. A missing or refused source stays restricted. Older readers
+ignore that source and can dispatch a cold-restored requester continuation as
+System, which makes binary-only downgrade unsafe.
+
+The migration updates only version metadata. It creates no table or index,
+scans no subagent payloads, and performs no backfill or row rewrite. Existing
+backup and integrity admission still apply. PostgreSQL uses the same version
+and unchanged catalog, with a metadata-only forward artifact. Restore the verified
+pre-upgrade backup and its matching build for rollback; do not lower schema markers.
 
 ### State schema 24
 

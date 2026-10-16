@@ -43,7 +43,7 @@ function flushLegacyContent(): void {
 }
 
 /** One retained Lit range owns each legacy content container. */
-export function mountLitContent(
+function mountLitContent(
   value: unknown,
   container: HTMLElement | DocumentFragment,
   options: { isConnected?: boolean; host?: object } = {},

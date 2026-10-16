@@ -40,6 +40,7 @@ import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import {
+  isVisibleSpawnedSession,
   resolveSubagentCapabilityStore,
   resolveStoredSubagentInheritedToolAllowlist,
   resolveStoredSubagentInheritedToolDenylist,
@@ -55,8 +56,8 @@ import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 export { resolveProviderToolPolicy };
 
 /**
- * Tools always denied for sub-agents regardless of depth.
- * These are system-level or interactive tools that sub-agents should never use.
+ * Default hard denies for sub-agents regardless of depth. Visible spawned
+ * sessions retain message delivery; all other hard denies still apply.
  */
 const SUBAGENT_TOOL_DENY_ALWAYS = [
   // System admin - dangerous from subagent
@@ -110,7 +111,9 @@ export function resolveSubagentToolPolicyForSession(
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
   const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
   const deny = [
-    ...resolveSubagentDenyListForRole(capabilities.role),
+    ...resolveSubagentDenyListForRole(capabilities.role).filter(
+      (tool) => tool !== "message" || !isVisibleSpawnedSession(sessionKey, { cfg, store }),
+    ),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
   const mergedAllow = allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;

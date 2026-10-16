@@ -1,4 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import type { ProviderStreamOptions } from "./provider-types.js";
 import type { OpenAIReasoningEffort } from "./providers/openai-reasoning-effort.js";
 import type { OpenAICompletionsToolChoice } from "./providers/openai-tool-projection.js";
 import type { StreamOptions } from "./types.js";
@@ -144,7 +145,7 @@ export interface AnthropicOptions extends StreamOptions, AnthropicContextManagem
 }
 
 /** Options shared by the OpenAI Responses and Completions transports. */
-export type BaseOpenAIStreamOptions = StreamOptions & {
+export type BaseOpenAIStreamOptions = ProviderStreamOptions & {
   topP?: number;
   authProfileId?: string;
   firstEventTimeoutMs?: number;

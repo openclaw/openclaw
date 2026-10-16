@@ -7,6 +7,7 @@ import {
   withScopedOpenClawAgentDatabaseReadOnly,
 } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { replaceSessionEntry, waitForSessionTranscriptProjection } from "./session-accessor.js";
@@ -117,7 +118,8 @@ it.each([false, true])(
           if (!opened.found) {
             throw new Error("Expected the seeded history reader");
           }
-          opened.value.db.function("json_extract", { deterministic: true }, (value, jsonPath) => {
+          const nativeDb = requireNativeSqliteDatabase(opened.value.db);
+          nativeDb.function("json_extract", { deterministic: true }, (value, jsonPath) => {
             if (jsonPath === "$.message.role" && typeof value === "string") {
               laterInputInspections += Number(value.includes("Unrelated later input"));
               hiddenSteerInspections += Number(value.includes("Counted hidden steering input"));
@@ -143,7 +145,7 @@ it.each([false, true])(
           expect(resolver.isSubagentRunMessage("steered-run", 4 + boundaryOffset)).toBe(true);
           expect(hiddenSteerInspections).toBe(inspectedHiddenSteer);
           expect(laterInputInspections).toBe(0);
-          const reads = trackSqliteStatementExecutions(opened.value.db, ["selected"], (sql) =>
+          const reads = trackSqliteStatementExecutions(nativeDb, ["selected"], (sql) =>
             /^select\b/i.test(sql.trimStart()) ? "selected" : null,
           );
           try {

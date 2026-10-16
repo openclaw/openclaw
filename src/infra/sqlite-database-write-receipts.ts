@@ -5,6 +5,11 @@ import { threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
+  isPostgresSqlConnection,
+  sqlPublicationAnchor,
+  type EngineConnection,
+} from "./sql-connection.js";
+import {
   isSqliteDatabaseAdmissionRetired as isRetired,
   readSqliteDatabaseGeneration,
   advanceSqliteDatabaseGeneration,
@@ -39,9 +44,10 @@ export function createSqliteDatabaseWriteReceipts(owner: {
 }) {
   /** Local sibling writers notify maintenance after publishing their shared write revision. */
   function onSqliteDatabaseWriteSettled(
-    database: DatabaseSync,
+    connection: EngineConnection,
     listener: () => void,
   ): (() => void) | undefined {
+    const database = sqlPublicationAnchor(connection);
     const record = owner.admission(database);
     if (!record) {
       return undefined;
@@ -68,10 +74,11 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   }
   /** A typed owner certifies all session keys affected by this synchronous kernel. */
   function withSqliteDatabaseWriteScope<T>(
-    database: DatabaseSync,
+    connection: EngineConnection,
     scope: readonly SqliteDatabaseWriteScope[],
     run: () => T,
   ): T {
+    const database = sqlPublicationAnchor(connection);
     const record = owner.admission(database);
     const tracked = record
       ? readSqliteDatabaseGeneration(record, "writeScopeRevision") > 0
@@ -102,7 +109,8 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   }
 
   /** Authority and user callbacks cannot borrow their caller's certified mutation scope. */
-  function withoutSqliteDatabaseWriteScope<T>(database: DatabaseSync, run: () => T): T {
+  function withoutSqliteDatabaseWriteScope<T>(connection: EngineConnection, run: () => T): T {
+    const database = sqlPublicationAnchor(connection);
     const previous = state.writeScopes.get(database);
     state.writeScopes.delete(database);
     try {
@@ -142,9 +150,10 @@ export function createSqliteDatabaseWriteReceipts(owner: {
 
   /** Deletion owners retire only scopes whose stored identity has actually been removed. */
   function retireSqliteDatabaseWriteScopes(
-    database: DatabaseSync,
+    connection: EngineConnection,
     scope: readonly SqliteDatabaseWriteScope[],
   ): void {
+    const database = sqlPublicationAnchor(connection);
     const keys = normalizedWriteScopes(scope);
     const record = owner.admission(database);
     const retire = () => {
@@ -177,7 +186,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
         commit: retire,
         rollback() {},
       }) &&
-      !database.isTransaction
+      !connection.isTransaction
     ) {
       retire();
     }
@@ -267,10 +276,10 @@ export function createSqliteDatabaseWriteReceipts(owner: {
 
   /** Per-key receipts survive unrelated committed writes. */
   function readSqliteDatabaseScopedWriteToken(
-    database: DatabaseSync,
+    connection: EngineConnection,
     scope: string | readonly SqliteDatabaseWriteScope[],
   ): string | undefined {
-    return readScopedWriteToken(database, scope);
+    return readScopedWriteToken(sqlPublicationAnchor(connection), scope);
   }
 
   function readSqliteDatabaseScopedWriteTokenForPath(
@@ -302,10 +311,14 @@ export function createSqliteDatabaseWriteReceipts(owner: {
 
   /** Capture the exact post-commit token before any fallible publication executes. */
   function readSqliteDatabasePendingScopedWriteToken(
-    database: DatabaseSync,
+    connection: EngineConnection,
     scope: string | readonly SqliteDatabaseWriteScope[],
   ): string | undefined {
-    return readScopedWriteToken(database, scope, true);
+    // PG publishes broad invalidation at commit, without native pre-commit scope tracking.
+    if (isPostgresSqlConnection(connection)) {
+      return undefined;
+    }
+    return readScopedWriteToken(sqlPublicationAnchor(connection), scope, true);
   }
 
   /** Host row caches retain a physical identity and receipt without opening SQLite. */
@@ -318,10 +331,11 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   }
 
   /** Predict the token published when the current native mutation settles. */
-  function readSqliteDatabasePendingWriteToken(database: DatabaseSync): string | undefined {
+  function readSqliteDatabasePendingWriteToken(connection: EngineConnection): string | undefined {
+    const database = sqlPublicationAnchor(connection);
     if (
-      !database.isOpen ||
-      !database.isTransaction ||
+      !connection.isOpen ||
+      !connection.isTransaction ||
       !hasSqlitePostCommitScope(database) ||
       owner.suspended(database)
     ) {

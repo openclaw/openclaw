@@ -262,6 +262,20 @@ export function isSubagentEnvelopeSession(
   });
 }
 
+/** Visible spawns are interactive sessions; a dashboard key alone grants nothing. */
+export function isVisibleSpawnedSession(
+  sessionKey: string,
+  opts?: { cfg?: OpenClawConfig; store?: SessionCapabilityStore },
+): boolean {
+  if (!isDashboardSessionKey(sessionKey)) {
+    return false;
+  }
+  const entry = resolveSessionCapabilityEntry({ sessionKey, ...opts });
+  return (
+    entry?.createdVia === "spawn" && isStoredSubagentEnvelopeSession({ sessionKey, ...opts, entry })
+  );
+}
+
 /**
  * Resolve a persisted child envelope that is strong enough to carry authority.
  * Session-key shape alone is useful for fail-closed subagent restrictions, but

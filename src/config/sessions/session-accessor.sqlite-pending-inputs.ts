@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
 import { classifyAgentRunTerminalOutcome } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
@@ -11,6 +10,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -155,7 +155,7 @@ const owners = resolveGlobalSingleton(Symbol.for("openclaw.sessionPendingInputOw
     owner: SessionPendingInputOwner;
     sourceInputId: string;
   }>(),
-  transactionRelocations: new WeakMap<DatabaseSync, Map<SessionPendingInputOwner, string>>(),
+  transactionRelocations: new WeakMap<EngineConnection, Map<SessionPendingInputOwner, string>>(),
 }));
 
 const recoveredDedupeOwners = resolveGlobalSingleton(

@@ -65,10 +65,6 @@ function TimestampTime(props: { view: ReturnType<typeof prepareTimestamp> }) {
   );
 }
 
-export function renderSolidChatTimestamp(timestamp: number, metadata: JSX.Element[] = []) {
-  return <ChatTimestamp timestamp={timestamp} metadata={metadata} />;
-}
-
 export function ChatTimestamp(props: { timestamp: number; metadata?: JSX.Element[] }) {
   const view = createMemo(() => prepareTimestamp(props.timestamp));
   const hasMetadata = () => Boolean(props.metadata?.length);

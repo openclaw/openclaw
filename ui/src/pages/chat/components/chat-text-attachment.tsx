@@ -1,6 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
-import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
+import { createLazyCustomElementRequests } from "../../../app/lazy-custom-element.ts";
 import { MarkdownBlocks } from "../../../components/markdown-blocks-owner.ts";
 import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -11,6 +11,7 @@ import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-previe
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { AttachmentPreviewSkeleton } from "./chat-attachment-card-solid.tsx";
@@ -98,18 +99,12 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
   const [source, setSource] = createSignal(false);
   const [version, setVersion] = createSignal(0);
   const [retry, setRetry] = createSignal(0);
-  const [loaderRevision, setLoaderRevision] = createSignal(0);
-  let disposed = false;
-  const htmlPreviewLoader = new LazyCustomElementRequestController({
-    requestUpdate: () => {
-      if (!disposed) {
-        setLoaderRevision((value) => value + 1);
-      }
-    },
+  const htmlPreviewLoader = createLazyCustomElementRequests({
     get updateComplete() {
       return host.updateComplete;
     },
   });
+  const previewState = projectOwner(htmlPreviewLoader, (owner) => owner.visibleState);
   const htmlDocument = () => !props.plainText && isHtmlDocument(props.mimeType, props.label);
   const markdown = () => {
     const mimeType = props.mimeType.split(";", 1)[0]?.trim().toLowerCase();
@@ -205,13 +200,9 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
     () => htmlDocument() && text() !== null && !failed(),
     (active) => htmlPreviewLoader.requestWhileActive(htmlPreviewElement, active),
   );
-  onCleanup(() => {
-    disposed = true;
-    htmlPreviewLoader.requestWhileActive(htmlPreviewElement, false);
-  });
+  onCleanup(() => htmlPreviewLoader.requestWhileActive(htmlPreviewElement, false));
   const htmlLoadState = () => {
-    loaderRevision();
-    const state = htmlPreviewLoader.visibleState;
+    const state = previewState.read();
     return state?.status === "error" ? (
       <LazyViewError
         error={state.error}

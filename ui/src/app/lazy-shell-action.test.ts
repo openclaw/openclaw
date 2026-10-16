@@ -22,7 +22,7 @@ import type { ApplicationGatewaySnapshot } from "./context.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
   KEYBOARD_SHORTCUTS_ELEMENT,
-  type LazyCustomElementRequestController,
+  type LazyCustomElementRequests,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
 import {
@@ -78,7 +78,7 @@ type PaletteShell = {
   querySelector: HTMLElement["querySelector"];
 } & ShellLifecycle & {
     commandPaletteElement: TestOptionalCustomElement;
-    lazyCustomElements: LazyCustomElementRequestController;
+    lazyCustomElements: LazyCustomElementRequests;
     openPalette(): void;
     restorePendingLazyAction(): void;
     commandPaletteLoading: CommandPaletteLoadingState;

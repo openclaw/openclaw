@@ -63,9 +63,9 @@ export async function readExactSessionDeliveryContext(params: {
  */
 export async function extractDeliveryInfo(
   sessionKey: string | undefined,
-  options?: { cfg?: OpenClawConfig },
+  options?: { cfg?: OpenClawConfig; agentId?: string },
 ): Promise<DeliveryInfo> {
-  return (await extractDeliveryInfoBatch([sessionKey], options))[0]!;
+  return (await extractDeliveryInfoBatch([{ sessionKey, agentId: options?.agentId }], options))[0]!;
 }
 
 type DeliveryInfo = {
@@ -89,11 +89,12 @@ type DeliveryStoreRead = {
 
 /** Resolves one batch through the session owner; only detached delivery facts leave the read scope. */
 export async function extractDeliveryInfoBatch(
-  sessionKeys: readonly (string | undefined)[],
+  requests: readonly { sessionKey?: string; agentId?: string }[],
   options?: { cfg?: OpenClawConfig },
 ): Promise<DeliveryInfo[]> {
-  const parsed = sessionKeys.map((sessionKey) => ({
+  const parsed = requests.map(({ sessionKey, agentId }) => ({
     sessionKey,
+    agentId,
     ...resolveSessionThreadInfo(sessionKey),
   }));
   const results: DeliveryInfo[] = parsed.map(({ threadId }) => ({
@@ -115,10 +116,15 @@ export async function extractDeliveryInfoBatch(
   } catch {
     return results;
   }
-  function prepareDeliveryLookup(sessionKey: string, baseSessionKey: string): DeliveryLookup {
+  function prepareDeliveryLookup(
+    sessionKey: string,
+    baseSessionKey: string,
+    requestedAgentId?: string,
+  ): DeliveryLookup {
     const { agentId, canonicalKey: canonicalBaseKey } = resolveSessionStoreIdentity({
       cfg,
       sessionKey: baseSessionKey,
+      agentId: requestedAgentId,
     });
     const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey, storeAgentId: agentId });
     const incognito = isIncognitoSessionKey(sessionKey)
@@ -139,7 +145,7 @@ export async function extractDeliveryInfoBatch(
       storePaths: [...storePaths],
     };
   }
-  const lookups = parsed.flatMap(({ sessionKey, baseSessionKey }, index) => {
+  const lookups = parsed.flatMap(({ sessionKey, baseSessionKey, agentId }, index) => {
     if (!sessionKey || !baseSessionKey) {
       return [];
     }
@@ -149,7 +155,7 @@ export async function extractDeliveryInfoBatch(
           index,
           sessionKey,
           baseSessionKey,
-          lookup: prepareDeliveryLookup(sessionKey, baseSessionKey),
+          lookup: prepareDeliveryLookup(sessionKey, baseSessionKey, agentId),
         },
       ];
     } catch {
@@ -162,7 +168,7 @@ export async function extractDeliveryInfoBatch(
   >();
   const readExact = (storePath: string, lookup: DeliveryLookup) => {
     const candidateKeys = deliveryLookupExactKeys([...lookup.sessionKeys, ...lookup.baseKeys]);
-    const cacheKey = JSON.stringify([storePath, candidateKeys]);
+    const cacheKey = JSON.stringify([lookup.agentId, storePath, candidateKeys]);
     let read = exactReads.get(cacheKey);
     if (!read) {
       read = lookup.sessionKeys.some(isIncognitoSessionKey)

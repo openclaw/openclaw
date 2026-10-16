@@ -555,6 +555,7 @@ function postgresConnection(anchor: DatabaseSync): PostgresSqlConnection {
     [Symbol.for("openclaw.postgres-sync-connection")]: true,
     anchor,
     advisoryLockKey: 1n,
+    mutationRevision: 0,
     get isOpen() {
       return anchor.isOpen;
     },

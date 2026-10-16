@@ -719,7 +719,7 @@ describe("LINE send helpers", () => {
     await sendModule.pushTextMessageWithQuickReplies(
       "U-quick",
       "Pick one",
-      [label, ...Array.from({ length: 19 }, (_, index) => `Choice ${index + 1}`)],
+      ["", "  ", label, ...Array.from({ length: 19 }, (_, index) => `Choice ${index + 1}`)],
       { cfg: LINE_TEST_CFG },
     );
 
