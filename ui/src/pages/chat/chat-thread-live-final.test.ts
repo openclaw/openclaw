@@ -2,46 +2,34 @@ import { describe, expect, it } from "vitest";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import {
+  groupsOf,
+  message as simpleMessage,
+  messagesOf,
+  nativeMessage,
+  pendingText,
+  person,
+  queued,
+} from "./chat-thread-fixtures.test-support.ts";
 import { coalesceStreamRuns } from "./chat-thread-grouping.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { projectTranscriptIndex } from "./components/chat-transcript-message-index.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 
-const person = (id: string) => ({
-  senderId: id,
-  senderName: id,
-  senderIdentity: { type: "profile", id },
-});
-const user = (sendId: string, sender: string, seq: number) => ({
-  role: "user",
-  content: sendId,
-  timestamp: seq * 10,
-  __openclaw: { id: sendId, seq, idempotencyKey: sendId + ":user", ...person(sender) },
-});
-const assistant = (content: string, timestamp: number, id: string, seq: number) => ({
-  role: "assistant",
-  content,
-  timestamp,
-  __openclaw: { id, seq, runId: "active" },
-});
-function input(id: string, runId: string, content: string, acceptedAt = 30, details: object = {}) {
-  return {
-    id,
-    runId,
-    acceptedAt,
-    state: "queued" as const,
-    message: {
-      role: "user",
-      content,
-      timestamp: acceptedAt,
-      __openclaw: { id: `pending:${id}` },
-      ...details,
-    },
-  };
-}
+const user = (sendId: string, sender: string, seq: number) =>
+  nativeMessage("user", sendId, seq * 10, {
+    id: sendId,
+    seq,
+    idempotencyKey: sendId + ":user",
+    ...person(sender),
+  });
+const assistant = (content: string, timestamp: number, id: string, seq: number) =>
+  nativeMessage("assistant", content, timestamp, { id, seq, runId: "active" });
 const history = [user("earlier", "writer", 1), user("active", "reader", 2)];
-const pending = input("pending-peer", "peer", "Peer follow-up", 30, {
-  __openclaw: { id: "pending:pending-peer", ...person("writer") },
+const pending = pendingText("Peer follow-up", 30, {
+  id: "pending-peer",
+  runId: "peer",
+  message: { __openclaw: { id: "pending:pending-peer", ...person("writer") } },
 });
 const staleInput = () => ({
   ...pending,
@@ -81,7 +69,7 @@ function visibleRows(
 }
 function indexItems(
   items: ReturnType<typeof coalesceAgentRunFrames>,
-  labels: Parameters<typeof projectTranscriptIndex>[2],
+  labels: Parameters<typeof projectTranscriptIndex>[2] = { assistantName: "Assistant" },
 ) {
   const chain = {
     collapsedItems: items,
@@ -93,7 +81,7 @@ function indexItems(
 }
 function completed() {
   return rememberLiveTerminalRun(
-    { role: "assistant", content: "The answer being read.", timestamp: 40 },
+    simpleMessage("assistant", "The answer being read.", 40),
     "active",
   );
 }
@@ -106,15 +94,11 @@ describe("live terminal continuity with pending collaborators", () => {
   ])(
     "keeps the active input before progress through custody with runId=$runId, localQueue=$localQueue",
     ({ runId, localQueue }) => {
-      const local = {
-        id: "active-local",
+      const local = queued("active-local", "Current input", 10, "sending", {
         sendRunId: "active",
-        text: "Current input",
-        createdAt: 10,
         sendAttempts: 1,
-        sendState: "sending" as const,
-      };
-      const accepted = input("active-input", "active", local.text, 20);
+      });
+      const accepted = pendingText(local.text, 20, { id: "active-input", runId: "active" });
       for (const pendingInputs of [[], [accepted], [accepted, pending]]) {
         if (!localQueue && pendingInputs.length === 0) {
           continue;
@@ -196,22 +180,15 @@ describe("live terminal continuity with pending collaborators", () => {
         ...settled,
       });
       const groups = items.flatMap((item) =>
-        item.kind === "agent-run-frame"
-          ? item.parts.filter((part) => part.kind === "group")
-          : item.kind === "group"
-            ? [item]
-            : [],
+        item.kind === "agent-run-frame" ? groupsOf(item.parts) : groupsOf([item]),
       );
-      const visible = groups.flatMap((group) => group.messages.map((source) => source.message));
+      const visible = messagesOf(groups);
       if (lateTerminal) {
         expect(visible).toEqual(expect.arrayContaining(messages));
-        const intervening = groups.findIndex((group) =>
-          group.messages.some((source) => source.message === messages[2]),
+        const [intervening, final] = [messages[2], canonical].map((message) =>
+          groups.findIndex((group) => group.messages.some((source) => source.message === message)),
         );
-        const final = groups.findIndex((group) =>
-          group.messages.some((source) => source.message === canonical),
-        );
-        expect(final).toBeGreaterThan(intervening);
+        expect(final).toBeGreaterThan(intervening!);
       } else {
         expect(visible).toEqual([...history, stale.message]);
       }
@@ -220,25 +197,23 @@ describe("live terminal continuity with pending collaborators", () => {
   it.each(["interrupted", "cancelled"] as const)(
     "keeps earlier %s automation before a newly submitted message and its canonical receipt",
     (state) => {
-      const automation = {
-        ...input("earlier-automation", "automation-run", "Earlier scheduled maintenance", 30, {
+      const automation = pendingText("Earlier scheduled maintenance", 30, {
+        id: "earlier-automation",
+        runId: "automation-run",
+        state,
+        message: {
           provenance: { kind: "inter_session", sourceTool: "sessions_send" },
           senderSession: {
             sessionKey: "agent:main:cron:maintenance:run:earlier",
             label: "Scheduled maintenance",
           },
-        }),
-        state,
-      };
+        },
+      });
       const submitted = user("New follow-up", "reader", 4);
-      const submitting = {
-        id: "new-follow-up",
+      const submitting = queued("new-follow-up", "New follow-up", 40, "submitting", {
         sendRunId: "New follow-up",
-        text: "New follow-up",
-        createdAt: 40,
         sendSubmittedAtMs: 40,
-        sendState: "submitting" as const,
-      };
+      });
       const disposition =
         state === "interrupted"
           ? "Delivery interrupted. This saved agent update is not scheduled to retry."
@@ -285,7 +260,7 @@ describe("live terminal continuity with pending collaborators", () => {
       const index = indexItems(
         withCommentary ? [frame] : items,
         withCommentary
-          ? { assistantName: "Assistant" }
+          ? undefined
           : { assistantName: "Assistant", userId: "reader", userName: "Reader" },
       );
       expect(index.transcriptMessageKeys.get(key!)).toBe(frame.key);
@@ -297,24 +272,26 @@ describe("live terminal continuity with pending collaborators", () => {
     },
   );
   it("keeps standalone activity messages addressable for replies and anchors", () => {
-    const message = {
-      role: "toolResult",
-      toolCallId: "standalone-call",
-      content: "Stored tool result",
-      timestamp: 1,
-      __openclaw: { id: "activity-message", seq: 1 },
-    };
-    const groups = build({
-      messages: [message],
-      pendingInputs: [],
-      ...settled,
-    }).filter((item) => item.kind === "group");
+    const message = nativeMessage(
+      "toolResult",
+      "Stored tool result",
+      1,
+      { id: "activity-message", seq: 1 },
+      { toolCallId: "standalone-call" },
+    );
+    const groups = groupsOf(
+      build({
+        messages: [message],
+        pendingInputs: [],
+        ...settled,
+      }),
+    );
     expect(groups).toHaveLength(1);
     const items = coalesceAgentRunFrames([
       { kind: "activity-run", key: "standalone-activity", groups },
     ]);
     expect(items[0]?.kind).toBe("activity-run");
-    const index = indexItems(items, { assistantName: "Assistant" });
+    const index = indexItems(items);
     expect(index.transcriptMessageKeys.get(groups[0]!.messages[0]!.key)).toBe(
       "standalone-activity",
     );

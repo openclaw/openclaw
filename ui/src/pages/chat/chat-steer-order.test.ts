@@ -6,6 +6,7 @@ import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { activeHistory, createState } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
+import { nativeMessage } from "./chat-thread-fixtures.test-support.ts";
 import { projectTranscriptChain } from "./components/chat-transcript-message-index.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
@@ -20,12 +21,11 @@ it.each(["tool", "item"] as const)(
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const history = activeHistory("active-run");
-    const original = {
-      role: "user",
-      content: "Original prompt",
-      timestamp: 1,
-      __openclaw: { id: "original", idempotencyKey: "active-run:user", seq: 1 },
-    };
+    const original = nativeMessage("user", "Original prompt", 1, {
+      id: "original",
+      idempotencyKey: "active-run:user",
+      seq: 1,
+    });
     history.messages = [original];
     const state = createState(history);
     await loadChatHistory(state);
@@ -99,40 +99,32 @@ it.each(["tool", "item"] as const)(
     expect(before).toEqual(["Original prompt", "tool", "Already visible answer."]);
     // Durable sequence, not skewed event time, anchors output on either side of acceptance.
     const persistTool = (toolCallId: string, seq: number, timestamp: number) => {
-      const message = {
-        role: "assistant",
+      const message = nativeMessage(
+        "assistant",
+        [{ type: "toolcall", id: toolCallId, name: "read", arguments: { path: "README.md" } }],
         timestamp,
-        content: [
-          { type: "toolcall", id: toolCallId, name: "read", arguments: { path: "README.md" } },
-        ],
-        __openclaw: { id: toolCallId, seq, runId: "active-run" },
-      };
+        { id: toolCallId, seq, runId: "active-run" },
+      );
       applySessionMessagePayload(state, { runId: "active-run", message }, true, {
         kind: "history-delta",
       });
       return message;
     };
     const beforeTool = persistTool("read-before-steer", 2, 5_000);
-    const savedAnswer = {
-      role: "assistant",
-      content: "Already visible answer.",
-      timestamp: 1_000,
-      __openclaw: { id: "saved-answer", seq: 3, runId: "active-run" },
-    };
+    const savedAnswer = nativeMessage("assistant", "Already visible answer.", 1_000, {
+      id: "saved-answer",
+      seq: 3,
+      runId: "active-run",
+    });
     emitReply("", false, true);
     accept({ runId: "active-run", message: savedAnswer });
     expect(rows()).toEqual(before);
-    const steer = {
-      role: "user",
-      content: "Take over the other work too",
-      timestamp: 2_000,
-      __openclaw: {
-        id: "steer",
-        idempotencyKey: "steer-run:user",
-        seq: 4,
-        steerTargetRunId: "active-run",
-      },
-    };
+    const steer = nativeMessage("user", "Take over the other work too", 2_000, {
+      id: "steer",
+      idempotencyKey: "steer-run:user",
+      seq: 4,
+      steerTargetRunId: "active-run",
+    });
     accept({ message: steer });
     expect(rows()).toEqual([...before, steer.content]);
     history.messages = [original, beforeTool, savedAnswer, steer];
@@ -151,17 +143,12 @@ it.each(["tool", "item"] as const)(
     emitTool("read-before-steer", 3, 30_000, true);
     await vi.runOnlyPendingTimersAsync();
     expect(rows()).toEqual(continued);
-    const secondSteer = {
-      ...steer,
-      content: "Also inspect the second file",
-      timestamp: 300,
-      __openclaw: {
-        ...steer["__openclaw"],
-        id: "steer-2",
-        seq: 6,
-        idempotencyKey: "steer-run-2:user",
-      },
-    };
+    const secondSteer = nativeMessage("user", "Also inspect the second file", 300, {
+      ...steer["__openclaw"],
+      id: "steer-2",
+      seq: 6,
+      idempotencyKey: "steer-run-2:user",
+    });
     accept({ message: secondSteer });
     const accepted = [...continued.slice(0, -1), secondSteer.content, "Continued."];
     expect(rows()).toEqual(accepted);

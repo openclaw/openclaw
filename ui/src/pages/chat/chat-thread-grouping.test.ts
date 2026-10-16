@@ -1,8 +1,18 @@
 // @vitest-environment node
 import { beforeEach, expect, it } from "vitest";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import {
+  groupsOf,
+  message,
+  messagesOf,
+  nativeMessage,
+  pending,
+  queued,
+  signedText as signed,
+  toolResult,
+} from "./chat-thread-fixtures.test-support.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   collapseCompletedTurnWork,
@@ -15,11 +25,11 @@ import { resetChatThreadState } from "./chat-thread.ts";
 const sessionKey = "agent:main:dashboard:answers";
 const cli: MessageClientSource = { id: "cli", mode: "cli", displayName: "Release helper" };
 const web: MessageClientSource = { id: "openclaw-control-ui", mode: "webchat" };
-function message(role: string, content: unknown, timestamp: number, extra: object = {}) {
-  return { role, content, timestamp, ...extra };
-}
+const clients = [cli, web];
+const senderIdentity = { type: "profile", id: "same-person" };
+const origin = { sessionKey: "agent:main:main", agentId: "main", label: undefined };
 function cachedGroups(messages: unknown[]) {
-  return buildItems({ messages }).filter((item) => item.kind === "group");
+  return groupsOf(buildItems({ messages }));
 }
 function groupHistory(messages: unknown[], showReasoning = false) {
   return groupMessages(
@@ -38,44 +48,38 @@ function projected(messages: unknown[]) {
   );
 }
 function visible(items: ReturnType<typeof projected>) {
-  return items.flatMap((item) =>
-    item.kind === "group" ? item.messages.map((source) => source.message) : [],
-  );
+  return messagesOf(groupsOf(items));
 }
 function work(
   items: ReturnType<typeof projected>,
   kind: "work-group" | "activity-run" = "work-group",
 ) {
-  return items
-    .filter((item) => item.kind === "work-group" || item.kind === "activity-run")
-    .filter((item) => item.kind === kind)
-    .flatMap((item) =>
-      item.groups.flatMap((group) => group.messages.map((source) => source.message)),
-    );
+  return messagesOf(
+    items.flatMap((item) =>
+      (item.kind === "work-group" || item.kind === "activity-run") && item.kind === kind
+        ? item.groups
+        : [],
+    ),
+  );
 }
 function tool(id: string, timestamp: number, extra: object = {}) {
-  return message("toolResult", "Evidence", timestamp, {
-    toolCallId: id,
-    toolName: "read",
-    ...extra,
-  });
-}
-function signed(text: string, phase: string) {
-  return { type: "text", text, textSignature: JSON.stringify({ v: 1, id: text, phase }) };
+  return toolResult(id, "read", "Evidence", timestamp, extra);
 }
 function expectProvenance(messages: unknown[]) {
   const groups = cachedGroups(messages);
   expect(groups.map((group) => group.messages.map((source) => source.message))).toEqual([messages]);
-  expect(groups.flatMap((group) => group.messages).map((entry) => entry.duplicateCount)).toEqual([
-    undefined,
-    undefined,
-  ]);
+  expect(groups.flatMap((group) => group.messages).map((entry) => entry.duplicateCount)).toEqual(
+    messages.map(() => undefined),
+  );
   return groups;
 }
-function expectHistory(messages: unknown[], shown: unknown[], folded: unknown[]) {
+function expectHistory(messages: unknown[], shown: number[], folded: number[]) {
   for (const history of [messages, structuredClone(messages)]) {
     const items = projected(history);
-    expect({ shown: visible(items), folded: work(items) }).toEqual({ shown, folded });
+    expect({ shown: visible(items), folded: work(items) }).toEqual({
+      shown: shown.map((index) => messages[index]),
+      folded: folded.map((index) => messages[index]),
+    });
     expect(items.filter((item) => item.kind === "work-group")).toHaveLength(folded.length ? 1 : 0);
     if (folded.length) {
       expect(items[1]?.kind).toBe("work-group");
@@ -85,42 +89,37 @@ function expectHistory(messages: unknown[], shown: unknown[], folded: unknown[])
 beforeEach(() => resetChatThreadState());
 
 it("keeps each queued message in the same row through acceptance and persistence", () => {
-  const queue: ChatQueueItem[] = ["First queued input", "Second queued input"].map(
-    (text, index) => ({
-      id: `local-${index}`,
-      text,
-      createdAt: index + 1,
+  const queue: ChatQueueItem[] = ["First queued input", "Second queued input"].map((text, index) =>
+    queued(`local-${index}`, text, index + 1, "waiting-reconnect", {
       sendRunId: `send-${index}`,
-      sendState: "waiting-reconnect",
       sendAttempts: 1,
     }),
   );
-  const pendingInputs = queue.map((item, index) => ({
-    id: `accepted-${index}`,
-    runId: item.sendRunId,
-    state: "queued" as const,
-    acceptedAt: index + 1,
-    message: message("user", item.text, index + 1, {
-      __openclaw: { id: `pending:accepted-${index}` },
-    }),
-  }));
+  const pendingInputs = queue.map((item, index) =>
+    pending(
+      `accepted-${index}`,
+      item.sendRunId,
+      nativeMessage("user", item.text, index + 1, { id: `pending:accepted-${index}` }),
+      index + 1,
+    ),
+  );
   const persisted = queue.map((item, index) =>
-    message("user", item.text, index + 1, {
-      __openclaw: {
-        id: `persisted-${index}`,
-        seq: index + 1,
-        idempotencyKey: `${item.sendRunId}:user`,
-        runId: `execution-${index}`,
-      },
+    nativeMessage("user", item.text, index + 1, {
+      id: `persisted-${index}`,
+      seq: index + 1,
+      idempotencyKey: `${item.sendRunId}:user`,
+      runId: `execution-${index}`,
     }),
   );
   const render = (input: Pick<CachedChatItemsProps, "messages" | "pendingInputs">) =>
-    buildItems({
-      paneId: "queued-input-continuity",
-      sessionKey: "agent:main:dashboard:queued-inputs",
-      queue,
-      ...input,
-    }).filter((item) => item.kind === "group");
+    groupsOf(
+      buildItems({
+        paneId: "queued-input-continuity",
+        sessionKey: "agent:main:dashboard:queued-inputs",
+        queue,
+        ...input,
+      }),
+    );
   const initial = render({ messages: [] });
   const rowKeys = initial.map((group) => group.key);
   const messageKeys = initial.map((group) => group.messages[0]?.key);
@@ -138,34 +137,31 @@ it("keeps each queued message in the same row through acceptance and persistence
     expect(groups.map((group) => group.messages[0]?.key)).toEqual(messageKeys);
   }
 });
-it("groups messages from the same collected sources without losing provenance", () => {
-  const clients = [cli, web];
-  const from = (content: string) =>
-    message("user", content, 1, {
-      __openclaw: {
+it.each([
+  {
+    name: "collected clients",
+    from: (content: string) =>
+      nativeMessage("user", content, 1, {
         senderId: "same-person",
-        senderIdentity: { type: "profile", id: "same-person" },
+        senderIdentity: { ...senderIdentity },
         transport: { clients },
-      },
-    });
-  const groups = expectProvenance([from("Continue"), from("Next turn")]);
-  expect(groups.map((group) => group.sourceClients)).toEqual([clients]);
-  expect(groups.map((group) => group.sender?.identity)).toEqual([
-    { type: "profile", id: "same-person" },
-  ]);
-});
-
-it("preserves forwarded provenance for the same source", () => {
-  const origin = { sessionKey: "agent:main:main", agentId: "main", label: undefined };
-  const messages = ["Report", "Second report"].map((text) =>
-    message("assistant", text, 1, {
-      senderLabel: "Forwarded from main",
-      senderSession: { ...origin },
-    }),
-  );
-  const groups = expectProvenance(messages);
-  expect(groups.map((group) => group.senderSession)).toEqual([origin]);
-  expect(groups.map((group) => group.senderLabel)).toEqual(["Forwarded from main"]);
+      }),
+    attribution: (group: MessageGroup) => [group.sourceClients, group.sender?.identity],
+    expected: [clients, senderIdentity],
+  },
+  {
+    name: "forwarded session",
+    from: (content: string) =>
+      message("assistant", content, 1, {
+        senderLabel: "Forwarded from main",
+        senderSession: { ...origin },
+      }),
+    attribution: (group: MessageGroup) => [group.senderSession, group.senderLabel],
+    expected: [origin, "Forwarded from main"],
+  },
+])("groups the same $name without losing provenance", ({ from, attribution, expected }) => {
+  const groups = expectProvenance([from("First report"), from("Second report")]);
+  expect(groups.map(attribution)).toEqual([expected]);
 });
 it.each([
   { type: "image", source: { type: "url", url: "https://example.com/result.png" } },
@@ -177,7 +173,6 @@ it.each([
     type: "canvas",
     preview: {
       kind: "canvas",
-      surface: "assistant_message",
       render: "url",
       url: "https://example.com/result",
     },
@@ -245,27 +240,25 @@ it.each([true, false])(
   "keeps work with its answer above a trailing steer (working=%s)",
   (runWorking) => {
     const runId = "target-run";
-    const prompt = message("user", "Inspect the file", 1, {
-      __openclaw: { idempotencyKey: `${runId}:user` },
+    const prompt = nativeMessage("user", "Inspect the file", 1, {
+      idempotencyKey: `${runId}:user`,
     });
     const evidence = tool("read-file", 2, { runId });
     const answer = message("assistant", "File inspected", 3, { runId });
-    const queued = message("user", "Queued follow-up", 4, {
-      __openclaw: { idempotencyKey: "queued-run:user" },
+    const queuedMessage = nativeMessage("user", "Queued follow-up", 4, {
+      idempotencyKey: "queued-run:user",
     });
-    const steer = message("user", "Also check permissions", 5, {
-      __openclaw: {
-        idempotencyKey: "steer-run:user",
-        steerTargetRunId: runId,
-      },
+    const steer = nativeMessage("user", "Also check permissions", 5, {
+      idempotencyKey: "steer-run:user",
+      steerTargetRunId: runId,
     });
-    const ordered = [prompt, evidence, answer, queued, steer];
+    const ordered = [prompt, evidence, answer, queuedMessage, steer];
     const items = collapseCompletedTurnWork(groupHistory(ordered), {
       sessionKey,
       runWorking,
       session: { key: sessionKey, lastRunId: runId, status: "done", runtimeMs: 321 },
     });
-    expect(visible(items)).toEqual(runWorking ? ordered : [prompt, answer, queued, steer]);
+    expect(visible(items)).toEqual(runWorking ? ordered : [prompt, answer, queuedMessage, steer]);
     expect(work(items)).toEqual(runWorking ? [] : [evidence]);
     if (!runWorking) {
       expect(items[1]).toMatchObject({ kind: "work-group", replyRunId: runId, durationMs: 321 });
@@ -281,7 +274,7 @@ it.each<[string, object, boolean, boolean?]>([
 ])("preserves %s through history reload", (_name, extra, preserved, legacy) => {
   const run = { runId: "completed-run" };
   const messages = [
-    message("user", "Inspect the file", 1, { __openclaw: run }),
+    nativeMessage("user", "Inspect the file", 1, run),
     tool("read-file", 2, { __openclaw: run }),
     message("assistant", "File verified — café 雪 🦞", 3, {
       stopReason: "stop",
@@ -298,30 +291,19 @@ it.each<[string, object, boolean, boolean?]>([
       stopReason: "stop",
     }),
   ];
-  expectHistory(
-    messages,
-    [messages[0], ...(preserved ? [messages[2]] : []), messages[3]],
-    [messages[1], ...(!preserved ? [messages[2]] : [])],
-  );
+  expectHistory(messages, preserved ? [0, 2, 3] : [0, 3], preserved ? [1] : [1, 2]);
 });
-it.each([
-  { phase: "final_answer", withTool: false },
-  { phase: "commentary", withTool: true },
-])(
-  "preserves signed answer before $phase, tool=$withTool through history reload",
-  ({ phase, withTool }) => {
-    const run = { __openclaw: { runId: "run" } };
-    const first = message("user", "Investigate", 1, run);
-    const answer = message("assistant", [signed("Substantive answer", "final_answer")], 2, run);
-    const evidence = withTool ? [tool("call", 3, run)] : [];
-    const later = message("assistant", [signed("Later update", phase)], 4, run);
-    expectHistory(
-      [first, answer, ...evidence, later],
-      [first, answer, ...(phase === "final_answer" ? [later] : [])],
-      [...evidence, ...(phase === "commentary" ? [later] : [])],
-    );
-  },
-);
+it.each<[string, boolean, number[], number[]]>([
+  ["final_answer", false, [0, 1, 2], []],
+  ["commentary", true, [0, 1], [2, 3]],
+])("preserves signed answer before %s through history reload", (phase, withTool, shown, folded) => {
+  const run = { __openclaw: { runId: "run" } };
+  const first = message("user", "Investigate", 1, run);
+  const answer = message("assistant", [signed("Substantive answer", "final_answer")], 2, run);
+  const evidence = withTool ? [tool("call", 3, run)] : [];
+  const later = message("assistant", [signed("Later update", phase)], 4, run);
+  expectHistory([first, answer, ...evidence, later], shown, folded);
+});
 
 it("keeps independent-run trailing activity with its owner", () => {
   const messages = [
