@@ -3,7 +3,10 @@ import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
-import { seedDeviceAuthToken } from "../infra/device-auth-store.test-support.js";
+import {
+  seedDeviceAuthToken,
+  readDeviceAuthTokenForTest,
+} from "../infra/device-auth-store.test-support.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -15,7 +18,8 @@ import {
   detectLegacyDeviceAuth,
   migrateLegacyDeviceAuth,
 } from "../infra/state-migrations.device-auth.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
@@ -199,17 +203,20 @@ describe("noteDevicePairingHealth", () => {
     await withOpenClawTestState(
       { prefix: "openclaw-doctor-device-auth-debt-", env: { OPENCLAW_TEST_FAST: "1" } },
       async (state) => {
-        openOpenClawStateDatabase({ env: state.env });
         const expectedToken = "synthetic-legacy-token";
         const sourcePath = await state.writeText(
           "identity/device-auth.json",
           legacyDeviceAuthContents,
         );
         // Migration lock release retires native handles; each read reacquires the owner.
-        const readTokenRow = () =>
-          openOpenClawStateDatabase({ env: state.env })
-            .db.prepare("SELECT token FROM device_auth_tokens WHERE device_id = ? AND role = ?")
-            .get("synthetic-device", "operator");
+        const readTokenRow = () => {
+          const entry = readDeviceAuthTokenForTest({
+            env: state.env,
+            deviceId: "synthetic-device",
+            role: "operator",
+          });
+          return entry ? { token: entry.token } : undefined;
+        };
         let rowAtRemoval: unknown;
         let removalAttempts = 0;
         __setFsSafeTestHooksForTest({

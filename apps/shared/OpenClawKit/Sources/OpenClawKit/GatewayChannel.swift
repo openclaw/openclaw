@@ -651,7 +651,8 @@ public actor GatewayChannelActor {
                     deviceId: identity.deviceId,
                     role: role,
                     gatewayID: options.deviceAuthGatewayID,
-                    profile: options.deviceIdentityProfile)
+                    profile: options.deviceIdentityProfile,
+                    observedToken: selectedAuth.authDeviceToken)
             }
             throw error
         }
@@ -754,7 +755,7 @@ extension GatewayChannelActor {
         } else {
             .none
         }
-        return SelectedConnectAuth(
+        var selected = SelectedConnectAuth(
             authToken: authToken,
             authBootstrapToken: authBootstrapToken,
             authDeviceToken: authDeviceToken,
@@ -764,6 +765,15 @@ extension GatewayChannelActor {
             storedScopes: storedEntry?.scopes,
             authSource: authSource,
             suppressedDeviceTokenRetry: suppressedDeviceTokenRetry)
+        if explicitBootstrapToken != nil, let deviceId {
+            selected.observedTokens = DeviceAuthStore.observeTokens(
+                deviceId: deviceId,
+                gatewayID: options.deviceAuthGatewayID,
+                profile: options.deviceIdentityProfile)
+        } else if let storedToken {
+            selected.observedTokens[options.role] = storedToken
+        }
+        return selected
     }
 
     nonisolated static func requestedScopesExceedStoredToken(
@@ -868,28 +878,29 @@ extension GatewayChannelActor {
     private func persistIssuedDeviceToken(
         authSource: GatewayAuthSource,
         deviceId: String,
-        role: String,
-        token: String,
-        scopes: [String],
+        issuance: (role: String, token: String, scopes: [String]),
         deviceAuthGatewayID: String?,
-        deviceIdentityProfile: GatewayDeviceIdentityProfile) -> Bool
+        deviceIdentityProfile: GatewayDeviceIdentityProfile,
+        expectedToken: String?) -> Bool
     {
         let persistedScopes: [String]
         if authSource == .bootstrapToken {
             guard self.shouldPersistBootstrapHandoffTokens(),
-                  let filteredScopes = self.filteredBootstrapHandoffScopes(role: role, scopes: scopes)
+                  let filteredScopes = self.filteredBootstrapHandoffScopes(role: issuance.role, scopes: issuance.scopes)
             else { return false }
             persistedScopes = filteredScopes
         } else {
-            persistedScopes = scopes
+            persistedScopes = issuance.scopes
         }
         return DeviceAuthStore.storeTokenResult(
             deviceId: deviceId,
-            role: role,
-            token: token,
+            role: issuance.role,
+            token: issuance.token,
             scopes: persistedScopes,
             gatewayID: deviceAuthGatewayID,
-            profile: deviceIdentityProfile).persisted
+            profile: deviceIdentityProfile,
+            expectedToken: expectedToken,
+            onlyIfUnchanged: true).persisted
     }
 
     private func handleConnectResponse(
@@ -946,11 +957,10 @@ extension GatewayChannelActor {
             if let identity, options.allowsDeviceAuthPersistence, self.persistIssuedDeviceToken(
                 authSource: self.lastAuthSource,
                 deviceId: identity.deviceId,
-                role: authRole,
-                token: deviceToken,
-                scopes: scopes,
+                issuance: (role: authRole, token: deviceToken, scopes: scopes),
                 deviceAuthGatewayID: deviceAuthGatewayID,
-                deviceIdentityProfile: deviceIdentityProfile)
+                deviceIdentityProfile: deviceIdentityProfile,
+                expectedToken: selectedAuth.observedTokens[authRole])
             {
                 persistedRoles.insert(authRole)
             }
@@ -969,11 +979,10 @@ extension GatewayChannelActor {
                    self.persistIssuedDeviceToken(
                        authSource: .bootstrapToken,
                        deviceId: identity.deviceId,
-                       role: authRole,
-                       token: deviceToken,
-                       scopes: scopes,
+                       issuance: (role: authRole, token: deviceToken, scopes: scopes),
                        deviceAuthGatewayID: deviceAuthGatewayID,
-                       deviceIdentityProfile: deviceIdentityProfile)
+                       deviceIdentityProfile: deviceIdentityProfile,
+                       expectedToken: selectedAuth.observedTokens[authRole])
                 {
                     persistedRoles.insert(authRole)
                 }

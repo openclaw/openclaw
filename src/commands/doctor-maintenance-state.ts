@@ -4,6 +4,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
+import { runWithDoctorMigrationBackup } from "../infra/update-doctor-migration-attribution.js";
 import {
   createUpdateDoctorDatabaseWriteCapture,
   DoctorMaintenanceRefusalError,
@@ -20,6 +21,7 @@ import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-st
 import { assertDoctorAgentLeaseAdmission } from "./doctor-agent-lease-refusal.js";
 import { acquireDoctorGatewayMaintenanceOwner } from "./doctor-maintenance-foreground.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
+import { captureFreshDoctorMigrationTables } from "./doctor-migration-backup.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
 
 /** Database custody can change paths while stopped-service custody remains with Doctor. */
@@ -205,7 +207,11 @@ export async function createDoctorMaintenanceState(options: {
     run<T>(operation: () => T): T {
       // Cancellation stops read-only inspections; admitted writers retain their resource scope.
       return resources!.run(() =>
-        inspections!.run(() => (capture ? capture.run(operation) : operation())),
+        inspections!.run(() =>
+          runWithDoctorMigrationBackup(captureFreshDoctorMigrationTables, () =>
+            capture ? capture.run(operation) : operation(),
+          ),
+        ),
       );
     },
     async acquire() {

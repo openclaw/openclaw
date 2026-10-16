@@ -12,6 +12,7 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { runClientCredentialOperation } from "../infra/client-credential-store.js";
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -47,7 +48,12 @@ function useTempHome(): string {
 function readExecApprovals(): {
   socket?: { token?: string };
 } {
-  return readExecApprovalsSnapshot().file;
+  const result = runClientCredentialOperation(process.env, { kind: "socket.read" });
+  return {
+    socket: {
+      token: result.kind === "socket" ? (result.socket?.socket_token ?? undefined) : undefined,
+    },
+  };
 }
 
 function rewriteSignedPayload(
@@ -236,7 +242,7 @@ describe("agent runtime identity token", () => {
       kind: "agentRuntime",
       ...params,
     });
-    expect(readExecApprovalsSnapshot().exists).toBe(false);
+    expect(readExecApprovals().socket?.token).toBeUndefined();
 
     await expect(
       runtimeToken.createAgentRuntimeIdentity({
@@ -650,7 +656,7 @@ describe("agent runtime identity token", () => {
     await expect(
       runtimeToken.verifyAgentRuntimeIdentityToken("not-a-valid-token"),
     ).resolves.toBeUndefined();
-    expect(readExecApprovalsSnapshot().exists).toBe(false);
+    expect(readExecApprovals().socket?.token).toBeUndefined();
   });
 
   it("rejects a shortened signature or a changed requesting UI", async () => {
@@ -730,7 +736,7 @@ describe("agent runtime identity token", () => {
   );
 
   it.each([false, true])(
-    "queues token verification behind approvals updates and rechecks expiry (expires: %s)",
+    "checks token expiry during concurrent approvals updates (expires: %s)",
     async (expires) => {
       const runtimeToken = await importRuntimeTokenModule();
       const { updateExecApprovals } = await import("../infra/exec-approvals.js");
@@ -745,8 +751,7 @@ describe("agent runtime identity token", () => {
       const write = updateExecApprovals({
         update: { kind: "replace", file: readExecApprovalsSnapshot().file },
       });
-      // Parallel identity reads retain their own expiry check while the shared
-      // writer settles an earlier approvals command.
+      // Credential reads check expiry independently of shared policy updates.
       const verifications = Array.from({ length: count }, () =>
         runtimeToken.verifyAgentRuntimeIdentityToken(token),
       );

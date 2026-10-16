@@ -1,5 +1,8 @@
 import { AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
-import { MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import {
+  CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
+  MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION,
+} from "./openclaw-state-db-contract.js";
 
 /** Destination versions, declared only with proof through the complete migration runner. */
 export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
@@ -24,6 +27,14 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     31: ["memory_index_sources", "memory_index_chunks"],
   },
   state: {
+    [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [
+      "device_identities",
+      "device_auth_tokens",
+      "gateway_origin_device_tokens",
+      "exec_approvals_config",
+      "sqlite_stat1",
+      "sqlite_stat4",
+    ],
     [MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION]: ["meeting_transcript_sessions"],
     26: ["session_state_heads", "sqlite_stat1", "sqlite_stat4"],
     27: ["acp_replay_events", "skill_usage", "state_leases", "sqlite_stat1", "sqlite_stat4"],

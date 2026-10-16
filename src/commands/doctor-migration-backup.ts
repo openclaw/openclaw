@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -29,6 +29,7 @@ import {
 } from "../infra/sqlite-integrity.js";
 import {
   createScopedMigrationSnapshot,
+  createScopedMigrationSnapshotSync,
   inspectScopedMigrationSnapshot,
   inspectScopedMigrationTables,
   ScopedMigrationSnapshotUnsupportedError,
@@ -38,6 +39,7 @@ import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.j
 import type { PublishedSqliteFileGuard } from "../infra/sqlite-snapshot.types.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
+import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
@@ -62,6 +64,53 @@ import { createDoctorRehearsalDatabaseCoverage } from "./doctor-rehearsal-databa
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
 
+/** A standalone retirement needs a fresh snapshot from the same source transaction. */
+export function captureFreshDoctorMigrationTables(
+  db: DatabaseSync,
+  options: { path: string; env: NodeJS.ProcessEnv; tables: readonly string[] },
+) {
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (hasUpdateDoctorMigrationCapture()) {
+    throw new Error("Updater migration requires its captured source generation.");
+  }
+  if (!maintenance?.ownsSchemaMaintenance || !db.isTransaction) {
+    throw new Error(
+      "Fresh migration backup requires schema maintenance and its source transaction.",
+    );
+  }
+  const assertCurrent = () => {
+    maintenance.assertAdmission();
+    maintenance.assertDatabaseAccess(options.path);
+    if (!db.isOpen || !db.isTransaction) {
+      throw new Error("Fresh migration backup lost its source transaction.");
+    }
+  };
+  assertCurrent();
+  const backupId = randomUUID();
+  const backup = createScopedMigrationSnapshotSync(db, {
+    sourcePath: options.path,
+    targetPath: `${options.path}.pre-startup-migration-${backupId}.scoped.bak`,
+    tables: options.tables,
+    assertCurrent,
+  });
+  recordDoctorMigrationBackups(
+    options.env,
+    backupId,
+    [
+      {
+        path: options.path,
+        identity: statSync(options.path, { bigint: true }),
+        archivePath: backup.path,
+      },
+    ],
+    true,
+  );
+  return {
+    capture: { path: options.path, generation: backup.generation, assertCurrent },
+    backupPath: backup.path,
+  };
+}
+
 /** Preserve the old database generation before Doctor advances its schemas. */
 export async function backupDoctorMigrationDatabases(params: {
   env: NodeJS.ProcessEnv;
@@ -77,6 +126,7 @@ export async function backupDoctorMigrationDatabases(params: {
 }): Promise<
   MigrationMessages & {
     versionMigrations?: NonNullable<OpenClawDatabaseSchemaPreflight["pendingMigrations"]>;
+    postgresGenerations?: Record<string, string>;
   }
 > {
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
@@ -131,8 +181,13 @@ export async function backupDoctorMigrationDatabases(params: {
   if (postgresPaths.size > 0) {
     const { backupDoctorPostgresMigration } = await import("./doctor-postgres-migration.js");
     const changes: string[] = [];
+    const postgresGenerations: Record<string, string> = {};
     for (const [pathname, input] of postgresPaths) {
-      changes.push(...(await backupDoctorPostgresMigration(pathname, input, maintenance)));
+      const backup = await backupDoctorPostgresMigration(pathname, input, maintenance);
+      changes.push(...backup.changes);
+      if (backup.generation !== undefined) {
+        postgresGenerations[pathname] = backup.generation;
+      }
     }
     const nativePaths = [...pending].filter((pathname) => !postgresPaths.has(pathname));
     if (!postgresPaths.has(sharedPath) && existsSync(sharedPath)) {
@@ -150,6 +205,7 @@ export async function backupDoctorMigrationDatabases(params: {
       ...native,
       changes: [...changes, ...native.changes],
       versionMigrations: params.pendingMigrations,
+      ...(Object.keys(postgresGenerations).length > 0 ? { postgresGenerations } : {}),
     };
   }
   const migrationTables = new Map<string, readonly string[]>();

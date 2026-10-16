@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as DeviceAuthStoreModule from "../infra/device-auth-store.js";
-import type * as DeviceIdentityModule from "../infra/device-identity.js";
+import type * as DeviceIdentityModule from "../infra/device-identity-async.js";
 import type * as NodeHostConfigModule from "../node-host/config.js";
 
 const {
@@ -9,14 +9,14 @@ const {
   access,
   stat,
   loadNodeHostConfig,
-  loadDeviceIdentityIfPresent,
+  loadDeviceIdentityIfPresentAsync,
   loadDeviceAuthTokenReadOnly,
 } = vi.hoisted(() => ({
   runExec: vi.fn(),
   access: vi.fn(),
   stat: vi.fn(),
   loadNodeHostConfig: vi.fn(),
-  loadDeviceIdentityIfPresent: vi.fn(),
+  loadDeviceIdentityIfPresentAsync: vi.fn(),
   loadDeviceAuthTokenReadOnly: vi.fn(),
 }));
 vi.mock("../process/exec.js", () => ({ runExec }));
@@ -31,9 +31,9 @@ vi.mock("../node-host/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof NodeHostConfigModule>()),
   loadNodeHostConfig,
 }));
-vi.mock("../infra/device-identity.js", async (importOriginal) => ({
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
   ...(await importOriginal<typeof DeviceIdentityModule>()),
-  loadDeviceIdentityIfPresent,
+  loadDeviceIdentityIfPresentAsync,
 }));
 vi.mock("../infra/device-auth-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof DeviceAuthStoreModule>()),
@@ -59,7 +59,7 @@ beforeEach(() => {
   });
   stat.mockResolvedValue({ isFile: () => true });
   loadNodeHostConfig.mockResolvedValue(null);
-  loadDeviceIdentityIfPresent.mockReturnValue(null);
+  loadDeviceIdentityIfPresentAsync.mockResolvedValue(null);
   loadDeviceAuthTokenReadOnly.mockResolvedValue(null);
 });
 afterEach(() => {
@@ -117,7 +117,7 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
         nodeId: "paired-node",
         gateway: { host: "gateway.example", port: 18789 },
       });
-      loadDeviceIdentityIfPresent.mockReturnValue({ deviceId: "paired-device" });
+      loadDeviceIdentityIfPresentAsync.mockResolvedValue({ deviceId: "paired-device" });
       loadDeviceAuthTokenReadOnly.mockResolvedValue({ token: "paired-node-token" });
       const plan = await buildNodeInstallPlan({
         env: {

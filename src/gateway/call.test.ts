@@ -242,8 +242,8 @@ let gatewayClientRequest: GatewayClientRequestImpl = async (method, params, opts
 };
 let gatewayClientStopAndWait = async () => {};
 
-vi.mock("./client.js", () => ({
-  prepareGatewayClientDeviceAuth: vi.fn(async () => {}),
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
   isGatewayConnectAssemblyError: (value: unknown) => connectAssemblyErrorState.has(value),
   GatewayClient: class {
     constructor(opts: GatewayClientOptions) {

@@ -158,6 +158,12 @@ const statePostgresSchemaV26 = {
   postgresFragments: statePostgresSchema.postgresFragments,
 };
 
+// v24 through v26 share this PostgreSQL catalog; v27 retires the credential tables.
+const statePostgresV26 = {
+  ...statePostgresSchema,
+  postgres: `${runtime.eagerSql}\n${runtime.clientCredentialSource.sql}`,
+};
+
 export const stateEngineSchema: StoreSchema = {
   id: "state",
   version: OPENCLAW_STATE_SCHEMA_VERSION,

@@ -15,6 +15,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js"
 import manifest from "../../state/postgres-schema.generated/manifest.json" with { type: "json" };
 import { statePostgresRuntime } from "../../state/postgres-schema.generated/runtime.js";
 import metadata from "../../state/postgres-schema.generated/state-port.json" with { type: "json" };
+import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../client-credential-schema.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../sqlite-schema-sql.js";
@@ -44,7 +45,11 @@ export async function loadStatePortDescriptor(
       );
     }
   }
-  const catalog = statePostgresRuntime.expectedCatalog;
+  const source =
+    sourceVersion !== OPENCLAW_STATE_SCHEMA_VERSION
+      ? statePostgresRuntime.clientCredentialSource
+      : undefined;
+  const catalog = [...statePostgresRuntime.expectedCatalog, ...(source?.expectedCatalog ?? [])];
   // The generated catalog owns these tagged facts; project only the copy fields.
   const columns = catalog.filter(
     (fact): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column",
@@ -79,17 +84,26 @@ export async function loadStatePortDescriptor(
   for (const table of DOCTOR_OWNED_STATE_TABLES) {
     sqliteFragments.set(table, extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table));
   }
+  const eager = schema(
+    metadata,
+    statePostgresRuntime.eagerSql,
+    metadata.sqliteRanges
+      .map(([start, end]) => OPENCLAW_STATE_SCHEMA_SQL.slice(start, end))
+      .join("\n"),
+  );
+  if (source) {
+    const credentials = schema(source, source.sql, CLIENT_CREDENTIAL_LEGACY_TABLES_SQL);
+    eager.sqlite += `\n${credentials.sqlite}`;
+    eager.preData += `\n${credentials.preData}`;
+    eager.postData += `\n${credentials.postData}`;
+    eager.tables.push(...credentials.tables);
+    eager.expectedCatalog.push(...credentials.expectedCatalog);
+  }
   const descriptor: PortDescriptor = {
     id: "state",
     version: sourceVersion,
     minimumPostgresVersion: manifest.minimumPostgresVersion,
-    ...schema(
-      metadata,
-      statePostgresRuntime.eagerSql,
-      metadata.sqliteRanges
-        .map(([start, end]) => OPENCLAW_STATE_SCHEMA_SQL.slice(start, end))
-        .join("\n"),
-    ),
+    ...eager,
     fragments: metadata.fragments.map((fragment) => {
       const runtime = statePostgresRuntime.fragments.find((entry) => entry.id === fragment.id)!;
       return Object.assign(schema(fragment, runtime.sql, sqliteFragments.get(fragment.id)!), {
@@ -109,6 +123,11 @@ export async function loadStatePortDescriptor(
       return { version, migrationRequired: false, pendingColumns: {} };
     },
     async admit(file, input) {
+      // Historical SQLite images use their descriptor; restored PG anchors still
+      // require owner admission against the exact predecessor without migrating.
+      if (sourceVersion !== OPENCLAW_STATE_SCHEMA_VERSION && !input) {
+        return;
+      }
       return withEngineStoreAdmission(() => {
         using anchor = openNodeSqliteDatabase(file);
         const selected = openEngineStore({
@@ -120,6 +139,7 @@ export async function loadStatePortDescriptor(
           openSqlite: () => assertOpenClawStateDatabaseForMaintenance(anchor, { pathname: file }),
           admitPostgres: admitStatePostgres,
           existingOnly: true,
+          existingVersion: sourceVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
         });
         if (selected !== anchor) {
           selected.close();
@@ -148,6 +168,5 @@ export async function loadStatePortDescriptor(
             : fact,
         ),
         inspectSqliteSource: undefined,
-        admit: undefined,
       };
 }

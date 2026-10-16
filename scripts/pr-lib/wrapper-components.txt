@@ -2599,3 +2599,14 @@ src/agents/main-session-recovery/main-session-recovery-lifecycle.ts
 src/agents/run-termination.ts
 src/config/sessions/session-run-lifecycle-projection.ts
 src/shared/agent-liveness.ts
+src/infra/client-credential-migration-data.ts
+src/infra/client-credential-migration.ts
+src/infra/client-credential-native-bootstrap.ts
+src/infra/client-credential-native-tokens.ts
+src/infra/client-credential-operations.ts
+src/infra/client-credential-readiness.ts
+src/infra/client-credential-receipt.ts
+src/infra/client-credential-schema.ts
+src/infra/client-credential-store.ts
+src/infra/device-identity-material.ts
+src/infra/exec-approvals-config.ts

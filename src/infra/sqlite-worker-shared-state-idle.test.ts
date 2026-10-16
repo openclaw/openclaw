@@ -6,6 +6,7 @@ import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -61,7 +62,6 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 const minute = 60_000;
-const emptyRead = { entry: null, expectedToken: null };
 const contextFor = (prefix: string) =>
   captureOpenClawStateWorkerContext({
     env: { OPENCLAW_STATE_DIR: dirs.make(prefix) },
@@ -164,42 +164,42 @@ it("retains pressure retirement across path close and releases its subscription 
 it("reuses the original worker until its 30-minute idle deadline, resetting it on real work", async () => {
   const f = await fixture();
   const originalExpiry = f.scheduled(30 * minute);
-  expect(await f.read()).toEqual(emptyRead);
+  expect(await f.read()).toBeUndefined();
   originalExpiry();
   expect(f.worker.threadId).not.toBe(-1);
   const exited = once(f.worker, "exit");
   f.scheduled(30 * minute)();
   await exited;
-  expect(await f.read()).toEqual(emptyRead);
+  expect(await f.read()).toBeUndefined();
 });
 
 const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 const read = {
-  type: "deviceAuth.read",
-  input: { deviceId: "idle-fixture:idle-custody", role: "operator", readOnly: false },
+  type: "nativeHookRelay.read",
+  input: { relayId: "idle-fixture:idle-custody" },
 } as const;
 
 async function openClient(
   context: OpenClawStateWorkerContext,
-  deviceId: string = read.input.deviceId,
+  relayId: string = read.input.relayId,
 ) {
   const operations = vi.spyOn(sqliteWorkers, "runSqliteWorkerStoreOperation");
   const messages = vi.spyOn(Worker.prototype, "postMessage");
-  const readDevice = () =>
+  const readRelay = () =>
     executeOpenClawStateWorker(context, {
-      type: "deviceAuth.read",
-      input: { ...read.input, deviceId },
+      type: "nativeHookRelay.read",
+      input: { relayId },
     });
   try {
     // Exercise native idle ownership without preparing the unrelated task-flow runtime.
-    expect(await readDevice()).toEqual(emptyRead);
+    expect(await readRelay()).toBeUndefined();
     const store = operations.mock.calls.at(-1)?.[0];
     const worker = messages.mock.contexts[0];
     if (!store || !(worker instanceof Worker)) {
       throw new Error("Expected the canonical shared-state client and native worker");
     }
-    return { context, store, worker, read: readDevice, actor: getSqliteWorkerActorIdentity(store) };
+    return { context, store, worker, read: readRelay, actor: getSqliteWorkerActorIdentity(store) };
   } finally {
     operations.mockRestore();
     messages.mockRestore();
@@ -211,13 +211,12 @@ poolIt(
   async () => {
     const context = contextFor("openclaw-worker-capacity-");
     const first = await openClient(context);
-    const identityKey = "idle-fixture:capacity-reopen";
-    const loadIdentity = () =>
-      executeOpenClawStateWorker(context, {
-        type: "deviceIdentity.load",
-        input: { identityKey },
-      });
-    const identity = await loadIdentity();
+    const key = "idle-fixture:capacity-reopen";
+    const record = { value: "synthetic-capacity-value" };
+    await executeOpenClawStateWorker(context, {
+      type: "machineState.write",
+      input: { key, value: record },
+    });
     const maintenance = maintenanceScope();
     const peerContext = maintenance.run(() =>
       captureOpenClawStateWorkerContext({ env: context.environment }),
@@ -253,13 +252,15 @@ poolIt(
     expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
 
     gate.resume();
-    await expect(active).resolves.toEqual(emptyRead);
-    await expect(executeOpenClawStateWorker(next, read)).resolves.toEqual(emptyRead);
+    await expect(active).resolves.toBeUndefined();
+    await expect(executeOpenClawStateWorker(next, read)).resolves.toBeUndefined();
     await expect(first.store.execute(read)).rejects.toMatchObject({ code: "closed" });
     expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
-    await expect(executeOpenClawStateWorker(peerContext, read)).resolves.toEqual(emptyRead);
+    await expect(executeOpenClawStateWorker(peerContext, read)).resolves.toBeUndefined();
 
-    await expect(loadIdentity()).resolves.toEqual(identity);
+    await expect(
+      readConfigMachineStateAsync(key, { env: context.environment }),
+    ).resolves.toEqual(record);
     const reopened = await openClient(context);
     expect(reopened.store).not.toBe(first.store);
     expect(reopened.actor).toBe(first.actor);
@@ -294,15 +295,15 @@ poolIt("joins expiring idle-client maintenance without retiring a healthy co-use
   expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
   const idleClosed = vi.fn();
   const idleClosing = track(first.store.close().then(idleClosed));
-  await expect(readContext(peerContext)).resolves.toEqual(emptyRead);
+  await expect(readContext(peerContext)).resolves.toBeUndefined();
   expect(idleClosed).not.toHaveBeenCalled();
   expect(f.worker.threadId).not.toBe(-1);
 
   gate.resume();
-  await expect(accepted).resolves.toEqual(emptyRead);
+  await expect(accepted).resolves.toBeUndefined();
   await idleClosing;
   expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
-  await expect(readContext(peerContext)).resolves.toEqual(emptyRead);
+  await expect(readContext(peerContext)).resolves.toBeUndefined();
 
   expect(f.worker.threadId).not.toBe(-1);
   await maintenance.close();
@@ -378,7 +379,7 @@ poolIt.each(["ordinary", "cleanup"] as const)(
     if (entrypoint === "cleanup") {
       await reopened.close();
     }
-    await expect(readContext(firstContext)).resolves.toEqual(emptyRead);
+    await expect(readContext(firstContext)).resolves.toBeUndefined();
   },
 );
 

@@ -7,8 +7,13 @@ import { ExpectedCliError } from "../failure-output.js";
  * Read-only by design: the SSH-verified pairing probe calls this remotely and
  * must never mint a fresh identity on a host that has not run the node host.
  */
-export async function runNodeIdentityShow(opts: { json?: boolean }) {
-  const identity = await loadDeviceIdentityIfPresentAsync();
+export async function runNodeIdentityShow(opts: { json?: boolean; identity?: string }) {
+  const identityKey = opts.identity ?? "primary";
+  if (!["primary", "node", "shareExtension"].includes(identityKey)) {
+    const message = "identity must be primary, node, or shareExtension";
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+  }
+  const identity = await loadDeviceIdentityIfPresentAsync({ identityKey });
   if (!identity) {
     const message =
       "no node device identity found (start the node host once with `openclaw node run` or `openclaw node install`)";

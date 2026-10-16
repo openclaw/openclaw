@@ -15,12 +15,15 @@ import { readBackupEngine } from "../../snapshot/database-backup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { bindFreshClientCredentialStore } from "../client-credential-migration.js";
 import {
   resolveClientCredentialStorePath,
   runClientCredentialOperation,
 } from "../client-credential-store.js";
+import { generateStoredDeviceIdentity } from "../device-identity-material.js";
 import { acquireGatewayLock } from "../gateway-lock.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { runLegacyStateMigrationSteps } from "../state-migrations.steps.js";
 import { UpdateCandidatePluginPlanSchema } from "../update-candidate-plugins.js";
 import {
@@ -39,6 +42,7 @@ import {
 import { assertUpdateDatabaseEngineContexts } from "../update-database-engine-admission.js";
 import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
 import { captureUpdateRecoveryBaseline } from "../update-recovery-baseline-capture.js";
+import { withEngineStoreAdmission } from "./admission-scope.js";
 import { agentPortProvider } from "./agent-port.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { installDatabaseEngineSelection } from "./context.js";
@@ -335,6 +339,11 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         `INSERT INTO "${namespace}".agent_databases (agent_id, path, schema_version, last_seen_at) VALUES ('registered', $1, $2, 1)`,
         [agent, OPENCLAW_AGENT_SCHEMA_VERSION],
       );
+      await activateUpdatePostgresPluginFixtures(
+        config,
+        env,
+        fileURLToPath(new URL("../../../extensions", import.meta.url)),
+      );
       const pluginRoots: string[] = [];
       // Descriptor loading precedes publishing the complete plugin fixture config.
       vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "0");
@@ -454,11 +463,29 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       }
     });
     it("captures a retained PostgreSQL agent and restores local credentials after candidate failure while preserving current update history", async () => {
+      withEngineStoreAdmission(() => {
+        using anchor = openNodeSqliteDatabase(shared);
+        const identity = anchor.prepare("SELECT store_id FROM openclaw_engine_anchor").get()!;
+        const database = new PostgresSyncConnection(
+          connection!,
+          namespace,
+          anchor,
+          String(identity.store_id),
+        );
+        try {
+          database.runTransaction(() =>
+            bindFreshClientCredentialStore(database, { path: shared, env }),
+          );
+        } finally {
+          database.close();
+        }
+      });
+      const generated = generateStoredDeviceIdentity(11);
       const identity = {
         identity_key: "node",
-        device_id: "synthetic-local-device",
-        public_key_pem: "synthetic-public-key",
-        private_key_pem: "synthetic-private-key",
+        device_id: generated.deviceId,
+        public_key_pem: generated.publicKeyPem,
+        private_key_pem: generated.privateKeyPem,
         created_at_ms: 11,
         updated_at_ms: 12,
       };
@@ -487,7 +514,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         token,
         expectedToken: null,
       });
-      runClientCredentialOperation(env, { kind: "socket.create", socket });
+      runClientCredentialOperation(env, { kind: "socket.ensure", fallback: socket });
       const owner = await acquireGatewayLock({
         env,
         role: "sqlite-maintenance",
@@ -575,13 +602,13 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
                   expectedToken: token.token,
                 });
                 runClientCredentialOperation(env, {
-                  kind: "socket.replace",
-                  socket: {
+                  kind: "socket.ensure",
+                  fallback: {
                     ...socket,
                     socket_token: "synthetic-candidate-socket-token",
                     updated_at_ms: 22,
                   },
-                  expectedToken: socket.socket_token,
+                  requested: { token: "synthetic-candidate-socket-token" },
                 });
                 throw new Error("candidate migration failed after committed data write");
               },

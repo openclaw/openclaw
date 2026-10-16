@@ -1102,6 +1102,34 @@ retained-originals limits, and restoring a verified pre-update backup. A complet
 recovery point includes the matching package, config, shared state, and every
 agent database. Keep writers stopped while activating restored state.
 
+### Client credential cutover rollback
+
+Before shared state schema 27, client private identities, cached tokens, and
+native socket material live in the shared database. An automatic rollback to
+that format restores the pre-upgrade shared database with those tables intact.
+The older app ignores `client/credentials.sqlite`; do not copy its newer rows
+back manually. Credentials issued between upgrade and rollback are lost and
+affected clients must pair again.
+
+On the next upgrade, Doctor checks the local migration receipt against the
+restored shared source and rebuilds stale local credentials from that source.
+A partial `copied` receipt never permits normal client access. Updated native
+clients refuse a replaced shared source until the matching Doctor repairs the
+binding. Older native clients refuse retired shared credential tables; update
+the app instead of lowering schema markers. PostgreSQL recovery also restores
+the local family captured by its engine-aware driver. Ordinary exported backups
+omit the native socket secret and initialize it again on restore.
+
+An independent native credential source is copied without changing its database,
+permissions, journals, or directory contents. It receives no retirement marker,
+so the old app can still read it after rollback. The local copy records the source
+identity and content hash: an unchanged source preserves refreshed local tokens,
+while a changed or restored source rebuilds the copy. Consumed legacy JSON claims
+survive that rebuild, preventing revoked credentials from being reimported.
+WAL-mode independent sources require the previous release's export or restore
+workflow; the importer refuses them before opening SQLite rather than changing
+their shared-memory files or ignoring committed WAL data.
+
 ### Example: state schema 21 to 20
 
 Schema 21 derives meeting-transcript selectors and bounded delivery-retention

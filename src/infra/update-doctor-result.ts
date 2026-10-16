@@ -236,7 +236,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
           accept(pathname, before, after) {
             options.assertCurrent?.();
             const expected = expectedGenerations;
-            if (!expected || expected[pathname] !== before) {
+            if (!expected || !Object.hasOwn(expected, pathname) || expected[pathname] !== before) {
               unchanged = false;
               return;
             }

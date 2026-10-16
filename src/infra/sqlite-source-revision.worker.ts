@@ -1,4 +1,4 @@
-// Keep this child independent of SQLite and the shared runtime import graph.
+// Ordinary observations keep SQLite and the shared runtime import graph unloaded.
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
   readStableSqliteFileGeneration,
@@ -12,16 +12,27 @@ if (process.argv[2] === SQLITE_READONLY_CHILD_ARG) {
   try {
     const pathname = process.argv[4];
     const mode = process.argv[3];
-    if ((mode !== "content-version" && mode !== "file-generation") || !pathname) {
+    if (
+      !["content-version", "file-generation", "update-generation"].includes(mode ?? "") ||
+      !pathname
+    ) {
       throw new Error("SQLite content observation requires its mode and source path");
     }
-    result =
-      mode === "file-generation"
-        ? {
-            ok: true,
-            generation: serializeSqliteFileGeneration(readStableSqliteFileGeneration(pathname)),
-          }
-        : { ok: true, contentVersion: readSqliteSourceContentVersionInProcess(pathname) ?? "" };
+    if (mode === "update-generation") {
+      const { readUpdateDatabaseGenerations } = await import("./update-database-generations.js");
+      result = {
+        ok: true,
+        generation: JSON.stringify(readUpdateDatabaseGenerations([pathname])[pathname]),
+      };
+    } else {
+      result =
+        mode === "file-generation"
+          ? {
+              ok: true,
+              generation: serializeSqliteFileGeneration(readStableSqliteFileGeneration(pathname)),
+            }
+          : { ok: true, contentVersion: readSqliteSourceContentVersionInProcess(pathname) ?? "" };
+    }
   } catch (error) {
     process.exitCode = 1;
     result = { ok: false, message: error instanceof Error ? error.message : String(error) };

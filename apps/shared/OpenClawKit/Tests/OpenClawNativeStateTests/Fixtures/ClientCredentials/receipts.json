@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "cases": [
+    {
+      "name": "canonical-sqlite",
+      "phase": "complete",
+      "source_store": "{\"format\":1,\"source\":{\"kind\":\"canonical\",\"engine\":\"sqlite\",\"identity\":\"/fixture/state/openclaw.sqlite:123\",\"generation\":\"77fb4cbcd4a75647dd03953682543ed15578eb7ab674343c878c6f32ff743468\",\"sha256\":\"38a62159539c33fb3e5e49734246649b024878688b9ac961eb3c3785daff76ea\",\"destinationVersion\":1},\"sharedFile\":{\"path\":\"/fixture/state/openclaw.sqlite\",\"dev\":\"1\",\"ino\":\"2\"},\"legacyImports\":{\"identity:primary\":{\"sha256\":null},\"auth:primary\":{\"sha256\":null}}}"
+    },
+    {
+      "name": "fresh-canonical-binding",
+      "phase": "complete",
+      "source_store": "{\"format\":1,\"source\":null,\"sharedFile\":{\"path\":\"/fixture/state/openclaw.sqlite\",\"dev\":\"1\",\"ino\":\"2\"},\"legacyImports\":{}}"
+    }
+  ]
+}

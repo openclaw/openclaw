@@ -221,21 +221,40 @@ describe("exec approvals SQLite store", () => {
     }
   });
 
-  it("mints one socket token and reuses it on later initialization", async () => {
-    const first = (await ensureExecApprovalsSnapshot()).file;
-    const transactions = vi.fn();
-    workerProbe.admission(workerAdmission, (request, grant, admit) => {
-      if (request.stage === "transaction") {
-        transactions();
-      }
-      admit(request, grant);
-    });
-    const second = (await ensureExecApprovalsSnapshot()).file;
-    expect(transactions).not.toHaveBeenCalled();
+  it("keeps socket credentials local across initialization and policy CAS", async () => {
+    const initialized = await ensureExecApprovalsSnapshot();
+    const first = initialized.file;
+    const policyRow = row();
+    const repeated = await ensureExecApprovalsSnapshot();
+    const second = repeated.file;
+    expect(row()).toEqual(policyRow);
+    expect(repeated.hash).toBe(initialized.hash);
     expect(first.socket?.token).toMatch(/^[A-Za-z0-9_-]+$/u);
     expect(first.socket?.token).toBe(second.socket?.token);
     expect(first.socket?.path).toBe(second.socket?.path);
-    expect(row()).toMatchObject({ has_socket_token: 1, socket_path: first.socket?.path });
+    expect(row()).toMatchObject({ has_socket_token: 0, socket_path: null });
+    expect(row()?.raw_json).not.toContain(first.socket?.token);
+    expect(readExecApprovalsSnapshot().file.socket?.token).toBeUndefined();
+    const rotated = await updateExecApprovals({
+      baseHash: initialized.hash,
+      update: {
+        kind: "replace",
+        preserveSocket: true,
+        file: { ...first, socket: { ...first.socket, token: "synthetic-rotated-socket-token" } },
+      },
+    });
+    expect(rotated?.file.socket?.token).toBe("synthetic-rotated-socket-token");
+    expect(rotated?.hash).toBe(initialized.hash);
+    expect(row()).toEqual(policyRow);
+    await expect(
+      updateExecApprovals({
+        baseHash: "stale-policy-hash",
+        update: { kind: "replace", preserveSocket: true, file: first },
+      }),
+    ).resolves.toBeNull();
+    expect((await ensureExecApprovalsSnapshot()).file.socket?.token).toBe(
+      "synthetic-rotated-socket-token",
+    );
   });
 
   it("throws typed snapshot failures while enforcement reads fail closed", () => {

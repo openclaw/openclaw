@@ -2,6 +2,7 @@ import CryptoKit
 import Darwin
 import Foundation
 import OpenClawKit
+import OpenClawNativeState
 import OSLog
 import Security
 
@@ -165,18 +166,6 @@ enum ExecApprovalsStore {
         return "/tmp/openclaw-\(geteuid())/exec-approvals-\(digest).sock"
     }
 
-    static func resolvedPersistedSocketPath(
-        existing: String?,
-        stateDirectoryURL: URL,
-        computed: String) -> String
-    {
-        let existing = existing?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let oldCanonical = stateDirectoryURL.appendingPathComponent("exec-approvals.sock").path
-        return existing.isEmpty || (existing == oldCanonical && computed != oldCanonical)
-            ? computed
-            : existing
-    }
-
     private static func homeURL() -> URL {
         guard let configured = OpenClawEnv.path("OPENCLAW_HOME") else {
             return FileManager().homeDirectoryForCurrentUser
@@ -238,16 +227,7 @@ enum ExecApprovalsStore {
     {
         var file = self.normalizeIncoming(
             record?.document ?? ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
-        let existingSocketPath = file.socket?.path
-        let resolvedSocketPath = self.resolvedPersistedSocketPath(
-            existing: existingSocketPath,
-            stateDirectoryURL: self.stateDirURL(),
-            computed: self.socketPath())
-        file.socket?.path = resolvedSocketPath
-        let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if token.isEmpty {
-            file.socket?.token = self.generateToken()
-        }
+        file.socket = nil
         if file.agents == nil {
             file.agents = [:]
         }
@@ -272,6 +252,19 @@ enum ExecApprovalsStore {
             }
         }
         return false
+    }
+
+    static func localSocketCredentials() throws -> (socketPath: String, token: String) {
+        var operation = ClientCredentialOperation(kind: .socketEnsure)
+        operation.fallback = .init(
+            path: self.socketPath(),
+            token: self.generateToken(),
+            updatedAtMs: Int64(Date().timeIntervalSince1970 * 1000))
+        let result = try DeviceCredentialAccess.execute(root: self.stateDirURL(), operation: operation)
+        guard let socket = result.socket, let path = socket.path, let token = socket.token else {
+            throw OpenClawNativeStateError("Could not acquire local execution socket credentials")
+        }
+        return (self.expandPath(path), token)
     }
 
     static func resolve(agentId: String?) -> ExecApprovalsResolved {
@@ -300,7 +293,13 @@ enum ExecApprovalsStore {
                     documentToWrite: ensured.needsWrite ? ensured.file : nil)
             }
             self.migrationRequiredCache.markResolved(stateDirectoryURL: stateDirectoryURL)
-            return .success(self.resolveFromFile(file, agentId: agentId))
+            let socket = try DeviceCredentialAccess.execute(
+                root: stateDirectoryURL,
+                operation: ClientCredentialOperation(kind: .socketRead)).socket
+            guard let socket, let path = socket.path, let token = socket.token else {
+                throw OpenClawNativeStateError("Local execution socket credentials are not ready")
+            }
+            return .success(self.resolveFromFile(file, agentId: agentId, socket: (path, token)))
         } catch let error as ExecApprovalsLegacyMigrationRequiredError {
             self.migrationRequiredCache.record(error)
             return .failure(.migrationRequired(error))
@@ -319,7 +318,11 @@ enum ExecApprovalsStore {
             autoAllowSkills: defaults.autoAllowSkills ?? self.defaultAutoAllowSkills)
     }
 
-    private static func resolveFromFile(_ file: ExecApprovalsFile, agentId: String?) -> ExecApprovalsResolved {
+    private static func resolveFromFile(
+        _ file: ExecApprovalsFile,
+        agentId: String?,
+        socket: (path: String, token: String)? = nil) -> ExecApprovalsResolved
+    {
         let resolvedDefaults = self.resolveDefaults(from: file)
         let key = self.agentKey(agentId)
         let agentEntry = file.agents?[key] ?? ExecApprovalsAgent()
@@ -333,8 +336,8 @@ enum ExecApprovalsStore {
                 ?? resolvedDefaults.autoAllowSkills)
         let allowlist = self.normalizeAllowlistEntries(
             (wildcardEntry.allowlist ?? []) + (agentEntry.allowlist ?? []))
-        let socketPath = self.expandPath(file.socket?.path ?? self.socketPath())
-        let token = file.socket?.token ?? ""
+        let socketPath = self.expandPath(socket?.path ?? self.socketPath())
+        let token = socket?.token ?? ""
         return ExecApprovalsResolved(
             socketPath: socketPath,
             token: token,

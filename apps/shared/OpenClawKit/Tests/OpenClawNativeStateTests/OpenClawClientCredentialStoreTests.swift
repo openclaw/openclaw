@@ -63,6 +63,50 @@ struct OpenClawClientCredentialStoreTests {
         }
     }
 
+    @Test func `credential comparisons preserve composed and decomposed UTF8 bytes`() throws {
+        try self.withRoot { root in
+            let owner = try Store(rootURL: root)
+            defer { owner.close() }
+            let composed = "\u{00E9}"
+            let decomposed = "e\u{0301}"
+            #expect(try owner.replaceToken(self.token(composed), expectedToken: nil))
+            #expect(try !owner.replaceToken(self.token("replacement"), expectedToken: decomposed))
+            var removal = ClientCredentialOperation(kind: .tokenRemove)
+            removal.key = .init(deviceID: "device-id", role: "operator")
+            removal.hasExpectedToken = true
+            removal.expectedToken = decomposed
+            #expect(try owner.execute(removal).changed == false)
+            removal.hasExpectedToken = false
+            removal.observedToken = decomposed
+            #expect(try owner.execute(removal).changed == false)
+
+            _ = try owner.createSocketCredentials(.init(path: composed, token: composed, updatedAtMs: 1))
+            #expect(try !owner.replaceSocketCredentials(
+                .init(path: "replacement", token: "replacement", updatedAtMs: 2),
+                expectedToken: decomposed))
+            var socket = ClientCredentialOperation(kind: .socketEnsure)
+            socket.fallback = .init(path: "fallback", token: "fallback", updatedAtMs: 3)
+            socket.requested = .init(path: decomposed, token: decomposed)
+            let replaced = try #require(owner.execute(socket).socket)
+            #expect(try #require(replaced.path).utf8.elementsEqual(decomposed.utf8))
+            #expect(try #require(replaced.token).utf8.elementsEqual(decomposed.utf8))
+            #expect(replaced.updatedAtMs == 3)
+
+            for role in [composed, decomposed] {
+                #expect(try owner.replaceToken(
+                    .init(
+                        deviceID: "device-id", role: role, token: role, scopesJSON: "[]", updatedAtMs: 1),
+                    expectedToken: nil))
+            }
+            var clear = ClientCredentialOperation(kind: .nativeTokensClear)
+            clear.device_id = "device-id"
+            clear.selector = .init(kind: .role, role: composed)
+            #expect(try owner.execute(clear).count == 1)
+            #expect(try owner.readToken(deviceID: "device-id", role: composed) == nil)
+            #expect(try owner.readToken(deviceID: "device-id", role: decomposed) != nil)
+        }
+    }
+
     @Test func `socket creation preserves nullable material and the first writer`() throws {
         try self.withRoot { root in
             let original = Store.SocketCredentials(path: nil, token: "socket-token", updatedAtMs: 17)
@@ -75,6 +119,24 @@ struct OpenClawClientCredentialStoreTests {
             try Store.withExclusiveOperation(rootURL: root) { (owner: Store) throws in
                 #expect(try owner.readSocketCredentials() == original)
             }
+        }
+    }
+
+    @Test(arguments: ["", "historical", "/custom/approvals.sock"])
+    func `socket ensure relocates only empty and historical paths`(storedPath: String) throws {
+        try self.withRoot { root in
+            let owner = try Store(rootURL: root)
+            defer { owner.close() }
+            let path = storedPath == "historical" ? root.appendingPathComponent("exec-approvals.sock").path : storedPath
+            let original = Store.SocketCredentials(path: path, token: " exact-token ", updatedAtMs: 17)
+            _ = try owner.createSocketCredentials(original)
+            var operation = ClientCredentialOperation(kind: .socketEnsure)
+            operation.fallback = .init(path: "/short/approvals.sock", token: "unused-token", updatedAtMs: 20)
+            let socket = try #require(owner.execute(operation).socket)
+            #expect(socket.path == (storedPath == "/custom/approvals.sock" ? storedPath : "/short/approvals.sock"))
+            #expect(socket.token == original.token)
+            #expect(socket.updatedAtMs == (storedPath == "/custom/approvals.sock" ? 17 : 20))
+            #expect(try owner.execute(operation).socket == socket)
         }
     }
 

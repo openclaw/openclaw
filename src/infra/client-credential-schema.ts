@@ -1,7 +1,8 @@
 // Independent of the selected Gateway engine and its shared schema version.
 export const CLIENT_CREDENTIAL_SCHEMA_VERSION = 1;
 
-export const CLIENT_CREDENTIAL_SCHEMA_SQL = `CREATE TABLE device_identities (
+// These unchanged tables also describe the shared-state v25 migration source.
+export const CLIENT_CREDENTIAL_LEGACY_TABLES_SQL = `CREATE TABLE device_identities (
   identity_key TEXT NOT NULL PRIMARY KEY,
   device_id TEXT NOT NULL,
   public_key_pem TEXT NOT NULL,
@@ -29,7 +30,9 @@ CREATE TABLE gateway_origin_device_tokens (
   scopes_json TEXT NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (gateway_scope, device_id, role)
-) STRICT;
+) STRICT;`;
+
+export const CLIENT_CREDENTIAL_SCHEMA_SQL = `${CLIENT_CREDENTIAL_LEGACY_TABLES_SQL}
 CREATE TABLE native_exec_socket_credentials (
   socket_key TEXT NOT NULL PRIMARY KEY CHECK (socket_key = 'current'),
   socket_path TEXT,

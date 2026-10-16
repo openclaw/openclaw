@@ -23,7 +23,12 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
+import {
+  openClientCredentialCustody,
+  resolveClientCredentialStorePath,
+  runClientCredentialOperation,
+  type ClientCredentialOperation,
+} from "./client-credential-store.js";
 import * as durability from "./directory-durability.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as sqliteCopy from "./sqlite-file-copy.js";
@@ -41,7 +46,11 @@ import {
 } from "./update-run-ledger.js";
 import { finishUpdateRun } from "./update-run-write.js";
 
-async function createRestoreFixture(state: OpenClawTestState, linked = false) {
+async function createRestoreFixture(
+  state: OpenClawTestState,
+  linked = false,
+  captureClientAbsent = false,
+) {
   expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
   expect(process.env.HOME).toBe(state.home);
   const shared = openOpenClawStateDatabase({ env: state.env });
@@ -75,6 +84,10 @@ async function createRestoreFixture(state: OpenClawTestState, linked = false) {
     owner.db.exec(
       `CREATE TABLE restore_witness(value TEXT); INSERT INTO restore_witness(rowid,value) VALUES (${index === 0 ? 71 : 8191},'baseline');`,
     );
+  }
+  if (captureClientAbsent) {
+    // Model a driver's absent preimage even though current fresh bootstrap creates this family.
+    await fs.unlink(resolveClientCredentialStorePath(state.env));
   }
   const input = {
     backupRoot: state.path("retained-package"),
@@ -165,21 +178,32 @@ it.each(["present", "absent"] as const)(
       { layout: "split", prefix: "update-client-restore-", scenario: "minimal" },
       async (state) => {
         const pathname = state.statePath("client", "credentials.sqlite");
-        const writeToken = async (token: string) => {
-          await fs.mkdir(path.dirname(pathname), { recursive: true, mode: 0o700 });
-          using db = new DatabaseSync(pathname);
-          if (db.prepare("PRAGMA user_version").get()?.user_version === 0) {
-            db.exec(CLIENT_CREDENTIAL_SCHEMA_SQL);
-            db.exec("PRAGMA user_version = 1");
+        const writeToken = (token: string, candidateCreatesAbsent = false) => {
+          const operation: ClientCredentialOperation = {
+            kind: "socket.ensure",
+            fallback: {
+              socket_key: "current",
+              socket_path: "/synthetic/native.sock",
+              socket_token: token,
+              updated_at_ms: 123,
+            },
+            requested: { token },
+          };
+          if (candidateCreatesAbsent) {
+            // Candidate bytes need no fabricated receipt; rollback removes the new family.
+            using owner = openClientCredentialCustody(state.env, {
+              createIfMissing: true,
+              migration: true,
+            })!;
+            owner.run(operation);
+          } else {
+            runClientCredentialOperation(state.env, operation);
           }
-          db.prepare(
-            "INSERT OR REPLACE INTO native_exec_socket_credentials VALUES ('current', ?, ?, ?)",
-          ).run("/synthetic/native.sock", token, 123);
         };
         if (initial === "present") {
-          await writeToken("synthetic-before-update");
+          writeToken("synthetic-before-update");
         }
-        const fixture = await createRestoreFixture(state);
+        const fixture = await createRestoreFixture(state, false, initial === "absent");
         try {
           expect(fixture.backup.databaseOwners).not.toContainEqual(
             expect.objectContaining({ path: pathname }),
@@ -191,7 +215,7 @@ it.each(["present", "absent"] as const)(
           } else {
             expect(fixture.backup.missingPaths).toContain(pathname);
           }
-          await writeToken("synthetic-candidate-write");
+          writeToken("synthetic-candidate-write", initial === "absent");
           await fixture.restore();
           if (initial === "present") {
             using restored = new DatabaseSync(pathname, { readOnly: true });
@@ -568,12 +592,20 @@ it.each(["collision", "after-rename", "final-publication"] as const)(
             name.startsWith(".sqlite-publish-prepared-"),
           );
           expect(prepared).toHaveLength(1);
-          using database = new DatabaseSync(path.join(parent, prepared[0]!, "database.sqlite"), {
+          const preparedPath = path.join(parent, prepared[0]!, "database.sqlite");
+          using database = new DatabaseSync(preparedPath, {
             readOnly: true,
           });
-          expect(database.prepare("SELECT value FROM restore_witness").get()).toEqual({
-            value: "baseline",
-          });
+          if (source.path === fixture.shared.path || source.path === fixture.agent.path) {
+            expect(database.prepare("SELECT value FROM restore_witness").get()).toEqual({
+              value: "baseline",
+            });
+          } else {
+            const snapshot = fixture.backup.databases.find((entry) => entry.path === source.path)!;
+            expect(await fs.readFile(preparedPath)).toEqual(
+              await fs.readFile(snapshot.snapshotPath),
+            );
+          }
           expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
             integrity_check: "ok",
           });
@@ -664,7 +696,7 @@ it.each([
       } else {
         expect(displaced).not.toBeNull();
       }
-      for (const { path: pathname } of fixture.backup.databases) {
+      for (const pathname of [fixture.shared.path, fixture.agent.path]) {
         using restored = new DatabaseSync(pathname, { readOnly: true });
         expect(restored.prepare("SELECT value FROM restore_witness").all()).toEqual([
           {
@@ -677,6 +709,10 @@ it.each([
           },
         ]);
       }
+      expect(runClientCredentialOperation(fixture.state.env, { kind: "socket.read" })).toEqual({
+        kind: "socket",
+        socket: null,
+      });
     });
   },
 );

@@ -61,7 +61,7 @@ describe("runNodeIdentityShow", () => {
     expect(exitSpy).not.toHaveBeenCalled();
     expect(logSpy).not.toHaveBeenCalled();
     expect(writeStdoutSpy).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
+    expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(false);
   });
 
   it("writes deviceId and raw public key JSON to stdout", async () => {
@@ -98,5 +98,16 @@ describe("runNodeIdentityShow", () => {
     const output = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
     expect(output).toContain(identity.deviceId);
     expect(output).toContain(publicKeyRawBase64UrlFromPem(identity.publicKeyPem));
+  });
+  it("selects an existing native profile without creating the default identity", async () => {
+    const identity = loadOrCreateDeviceIdentity({ identityKey: "node" });
+    await runNodeIdentityShow({ json: true, identity: "node" });
+    expect(JSON.parse(stdout.join(""))).toEqual({
+      deviceId: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    });
+    await expect(runNodeIdentityShow({ identity: "unknown" })).rejects.toBeInstanceOf(
+      ExpectedCliError,
+    );
   });
 });

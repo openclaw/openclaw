@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   createScopedMigrationSnapshot,
+  createScopedMigrationSnapshotSync,
   inspectScopedMigrationTables,
   restoreScopedMigrationSnapshot,
   ScopedMigrationSnapshotUnsupportedError,
@@ -102,6 +103,49 @@ function editMetadata(
 }
 
 describe("table-scoped migration snapshots", () => {
+  it("captures the caller's uncommitted rows and restores their exact SQLite values", () => {
+    const f = fixture();
+    withDatabase(f.sourcePath, (db) => {
+      db.exec("BEGIN IMMEDIATE; UPDATE loose SET value = CAST(x'0080ff' AS TEXT)");
+      const captured = createScopedMigrationSnapshotSync(db, {
+        ...f,
+        targetPath: f.backupPath,
+        tables,
+        assertCurrent: () => expect(db.isTransaction).toBe(true),
+      });
+      expect(captured.generation).toMatch(/^[a-f0-9]{64}$/u);
+      db.exec("ROLLBACK");
+      expect(db.prepare("SELECT value FROM loose").get()).toEqual({ value: "old row" });
+    });
+    restoreScopedMigrationSnapshot({ ...f, assertCurrent: () => {} });
+    withDatabase(f.sourcePath, (db) => {
+      expect(
+        db.prepare("SELECT rowid, typeof(value) AS kind, hex(value) AS bytes FROM loose").get(),
+      ).toEqual({
+        rowid: 913,
+        kind: "text",
+        bytes: "0080FF",
+      });
+      expect(db.prepare("SELECT hex(payload) AS bytes FROM selected").get()).toEqual({
+        bytes: "00FF",
+      });
+    });
+  });
+
+  it("refuses a fresh capture outside the source transaction or over an existing archive", () => {
+    const f = fixture();
+    withDatabase(f.sourcePath, (db) => {
+      const options = { ...f, targetPath: f.backupPath, tables, assertCurrent: () => {} };
+      expect(() => createScopedMigrationSnapshotSync(db, options)).toThrow("source transaction");
+      expect(fs.existsSync(f.backupPath)).toBe(false);
+      fs.writeFileSync(f.backupPath, "retained original");
+      db.exec("BEGIN IMMEDIATE");
+      expect(() => createScopedMigrationSnapshotSync(db, options)).toThrow();
+      db.exec("ROLLBACK");
+      expect(fs.readFileSync(f.backupPath, "utf8")).toBe("retained original");
+    });
+  });
+
   it("restores mixed-case triggers without conflating distinct Unicode table names", async () => {
     const f = fixture();
     withDatabase(f.sourcePath, (db) => {

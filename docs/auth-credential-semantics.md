@@ -395,6 +395,24 @@ For script compatibility, check errors keep this first line unchanged:
 
 Human-friendly detail and the stable reason code follow on subsequent lines in the form `↳ Auth reason [code]: ...`.
 
+## Client identities and paired tokens
+
+Client private identities and paired device-token caches live in the separately
+versioned local `client/credentials.sqlite`, including when the Gateway uses
+PostgreSQL. These are distinct from model-provider auth profiles. Native bootstrap
+does not open the selected Gateway database. Gateway-issued pairing and revocation
+remain under the Gateway's authority; a local cache does not grant authorization.
+
+Migration preserves exact private keys, tokens, scope strings, and timestamps.
+Legacy JSON imports record consumption atomically with the local write. Revocation
+retains that record, so a restored or rewritten legacy file cannot resurrect its
+token. Refresh and removal compare the observed token with the current local row.
+
+Automatic rollback restores the pre-upgrade shared credentials. Tokens issued
+between upgrade and rollback are lost; affected clients pair again. A subsequent
+upgrade rebuilds any stale local store from the restored shared source. See
+[credential migration and recovery](/reference/database-schemas/versioning#local-client-credentials).
+
 ## Related
 
 - [Secrets management](/gateway/secrets)

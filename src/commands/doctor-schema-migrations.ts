@@ -2,6 +2,8 @@ import { withEngineStoreAdmission } from "../infra/database-engine/admission-sco
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteIntegrityOperationInWorker } from "../infra/sqlite-integrity-operation.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { agentEngineInput, openAgentEngineStore } from "../state/openclaw-agent-db-engine.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchemaSteps } from "../state/openclaw-agent-db-schema.js";
@@ -11,6 +13,7 @@ import {
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 
@@ -23,12 +26,30 @@ export async function prepareDoctorDatabaseMigrations(
   if (!migrations?.length) {
     return result;
   }
+  const capture = result.postgresGenerations
+    ? createUpdateDoctorDatabaseWriteCapture(result.postgresGenerations, {
+        env: params.env,
+        signal: resolveSqliteInspectionSignal() ?? new AbortController().signal,
+        assertCurrent() {
+          const maintenance = getOpenClawDatabaseMaintenanceScope();
+          if (!maintenance?.ownsSchemaMaintenance) {
+            throw new Error("PostgreSQL version migration lost schema maintenance custody.");
+          }
+          maintenance.assertAdmission();
+        },
+        warn: (message) => result.warnings.push(message),
+      })
+    : undefined;
+  const runMigration = <T>(operation: () => T): T =>
+    capture ? capture.run(operation) : operation();
   // Acquiring an agent lease opens shared state and writes lease/registry rows.
   // Finish state-only scoped migrations before that broader maintenance begins.
   for (const migration of migrations.filter((entry) => entry.kind === "state")) {
     if (isStatePostgres()) {
-      withEngineStoreAdmission(() =>
-        openOpenClawStateDatabase({ path: migration.path, env: params.env }),
+      runMigration(() =>
+        withEngineStoreAdmission(() =>
+          openOpenClawStateDatabase({ path: migration.path, env: params.env }),
+        ),
       );
       result.changes.push(
         `Upgraded PostgreSQL state schema: v${migration.foundVersion} -> v${migration.supportedVersion}.`,
@@ -63,12 +84,14 @@ export async function prepareDoctorDatabaseMigrations(
           using database = openNodeSqliteDatabase(target.path);
           if (agentEngineInput()) {
             lease.assertOwned();
-            withEngineStoreAdmission(() => {
-              const engine = openAgentEngineStore(database, target.agentId, target.path, true);
-              if (engine !== database) {
-                engine.close();
-              }
-            });
+            runMigration(() =>
+              withEngineStoreAdmission(() => {
+                const engine = openAgentEngineStore(database, target.agentId, target.path, true);
+                if (engine !== database) {
+                  engine.close();
+                }
+              }),
+            );
           } else {
             await runSqliteIntegrityOperationInWorker(
               ensureOpenClawAgentDatabaseSchemaSteps(database, {

@@ -7,7 +7,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { loadDeviceAuthTokens } from "../infra/device-auth-store.js";
-import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
+import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
 import {
   summarizeDeviceTokens,
   type DeviceAuthTokenSummary,
@@ -254,7 +254,7 @@ async function collectLocalDeviceAuthFindings(
 ): Promise<HealthFinding[]> {
   let identity;
   try {
-    identity = loadDeviceIdentityIfPresent({ env: process.env });
+    identity = await loadDeviceIdentityIfPresentAsync({ env: process.env });
   } catch {
     return [];
   }
