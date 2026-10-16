@@ -57,6 +57,8 @@ interface NostrBusOptions {
     senderPubkey: string;
     reply: (text: string) => Promise<void>;
   }) => Promise<"allow" | "block" | "pairing">;
+  /** Internal local rejection hint for literal-only allowlist accounts; never grants access. */
+  admissionPubkeys?: readonly string[];
   /** Override pre-crypto DM guardrails for tests or future channel tuning (optional) */
   guardPolicy?: DirectDmPreCryptoGuardPolicyOverrides;
   onError?: (error: Error, context: string) => void;
@@ -177,10 +179,6 @@ function createRelayHealthTracker() {
       } // Unknown relay gets neutral score
 
       const total = s.successCount + s.failureCount;
-      if (total === 0) {
-        return 0.5;
-      }
-
       const successRate = s.successCount / total;
 
       // Recency bonus (prefer recently successful relays)
@@ -218,6 +216,7 @@ export async function startNostrBus(options: NostrBusOptions) {
   const sk = validatePrivateKey(privateKey);
   const pk = getPublicKey(sk);
   const pool = new SimplePool();
+  const admissionPubkeys = options.admissionPubkeys ? new Set(options.admissionPubkeys) : undefined;
   pool.onRelayConnectionSuccess = options.onConnect;
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
@@ -439,6 +438,11 @@ export async function startNostrBus(options: NostrBusOptions) {
     // Apply the relay age fence once, before admission; recovered durable claims must still deliver.
     if (typeof event.created_at === "number" && event.created_at < since) {
       metrics.emit("event.rejected.stale");
+      return;
+    }
+    // Keep configured peer identities local, never in relay subscription filters.
+    // Matching events still pass durable ingress and current sender authorization.
+    if (admissionPubkeys && !admissionPubkeys.has(event.pubkey)) {
       return;
     }
     try {

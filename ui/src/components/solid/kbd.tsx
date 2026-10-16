@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { For, Show, untrack } from "solid-js";
 import {
   formatKeyboardShortcutParts,
   isApplePlatform,
@@ -8,7 +8,7 @@ import {
 import { hasKeyboardIcon, KeyboardIcon } from "./icon.tsx";
 
 export type KbdOptions = {
-  className?: string;
+  class?: string;
   inline?: boolean;
   slot?: string;
   ariaHidden?: boolean;
@@ -63,12 +63,12 @@ export function Kbd(props: KbdOptions & { keys: string | number | readonly strin
       : props.keys;
   return (
     <kbd
-      class={["shortcut-kbd", props.className]}
+      class={["shortcut-kbd", props.class]}
       style={props.inline ? { font: "inherit" } : undefined}
       slot={props.slot}
       aria-hidden={props.ariaHidden ? "true" : undefined}
       hidden={props.hidden}
-      ref={props.ref}
+      ref={(element) => untrack(() => props.ref?.(element))}
     >
       <For each={parts()}>{(key) => <Key value={key} />}</For>
     </kbd>
@@ -102,8 +102,7 @@ export function ShortcutHint(props: { label: string; combo: KeyboardShortcutComb
     <>
       {props.label}
       {" ("}
-      <KeyboardShortcut combo={props.combo} inline />
-      {")"}
+      <KeyboardShortcut combo={props.combo} inline />)
     </>
   );
 }

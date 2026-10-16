@@ -102,6 +102,7 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
         await expect
           .poll(() => modelPickerValue(utilityField.locator("openclaw-select-picker")))
           .toBe("__openclaw_automatic_utility__");
+        await utilityField.locator(".picker-select__trigger").click();
         await expect
           .poll(() =>
             utilityField
@@ -110,6 +111,7 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
               .then((value) => value?.trim()),
           )
           .toBe("Auto");
+        await page.keyboard.press("Escape");
 
         if (recordVisuals) {
           await page.screenshot({
@@ -130,10 +132,9 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
           "0px",
         );
         const tooltip = helpButton.locator("..");
-        const tooltipPopup = tooltip.locator("wa-tooltip");
+        const tooltipPopup = tooltip.locator(".tooltip-surface[popover]");
         const tooltipBody = tooltip.locator(".tooltip-rich-content");
-        const tooltipIsOpen = () =>
-          tooltipPopup.evaluate((node) => Boolean(Reflect.get(node, "open")));
+        const tooltipIsOpen = () => tooltipPopup.evaluate((node) => node.matches(":popover-open"));
 
         const defaultColor = await helpButton.evaluate((node) => getComputedStyle(node).color);
         await helpButton.hover();
@@ -227,8 +228,8 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
           const group = behaviorRow.getByRole("radiogroup");
           const behaviorTooltipIsOpen = () =>
             behaviorTooltip
-              .locator("wa-tooltip")
-              .evaluate((node) => Boolean(Reflect.get(node, "open")));
+              .locator(".tooltip-surface[popover]")
+              .evaluate((node) => node.matches(":popover-open"));
           await behaviorButton.hover();
           expect(await behaviorButton.evaluate((node) => getComputedStyle(node).color)).toBe(
             helpHoverColor,

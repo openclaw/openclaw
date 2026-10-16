@@ -15,6 +15,7 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
+  sessionMenuLabels,
   waitForMobileSidebarDrawerOpen,
 } from "./session-management.test-support.ts";
 
@@ -22,7 +23,7 @@ const suite = createSessionManagementE2eSuite(true);
 
 suite.define(() => {
   it.each(["coarse", "fine"] as const)(
-    "separates reorder controls, colored session glyphs, and section labels with a %s pointer",
+    "keeps shortcut menus, colored session glyphs, and section labels usable in a %s pointer layout",
     async (pointer) => {
       await suite.withPage(
         {
@@ -62,7 +63,7 @@ suite.define(() => {
               localStorage.setItem(
                 key,
                 JSON.stringify({
-                  sidebarEntries: [
+                  railShortcuts: [
                     "route:cron",
                     "session:agent:main:release-plan",
                     "plugin:reports/reports",
@@ -117,41 +118,52 @@ suite.define(() => {
               frame.elements[0]!.png,
             );
           }
+          if (pointer === "coarse") {
+            await page.clock.install();
+          }
           for (const width of [320, 390, 768]) {
             await page.setViewportSize({ width, height: 844 });
             expect((await rail.boundingBox())?.width).toBe(52);
             for (const row of [pinned, plugin]) {
-              const grip = row.locator(".sidebar-reorder-trigger");
+              const shortcut = row.getByRole("link");
               await row.hover();
-              const [button, icon, glyph] = await Promise.all([
-                grip.boundingBox(),
-                grip.locator("svg").boundingBox(),
+              const [button, glyph] = await Promise.all([
+                shortcut.boundingBox(),
                 row.locator(".session-glyph, .nav-item__icon").first().boundingBox(),
               ]);
+              expect(await row.locator(".sidebar-reorder-trigger").count()).toBe(0);
               expect(button).not.toBeNull();
-              expect(icon).not.toBeNull();
               expect(glyph).not.toBeNull();
-              expect(button!.width).toBeGreaterThanOrEqual(24);
-              expect(button!.height).toBeGreaterThanOrEqual(24);
-              expect(icon!.x).toBeGreaterThanOrEqual(button!.x);
-              expect(icon!.x + icon!.width).toBeLessThanOrEqual(button!.x + button!.width);
-              // Rail controls may be stacked or adjacent, but must not cover the glyph.
-              expect(
-                glyph!.x + glyph!.width <= button!.x ||
-                  button!.x + button!.width <= glyph!.x ||
-                  glyph!.y + glyph!.height <= button!.y ||
-                  button!.y + button!.height <= glyph!.y,
-              ).toBe(true);
+              expect(button!.width).toBeGreaterThanOrEqual(32);
+              expect(button!.height).toBeGreaterThanOrEqual(32);
+              expect(glyph!.x).toBeGreaterThanOrEqual(button!.x);
+              expect(glyph!.x + glyph!.width).toBeLessThanOrEqual(button!.x + button!.width);
+              expect(glyph!.y).toBeGreaterThanOrEqual(button!.y);
+              expect(glyph!.y + glyph!.height).toBeLessThanOrEqual(button!.y + button!.height);
               if (width === 390) {
                 const previous = await row.evaluate((element) =>
                   element.previousElementSibling?.getAttribute("data-sidebar-entry"),
                 );
                 expect(previous).not.toBeNull();
                 if (pointer === "coarse") {
-                  await grip.tap();
+                  const touch = {
+                    pointerId: 1,
+                    pointerType: "touch",
+                    isPrimary: true,
+                    clientX: button!.x + button!.width / 2,
+                    clientY: button!.y + button!.height / 2,
+                  };
+                  const initialUrl = page.url();
+                  await shortcut.dispatchEvent("pointerdown", touch);
+                  await page.clock.fastForward(500);
+                  await page.getByRole("menuitem", { name: "Move up", exact: true }).waitFor();
+                  await shortcut.dispatchEvent("pointerup", touch);
+                  await shortcut.dispatchEvent("click", { ...touch, detail: 1 });
+                  expect(page.url()).toBe(initialUrl);
+                  await waitForMobileSidebarDrawerOpen(page);
                 } else {
-                  await grip.focus();
-                  await page.keyboard.press("Enter");
+                  await shortcut.focus();
+                  await page.keyboard.press("Shift+F10");
                 }
                 const move = page.getByRole("menuitem", { name: "Move up", exact: true });
                 if (pointer === "coarse") {
@@ -176,6 +188,14 @@ suite.define(() => {
               sessionBox!.x + sessionBox!.width,
             );
             expect(menuBox!.width).toBe(44);
+            const sessionTitle = await session
+              .locator(".sidebar-recent-session__name")
+              .boundingBox();
+            expect(sessionTitle).not.toBeNull();
+            expect(sessionTitle!.x + sessionTitle!.width).toBeLessThanOrEqual(menuBox!.x);
+            expect(menuBox!.y).toBeLessThanOrEqual(sessionTitle!.y + sessionTitle!.height);
+            expect(menuBox!.y + menuBox!.height).toBeGreaterThanOrEqual(sessionTitle!.y);
+            expect(sessionBox!.height).toBeCloseTo(44, 1);
             for (const colored of [session, group.locator(".sidebar-recent-session")]) {
               const clearance = await colored.evaluate((row) => {
                 const stripe = getComputedStyle(row, "::before");
@@ -231,8 +251,14 @@ suite.define(() => {
               category: "Research",
               lastMessagePreview: "Keep this second line visible during navigation",
             }),
-            sessionRow(plainKey, "Investigate mobile sidebar title readability", 1),
-            sessionRow(privateKey, "Private planning and follow-up tasks", 0, { incognito: true }),
+            sessionRow(plainKey, "Investigate mobile sidebar title readability", 1, {
+              category: "Research",
+              color: "blue",
+            }),
+            sessionRow(privateKey, "Private planning and follow-up tasks", 0, {
+              category: "Research",
+              incognito: true,
+            }),
           ]),
         },
         sessionGroups: [
@@ -262,6 +288,7 @@ suite.define(() => {
         const title = row.locator(".sidebar-recent-session__name");
         const titleWidth = () => title.evaluate((element) => element.getBoundingClientRect().width);
         const restingWidth = await titleWidth();
+        await page.mouse.move(389, 649);
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           const frame = await takeControlUiScreenshotFrame(
             page,
@@ -282,8 +309,8 @@ suite.define(() => {
         const drawerBox = await page.locator(".shell-nav").boundingBox();
         expect(drawerBox?.width).toBeGreaterThanOrEqual(330);
         expect(drawerBox?.width).toBeLessThanOrEqual(336);
-        // Desktop-sized glyph spacing keeps the color stripe clear without losing the menu.
-        expect(restingWidth).toBeGreaterThanOrEqual(230);
+        // Reserve one 44px menu target without starving the title beside the rail.
+        expect(restingWidth).toBeGreaterThanOrEqual(180);
         const plainRow = page.locator(`[data-session-key="${plainKey}"]`);
         const plainTitle = plainRow.locator(".sidebar-recent-session__name");
         await plainTitle.waitFor({ state: "visible" });
@@ -314,8 +341,18 @@ suite.define(() => {
         expect(buttonBox.width).toBeCloseTo(44, 4);
         expect(buttonBox.height).toBeCloseTo(44, 4);
         expect(titleBox.x).toBeGreaterThanOrEqual(rowBox.x);
-        expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);
-        expect(titleBox.y + titleBox.height).toBeLessThanOrEqual(buttonBox.y);
+        expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(buttonBox.x);
+        expect(buttonBox.y).toBeLessThanOrEqual(titleBox.y + titleBox.height);
+        expect(buttonBox.y + buttonBox.height).toBeGreaterThanOrEqual(titleBox.y);
+        // Empty metadata must not reserve a second row just for the menu.
+        expect((await plainRow.boundingBox())!.height).toBeCloseTo(44, 1);
+        expect(
+          await plainTitle.evaluate((element) => ({
+            clipped: element.scrollWidth > element.clientWidth,
+            overflow: getComputedStyle(element).textOverflow,
+            mask: getComputedStyle(element).maskImage,
+          })),
+        ).toEqual({ clipped: true, overflow: "ellipsis", mask: "none" });
         expect(buttonBox.y).toBeGreaterThanOrEqual(rowBox.y);
         expect(buttonBox.y + buttonBox.height).toBeLessThanOrEqual(rowBox.y + rowBox.height);
         if (pointer === "coarse") {
@@ -330,12 +367,16 @@ suite.define(() => {
         await page.getByRole("menuitem", { name: "Archive session", exact: true }).waitFor();
         await captureUiProof(suite, page, "mobile-sidebar-session-menu-after-root.png");
 
-        expect(await page.locator("openclaw-session-menu [slot='submenu']").count()).toBe(0);
+        expect(
+          await page.locator("openclaw-session-menu .session-menu__panel [role='menu']").count(),
+        ).toBe(0);
         await page.getByRole("menuitem", { name: "Move to group" }).click();
         const back = page.getByRole("menuitem", { name: "Back" });
         await back.waitFor({ state: "visible" });
         await page.getByRole("menuitemradio", { name: "Operations" }).waitFor({ state: "visible" });
-        expect(await page.locator("openclaw-session-menu [slot='submenu']").count()).toBe(0);
+        expect(
+          await page.locator("openclaw-session-menu .session-menu__panel [role='menu']").count(),
+        ).toBe(0);
         const menuBox = await menu.boundingBox();
         if (!menuBox) {
           throw new Error("expected visible compact sidebar session menu");
@@ -442,15 +483,12 @@ suite.define(() => {
           const menu = page.locator("openclaw-session-menu");
           await menu.getByRole("menuitem", { name: "Pin session", exact: true }).waitFor();
           const phase = "after-" + width;
-          expect(
-            await menu
-              .locator(":scope > wa-dropdown > wa-dropdown-item > .session-menu__text")
-              .allTextContents(),
-          ).toEqual([
+          expect(await sessionMenuLabels(menu.locator(".session-menu__panel"))).toEqual([
             "Pin session",
             "Rename…",
             "Mark as unread",
             "Copy link",
+            "Move to cloud…",
             "Assign to…",
             "Move to group",
             "Snooze",
@@ -474,7 +512,7 @@ suite.define(() => {
           await menu.getByRole("menuitem", { name: "Assign to…", exact: true }).click();
           await menu.getByRole("menuitemradio", { name: "Ben", exact: true }).waitFor();
           if (width === 390) {
-            expect(await menu.locator("[slot='submenu']").count()).toBe(0);
+            expect(await menu.locator(".session-menu__panel [role='menu']").count()).toBe(0);
             await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
             await menu.getByRole("menuitem", { name: "Copy link", exact: true }).waitFor();
           } else {
@@ -503,7 +541,7 @@ suite.define(() => {
           if (width === 390) {
             for (const label of ["Copy details", "Open in", "Icon & color"]) {
               await menu.getByRole("menuitem", { name: label, exact: true }).click();
-              expect(await menu.locator("[slot='submenu']").count()).toBe(0);
+              expect(await menu.locator(".session-menu__panel [role='menu']").count()).toBe(0);
               await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
               await menu.getByRole("button", { name: "Ask", exact: true }).first().waitFor();
             }

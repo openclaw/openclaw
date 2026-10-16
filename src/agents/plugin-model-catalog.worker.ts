@@ -1,10 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import {
-  assertTransactionUsable,
-  runSqliteWorkerTransactionSync,
-} from "../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteWorkerTransactionSync } from "../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../infra/sqlite-worker-database-context.js";
 import { normalizePluginProviderBaseUrl } from "../plugins/plugin-metadata-provider-facts.js";
@@ -45,7 +43,7 @@ export type PluginModelCatalogCredentialOperations = {
 
 /** Apply removal-time endpoint facts to the current rows inside the writer transaction. */
 function pruneRemovedProviderCatalogEntriesInDatabase(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   removedProviderBaseUrls: Readonly<Record<string, string>>;
   updatedAt: number;
 }): boolean {
@@ -109,14 +107,14 @@ function pruneRemovedProviderCatalogEntriesInDatabase(params: {
 /** Reread authorization inside the admitted publication, including outside discovery snapshots. */
 function findRemovedPluginModelCatalogCredentials(
   snapshot: PluginModelCatalogAuthSnapshot,
-  database: DatabaseSync,
+  database: EngineConnection,
   databasePath: string,
   env: NodeJS.ProcessEnv,
 ): ReadonlySet<string> {
   const captured = new Set<string>();
   const authorized = new Set<string>();
   for (const owner of snapshot) {
-    const read = (db: DatabaseSync) =>
+    const read = (db: EngineConnection) =>
       loadPersistedAuthProfileStoreFromRows(
         readAuthProfileRows(db, owner.databasePath, owner.kind),
         owner.databasePath,
@@ -150,7 +148,7 @@ export function bindSqliteWorkerBackend(
   _input: unknown,
   context: SqliteWorkerDatabaseContext,
 ): SqliteWorkerBackend<PluginModelCatalogCredentialOperations> {
-  return {
+  return bindSqliteWorkerDatabase<PluginModelCatalogCredentialOperations>(context.database, {
     execute(command) {
       return runSqliteWorkerTransactionSync(context, () => {
         if (command.type === "catalog.pruneRemovedProviders") {
@@ -221,12 +219,5 @@ export function bindSqliteWorkerBackend(
         return undefined;
       });
     },
-    assertSettled() {
-      assertTransactionUsable(context.database);
-      if (!context.database.isOpen || context.database.isTransaction) {
-        throw new Error("Catalog cleanup left an unsettled agent transaction");
-      }
-    },
-    close() {},
-  };
+  });
 }

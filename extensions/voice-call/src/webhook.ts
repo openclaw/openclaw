@@ -3,12 +3,8 @@ import { URL } from "node:url";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import type { PluginLogger, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
+import { resolveConfiguredCapabilityProviderAsync } from "openclaw/plugin-sdk/provider-selection-runtime";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
@@ -27,7 +23,6 @@ import {
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
 import {
-  normalizeVoiceCallConfig,
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKeyForCall,
   type VoiceCallConfig,
@@ -107,14 +102,6 @@ type CachedWebhookResponse = {
   response: Promise<WebhookResponsePayload>;
 };
 
-function cloneWebhookResponsePayload(payload: WebhookResponsePayload): WebhookResponsePayload {
-  return {
-    statusCode: payload.statusCode,
-    headers: payload.headers ? { ...payload.headers } : undefined,
-    body: payload.body,
-  };
-}
-
 export class VoiceCallWebhookServer {
   private server: http.Server | null = null;
   private listeningUrl: string | null = null;
@@ -143,7 +130,7 @@ export class VoiceCallWebhookServer {
     private readonly agentRuntime?: OpenClawPluginApi["runtime"]["agent"],
     logger?: PluginLogger,
   ) {
-    this.config = normalizeVoiceCallConfig(config);
+    this.config = config;
     const rawLogger = logger ?? {
       info: console.log,
       warn: console.warn,
@@ -269,7 +256,7 @@ export class VoiceCallWebhookServer {
     const pluginConfig = this.fullConfig ?? this.coreConfig ?? undefined;
     const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
       await loadRealtimeTranscriptionRuntime();
-    const resolution = resolveConfiguredCapabilityProvider({
+    const resolution = await resolveConfiguredCapabilityProviderAsync({
       configuredProviderId: streaming.provider,
       providerConfigs: streaming.providers,
       cfg: pluginConfig,
@@ -281,7 +268,9 @@ export class VoiceCallWebhookServer {
       resolveProviderConfig: ({ provider, cfg, rawConfig }) =>
         provider.resolveConfig?.({ cfg, rawConfig }) ?? rawConfig,
       isProviderConfigured: ({ provider, cfg, providerConfig }) =>
-        provider.isConfigured({ cfg, providerConfig }),
+        provider.isConfiguredAsync
+          ? provider.isConfiguredAsync({ cfg, providerConfig })
+          : (provider.isConfigured?.({ cfg, providerConfig }) ?? false),
     });
     if (!resolution.ok) {
       this.logger.warn(
@@ -755,29 +744,26 @@ export class VoiceCallWebhookServer {
     }
   }
 
-  private pruneReplayResponses(rawNow: number): void {
-    const now = asDateTimestampMs(rawNow);
-    if (now !== undefined) {
-      for (const [key, entry] of this.replayResponses) {
-        if (entry.expiresAt <= now) {
-          this.replayResponses.delete(key);
-        }
+  private pruneReplayResponses(now: number): void {
+    for (const [key, entry] of this.replayResponses) {
+      if (entry.expiresAt <= now) {
+        this.replayResponses.delete(key);
       }
     }
     pruneMapToMaxSize(this.replayResponses, WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES);
   }
 
   private async getCachedReplayResponse(key: string): Promise<WebhookResponsePayload | null> {
-    const now = asDateTimestampMs(Date.now());
+    const now = Date.now();
     const entry = this.replayResponses.get(key);
-    if (!entry || now === undefined) {
+    if (!entry) {
       return null;
     }
     if (entry.expiresAt <= now) {
       this.replayResponses.delete(key);
       return null;
     }
-    return cloneWebhookResponsePayload(await entry.response);
+    return await entry.response;
   }
 
   private async cacheReplayResponse(
@@ -786,43 +772,30 @@ export class VoiceCallWebhookServer {
     releaseReplay?: () => void,
   ): Promise<WebhookResponsePayload> {
     const now = Date.now();
-    const expiresAt = resolveExpiresAtMsFromDurationMs(WEBHOOK_REPLAY_RESPONSE_TTL_MS, {
-      nowMs: now,
-    });
     this.replayResponseCacheCalls += 1;
     if (this.replayResponseCacheCalls % WEBHOOK_REPLAY_RESPONSE_PRUNE_INTERVAL === 0) {
       this.pruneReplayResponses(now);
     }
 
-    let cachedEntry: CachedWebhookResponse | undefined;
-    const ownerResponse = buildResponse()
-      .then(cloneWebhookResponsePayload)
-      .catch((err: unknown) => {
-        if (cachedEntry && this.replayResponses.get(key) === cachedEntry) {
-          this.replayResponses.delete(key);
-        }
-        releaseReplay?.();
-        throw err;
-      });
+    const ownerResponse = buildResponse().catch((err: unknown) => {
+      if (this.replayResponses.get(key) === cachedEntry) {
+        this.replayResponses.delete(key);
+      }
+      releaseReplay?.();
+      throw err;
+    });
     // Twilio owners receive the real one-time TwiML; waiters only see token-free XML.
     const response = ownerResponse.then((payload) =>
-      this.provider.name === "twilio"
-        ? buildTwilioResponse()
-        : cloneWebhookResponsePayload(payload),
+      this.provider.name === "twilio" ? buildTwilioResponse() : payload,
     );
     // Preserve rejection for concurrent waiters without creating an orphaned rejection.
     void response.catch(() => {});
-    if (expiresAt !== undefined) {
-      cachedEntry = {
-        expiresAt,
-        response,
-      };
-      this.replayResponses.set(key, cachedEntry);
-    }
+    const cachedEntry = { expiresAt: now + WEBHOOK_REPLAY_RESPONSE_TTL_MS, response };
+    this.replayResponses.set(key, cachedEntry);
     if (this.replayResponses.size > WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES) {
       this.pruneReplayResponses(now);
     }
-    return cloneWebhookResponsePayload(await ownerResponse);
+    return await ownerResponse;
   }
 
   private verifyPreAuthWebhookHeaders(headers: http.IncomingHttpHeaders): string | undefined {

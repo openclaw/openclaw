@@ -48,16 +48,14 @@ import {
 } from "../routing/session-key.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
+import { STATE_SCHEMA_MIGRATION_DESCRIPTIONS } from "../state/openclaw-state-db-contract.js";
 import { detectOpenClawStateDatabaseSchemaMigrations } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { listLegacyPairingStoreFiles } from "./pairing-files.js";
 import { isPathInside } from "./path-guards.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
-import {
-  legacyAgentQuarantineNotices,
-  resolveLegacyStandaloneAgentDir,
-} from "./state-migrations.agent-dir-receipt.js";
+import { legacyAgentQuarantineNotices } from "./state-migrations.agent-dir-receipt.js";
 import {
   detectLegacyApnsRegistrations,
   migrateLegacyApnsRegistrations,
@@ -71,7 +69,7 @@ import {
   detectLegacyCommitments,
   migrateLegacyCommitments,
 } from "./state-migrations.commitments.js";
-import { migrateLegacyConfigMachineState } from "./state-migrations.config-machine-state.js";
+import { createConfigMachineStateStep } from "./state-migrations.config-machine-state-step.js";
 import {
   detectLegacyDebugProxyCaptureSidecar,
   migrateLegacyDebugProxyCaptureSidecar,
@@ -153,6 +151,7 @@ import {
   inspectOrphanSessionStoreEndpoints,
   uniqueMigrationEndpoints,
 } from "./state-migrations.prelude.js";
+import { resolveLegacyProfileMigrationExceptions } from "./state-migrations.profile-scope.js";
 import {
   detectLegacyRescuePending,
   discardLegacyRescuePending,
@@ -179,10 +178,7 @@ import {
   autoMigrateLegacyStateDir,
   resolvePendingLegacyStateDirMigrationPaths,
 } from "./state-migrations.state-dir.js";
-import {
-  createStateSchemaMigrationStep,
-  describeStateSchemaMigration,
-} from "./state-migrations.state-schema.js";
+import { createStateSchemaMigrationStep } from "./state-migrations.state-schema.js";
 import { runLegacyStateMigrationSteps } from "./state-migrations.steps.js";
 import {
   detectLegacyTuiLastSessions,
@@ -321,8 +317,13 @@ export async function detectLegacyStateMigrations(params: {
     : undefined;
   const rehearsalRoot = resolveUpdateRehearsalRoot(env);
   const seenAgentSources = new Set<string>();
+  const { standaloneAgent } = resolveLegacyProfileMigrationExceptions({
+    env,
+    homedir,
+    configuredAgentDir: migrationTarget?.dir,
+  });
   const legacyAgentInspections = [
-    { legacyDir: resolveLegacyStandaloneAgentDir(homedir), standalone: true },
+    ...(standaloneAgent ? [{ legacyDir: standaloneAgent, standalone: true }] : []),
     { legacyDir: path.join(stateDir, "agent"), standalone: false },
   ]
     .filter(({ legacyDir }) => {
@@ -559,7 +560,9 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (stateSchemaMigrations.length > 0) {
     for (const migration of stateSchemaMigrations) {
-      preview.push(`- Shared SQLite schema: ${describeStateSchemaMigration(migration)}`);
+      preview.push(
+        `- Shared SQLite schema: ${STATE_SCHEMA_MIGRATION_DESCRIPTIONS[migration.kind]}`,
+      );
     }
     preview.push(
       "- Rerun doctor after shared SQLite schema repair to detect plugin state migrations",
@@ -810,25 +813,6 @@ function createPluginInstallIndexStep(params: {
       changes: [],
       warnings: migrationFileExists(sourcePath) ? [message] : [],
     }),
-  };
-}
-
-function createConfigMachineStateStep(params: {
-  config: OpenClawConfig;
-  configPath: string;
-  configIncludedPaths: readonly string[];
-  stateDir: string;
-  env: NodeJS.ProcessEnv;
-}): LegacyStateMigrationStep {
-  const stateEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
-  return {
-    id: "config-machine-state",
-    phase: "shared",
-    source: createConfigMigrationSources(params.configPath, params.configIncludedPaths),
-    target: [{ kind: "sqlite", path: resolveOpenClawStateSqlitePath(stateEnv) }],
-    requiredness: "conditional",
-    reversibility: "checkpoint-required",
-    run: () => migrateLegacyConfigMachineState({ config: params.config, env: stateEnv }),
   };
 }
 

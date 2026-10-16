@@ -336,6 +336,8 @@ export class MarkdownDomReconciler {
       if (fragment.prefix !== canonical) {
         fragment.canonical = parseCanonical(fragment.html, prefix, fragment.incremental);
         fragment.prefix = canonical;
+      } else if (!media) {
+        continue;
       }
       fragment.children = this.reconcile(fragment, fragment.children, fragment.canonical, media);
     }
@@ -440,7 +442,10 @@ export class MarkdownDomReconciler {
       clearRange(node);
       if (source.tag) {
         const template = document.createElement("template");
-        template.innerHTML = source.canonical.slice(source.canonical.indexOf(":") + 1);
+        // Serializing parsed HTML restores literal CRs; encode them before another parse.
+        template.innerHTML = source.canonical
+          .slice(source.canonical.indexOf(":") + 1)
+          .replaceAll("\r", "&#13;");
         node.end.before(template.content);
       }
       node.element = undefined;

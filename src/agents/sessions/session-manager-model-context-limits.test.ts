@@ -623,20 +623,20 @@ it.each(["sync", "async"])(
         const messages = selected.buildSessionContext().messages;
         expect(messages.map((message) => message.role)).toEqual([
           "user",
+          "user",
           "assistant",
           "toolResult",
           "toolResult",
         ]);
-        expect(messages[0]).toEqual(full.messages[1]);
-        expect(messages[1]).toEqual(full.messages[2]);
-        expect(messages[2]).toMatchObject({
+        expect(messages.slice(0, 3)).toEqual(full.messages.slice(0, 3));
+        expect(messages[3]).toMatchObject({
           role: "toolResult",
           toolCallId: "large",
           toolName: "read",
           isError: false,
           content: [{ type: "text", text: expect.stringMatching(/omitted.*\d+ bytes/u) }],
         });
-        expect(messages[3]).toEqual(full.messages[4]);
+        expect(messages[4]).toEqual(full.messages[4]);
         expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(limits.maxBytes);
         expect(oversizedPayloadReads).toBe(0);
         expect(selected.isPersisted()).toBe(false);
@@ -661,14 +661,130 @@ it("retains a displaced repeated-ID owner when omitting an oversized result body
       const selected = SessionManager.openModelContext(scope, {
         limits: { maxBytes: 4096, maxEvents: 8, toolResultOverflow: "omit" },
       }).buildSessionContext().messages;
-      expect(selected.slice(0, -1)).toEqual(full.slice(3, -1));
+      expect(selected.slice(0, -1)).toEqual(full.slice(0, -1));
       expect(selected.at(-1)).toMatchObject({
         role: "toolResult",
         toolCallId: "repeat",
         content: [{ type: "text", text: expect.stringContaining("body omitted") }],
       });
-      expect(selected[1]).toEqual(full[4]);
+      expect(selected[4]).toEqual(full[4]);
       expect(Buffer.byteLength(JSON.stringify(selected))).toBeLessThanOrEqual(4096);
     });
   });
 });
+
+it.each([
+  { label: "oversized result", toolResultBodySizes: [32_768] },
+  { label: "cumulative results", toolResultBodySizes: [2_000, 2_000] },
+])(
+  "preserves early requests under $label pressure with a nonempty recent suffix",
+  async ({ label, toolResultBodySizes }) => {
+    await withHistory(
+      `context-history-pressure-${toolResultBodySizes.length}`,
+      async ({ scope, source, verifyRead }) => {
+        source.appendMessage(makeUserMessage("original goal: migrate the blue database", 0));
+        source.appendMessage(
+          makeUserMessage("constraint: verify the checksum before switching reads", 1),
+        );
+        for (const [index, bodySizeBytes] of toolResultBodySizes.entries()) {
+          appendCall(source, `pressure-${index}`);
+          appendResult(
+            source,
+            `pressure-${index}`,
+            `pressure-body-${index}:` + "x".repeat(bodySizeBytes),
+          );
+        }
+        source.appendMessage(
+          makeAgentAssistantMessage({ content: [{ type: "text", text: "recent explanation" }] }),
+        );
+        source.appendMessage(makeUserMessage("summarize the plan", 2));
+        const contextLimits = { maxBytes: 4096, maxEvents: 20 };
+        const strictContextMessages = SessionManager.openModelContext(scope, {
+          limits: contextLimits,
+        }).buildSessionContext().messages;
+        expect(strictContextMessages.length).toBeGreaterThan(0);
+        expect(JSON.stringify(strictContextMessages)).not.toContain("original goal:");
+        await verifyRead(async () => {
+          const hydratedBodies = new Set<string>();
+          const parseJson = JSON.parse;
+          const parseJsonSpy = vi
+            .spyOn(JSON, "parse")
+            .mockImplementation((serializedJson, reviver) => {
+              for (const match of serializedJson.matchAll(/pressure-body-\d+:/gu)) {
+                hydratedBodies.add(match[0]);
+              }
+              return parseJson(serializedJson, reviver);
+            });
+          let contextMessages: ReturnType<SessionManager["buildSessionContext"]>["messages"];
+          try {
+            contextMessages = SessionManager.openModelContext(scope, {
+              limits: { ...contextLimits, toolResultOverflow: "omit" },
+            }).buildSessionContext().messages;
+          } finally {
+            parseJsonSpy.mockRestore();
+          }
+          const serializedMessages = JSON.stringify(contextMessages);
+          expect(serializedMessages, label).toContain("original goal: migrate the blue database");
+          expect(serializedMessages).toContain(
+            "constraint: verify the checksum before switching reads",
+          );
+          expect(serializedMessages).toContain("recent explanation");
+          expect(serializedMessages).toContain("summarize the plan");
+          expect(serializedMessages).toContain("body omitted");
+          expect(contextMessages).toHaveLength(4 + toolResultBodySizes.length * 2);
+          expect(Buffer.byteLength(serializedMessages)).toBeLessThanOrEqual(contextLimits.maxBytes);
+          expect(hydratedBodies).toEqual(
+            new Set(
+              Array.from(serializedMessages.matchAll(/pressure-body-\d+:/gu), (match) => match[0]),
+            ),
+          );
+          const asyncSessionManager = await SessionManager.openModelContextAsync(scope, {
+            limits: { ...contextLimits, toolResultOverflow: "omit" },
+          });
+          expect(asyncSessionManager.buildSessionContext().messages).toEqual(contextMessages);
+        });
+      },
+    );
+  },
+);
+
+it.each([false, true])(
+  "retains affordable tool bodies after dropping an oversized prefix (compacted=%s)",
+  async (hasCompactionBoundary) => {
+    await withHistory(
+      `context-retained-results-${hasCompactionBoundary}`,
+      async ({ scope, source, verifyRead }) => {
+        const oversizedRequestId = source.appendMessage(
+          makeUserMessage("old request:" + "x".repeat(32_768), 0),
+        );
+        if (hasCompactionBoundary) {
+          source.appendCompaction("required summary", oversizedRequestId, 100);
+        }
+        source.appendMessage(makeUserMessage("verify the recent checksum", 1));
+        appendCall(source, "checksum");
+        appendResult(source, "checksum", "verified checksum: synthetic-42 " + "x".repeat(1024));
+        source.appendMessage(
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "verification completed" }],
+          }),
+        );
+        const contextLimits = { maxBytes: 4096, maxEvents: 20 };
+        const expectedMessages = SessionManager.openModelContext(scope, {
+          limits: contextLimits,
+        }).buildSessionContext().messages;
+        expect(JSON.stringify(expectedMessages)).toContain("verified checksum: synthetic-42");
+        expect(JSON.stringify(expectedMessages)).not.toContain("old request:");
+        await verifyRead(async () => {
+          const options = { limits: { ...contextLimits, toolResultOverflow: "omit" as const } };
+          const selected = SessionManager.openModelContext(scope, options);
+          expect(selected.buildSessionContext().messages).toEqual(expectedMessages);
+          const asyncSelected = await SessionManager.openModelContextAsync(scope, options);
+          expect(asyncSelected.buildSessionContext().messages).toEqual(expectedMessages);
+          expect(Buffer.byteLength(JSON.stringify(expectedMessages))).toBeLessThanOrEqual(
+            contextLimits.maxBytes,
+          );
+        });
+      },
+    );
+  },
+);

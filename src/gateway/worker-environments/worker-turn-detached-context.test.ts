@@ -1,5 +1,5 @@
 import { AsyncResource } from "node:async_hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -11,12 +11,13 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createCoordinatorTestService } from "./placement-dispatch-coordinator.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -111,7 +112,7 @@ async function launchProbe(
   assertRunCurrent?: () => void,
   waitForInitialPlacement?: WorkerTurnLauncherOptions["waitForInitialPlacement"],
 ) {
-  if (!waitForInitialPlacement) {
+  if (!waitForInitialPlacement && (await placements.getAsync(SESSION_ID))?.state !== "active") {
     await seedActivePlacement();
   }
   const deliberateStop = new WorkerRunnerUnavailableError();
@@ -226,28 +227,14 @@ async function withAsyncReadHook<T>(
 function afterNextModelContextSnapshot(afterSnapshot: () => Promise<void>) {
   // The concurrent writer must not borrow the reader's transcript admission fence.
   const mutate = AsyncResource.bind(afterSnapshot);
-  let read = vi.spyOn(WorkerTaskPool.prototype, "run");
-  async function intercept(
-    this: WorkerTaskPool<unknown, unknown>,
-    ...args: Parameters<WorkerTaskPool<unknown, unknown>["run"]>
-  ) {
-    read.mockRestore();
-    const run = this.run.bind(this);
-    const input = args[0];
-    if (
-      !input ||
-      typeof input !== "object" ||
-      !("kind" in input) ||
-      input.kind !== "model-context"
-    ) {
-      read = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(intercept);
-      return await run(...args);
-    }
-    const snapshot = await run(...args);
-    await mutate();
-    return snapshot;
-  }
-  read.mockImplementation(intercept);
+  const run = contextWorker.readSessionTranscriptModelContextInWorker;
+  const read = vi
+    .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+    .mockImplementationOnce(async (...args) => {
+      const snapshot = await run(...args);
+      await mutate();
+      return snapshot;
+    });
   return () => read.mockRestore();
 }
 
@@ -260,8 +247,62 @@ describe("worker detached model-context branch parity", () => {
   });
   afterEach(async () => {
     if (!hasUnjoinedOwner) {
-      await cleanupWorkerTurnLauncherTest();
+      await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
     }
+  });
+  afterAll(async () => {
+    if (!hasUnjoinedOwner) {
+      await closeStateDatabaseForTest();
+    }
+  });
+
+  it("launches a continuation from the committed interruption writes instead of the original admission", async () => {
+    const original = recorder();
+    await original.persistApproved();
+    const originalLeaf = original.getAdmissionReceipt()?.entryId;
+    expect(originalLeaf).toEqual(expect.any(String));
+    const manager = await SessionManager.openAsync(sessionTarget);
+    await manager.appendMessageAsync(
+      makeAgentAssistantMessage({
+        content: [
+          {
+            type: "toolCall",
+            id: "interrupted",
+            name: "exec",
+            arguments: { command: "effect-once" },
+          },
+        ],
+        stopReason: "toolUse",
+      }),
+    );
+    const unknown = "The node disconnected; outcome unknown. Verify state before retrying.";
+    await manager.appendMessageAsync({
+      role: "toolResult",
+      toolCallId: "interrupted",
+      toolName: "exec",
+      content: [{ type: "text", text: unknown }],
+      isError: true,
+      timestamp: 2,
+    });
+    const committedLeaf = await manager.appendMessageAsync(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Preserved partial reply" }],
+        timestamp: 3,
+      }),
+    );
+    expect(committedLeaf).not.toBe(originalLeaf);
+    const stale = await launchProbe({
+      ...request("original-recorder-borrowed"),
+      suppressNextUserMessagePersistence: true,
+      userTurnTranscriptRecorder: original,
+    });
+    expect(stale.launch?.baseLeafId).toBe(originalLeaf);
+    const continuation = await launchProbe({
+      ...request("interruption-continuation"),
+      suppressNextUserMessagePersistence: true,
+    });
+    expect(continuation.launch?.baseLeafId).toBe(committedLeaf);
+    expect(continuation.launch?.history).toContainEqual({ role: "toolResult", text: unknown });
   });
 
   it.each([false, true])(
@@ -475,69 +516,22 @@ describe("worker detached model-context branch parity", () => {
     },
   );
 
-  it.each(["missing", "after-snapshot", "model-resolution"] as const)(
-    "rejects a missing or removed canonical user admission (%s)",
-    async (stage) => {
-      seedPrevious();
-      const inputRecorder = recorder();
-      if (stage === "missing") {
-        inputRecorder.markRuntimePersisted(
-          buildPersistedUserTurnMessage({ text: "current request" }),
-        );
-      } else {
-        await inputRecorder.persistApproved();
-      }
-      const beforeRows = stage === "missing" ? readWorkerTurnTranscriptStorageRows() : undefined;
-      const writer = SessionManager.open(sessionTarget);
-      let removed = 0;
-      const removeAdmission = () => {
-        const admission = inputRecorder.getAdmissionReceipt();
-        if (!admission) {
-          throw new Error("expected an admitted user before removal");
-        }
-        removed = writer.removeTrailingEntries((entry) => entry.id === admission.entryId);
-        expect(removed).toBe(1);
-      };
-      const restore =
-        stage === "after-snapshot"
-          ? afterNextModelContextSnapshot(async () => removeAdmission())
-          : undefined;
-      try {
-        const result = await launchProbe({
-          ...request(`recorder-admission-${stage}`),
-          userTurnTranscriptRecorder: inputRecorder,
-          ...(stage === "model-resolution"
-            ? {
-                onExecutionPhase: ({ phase }) => {
-                  if (phase === "model_resolution") {
-                    removeAdmission();
-                  }
-                },
-              }
-            : {}),
-        });
-        expectNoLaunch(result);
-        expect(result.outcome).toMatchObject({
-          kind: "rejected",
-          error:
-            stage === "missing"
-              ? { message: "Cloud worker turn has no readable canonical user admission" }
-              : { name: "SessionTranscriptReadFenceError" },
-        });
-        if (stage === "missing") {
-          expect(readWorkerTurnTranscriptStorageRows()).toEqual(beforeRows);
-        } else {
-          expect(
-            removed,
-            result.outcome.kind === "rejected" ? String(result.outcome.error) : "resolved",
-          ).toBe(1);
-          expect(inputRecorder.getAdmissionReceipt()).toBeDefined();
-        }
-      } finally {
-        restore?.();
-      }
-    },
-  );
+  it("rejects a missing canonical user admission", async () => {
+    seedPrevious();
+    const inputRecorder = recorder();
+    inputRecorder.markRuntimePersisted(buildPersistedUserTurnMessage({ text: "current request" }));
+    const beforeRows = readWorkerTurnTranscriptStorageRows();
+    const result = await launchProbe({
+      ...request("recorder-admission-missing"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    expectNoLaunch(result);
+    expect(result.outcome).toMatchObject({
+      kind: "rejected",
+      error: { message: "Cloud worker turn has no readable canonical user admission" },
+    });
+    expect(readWorkerTurnTranscriptStorageRows()).toEqual(beforeRows);
+  });
 
   it("retains the initial-setup writer fence across the asynchronous context read", async ({
     signal,

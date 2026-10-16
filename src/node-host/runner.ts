@@ -8,7 +8,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
-import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
 import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
@@ -170,7 +170,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
   await initializeSqliteRuntimeCapabilities();
   ensureNodeHostStateReady();
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const savedConfig = await loadNodeHostConfig();
   const plannedGateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,

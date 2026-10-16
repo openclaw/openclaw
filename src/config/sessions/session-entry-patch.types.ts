@@ -60,6 +60,7 @@ export type SessionEntryPatchCommit = {
 export type SessionEntryPatchCommitted = {
   kind: "session-entry-patch";
   entry: SessionEntry | null;
+  applied: boolean;
   publication?: SessionEntryReplacementPublication;
   /** Guard snapshot before the entry patch, carried only while the session ID is unchanged. */
   transcriptPredicate?: {
@@ -69,6 +70,7 @@ export type SessionEntryPatchCommitted = {
   refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
 };
 
+/** Internal bookkeeping borrows the committed result without mutating it. */
 export type SessionEntryPatchCommitObserver = (
   entry: SessionEntry,
   /** Historical predicate facts from the committed transaction, never current authority. */

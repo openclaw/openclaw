@@ -61,6 +61,7 @@ export function preparedModel(): Awaited<
     model: "gpt-test",
     authProfileId: undefined,
     outputTextPolicy: "strict-visible",
+    thinkLevel: "off",
     agentId: "main",
     agentDir: "/tmp/agent",
   };

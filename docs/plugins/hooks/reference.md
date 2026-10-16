@@ -123,7 +123,7 @@ contracts above; a modifying hook is not an observation hook.
 
 | Hook                            | Kind    | Purpose                                                                                                                         |
 | ------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `before_model_resolve`          | Modify  | Override provider or model before session messages load                                                                         |
+| `before_model_resolve`          | Modify  | Override provider, model, or the run's fallback chain before session messages load                                              |
 | `agent_turn_prepare`            | Modify  | Inspect drained plugin turn injections and add context before prompt hooks                                                      |
 | `before_prompt_build`           | Modify  | Add prompt context, narrow the current turn's submitted tools, or perform authorized post-policy enrichment                     |
 | `before_agent_run`              | Gate    | Inspect prompt and session messages before model submission; node turns gate Gateway input before worker-local context assembly |
@@ -189,9 +189,11 @@ queue. The field identifies an existing queue and grants no additional access.
 | `before_compaction` / `after_compaction` | Observe | Observe compaction boundaries; no rewrite or veto result     |
 | `before_reset`                           | Observe | Observe session-reset events (`/reset`, programmatic resets) |
 
-Successful engine-owned compaction attempts emit `after_compaction` even when
-no history changes, with `compactedCount: 0`. Failed or aborted attempts do not
-emit that completion hook.
+Successful engine-owned and built-in native compaction attempts emit
+`after_compaction` even when no history changes, with `compactedCount: 0`.
+Native skips include heartbeat-only transcripts and automatic retention-policy
+no-ops. Completion means the attempt finished; it does not guarantee a history
+rewrite. Failed or aborted attempts do not emit that completion hook.
 
 `session_end.reason` is one of `new`, `reset`, `idle`, `daily`, `compaction`,
 `deleted`, `shutdown`, `restart`, or `unknown`. `session_start` has no reason

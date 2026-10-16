@@ -2,12 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import * as processExec from "../process/exec.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { runCommand } from "./invoke-run-command.js";
 
 describe("runCommand", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -41,6 +43,30 @@ describe("runCommand", () => {
         expect(result.success).toBe(true);
         expect(result.stdout).toBe("completed");
       }
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "restores the service PATH after login startup and resolves service-only tools",
+    async () => {
+      const home = tempDirs.make("openclaw-node-service-path-");
+      fs.writeFileSync(path.join(home, ".profile"), "export PATH=/usr/bin:/bin\n");
+      const serviceBin = path.join(home, "service bin");
+      fs.mkdirSync(serviceBin);
+      fs.writeFileSync(path.join(serviceBin, "openclaw-path-probe"), "#!/bin/sh\nprintf service", {
+        mode: 0o755,
+      });
+      const servicePath = `${serviceBin}:/usr/bin:/bin`;
+      const result = await runCommand(
+        buildNodeShellCommand('printf "%s\\n" "$PATH"; openclaw-path-probe', "linux"),
+        undefined,
+        { HOME: home, PATH: servicePath, OPENCLAW_PREPEND_PATH: "/request-override" },
+        undefined,
+      );
+      expect(result).toMatchObject({ success: true, stderr: "" });
+      const [childPath, output] = result.stdout.split("\n");
+      expect(childPath?.startsWith(`${servicePath}:`)).toBe(true);
+      expect(output).toBe("service");
     },
   );
 

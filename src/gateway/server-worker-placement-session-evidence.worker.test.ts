@@ -2,13 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.entry.js";
 import {
   readSessionIdentityEvidenceBatch,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import type { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type {
   WorkerTaskPoolOptions,
@@ -22,6 +25,7 @@ import {
 import * as registry from "../state/openclaw-agent-db-registry-listing.js";
 import { drainAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -32,8 +36,7 @@ const boundary = vi.hoisted(
   (): {
     afterReply?: (reply: unknown) => Promise<void>;
     afterCleanup?: () => Promise<void>;
-    failRetirement: boolean;
-  } => ({ failRetirement: false }),
+  } => ({}),
 );
 vi.mock("../infra/worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/worker-task-pool.js")>();
@@ -59,9 +62,6 @@ vi.mock("../infra/worker-task-pool.js", async (importOriginal) => {
             : result;
         },
         async rotate() {
-          if (observedRead && boundary.failRetirement) {
-            throw new Error("synthetic retirement failure");
-          }
           await pool.rotate();
           if (observedRead) {
             await boundary.afterCleanup?.();
@@ -81,7 +81,6 @@ vi.mock("../infra/worker-task-pool.js", async (importOriginal) => {
 afterEach(() => {
   boundary.afterReply = undefined;
   boundary.afterCleanup = undefined;
-  boundary.failRetirement = false;
   vi.restoreAllMocks();
 });
 
@@ -156,44 +155,63 @@ function isEvidenceReply(reply: unknown): boolean {
   );
 }
 
-it.each([false, true])(
-  "retains only requested registry currency after invalidation (registered=%s)",
-  async (registered) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it.for(["discovery", "identity"] as const)(
+  "cancels placement evidence during %s admission without abandoning its writer",
+  async (phase, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const subject = await placement();
-      const store = registered ? state.statePath("custom", "shared.json") : undefined;
-      const cfg: OpenClawConfig = store ? { session: { store } } : {};
-      setRuntimeConfigSnapshot(cfg, cfg);
-      replaceSessionEntrySync(
-        { ...subject, ...(store ? { storePath: store } : {}) },
-        { sessionId: subject.sessionId, updatedAt: 1 },
-      );
-      registry.readOpenClawAgentDatabaseRegistryToken();
-      const prepare = registry.prepareOpenClawAgentDatabaseRegistrySnapshotRead;
-      let registryReads = 0;
-      vi.spyOn(registry, "prepareOpenClawAgentDatabaseRegistrySnapshotRead").mockImplementation(
-        (...args) => {
-          const captured = prepare(...args);
-          return {
-            ...captured,
-            read: () => {
-              registryReads += 1;
-              return captured.read();
-            },
-          };
-        },
-      );
-      let observedEvidence = false;
-      boundary.afterReply = async (reply) => {
-        if (isEvidenceReply(reply)) {
-          observedEvidence = true;
-          expect(registry.invalidateRegisteredAgentDatabasesMemo({})).toBeDefined();
-        }
+      await upsertSessionEntryCore(subject, { sessionId: subject.sessionId, updatedAt: 1 });
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const databasePath = database.path;
+      await closeOpenClawAgentDatabasesAsync();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const controller = new AbortController();
+      const interrupted = new Error("placement evidence stopped");
+      let writerSettled = false;
+      let writer: Promise<void> | undefined;
+      const holdWriter = () => {
+        entered.resolve();
+        return release.promise.then(() => {
+          writerSettled = true;
+        });
       };
+      if (phase === "discovery") {
+        writer = runWithSqliteDatabaseAdmissionTurn([], holdWriter, [path.dirname(databasePath)]);
+        await withinTest(entered.promise, signal);
+      } else {
+        boundary.afterReply = async (reply) => {
+          if (
+            isRecord(reply) &&
+            reply.ok === true &&
+            isRecord(reply.value) &&
+            reply.value.kind === "session-target-inventory"
+          ) {
+            boundary.afterReply = undefined;
+            writer = runOpenClawAgentWriteAdmission(
+              { agentId: "main", path: databasePath },
+              holdWriter,
+            );
+            await entered.promise;
+          }
+        };
+      }
+      const pending = createWorkerPlacementSessionEvidenceResolver([subject], controller.signal);
+      void pending.catch(() => {});
+      try {
+        await withinTest(entered.promise, signal);
+        controller.abort(interrupted);
+        await expect(withinTest(pending, signal)).rejects.toBe(interrupted);
+        expect(writerSettled).toBe(false);
+      } finally {
+        boundary.afterReply = undefined;
+        release.resolve();
+        await Promise.allSettled([writer, pending]);
+      }
+      expect(writerSettled).toBe(true);
       const resolve = await createWorkerPlacementSessionEvidenceResolver([subject]);
-      expect(observedEvidence).toBe(true);
-      expect(registryReads).toBe(registered ? 1 : 0);
-      expect(await resolve(subject)).toBe(registered ? "unknown" : "current");
+      expect(await resolve(subject)).toBe("current");
     });
   },
 );
@@ -202,6 +220,7 @@ it.each(["path", "root", "agent"] as const)(
   "revokes unresolved discovery before a %s close can finish",
   async (selection) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const subject = await placement();
       replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
       const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -372,90 +391,9 @@ it.each(["evidence write", "settlement write", "alias retarget"] as const)(
   },
 );
 
-it.each(["path", "root"] as const)(
-  "retains lexical alias custody through failed physical retirement for a %s close",
-  async (selection) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const physical = state.statePath("physical.sqlite");
-      const aliasDir = state.statePath("aliases");
-      fs.mkdirSync(aliasDir);
-      const alias = path.join(aliasDir, "session.sqlite");
-      const subject = await placement();
-      replaceSessionEntrySync(
-        { ...subject, storePath: physical },
-        { sessionId: subject.sessionId, updatedAt: 1 },
-      );
-      fs.symlinkSync(physical, alias);
-      const cfg: OpenClawConfig = { session: { store: alias } };
-      setRuntimeConfigSnapshot(cfg, cfg);
-      boundary.afterReply = async (reply) => {
-        if (isEvidenceReply(reply)) {
-          boundary.failRetirement = true;
-          throw new Error("synthetic reply failure");
-        }
-      };
-      try {
-        expect(await (await createWorkerPlacementSessionEvidenceResolver([subject]))(subject)).toBe(
-          "unknown",
-        );
-        boundary.afterReply = undefined;
-        const close = () =>
-          selection === "path"
-            ? closeOpenClawAgentDatabaseByPathAsync(alias, "main")
-            : closeOpenClawAgentDatabasesAsync(aliasDir);
-        // An alias-only close must still find the failed physical reader's custody.
-        const resourceFailure = {
-          message: "Agent database resource drainage failed",
-          errors: expect.arrayContaining([
-            expect.objectContaining({ message: "synthetic retirement failure" }),
-          ]),
-        };
-        await expect(close()).rejects.toMatchObject(
-          selection === "path"
-            ? resourceFailure
-            : {
-                message: "Agent database close failed",
-                errors: expect.arrayContaining([expect.objectContaining(resourceFailure)]),
-              },
-        );
-        boundary.failRetirement = false;
-        await close();
-        expect(await (await createWorkerPlacementSessionEvidenceResolver([subject]))(subject)).toBe(
-          "current",
-        );
-      } finally {
-        boundary.afterReply = undefined;
-        boundary.failRetirement = false;
-      }
-    });
-  },
-);
-
-it("rejects discovery revoked during final reader cleanup", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const subject = await placement();
-    replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
-    let revoke: Promise<void> | undefined;
-    boundary.afterCleanup = async () => {
-      boundary.afterCleanup = undefined;
-      // Close joins native cleanup; do not wait for ourselves here.
-      revoke = drainAgentDatabaseResources({ agentId: "main" }, async () => {});
-    };
-    try {
-      expect(await (await createWorkerPlacementSessionEvidenceResolver([subject]))(subject)).toBe(
-        "unknown",
-      );
-      expect(revoke).toBeDefined();
-      await revoke;
-    } finally {
-      boundary.afterCleanup = undefined;
-      await revoke;
-    }
-  });
-});
-
 it("transfers a Windows-normalized environment through inventory and evidence workers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const subject = await placement();
     replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
     const { OPENCLAW_STATE_DIR, ...otherEnv } = process.env;
@@ -479,8 +417,9 @@ it("transfers a Windows-normalized environment through inventory and evidence wo
   });
 });
 
-it("rereads incognito absence when a row appears in the same native owner during disk work", async () => {
+it("reads memory evidence after an in-process write completes during disk work", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const disk = await placement("disk-current");
     const incognito = await placement(
       "private-created",
@@ -488,7 +427,7 @@ it("rereads incognito absence when a row appears in the same native owner during
       "agent:main:dashboard:incognito-created",
     );
     replaceSessionEntrySync(disk, { sessionId: disk.sessionId, updatedAt: 1 });
-    replaceSessionEntrySync(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:dashboard:incognito-anchor" },
       {
         sessionId: "private-anchor",
@@ -499,7 +438,7 @@ it("rereads incognito absence when a row appears in the same native owner during
     boundary.afterReply = async (reply) => {
       if (isEvidenceReply(reply)) {
         boundary.afterReply = undefined;
-        replaceSessionEntrySync(incognito, { sessionId: incognito.sessionId, updatedAt: 2 });
+        await upsertSessionEntryCore(incognito, { sessionId: incognito.sessionId, updatedAt: 2 });
         wrote = true;
       }
     };

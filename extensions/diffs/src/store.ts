@@ -29,7 +29,6 @@ const SWEEP_FALLBACK_AGE_MS = 24 * 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const CLEANUP_CONCURRENCY = 4;
 const MAX_DECODED_HTML_BYTES = 64 * 1024 * 1024;
-const ARTIFACT_ID_ATTEMPTS = 8;
 const VIEWER_PREFIX = "/plugins/diffs/view";
 const EMPTY_BLOB = new Uint8Array();
 const gzipAsync = promisify(gzip);
@@ -98,7 +97,7 @@ export class DiffArtifactStore {
     };
     const entry = await this.registerUnique(compressedHtml, metadata, ttlMs);
     this.scheduleCleanup();
-    return viewerEntryToMeta(entry, token);
+    return viewerEntryToMeta(entry, token, metadata);
   }
 
   async readAuthorizedViewer(id: string, token: string) {
@@ -125,7 +124,7 @@ export class DiffArtifactStore {
       throw new Error(`Diff artifact ${id} decoded size does not match its metadata.`);
     }
     return {
-      artifact: viewerEntryToMeta(entry, token),
+      artifact: viewerEntryToMeta(entry, token, entry.metadata),
       html,
     };
   }
@@ -140,37 +139,24 @@ export class DiffArtifactStore {
       ...(params.context ? { context: params.context } : {}),
     };
 
-    for (let attempt = 0; attempt < ARTIFACT_ID_ATTEMPTS; attempt += 1) {
-      const id = crypto.randomBytes(10).toString("hex");
-      if (!(await this.registerIfAbsentWithCleanup(id, EMPTY_BLOB, metadata, ttlMs))) {
-        continue;
-      }
-      const artifactDir = this.artifactDir(id);
-      try {
-        await fs.mkdir(this.rootDir, { recursive: true });
-        await fs.mkdir(artifactDir);
-        const entry = await this.blobStore.lookup(id);
-        if (!entry || !isRenderedFileMetadata(entry.metadata)) {
-          throw new Error(`Diff file artifact expired before materialization: ${id}`);
-        }
-        this.renderingFileIds.add(id);
-        this.scheduleCleanup();
-        return {
-          id,
-          filePath: path.join(artifactDir, `preview.${format}`),
-          expiresAt: resolveEntryExpiresAt(entry),
-          ...(params.context ? { context: params.context } : {}),
-        };
-      } catch (error) {
-        await this.blobStore.delete(id).catch(() => false);
-        await fs.rm(artifactDir, { recursive: true, force: true }).catch(() => {});
-        if (isFileExists(error)) {
-          continue;
-        }
-        throw error;
-      }
+    const entry = await this.registerUnique(EMPTY_BLOB, metadata, ttlMs);
+    const id = entry.key;
+    const artifactDir = this.artifactDir(id);
+    try {
+      await fs.mkdir(this.rootDir, { recursive: true });
+      await fs.mkdir(artifactDir);
+    } catch (error) {
+      await this.blobStore.delete(id).catch(() => false);
+      throw error;
     }
-    throw new Error("Failed to allocate a unique diff file artifact id.");
+    this.renderingFileIds.add(id);
+    this.scheduleCleanup();
+    return {
+      id,
+      filePath: path.join(artifactDir, `preview.${format}`),
+      expiresAt: resolveEntryExpiresAt(entry),
+      ...(params.context ? { context: params.context } : {}),
+    };
   }
 
   async completeFileArtifact(id: string): Promise<void> {
@@ -260,11 +246,8 @@ export class DiffArtifactStore {
     metadata: DiffArtifactBlobMetadata,
     ttlMs: number,
   ): Promise<PluginBlobEntry<DiffArtifactBlobMetadata>> {
-    for (let attempt = 0; attempt < ARTIFACT_ID_ATTEMPTS; attempt += 1) {
-      const id = crypto.randomBytes(10).toString("hex");
-      if (!(await this.registerIfAbsentWithCleanup(id, bytes, metadata, ttlMs))) {
-        continue;
-      }
+    const id = crypto.randomBytes(10).toString("hex");
+    if (await this.registerIfAbsentWithCleanup(id, bytes, metadata, ttlMs)) {
       const entry = await this.blobStore.lookup(id);
       if (entry) {
         return entry;
@@ -298,11 +281,6 @@ export class DiffArtifactStore {
     if (!isRenderedFileMetadata(entry.metadata) || this.renderingFileIds.has(entry.key)) {
       return;
     }
-    // A current row wins over the expired snapshot. This prevents cleanup from
-    // deleting a materialization if an id was replaced after the TTL transaction.
-    if (await this.blobStore.lookup(entry.key)) {
-      return;
-    }
     await fs.rm(this.artifactDir(entry.key), { recursive: true, force: true }).catch(() => {});
   }
 
@@ -330,20 +308,18 @@ export class DiffArtifactStore {
 function viewerEntryToMeta(
   entry: PluginBlobEntry<DiffArtifactBlobMetadata>,
   token: string,
+  metadata: DiffViewerArtifactMetadata,
 ): DiffArtifactMeta {
-  if (!isViewerMetadata(entry.metadata)) {
-    throw new Error(`Diff artifact ${entry.key} is not a viewer.`);
-  }
   return {
     id: entry.key,
     token,
     createdAt: timestampMsToIsoString(entry.createdAt) ?? "1970-01-01T00:00:00.000Z",
     expiresAt: resolveEntryExpiresAt(entry),
-    title: entry.metadata.title,
-    inputKind: entry.metadata.inputKind,
-    fileCount: entry.metadata.fileCount,
+    title: metadata.title,
+    inputKind: metadata.inputKind,
+    fileCount: metadata.fileCount,
     viewerPath: `${VIEWER_PREFIX}/${entry.key}/${token}`,
-    ...(entry.metadata.context ? { context: entry.metadata.context } : {}),
+    ...(metadata.context ? { context: metadata.context } : {}),
   };
 }
 
@@ -415,10 +391,6 @@ function isArtifactContext(value: unknown): value is DiffArtifactContext | undef
   return Object.entries(context).every(
     ([key, entry]) => allowed.has(key) && (entry === undefined || typeof entry === "string"),
   );
-}
-
-function isFileExists(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "EEXIST";
 }
 
 function isFileNotFound(error: unknown): boolean {

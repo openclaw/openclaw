@@ -159,15 +159,6 @@ export async function loadControlUiSessionPullRequestChecks(
       try {
         await assertHead();
         const details = await fetchSessionPullRequestCheckDetails(checkTarget, request);
-        // Do not label old-head job steps as current after a push during the request.
-        if (
-          !(
-            details.error instanceof gitHubPublicApi.ControlUiGitHubError &&
-            details.error.statusCode === 429
-          )
-        ) {
-          await assertHead();
-        }
         const result: ControlUiSessionPullRequestCheckDetails = {
           ...target,
           checks: details.checks,
@@ -230,22 +221,6 @@ export async function loadControlUiSessionPullRequestChecks(
   try {
     const result = await entry.promise;
     assertCurrent();
-    // A summary refresh can replace the PR while this details request is in flight.
-    const current = await loadPullRequests(
-      { sessionKey: params.sessionKey, agentId: params.agentId },
-      { fetchImpl: deps.fetchImpl },
-    );
-    assertCurrent();
-    if (
-      !current.pullRequests.some(
-        (candidate) =>
-          matchesTarget(candidate) &&
-          new URL(candidate.url).hostname === host &&
-          (candidate.state === "open" || candidate.state === "draft"),
-      )
-    ) {
-      return unavailable("The session pull request or head changed; reopen CI details");
-    }
     return structuredClone({
       ...result,
       ...(result.retryAfterMs === undefined

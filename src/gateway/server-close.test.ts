@@ -6,39 +6,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { registerDispatcher } from "../auto-reply/reply/dispatcher-registry.js";
-import {
-  createReplyOperation,
-  type ReplyOperation,
-} from "../auto-reply/reply/reply-run-registry.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
-import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
-import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import {
-  captureActivePluginRegistrySnapshot,
-  createPluginRegistryOwner,
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "../plugins/services.js";
 import {
   createServiceRegistration,
   startPluginServices,
 } from "../plugins/services.test-support.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginService } from "../plugins/types.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
+import { registerGatewayCancellationTests } from "./server-close-cancellation.test-support.js";
+import { registerGatewayResourceRetirementTests } from "./server-close-retirement.test-support.js";
 import {
   createGatewayCloseTestDepsFactory,
   createGatewayCloseTestHandlerFactory,
@@ -62,8 +54,11 @@ const mocks = vi.hoisted(() => ({
   stopGmailWatcher: vi.fn(async () => undefined),
   disposeAcpSessionManager: vi.fn(async (_reason: string) => undefined),
   fenceSessionSuspensionWritesForGatewayShutdown: vi.fn(),
-  closePluginStateDatabaseAsync: vi.fn<() => Promise<void>>(async () => undefined),
 }));
+const sharedStateLifecycle = resolveGlobalMap<string, boolean>(
+  Symbol("gateway-close-shared-state"),
+  "shared-state",
+);
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
@@ -132,13 +127,6 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   disposeAcpSessionManager: mocks.disposeAcpSessionManager,
 }));
 
-vi.mock("../plugin-state/plugin-state-store.js", async () => ({
-  ...(await vi.importActual<typeof import("../plugin-state/plugin-state-store.js")>(
-    "../plugin-state/plugin-state-store.js",
-  )),
-  closePluginStateDatabaseAsync: mocks.closePluginStateDatabaseAsync,
-}));
-
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({
     debug: vi.fn(),
@@ -197,142 +185,8 @@ function createHttpServer(
 }
 
 describe("createGatewayCloseHandler", () => {
-  it.each([true, false])(
-    "selects only serving Gateway owners while closing custodians drain (open survivor: %s)",
-    async (openSurvivor) => {
-      const database = new DatabaseSync(":memory:");
-      let resets = 0;
-      resolveGlobalSingleton(
-        Symbol("gateway-closing-owner-database"),
-        () => database,
-        (db) => {
-          if (db.isOpen) {
-            resets++;
-            db.close();
-          }
-        },
-        "plugin-registry",
-      );
-      const disposed: string[] = [];
-      const createOwner = (id: string, holdMemory: boolean) => {
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        if (!holdMemory) {
-          release.resolve();
-        }
-        const registry = createEmptyPluginRegistry();
-        const record = createPluginRecord({ id, status: "loaded" });
-        registry.plugins.push(record);
-        const instance = new PluginInstance(id, { record, registry });
-        let retiring = false;
-        const drain = vi.fn(async () => {
-          entered.resolve();
-          await release.promise;
-          expect(database.prepare("SELECT 1 AS value").get()).toEqual({ value: 1 });
-        });
-        registry.memoryCapabilities.push({
-          pluginId: id,
-          capability: instance.wrap({
-            runtime: {
-              getMemorySearchManager: async () => {
-                if (retiring) {
-                  throw new Error("Selected Gateway memory runtime is closing");
-                }
-                expect(database.prepare("SELECT 2 AS value").get()).toEqual({ value: 2 });
-                return { manager: null };
-              },
-              resolveMemoryBackendConfig: () => ({ backend: "builtin" }),
-              prepareReload: () => {
-                retiring = true;
-                return {
-                  drain,
-                  resume: () => {
-                    retiring = false;
-                  },
-                };
-              },
-            } satisfies MemoryPluginRuntime,
-          }),
-        });
-        instance.lifecycle.onDispose(() => {
-          expect(database.prepare("SELECT 3 AS value").get()).toEqual({ value: 3 });
-          disposed.push(id);
-        });
-        setActivePluginRegistry(registry, id, "gateway-bindable", `/virtual/${id}`);
-        const owner = createPluginRegistryOwner(registry);
-        return { id, registry, owner, entered, release, drain };
-      };
-      const oldest = createOwner("oldest", !openSurvivor);
-      const closing = createOwner("closing", true);
-      const newest = createOwner("newest", false);
-      const pending: Promise<unknown>[] = [];
-      try {
-        const closingDone = closing.owner.close();
-        pending.push(closingDone);
-        await closing.entered.promise;
-        if (!openSurvivor) {
-          pending.push(oldest.owner.close());
-          await oldest.entered.promise;
-        }
-        const newestDone = newest.owner.close();
-        pending.push(newestDone);
-        await newestDone;
-        expect(captureActivePluginRegistrySnapshot()).toEqual(
-          openSurvivor
-            ? {
-                activeRegistry: oldest.registry,
-                key: oldest.id,
-                workspaceDir: "/virtual/oldest",
-                runtimeSubagentMode: "gateway-bindable",
-              }
-            : {
-                activeRegistry: null,
-                key: null,
-                workspaceDir: null,
-                runtimeSubagentMode: "default",
-              },
-        );
-        expect(database.isOpen).toBe(true);
-        expect(resets).toBe(0);
-        expect(disposed).toEqual([newest.id]);
-        if (openSurvivor) {
-          await expect(
-            getActivePluginRegistry()!.memoryCapabilities[0]!.capability.runtime!.getMemorySearchManager(
-              { cfg: {}, agentId: "fixture" },
-            ),
-          ).resolves.toEqual({ manager: null });
-        }
-        closing.release.resolve();
-        await closingDone;
-        expect(getActivePluginRegistry()).toBe(openSurvivor ? oldest.registry : null);
-        expect(database.isOpen).toBe(true);
-        expect(resets).toBe(0);
-        expect(disposed).toEqual([newest.id, closing.id]);
-        oldest.release.resolve();
-        const oldestDone = oldest.owner.close();
-        pending.push(oldestDone);
-        await oldestDone;
-        expect(getActivePluginRegistry()).toBeNull();
-        expect(disposed).toEqual([newest.id, closing.id, oldest.id]);
-        expect(database.isOpen).toBe(false);
-        expect(resets).toBe(1);
-        for (const item of [oldest, closing, newest]) {
-          expect(item.drain).toHaveBeenCalledOnce();
-        }
-      } finally {
-        for (const item of [oldest, closing, newest]) {
-          item.release.resolve();
-          pending.push(item.owner.close());
-        }
-        await Promise.allSettled(pending);
-        if (database.isOpen) {
-          database.close();
-        }
-      }
-    },
-  );
-
   beforeEach(() => {
+    sharedStateLifecycle.set("open", true);
     resetPluginRuntimeStateForTest();
     vi.useRealTimers();
     mocks.logInfo.mockClear();
@@ -350,7 +204,6 @@ describe("createGatewayCloseHandler", () => {
       mocks.stopGmailWatcher,
       mocks.closeProviderTransportDispatcherPool,
       mocks.disposeAcpSessionManager,
-      mocks.closePluginStateDatabaseAsync,
     ]) {
       mock.mockReset();
       mock.mockResolvedValue(undefined);
@@ -360,6 +213,7 @@ describe("createGatewayCloseHandler", () => {
   afterEach(() => {
     finishGatewayRestartTrace("test.finish");
     resetPluginRuntimeStateForTest();
+    memorySessionActorOwners.reset();
     vi.useRealTimers();
     if (originalRestartTraceEnv === undefined) {
       delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
@@ -368,65 +222,14 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
-  it.each([
-    { ownership: "owned", retained: false },
-    { ownership: "unowned", retained: false },
-    { ownership: "owned", retained: true },
-    { ownership: "unowned", retained: true },
-  ] as const)(
-    "reports $ownership queued cleanup failure and honors retained resources ($retained)",
-    async ({ ownership, retained }) => {
-      const resolveGatewayContext = () => undefined;
-      const cleanupError = new Error("queued engine disposal failed");
-      const failure = retained ? new PluginRuntimeCloseRetainedError(cleanupError) : cleanupError;
-      const onRemoved = vi.fn(async () => {
-        throw failure;
-      });
-      enqueueSwarmRun({
-        groupId: `failed-queued-cleanup-${ownership}`,
-        runId: `failed-queued-${ownership}`,
-        maxConcurrent: 1,
-        activeRunIds: [`failed-queued-blocker-${ownership}`],
-        lifecycleOwner: ownership === "owned" ? resolveGatewayContext : undefined,
-        start: async () => {},
-        onStartFailure: () => true,
-        onRemoved,
-      });
-      const retireRegistry = vi.fn(async () => ({ cleanupCount: 0, failures: [] }));
-      const closeSdkResources = vi.fn(async () => {});
-      const clearSecretsRuntimeSnapshot = vi.fn();
-      const close = createGatewayCloseHandler({
-        resolveGatewayContext,
-        closeSdkResources,
-        clearSecretsRuntimeSnapshot,
-        closePluginRegistry: async (onRetirement) => {
-          await onRetirement?.(retireRegistry);
-          return { memoryErrors: [], pluginFailures: [] };
-        },
-      });
-      try {
-        await expect(close()).rejects.toMatchObject({ errors: [failure] });
-        expect(onRemoved).toHaveBeenCalledExactlyOnceWith("shutdown");
-        expect(closeSdkResources).toHaveBeenCalledTimes(ownership === "owned" && retained ? 0 : 1);
-        expect(retireRegistry).toHaveBeenCalledTimes(retained ? 0 : 1);
-        expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledTimes(retained ? 0 : 1);
-      } finally {
-        releaseSwarmRun(`failed-queued-blocker-${ownership}`);
-        const { testing } =
-          await import("../agents/subagents/swarm/swarm-scheduler.test-support.js");
-        testing.reset();
-      }
-    },
-  );
+  registerGatewayResourceRetirementTests(createGatewayCloseHandler);
 
   it.each(["shutdown", "pre-restart", "harness", "sdk"] as const)(
     "retains shared SQLite through actual %s cleanup after grace",
     async (owner) => {
       const { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
-      const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
-      const { closePluginStateDatabaseAsync } = await vi.importActual<
-        typeof import("../plugin-state/plugin-state-store.js")
-      >("../plugin-state/plugin-state-store.js");
+      const { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } =
+        await import("../state/openclaw-state-db.js");
       const hooks = await vi.importActual<typeof import("../hooks/internal-hooks.js")>(
         "../hooks/internal-hooks.js",
       );
@@ -496,9 +299,6 @@ describe("createGatewayCloseHandler", () => {
         hooks.registerInternalHook(eventKey, cleanup);
         mocks.triggerInternalHook.mockImplementation(hooks.triggerInternalHook);
       }
-      mocks.closePluginStateDatabaseAsync.mockImplementation(async () =>
-        closePluginStateDatabaseAsync(),
-      );
       const httpClose = vi.fn((callback: (error?: Error | null) => void) => callback(null));
       const close = createGatewayCloseHandler({
         httpServer: createHttpServer(httpClose) as never,
@@ -529,7 +329,7 @@ describe("createGatewayCloseHandler", () => {
         expect(preparedDatabase.isOpen).toBe(true);
         expect(sdkDisposalReads).toEqual([]);
         expect(closed).toBe(false);
-        expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+        expect(sharedStateLifecycle.has("open")).toBe(true);
         if (owner === "shutdown" || owner === "pre-restart") {
           expect(formatGatewayPendingCloseSteps()).toContain(
             `restart.close.gateway-${owner}-hook=`,
@@ -545,6 +345,7 @@ describe("createGatewayCloseHandler", () => {
             owner === "sdk" ? [] : [owner === "harness" ? "agent-harnesses" : `gateway:${owner}`],
           );
           expect(sdkDisposalReads).toEqual([{ value: 42 }]);
+          expect(database.db.isOpen).toBe(false);
           expect(sdkDatabase.isOpen).toBe(false);
           expect(preparedDatabase.isOpen).toBe(false);
         } finally {
@@ -558,7 +359,7 @@ describe("createGatewayCloseHandler", () => {
           }
           hooks.unregisterInternalHook(eventKey, cleanup);
           vi.useRealTimers();
-          await closePluginStateDatabaseAsync();
+          await closeOpenClawStateDatabaseAsync();
           await state.cleanup();
         }
       }
@@ -566,8 +367,7 @@ describe("createGatewayCloseHandler", () => {
       expect(cleanup).toHaveBeenCalledOnce();
       expect(failures).toEqual([]);
       expect(reads).toEqual([{ value: 1 }]);
-      expect(database.db.isOpen).toBe(false);
-      expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
+      expect(sharedStateLifecycle.size).toBe(0);
     },
   );
 
@@ -575,10 +375,8 @@ describe("createGatewayCloseHandler", () => {
     "finishes shared state cleanup after actual SDK disposal rejects (global failure: %s)",
     async (globalFailure) => {
       const { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
-      const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
-      const { closePluginStateDatabaseAsync } = await vi.importActual<
-        typeof import("../plugin-state/plugin-state-store.js")
-      >("../plugin-state/plugin-state-store.js");
+      const { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } =
+        await import("../state/openclaw-state-db.js");
       const state = await createOpenClawTestState({ label: "sdk-disposal-failure-tail" });
       const database = openOpenClawStateDatabase({ env: state.env });
       const sdkDatabase = new DatabaseSync(":memory:");
@@ -607,9 +405,6 @@ describe("createGatewayCloseHandler", () => {
       });
       resolveGlobalSingleton(Symbol("sdk-failure-tail"), () => ({}), reset);
       const clearSecretsRuntimeSnapshot = vi.fn();
-      mocks.closePluginStateDatabaseAsync.mockImplementation(async () =>
-        closePluginStateDatabaseAsync(),
-      );
       let sdkFailure: unknown;
       const close = createGatewayCloseHandler({
         clearSecretsRuntimeSnapshot,
@@ -659,7 +454,7 @@ describe("createGatewayCloseHandler", () => {
         if (sdkDatabase.isOpen) {
           sdkDatabase.close();
         }
-        await closePluginStateDatabaseAsync();
+        await closeOpenClawStateDatabaseAsync();
         await state.cleanup();
       }
     },
@@ -719,14 +514,14 @@ describe("createGatewayCloseHandler", () => {
         if (failureKind === "admission") {
           await expect(closing).rejects.toThrow(/retir/);
           expect(stop).not.toHaveBeenCalled();
-          expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+          expect(sharedStateLifecycle.has("open")).toBe(true);
           expect(getActivePluginRegistry()).toBe(registry);
           expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
         } else {
           const result = await closing;
           expect(result.warnings).toContain("plugin-services");
           expect(stop).toHaveBeenCalledOnce();
-          expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
+          expect(sharedStateLifecycle.size).toBe(0);
           expect(getActivePluginRegistry()).toBeNull();
           expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
           expect(await pluginServices.stop()).toEqual({ errors: [failure] });
@@ -822,7 +617,7 @@ describe("createGatewayCloseHandler", () => {
       try {
         await entered.promise;
         await vi.advanceTimersByTimeAsync(0);
-        expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+        expect(sharedStateLifecycle.has("open")).toBe(true);
         expect(closed).toBe(false);
         if (owner === "updateCheck") {
           expect(mocks.disposeAllCodeModeRuns).not.toHaveBeenCalled();
@@ -831,7 +626,7 @@ describe("createGatewayCloseHandler", () => {
         stopped.resolve();
         await closing;
       }
-      expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
+      expect(sharedStateLifecycle.size).toBe(0);
       expect(closed).toBe(true);
       if (owner === "updateCheck") {
         expect(mocks.disposeAllCodeModeRuns).toHaveBeenCalledOnce();
@@ -848,13 +643,13 @@ describe("createGatewayCloseHandler", () => {
     const closing = close({ reason: "test" });
     try {
       await vi.waitFor(() => expect(stopMediaCleanup).toHaveBeenCalledTimes(1));
-      expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+      expect(sharedStateLifecycle.has("open")).toBe(true);
     } finally {
       cleanup.resolve();
       await closing;
     }
     const result = await closing;
-    expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
+    expect(sharedStateLifecycle.size).toBe(0);
     expect(result.warnings).toContain("media-cleanup");
   });
 
@@ -1151,14 +946,14 @@ describe("createGatewayCloseHandler", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(stopChannel).toHaveBeenCalledWith("discord");
       expect(deps.heartbeatRunner.stop).toHaveBeenCalledOnce();
-      expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+      expect(sharedStateLifecycle.has("open")).toBe(true);
       expect(closed).toBe(false);
 
       pluginCleanup.resolve();
       const result = await closePromise;
       expect(result.warnings).toContain("plugin-services");
       expect(pluginServices.stop).toHaveBeenCalledOnce();
-      expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
+      expect(sharedStateLifecycle.size).toBe(0);
     } finally {
       pluginCleanup.resolve();
       for (const child of children) {
@@ -1216,7 +1011,7 @@ describe("createGatewayCloseHandler", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       expect(deps.stopChannel).toHaveBeenCalledWith("discord");
       expect(mocks.disposeAllSessionMcpRuntimes).toHaveBeenCalledOnce();
-      expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+      expect(sharedStateLifecycle.has("open")).toBe(true);
       expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
       expect(getActivePluginRegistry()).toBe(registry);
       expect(closed).toBe(false);
@@ -1228,7 +1023,7 @@ describe("createGatewayCloseHandler", () => {
       const result = await closing;
       expect(stop).toHaveBeenCalledOnce();
       expect(deps.stopChannel).toHaveBeenCalledWith("discord");
-      expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
+      expect(sharedStateLifecycle.size).toBe(0);
       expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
       expect(getActivePluginRegistry()).not.toBe(registry);
       expect(result.warnings).toContain("plugin-services");
@@ -1267,9 +1062,7 @@ describe("createGatewayCloseHandler", () => {
       );
       expect(drainActiveSessionsForShutdown).toHaveBeenCalledOnce();
       expect(firstMockCall(drainActiveSessionsForShutdown)?.[0]?.reason).toBe(reason);
-      expect(order).toStrictEqual(
-        reason === "restart" ? ["reply-drain", "session-end"] : ["session-end"],
-      );
+      expect(order).toStrictEqual(["reply-drain", "session-end"]);
       expect(result.warnings.includes("session-end-drain")).toBe(timedOut);
     },
   );
@@ -1303,86 +1096,10 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
-  it.each([false, true])(
-    "cancels only captured Gateway replies before disposal (marker fails: %s)",
-    async (markerFails) => {
-      const resolveGatewayContext = () => undefined;
-      const otherGatewayContext = () => undefined;
-      const operations: ReplyOperation[] = [];
-      const begin = (key: string, resolver = resolveGatewayContext) => {
-        const operation = createReplyOperation({
-          sessionKey: key,
-          sessionId: key,
-          resetTriggered: false,
-        });
-        operation.setPhase("running");
-        bindGatewayContextResolver(operation, resolver);
-        operations.push(operation);
-        return operation;
-      };
-      const owned = begin("agent:main:closing");
-      const reboundDuringAbort = begin("agent:main:rebound");
-      owned.abortSignal.addEventListener(
-        "abort",
-        () => bindGatewayContextResolver(reboundDuringAbort, otherGatewayContext),
-        { once: true },
-      );
-      const replaced = begin("agent:main:replaced");
-      const other = begin("agent:main:other", otherGatewayContext);
-      const finalizing = begin("agent:main:finalizing");
-      finalizing.freezeAbort();
-      const markerEntered = createDeferredCore();
-      const markerCommitted = createDeferredCore();
-      const observed: boolean[] = [];
-      const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(
-        async () => {
-          markerEntered.resolve(undefined);
-          await markerCommitted.promise;
-          if (markerFails) {
-            throw new Error("marker write failed");
-          }
-        },
-      );
-      const close = createGatewayCloseHandler({
-        getPendingReplyCount: () => Number(!owned.abortSignal.aborted),
-        markMainSessionsAbortedForRestart,
-        channelIds: ["telegram"],
-        stopChannel: async () => {
-          observed.push(owned.abortSignal.aborted);
-        },
-        disposeAllCodeModeRuns: () => {
-          observed.push(owned.abortSignal.aborted);
-        },
-        resolveGatewayContext,
-      });
-      try {
-        const closing = close({ restartExpectedMs: 123, drainTimeoutMs: 0 });
-        await markerEntered.promise;
-        expect(owned.abortSignal.aborted).toBe(false);
-        replaced.complete();
-        const replacement = begin(replaced.key);
-        markerCommitted.resolve(undefined);
-        const result = await closing;
-
-        expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
-          expect.objectContaining({ activeRuns: [], reason: "gateway restart shutdown" }),
-        );
-        expect(observed).toEqual([true, true]);
-        expect(isAgentRunRestartAbortReason(owned.abortSignal.reason)).toBe(true);
-        expect(other.abortSignal.aborted).toBe(false);
-        expect(reboundDuringAbort.abortSignal.aborted).toBe(false);
-        expect(replacement.abortSignal.aborted).toBe(false);
-        expect(finalizing.abortSignal.aborted).toBe(false);
-        expect(finalizing.result).toBeNull();
-        expect(result.warnings.includes("restart-main-session-marker")).toBe(markerFails);
-      } finally {
-        markerCommitted.resolve(undefined);
-        for (const operation of operations) {
-          operation.complete();
-        }
-      }
-    },
-  );
+  registerGatewayCancellationTests({
+    createClose: createGatewayCloseHandler,
+    setShutdownHook: (hook) => mocks.triggerInternalHook.mockImplementation(hook),
+  });
 
   it("aborts active runs when restart reply drain times out", async () => {
     vi.useFakeTimers();
@@ -1515,19 +1232,19 @@ describe("createGatewayCloseHandler", () => {
         ...(restart ? { restartExpectedMs: 123 } : {}),
         drainTimeoutMs: 0,
       });
-      expect(result.warnings.includes("restart-reply-drain")).toBe(restart);
+      expect(result.warnings).toContain("restart-reply-drain");
       expect(controller.signal.aborted).toBe(!finalizing);
       expect(chatAbortControllers.has(runId)).toBe(finalizing);
       expect(chatAbortControllers.size).toBe(finalizing ? 1 : 0);
       if (!finalizing) {
-        expect(isAgentRunRestartAbortReason(controller.signal.reason)).toBe(restart);
+        expect(isAgentRunRestartAbortReason(controller.signal.reason)).toBe(true);
       }
       if (!restart) {
-        expect(getPendingReplyCount).not.toHaveBeenCalled();
-        expect(markMainSessionsAbortedForRestart).not.toHaveBeenCalled();
+        expect(getPendingReplyCount).toHaveBeenCalled();
+        expect(markMainSessionsAbortedForRestart).toHaveBeenCalledOnce();
         expect(deps.broadcast).toHaveBeenCalledWith(
           "chat",
-          expect.objectContaining({ runId, state: "aborted", stopReason: "rpc" }),
+          expect.objectContaining({ runId, state: "aborted", stopReason: "restart" }),
           { sessionKeys: ["session-1"] },
         );
       }
@@ -1887,7 +1604,7 @@ describe("createGatewayCloseHandler", () => {
         }
         await vi.advanceTimersByTimeAsync(5_000);
         expect(httpClose).toHaveBeenCalledOnce();
-        expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+        expect(sharedStateLifecycle.has("open")).toBe(true);
       } finally {
         cleanup.resolve();
         await closePromise;

@@ -23,6 +23,7 @@ import {
   formatAcpInheritedToolAllowError,
   formatAcpInheritedToolDenyError,
 } from "../inherited-tool-deny.js";
+import { createCachedToolSchema } from "../schema/cached-schema.js";
 import { optionalStringEnum, requesterProfileSchema } from "../schema/typebox.js";
 import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js";
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
@@ -142,7 +143,13 @@ function resolveSessionsSpawnThreadAvailability(opts?: {
   };
 }
 
-function createSessionsSpawnToolSchema(params: {
+const createSessionsSpawnToolSchema = createCachedToolSchema({
+  build: buildSessionsSpawnToolSchema,
+  key: (params) =>
+    `${params.acpAvailable}:${params.threadAvailable}:${params.subagentThreadAvailable}:${params.swarmEnabled}`,
+});
+
+function buildSessionsSpawnToolSchema(params: {
   acpAvailable: boolean;
   threadAvailable: boolean;
   subagentThreadAvailable: boolean;
@@ -212,7 +219,7 @@ function createSessionsSpawnToolSchema(params: {
     ),
     completionTarget: optionalStringEnum(["parent"] as const, {
       description:
-        "parent: return results in a private requester turn; no automatic channel delivery. After sessions_yield, answer under the conversation's normal reply rules (NO_REPLY stays silent). Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
+        "parent: return substantive results in a private requester turn; no automatic channel delivery. After sessions_yield, the parent must receive the internal result even when no external reply is needed. For external replies only, exactly NO_REPLY as the entire final answer stays silent; a literal leading NO_REPLY newline suppresses that line only. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently. Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
     }),
     sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES, {
       description: '"inherit" parent sandbox policy; "require" fails unless child is sandboxed.',
@@ -304,6 +311,10 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: SessionsSpawnToolOptions & { workerPlacement?: boolean },
 ): AnyAgentTool {
+  const requesterThinkingExplicit =
+    // SAFETY: The host forwards this optional runtime bit; public callers can omit it.
+    (opts as (typeof opts & { requesterThinkingExplicit?: boolean }) | undefined)
+      ?.requesterThinkingExplicit;
   const requestOwners = captureExecRequestOwners({
     runId: opts?.requesterTurnRunId,
     sessionId: opts?.expectedParentSessionId,
@@ -331,12 +342,14 @@ export function createSessionsSpawnTool(
     requesterAgentId,
     sandboxed: opts?.sandboxed,
   });
-  const parameters = createSessionsSpawnToolSchema({
-    acpAvailable,
-    threadAvailable,
-    subagentThreadAvailable: threadAvailability.subagent,
-    swarmEnabled: swarmConfig.enabled,
-  });
+  const parameters = opts?.workerPlacement
+    ? PlacedSessionsSpawnSchema
+    : createSessionsSpawnToolSchema({
+        acpAvailable,
+        threadAvailable,
+        subagentThreadAvailable: threadAvailability.subagent,
+        swarmEnabled: swarmConfig.enabled,
+      });
   const tool: AnyAgentTool = {
     label: "Sessions",
     name: "sessions_spawn",
@@ -353,7 +366,7 @@ export function createSessionsSpawnTool(
           sessionToolsVisibility,
           spawnRestricted: restrictToSpawned,
         }),
-    parameters: opts?.workerPlacement ? PlacedSessionsSpawnSchema : parameters,
+    parameters,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
         const operatorSelection = resolveGatewayToolOperatorSelection();
@@ -579,6 +592,8 @@ export function createSessionsSpawnTool(
           agentTo: opts?.agentTo,
           agentThreadId: opts?.agentThreadId,
           currentChannelId: opts?.currentChannelId,
+          currentThreadTs: opts?.currentThreadTs,
+          currentConversationOrigin: opts?.currentConversationOrigin,
           currentMessageId: opts?.currentMessageId,
           agentGroupSpace: opts?.agentGroupSpace,
           agentMemberRoleIds: opts?.agentMemberRoleIds,
@@ -671,6 +686,7 @@ export function createSessionsSpawnTool(
               {
                 ...inheritedSpawnContext(),
                 requesterThinkingLevel: opts?.requesterThinkingLevel,
+                requesterThinkingExplicit,
                 requesterModel: opts?.requesterModel,
                 currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
                 agentGroupId: opts?.agentGroupId,

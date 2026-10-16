@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOverlay, type Overlay } from "../../components/overlay-lifecycle.ts";
 import {
   disposeSessionViews,
   renderSessionsView,
@@ -201,6 +202,7 @@ describe("Sessions query clearing", () => {
     const onSearchChange = vi.fn();
     const props = { ...buildProps(buildMultiResult([])), searchQuery: "keep me", onSearchChange };
     let overlay: HTMLElement | undefined;
+    let overlayOwner: Overlay | undefined;
     try {
       renderSessionsView(props, container);
       const input = container.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
@@ -212,7 +214,13 @@ describe("Sessions query clearing", () => {
         document.body.append(overlay);
       }
       if (owner === "popover") {
-        container.querySelector("wa-popover")!.setAttribute("open", "");
+        overlay = document.createElement("div");
+        overlay.popover = "manual";
+        document.body.append(overlay);
+        overlayOwner = createOverlay("sessions-search-test", undefined, { dismissEscape: false });
+        overlayOwner.bindSurface(overlay);
+        overlayOwner.bindTrigger(input);
+        expect(overlayOwner.request(true, "none")).toBe(true);
       }
       if (owner === "modal") {
         overlay = document.createElement("dialog");
@@ -235,7 +243,8 @@ describe("Sessions query clearing", () => {
       expect(input.value).toBe("keep me");
       expect(event.defaultPrevented).toBe(owner === "prevented");
     } finally {
-      container.querySelector("wa-popover")?.removeAttribute("open");
+      overlayOwner?.dispose();
+      overlay?.removeAttribute("open");
       overlay?.remove();
       container.remove();
     }

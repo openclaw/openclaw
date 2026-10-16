@@ -1,6 +1,9 @@
+import fs from "node:fs";
 import type { Server } from "node:http";
+import nodePath from "node:path";
 import { buildControlUiPublicSessionSharePath } from "@openclaw/session-url-contract/public-share";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resetGatewayWorkAdmission,
@@ -23,10 +26,17 @@ import { createSessionRowProjectionFixture } from "./session-row-projection.test
 const reader = vi.hoisted(() => vi.fn());
 const shareActive = vi.hoisted(() => vi.fn());
 const tokenResolver = vi.hoisted(() => vi.fn());
+const renderCard = vi.hoisted(() => vi.fn());
+vi.mock(import("./control-ui-public-session-card.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  createPublicSessionCardRenderer: () => ({ render: renderCard, dispose: async () => {} }),
+}));
+// mock-isolation: Keep persisted session state outside this HTTP transport fixture.
 vi.mock("./control-ui-public-session-read.js", () => ({
   isPublicSessionShareActive: shareActive,
   readPublicSessionShare: reader,
 }));
+// mock-isolation: The transport fixture supplies exact token outcomes without installation identity.
 vi.mock("./control-ui-public-session-token.js", () => ({
   resolvePublicSessionShareToken: tokenResolver,
 }));
@@ -51,16 +61,20 @@ const PUBLIC_SESSION = {
 };
 
 const servers = new Set<Server>();
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 function createPublicGateway(basePath = "", config: OpenClawConfig = TEST_CONFIG): Server {
   const context = createGatewayRequestContext(makeContextParams());
   context.resolveGatewayContext = () => context;
   const projection = createSessionRowProjectionFixture({ cfg: config, store: {} });
   bindSessionRowProjection(context, () => projection);
+  const root = dirs.make("session-card-http-");
+  fs.writeFileSync(nodePath.join(root, "social-card.png"), "static card bytes");
   const server = createTestGatewayServer({
     resolvedAuth: AUTH_TOKEN,
     overrides: {
       controlUiEnabled: true,
       controlUiBasePath: basePath,
+      controlUiRoot: { kind: "resolved", path: root },
       getRuntimeConfig: () => config,
       getGatewayRequestContext: () => context,
       httpRequestLifetime: context,
@@ -112,7 +126,7 @@ function responseHeader(
   response: ReturnType<typeof createResponse>,
   name: string,
 ): string | undefined {
-  const call = response.setHeader.mock.calls.find(
+  const call = response.setHeader.mock.calls.findLast(
     ([headerName]) => String(headerName).toLowerCase() === name.toLowerCase(),
   );
   return call ? String(call[1]) : undefined;
@@ -121,6 +135,7 @@ function responseHeader(
 beforeEach(() => {
   resetGatewayWorkAdmission();
   reader.mockReset().mockResolvedValue(PUBLIC_SESSION);
+  renderCard.mockReset().mockResolvedValue(Buffer.from("rendered card bytes"));
   shareActive.mockReset().mockReturnValue(true);
   tokenResolver.mockReset().mockImplementation((token: string) => {
     const shareId = token.slice(3, 51);
@@ -150,6 +165,12 @@ describe("anonymous public session HTTP boundary", () => {
       });
       const html = response.getBody();
       expect(html).toContain("Launch notes");
+      expect(html).toContain(`${basePath}/share/session/card.png?token=`);
+      expect(html).toContain('property="og:image:width" content="1200"');
+      expect(html).toContain('property="og:image:height" content="630"');
+      expect(html).toContain(
+        'name="twitter:image:alt" content="Launch notes · OpenClaw public session"',
+      );
       expect(html).toContain("The public viewer is ready.");
       expect(html).not.toMatch(/agent:demo|séssion\.123|new WebSocket|openclaw-app/);
       expect(responseHeader(response, "Cache-Control")).toBe("no-store");
@@ -219,6 +240,76 @@ describe("anonymous public session HTTP boundary", () => {
       expect(unavailable.getBody()).not.toContain("private store location");
     },
   );
+
+  it.each(["", "/control"])(
+    "serves a redacted, cached card through the public boundary (%s)",
+    async (basePath) => {
+      const server = createPublicGateway(basePath);
+      const cardPath = requestPath({ basePath }).replace(
+        "/share/session?",
+        "/share/session/card.png?",
+      );
+      reader.mockResolvedValue({
+        ...PUBLIC_SESSION,
+        title: "<headline>",
+        messages: [
+          { role: "toolResult", content: "PRIVATE_TOOL_CONTENT" },
+          { role: "user", provenance: { kind: "internal" }, content: "PRIVATE_INPUT" },
+          { role: "user", content: "Public opening" },
+        ],
+      });
+      const first = await send(server, { path: cardPath });
+      expect(first.res.statusCode).toBe(200);
+      expect(responseHeader(first, "Content-Type")).toBe("image/png");
+      expect(responseHeader(first, "Cache-Control")).toBe("public, max-age=300");
+      expect(first.end).toHaveBeenLastCalledWith(Buffer.from("rendered card bytes"));
+      expect(renderCard).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "<headline>", quote: "Public opening", messageCount: 2 }),
+      );
+      expect(JSON.stringify(renderCard.mock.calls)).not.toContain("PRIVATE_");
+      await send(server, { path: cardPath });
+      expect(renderCard).toHaveBeenCalledTimes(1);
+      shareActive.mockReturnValue(false);
+      const revoked = await send(server, { path: cardPath });
+      expect(revoked.end).toHaveBeenLastCalledWith(Buffer.from("static card bytes"));
+      expect(responseHeader(revoked, "Cache-Control")).toBe("no-store");
+    },
+  );
+
+  it("returns the same static PNG for unknown, unpublished, renderer failures and insecure ingress", async () => {
+    const server = createPublicGateway();
+    const cardPath = requestPath().replace("/share/session?", "/share/session/card.png?");
+    tokenResolver.mockResolvedValueOnce(null);
+    expect((await send(server, { path: cardPath })).end).toHaveBeenLastCalledWith(
+      Buffer.from("static card bytes"),
+    );
+    reader.mockResolvedValueOnce(null);
+    expect((await send(server, { path: cardPath })).end).toHaveBeenLastCalledWith(
+      Buffer.from("static card bytes"),
+    );
+    renderCard.mockRejectedValueOnce(new Error("PRIVATE_RENDER_ERROR"));
+    expect((await send(server, { path: cardPath })).end).toHaveBeenLastCalledWith(
+      Buffer.from("static card bytes"),
+    );
+    const insecure = await send(server, { path: cardPath, remoteAddress: "203.0.113.12" });
+    expect(insecure.end).toHaveBeenLastCalledWith(Buffer.from("static card bytes"));
+    expect(tokenResolver).toHaveBeenCalledTimes(3);
+    expect((await send(server, { path: `${cardPath}&offset=1` })).end).toHaveBeenLastCalledWith(
+      Buffer.from("static card bytes"),
+    );
+  });
+
+  it("shares the page's client rate limit with card requests", async () => {
+    const server = createPublicGateway();
+    for (let request = 0; request < 120; request++) {
+      await send(server);
+    }
+    const cardPath = requestPath().replace("/share/session?", "/share/session/card.png?");
+    const limited = await send(server, { path: cardPath });
+    expect(limited.end).toHaveBeenLastCalledWith(Buffer.from("static card bytes"));
+    expect(responseHeader(limited, "Cache-Control")).toBe("no-store");
+    expect(renderCard).not.toHaveBeenCalled();
+  });
 
   it("rejects transcript work after Gateway admission closes while generic previews stay cheap", async () => {
     const server = createPublicGateway();

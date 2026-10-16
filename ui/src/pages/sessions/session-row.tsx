@@ -2,11 +2,11 @@ import {
   normalizeFastMode,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { AgentIdentityResult, GatewaySessionRow } from "../../api/types.ts";
+import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import {
@@ -31,26 +31,13 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-reason.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
+import type { JSX as SolidJSX } from "../../types/solid-elements.js";
 import { CategoryCell } from "./category-cell.tsx";
 import { SessionStatusBadge } from "./session-status.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
 import type { SessionsProps } from "./view-types.ts";
-import "../../components/agent-row-chip.ts";
 import "../../components/tooltip.ts";
-import "../../components/web-awesome.ts";
 import "../../styles/capacity-meter.css";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-agent-row-chip": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-agent-row-chip"]
-      > & {
-        "prop:agentId": HTMLElementTagNameMap["openclaw-agent-row-chip"]["agentId"];
-      };
-    }
-  }
-}
 
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
 const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
@@ -398,8 +385,8 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                   ) : undefined}
                 </span>
                 {row().kind === "global" && !row().agentId ? undefined : (
-                  <openclaw-agent-row-chip
-                    prop:agentId={parseAgentSessionKey(row().key)?.agentId ?? row().agentId}
+                  <AgentRowChip
+                    agentId={parseAgentSessionKey(row().key)?.agentId ?? row().agentId}
                   />
                 )}
                 {showDisplayName() ? (

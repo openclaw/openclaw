@@ -8,12 +8,13 @@ import {
 import {
   createNativeSessionBindingLifecycleV2,
   reclaimNativeSessionGenerationWithAuthority,
-  resolveNativeSessionBindingWithAuthorityV2,
-  type NativeSessionBindingAuthority,
+  resolvePreparedNativeSessionBinding,
+  type PreparedNativeSessionBindingAuthority,
   type NativeSessionBindingLeaseOptions,
   type NativeSessionBindingStateStoreV2,
   type NativeSessionGenerationAdoptionResult,
-  type NativeSessionGenerationOperationsV2,
+  type PreparedNativeSessionGenerationOperations,
+  type RetainedNativeSessionGenerationAuthority,
   type NativeSessionGenerationReclaimPlan,
 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -73,14 +74,14 @@ export {
   type StoredCodexAppServerBinding,
 } from "./session-binding-record.js";
 
-export { combineNativeSessionBindingAuthority as combineCodexBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+export { combinePreparedNativeSessionBindingAuthority as combineCodexBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 export {
   createStoredCodexAppServerBinding,
   hashCodexAppServerBindingFingerprint,
   normalizeStoredCodexAppServerBindingFingerprints,
 } from "./session-binding-codec.js";
-export type CodexBindingAuthority = NativeSessionBindingAuthority;
-export type CodexBindingWithCurrent = NativeSessionBindingAuthority["withCurrent"];
+export type CodexBindingAuthority = PreparedNativeSessionBindingAuthority;
+export type CodexBindingWithCurrent = PreparedNativeSessionBindingAuthority["withCurrent"];
 
 export {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -264,12 +265,14 @@ export async function resolveCodexSessionBinding(params: {
   assertCurrent?: () => void;
   assertBinding?: (binding: CodexAppServerThreadBinding | undefined) => void;
   authority?: CodexBindingAuthority;
+  generationAuthority?: RetainedNativeSessionGenerationAuthority;
 }): Promise<{
   binding: CodexAppServerThreadBinding | undefined;
   authority: CodexBindingAuthority;
+  release: () => void;
 }> {
   const identity = params.identity;
-  return await resolveNativeSessionBindingWithAuthorityV2({
+  return await resolvePreparedNativeSessionBinding({
     ...params,
     ...(identity.kind === "session"
       ? {
@@ -292,6 +295,7 @@ export function createCodexAppServerBindingStore(
   const lifecycle = createNativeSessionBindingLifecycleV2<StoredCodexAppServerBinding>(
     {
       lookup: (key) => state.asyncReads.lookup(key),
+      // Only custom legacy adapters use this; canonical worker stores publish pinned lease facts.
       assertLeaseCurrent: (key, token) => {
         const raw = state.lookup(key);
         const current = readStoredCodexAppServerBinding(raw);
@@ -719,7 +723,7 @@ export function createCodexAppServerBindingStore(
 function codexSessionGenerationOperations(
   store: CodexAppServerBindingStore,
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
-): NativeSessionGenerationOperationsV2 {
+): PreparedNativeSessionGenerationOperations {
   return {
     prepareReclaim: () => store.prepareSessionGenerationReclaim(identity),
     adopt: (expectedPreviousSessionId, authority) =>

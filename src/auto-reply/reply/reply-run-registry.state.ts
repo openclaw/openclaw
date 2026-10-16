@@ -6,6 +6,8 @@ import type {
   SessionAdmissionDatabaseClaim,
   SessionAdmissionTransition,
 } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
+import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { notifyGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
@@ -32,22 +34,9 @@ import {
 
 export type ReplyRunWaiter = (ended: boolean) => void;
 
-export type ReplyRunAdmissionSource = {
-  sessionId: string;
-  sessionIds: Set<string>;
-  operation: ReplyOperation;
-  databaseIdentity?: OpenClawAgentDatabaseIdentity;
-};
-
-type ReplyRunCompletionObservation = {
-  changed: boolean;
-  sources: Map<OpenClawAgentDatabaseIdentity | undefined, ReplyRunAdmissionSource>;
-};
-
 export type ReplyRunAdmissionBarrier = {
   settled: Promise<void>;
-  source: ReplyRunAdmissionSource;
-  sources: Map<OpenClawAgentDatabaseIdentity | undefined, ReplyRunAdmissionSource>;
+  operation: ReplyOperation;
 };
 
 export type ReplyOperationAdmission = {
@@ -56,6 +45,10 @@ export type ReplyOperationAdmission = {
   databaseClaim?: SessionAdmissionDatabaseClaim;
   reader?: SessionEntryCohortReader;
   resolveReader?: () => SessionEntryCohortReader | undefined;
+  sessionTarget?: SessionEntryTargetPatchScope;
+  resolveSessionTarget?: () => SessionEntryTargetPatchScope | undefined;
+  sessionActor?: SessionActor;
+  acquireSessionActor?: () => Promise<SessionActor | undefined>;
   afterTransition?: (transition: SessionAdmissionTransition) => Promise<void>;
 };
 
@@ -67,11 +60,10 @@ type ReplyRunState = {
   followupAdmissionBarriersByKey: Map<string, ReplyRunAdmissionBarrier>;
   successorAdmissionBarriersByKey: Map<string, ReplyRunAdmissionBarrier>;
   sourceTurnByKey: Map<string, string>;
-  completionObservationsByKey?: Map<string, Set<ReplyRunCompletionObservation>>;
-  evictOperationByOperation?: WeakMap<ReplyOperation, () => void>;
-  clearOperationByOperation?: WeakMap<ReplyOperation, () => void>;
-  executionStartedOperations?: WeakSet<ReplyOperation>;
-  lifecycleAdmissionByOperation?: WeakMap<ReplyOperation, ReplyOperationAdmission>;
+  evictOperationByOperation: WeakMap<ReplyOperation, () => void>;
+  clearOperationByOperation: WeakMap<ReplyOperation, () => void>;
+  executionStartedOperations: WeakSet<ReplyOperation>;
+  lifecycleAdmissionByOperation: WeakMap<ReplyOperation, ReplyOperationAdmission>;
 };
 
 const REPLY_RUN_STATE_KEY = Symbol.for("openclaw.replyRunRegistry");
@@ -84,14 +76,33 @@ export const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STA
   followupAdmissionBarriersByKey: new Map<string, ReplyRunAdmissionBarrier>(),
   successorAdmissionBarriersByKey: new Map<string, ReplyRunAdmissionBarrier>(),
   sourceTurnByKey: new Map<string, string>(),
+  evictOperationByOperation: new WeakMap(),
+  clearOperationByOperation: new WeakMap(),
+  executionStartedOperations: new WeakSet(),
+  lifecycleAdmissionByOperation: new WeakMap(),
 }));
 // Admission and the active operation must remain visible across transformed SDK graphs.
-export const lifecycleAdmissionByOperation = (replyRunState.lifecycleAdmissionByOperation ??=
-  new WeakMap<ReplyOperation, ReplyOperationAdmission>());
+export const lifecycleAdmissionByOperation = replyRunState.lifecycleAdmissionByOperation;
 
 /** Resolve only the supplied operation's borrow; a key lookup could select its successor. */
 export function getReplyOperationSessionReader(operation: ReplyOperation | undefined) {
   return operation ? lifecycleAdmissionByOperation.get(operation)?.reader : undefined;
+}
+/** Resolve the live operation's captured physical target, without selecting another owner. */
+export function getReplyOperationSessionTarget(operation: ReplyOperation | undefined) {
+  return operation
+    ? lifecycleAdmissionByOperation.get(operation)?.resolveSessionTarget?.()
+    : undefined;
+}
+
+export function acquireReplyOperationSessionActor(
+  operation: ReplyOperation,
+): Promise<SessionActor | undefined> {
+  const admission = lifecycleAdmissionByOperation.get(operation);
+  if (!admission?.acquireSessionActor) {
+    throw new Error("Reply operation has no session actor admission");
+  }
+  return admission.acquireSessionActor();
 }
 /** Follow acknowledged reader handoffs only within this exact operation admission. */
 export function captureReplyOperationSessionReader(operation: ReplyOperation | undefined) {
@@ -104,30 +115,6 @@ export function acknowledgeReplySessionTransition(
 ) {
   return lifecycleAdmissionByOperation.get(operation)?.afterTransition?.(transition);
 }
-replyRunState.followupAdmissionBarriersByKey ??= new Map();
-replyRunState.successorAdmissionBarriersByKey ??= new Map();
-replyRunState.sourceTurnByKey ??= new Map();
-const replyRunCompletionObservations = (replyRunState.completionObservationsByKey ??= new Map());
-
-/** Observe owner departures only for the lifetime of one awaited admission attempt. */
-export function observeReplyRunCompletions(sessionKey: string) {
-  const observations = replyRunCompletionObservations;
-  const observation: ReplyRunCompletionObservation = { changed: false, sources: new Map() };
-  const pending = observations.get(sessionKey) ?? new Set<ReplyRunCompletionObservation>();
-  pending.add(observation);
-  observations.set(sessionKey, pending);
-  return {
-    read: () => (observation.changed ? [...observation.sources.values()] : undefined),
-    dispose: () => {
-      pending.delete(observation);
-      observation.sources.clear();
-      if (pending.size === 0 && observations.get(sessionKey) === pending) {
-        observations.delete(sessionKey);
-      }
-    },
-  };
-}
-
 export function resolveReplyOperationAgentId(sessionKey: string, agentId?: string) {
   const owner = normalizeOptionalString(agentId) ?? parseAgentSessionKey(sessionKey)?.agentId;
   return owner ? normalizeAgentId(owner) : undefined;
@@ -162,17 +149,11 @@ export function prepareReplyRunKeyUpdate(
 }
 
 // Retain the owning closure across transformed SDK module graphs.
-export const clearReplyOperationByOperation = (replyRunState.clearOperationByOperation ??=
-  new WeakMap<ReplyOperation, () => void>());
+export const clearReplyOperationByOperation = replyRunState.clearOperationByOperation;
 
-export const evictReplyOperationByOperation = (replyRunState.evictOperationByOperation ??=
-  new WeakMap<ReplyOperation, () => void>());
+export const evictReplyOperationByOperation = replyRunState.evictOperationByOperation;
 
 export function notifyReplyRunEnded(sessionKey: string): void {
-  // Rekey departures invalidate reads without granting destination-lane lineage.
-  for (const observation of replyRunCompletionObservations.get(sessionKey) ?? []) {
-    observation.changed = true;
-  }
   const waiters = replyRunState.waitersByKey.get(sessionKey);
   if (!waiters || waiters.size === 0) {
     return;
@@ -223,8 +204,7 @@ export function isReplyOperationPreBackendPhase(phase: ReplyOperationPhase): boo
 }
 
 export const attachedBackendByOperation = new WeakMap<ReplyOperation, ReplyBackendHandle>();
-const executionStartedOperations = (replyRunState.executionStartedOperations ??=
-  new WeakSet<ReplyOperation>());
+const executionStartedOperations = replyRunState.executionStartedOperations;
 export function markReplyOperationExecutionStarted(operation: ReplyOperation): void {
   executionStartedOperations.add(operation);
   notifyGatewayWorkMetricsChanged();
@@ -242,18 +222,7 @@ type ReplyOperationAfterClear = {
   barrier?: ReplyRunAdmissionBarrier;
 };
 const afterClearByOperation = new WeakMap<ReplyOperation, ReplyOperationAfterClear>();
-type ReplyOperationSuccessorBarrierGroup = {
-  registrationKey: string;
-  sources: Map<string, ReplyRunAdmissionSource>;
-  start: () => void;
-};
-// Alias-keyed fences registered for one lane rotate together. Rekeyed command
-// operations retain prior-lane identities so source successors do not adopt
-// the target session.
-const successorBarrierGroupsByOperation = new WeakMap<
-  ReplyOperation,
-  Set<ReplyOperationSuccessorBarrierGroup>
->();
+const successorBarrierGroupsByOperation = new WeakMap<ReplyOperation, Set<() => void>>();
 export type ReplyOperationStaleExpiryOptions = {
   afterClearBarrier?: PromiseLike<unknown>;
   followupAdmissionBarrierTimeout?: number | ReplyFollowupAdmissionBarrierTimeoutPolicy;
@@ -401,11 +370,8 @@ export function runAfterReplyOperationClear(
   const afterClearState = afterClearByOperation.get(operation);
   if (!afterClearState?.barrier && replyRunState.activeRunsByKey.get(operation.key) !== operation) {
     const barrier = replyRunState.followupAdmissionBarriersByKey.get(operation.key);
-    const source = barrier?.sources.get(
-      lifecycleAdmissionByOperation.get(operation)?.databaseIdentity,
-    );
-    if (barrier && source) {
-      void barrier.settled.then(() => afterClear(source.sessionId));
+    if (barrier) {
+      void barrier.settled.then(() => afterClear(operation.sessionId));
       return;
     }
     afterClear(operation.sessionId);
@@ -420,62 +386,17 @@ export function isReplyOperationAbortedForRestart(operation: ReplyOperation): bo
   return operation.result?.kind === "aborted" && operation.result.code === "aborted_for_restart";
 }
 
-export function mergeReplyRunAdmissionSource<T extends ReplyRunAdmissionSource>(
-  source: T,
-  previous?: ReplyRunAdmissionSource,
-): T {
-  // Only a connected UUID lineage in the same physical store can carry old work.
-  // Restart invalidation cannot disappear when the next owner replaces the source.
-  // Keep valid pending source references stable for retained clear callbacks.
-  if (
-    previous &&
-    !isReplyOperationAbortedForRestart(previous.operation) &&
-    previous.databaseIdentity === source.databaseIdentity &&
-    source.sessionIds.has(previous.sessionId)
-  ) {
-    for (const id of source.sessionIds) {
-      previous.sessionIds.add(id);
-    }
-    return Object.assign(previous, source, { sessionIds: previous.sessionIds });
-  }
-  return source;
-}
-
-function resolveReplyRunAdmissionSource(
-  operation: ReplyOperation,
-  sessionId: string,
-  previous?: ReplyRunAdmissionSource,
-): ReplyRunAdmissionSource {
-  return mergeReplyRunAdmissionSource(
-    {
-      sessionId,
-      sessionIds: operation.captureOwnedSessionIds(),
-      operation,
-      databaseIdentity: lifecycleAdmissionByOperation.get(operation)?.databaseIdentity,
-    },
-    previous,
-  );
-}
-
 function registerReplyRunAdmissionBarrier(
   barriersByKey: Map<string, ReplyRunAdmissionBarrier>,
   sessionKey: string,
-  initialSource: ReplyRunAdmissionSource,
+  operation: ReplyOperation,
   barrier: Promise<void>,
 ): ReplyRunAdmissionBarrier {
   const previous = barriersByKey.get(sessionKey);
-  const source = mergeReplyRunAdmissionSource(
-    initialSource,
-    previous?.sources.get(initialSource.databaseIdentity),
-  );
-  // Retain only the latest source per physical store in this pending chain.
-  // A foreign global barrier must not hide a same-store compaction successor.
-  const sources = new Map(previous?.sources);
-  sources.set(source.databaseIdentity, source);
   const settled = previous
     ? Promise.all([previous.settled, barrier]).then(() => undefined)
     : barrier;
-  const entry = { settled, source, sources };
+  const entry = { settled, operation };
   barriersByKey.set(sessionKey, entry);
   void settled.then(() => {
     if (barriersByKey.get(sessionKey) === entry) {
@@ -495,22 +416,14 @@ export function registerReplyOperationSuccessorBarrier(params: {
   deferUntilClear?: boolean;
 }): void {
   const settlement = createDeferredCore();
-  const sources = new Map<string, ReplyRunAdmissionSource>();
-  for (const sessionKey of new Set(params.sessionKeys.map(normalizeOptionalString))) {
-    if (sessionKey) {
-      sources.set(sessionKey, resolveReplyRunAdmissionSource(params.operation, params.sessionId));
-    }
-  }
+  const sessionKeys = new Set(params.sessionKeys);
   const publish = () => {
-    for (const [sessionKey, source] of sources) {
-      sources.set(
+    for (const sessionKey of sessionKeys) {
+      registerReplyRunAdmissionBarrier(
+        replyRunState.successorAdmissionBarriersByKey,
         sessionKey,
-        registerReplyRunAdmissionBarrier(
-          replyRunState.successorAdmissionBarriersByKey,
-          sessionKey,
-          source,
-          settlement.promise,
-        ).source,
+        params.operation,
+        settlement.promise,
       );
     }
   };
@@ -540,10 +453,8 @@ export function registerReplyOperationSuccessorBarrier(params: {
     start();
     return;
   }
-  const groups =
-    successorBarrierGroupsByOperation.get(params.operation) ??
-    new Set<ReplyOperationSuccessorBarrierGroup>();
-  groups.add({ registrationKey: params.operation.key, sources, start });
+  const groups = successorBarrierGroupsByOperation.get(params.operation) ?? new Set<() => void>();
+  groups.add(start);
   successorBarrierGroupsByOperation.set(params.operation, groups);
 }
 
@@ -551,22 +462,8 @@ export function startReplyOperationSuccessorBarriers(operation: ReplyOperation):
   const groups = successorBarrierGroupsByOperation.get(operation);
   // Drop operation-owned metadata before handoff so adoption cannot retain stale groups.
   successorBarrierGroupsByOperation.delete(operation);
-  for (const { start } of groups ?? []) {
+  for (const start of groups ?? []) {
     start();
-  }
-}
-
-export function updateSuccessorAdmissionSessionId(
-  operation: ReplyOperation,
-  sessionId: string,
-): void {
-  for (const group of successorBarrierGroupsByOperation.get(operation) ?? []) {
-    if (group.registrationKey !== operation.key) {
-      continue;
-    }
-    for (const source of group.sources.values()) {
-      resolveReplyRunAdmissionSource(operation, sessionId, source);
-    }
   }
 }
 
@@ -639,7 +536,7 @@ export function registerFollowupAdmissionBarrier(
   const entry = registerReplyRunAdmissionBarrier(
     replyRunState.followupAdmissionBarriersByKey,
     operation.key,
-    resolveReplyRunAdmissionSource(operation, operation.sessionId),
+    operation,
     waitForReplyBarrierSettlement(barrier, timeout),
   );
   // A later global barrier may belong to another store. Late callbacks still
@@ -652,18 +549,6 @@ export function registerFollowupAdmissionBarrier(
   return entry;
 }
 
-export function updateFollowupAdmissionSessionId(operation: ReplyOperation): void {
-  const sources = replyRunState.followupAdmissionBarriersByKey.get(operation.key)?.sources;
-  const databaseIdentity = lifecycleAdmissionByOperation.get(operation)?.databaseIdentity;
-  const source = sources?.get(databaseIdentity);
-  if (sources && source) {
-    sources.set(
-      databaseIdentity,
-      resolveReplyRunAdmissionSource(operation, operation.sessionId, source),
-    );
-  }
-}
-
 export function clearReplyRunState(operation: ReplyOperation): void {
   const { key: sessionKey, sessionId } = operation;
   if (replyRunState.activeRunsByKey.get(sessionKey) !== operation) {
@@ -674,21 +559,6 @@ export function clearReplyRunState(operation: ReplyOperation): void {
       replyRunState.activeKeysBySessionId.delete(sessionId);
     }
     return;
-  }
-  for (const observation of replyRunState.completionObservationsByKey?.get(sessionKey) ?? []) {
-    if (
-      !operation.result ||
-      operation.key !== sessionKey ||
-      isReplyOperationAbortedForRestart(operation)
-    ) {
-      observation.sources.clear();
-      continue;
-    }
-    const source = resolveReplyRunAdmissionSource(operation, sessionId);
-    observation.sources.set(
-      source.databaseIdentity,
-      mergeReplyRunAdmissionSource(source, observation.sources.get(source.databaseIdentity)),
-    );
   }
   replyRunState.activeRunsByKey.delete(sessionKey);
   replyRunState.sourceTurnByKey.delete(sessionKey);

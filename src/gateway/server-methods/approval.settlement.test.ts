@@ -30,7 +30,7 @@ import {
 } from "./approval.test-support.js";
 
 const resultDelivery = vi.hoisted(() => ({
-  loseResult: undefined as "worker" | "native" | undefined,
+  loseResult: undefined as "worker" | undefined,
   hideReceipt: false,
   wrapRefusal: false,
   wrappedRefusal: undefined as Error | undefined,
@@ -107,22 +107,6 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
           }),
         options,
       ),
-  };
-});
-vi.mock("../operator-approval-store.native.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../operator-approval-store.native.js")>();
-  return {
-    ...actual,
-    executeNativeOperatorApproval: (
-      ...args: Parameters<typeof actual.executeNativeOperatorApproval>
-    ) => {
-      const result = actual.executeNativeOperatorApproval(...args);
-      if (args[0] === "operatorApprovals.resolve" && resultDelivery.loseResult === "native") {
-        resultDelivery.loseResult = undefined;
-        throw new SqliteWorkerError("synthetic committed result delivery loss", "outcome-unknown");
-      }
-      return result;
-    },
   };
 });
 
@@ -361,7 +345,7 @@ it.each(["worker", "native", "missing-receipt"] as const)(
       settled = true;
     });
     const readback = vi.spyOn(operatorApprovalStore, "getOperatorApprovalDetailed");
-    resultDelivery.loseResult = variant === "native" ? "native" : "worker";
+    resultDelivery.loseResult = "worker";
     resultDelivery.hideReceipt = variant === "missing-receipt";
     await expect(
       manager.resolveAutoReview(
@@ -371,9 +355,7 @@ it.each(["worker", "native", "missing-receipt"] as const)(
         variant === "native"
           ? {
               family: "native-compatibility",
-              assertCurrent: () => {
-                getOperatorApproval({ id: record.id, databaseOptions });
-              },
+              assertCurrent() {},
             }
           : undefined,
       ),

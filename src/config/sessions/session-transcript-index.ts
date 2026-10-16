@@ -7,6 +7,7 @@
 // marks the session dirty for its write or maintenance owner to rebuild from
 // the canonical visible-path resolver.
 import type { DatabaseSync } from "node:sqlite";
+import type { Expression } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -19,7 +20,10 @@ import {
   withoutSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import {
+  readSessionActorTransactionState,
+  writableSessionActorMap,
+} from "./session-actor-transaction.js";
 import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
@@ -116,7 +120,10 @@ export function shouldRebuildSessionTranscriptIndexSynchronously(
   return true;
 }
 
-function selectSessionTranscriptProjectionState(db: DatabaseSync, sessionId: string) {
+function selectSessionTranscriptProjectionState(
+  db: DatabaseSync,
+  sessionId: string | Expression<string>,
+) {
   return getIndexKysely(db)
     .selectFrom("session_transcript_index_state")
     .select([
@@ -167,7 +174,10 @@ function readSessionTranscriptProjectionState(
 }
 
 /** The projection owner supplies the same readiness predicate to compound readers. */
-export function selectSessionTranscriptIndexStatus(db: DatabaseSync, sessionId: string) {
+export function selectSessionTranscriptIndexStatus(
+  db: DatabaseSync,
+  sessionId: string | Expression<string>,
+) {
   const kysely = getIndexKysely(db);
   return kysely
     .selectFrom(
@@ -319,6 +329,9 @@ export function createTranscriptIndexAppenderInTransaction(
     if (append.activeRow) {
       insertActiveEvent ??= createActiveEventInserter(db, sessionId);
       insertActiveEvent(append.activeRow);
+      if (actor) {
+        actor.transcript.active = writableSessionActorMap(actor.transcript.active);
+      }
       actor?.transcript.active.set(params.seq, {
         session_id: sessionId,
         active_position: append.activeRow.activePosition,
@@ -409,41 +422,27 @@ export function replaceSessionTranscriptIndexSuffixInTransaction(
     if (!previous) {
       throw new Error(`Missing previous transcript projection: ${sessionId}`);
     }
-    const currentRows = executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("session_transcript_active_events")
-        .select(["active_position", "context_eligible", "event_seq", "message_position"])
-        .where("session_id", "=", sessionId)
-        .where("event_seq", "<", params.unchangedBeforeSeq)
-        .orderBy("active_position", "asc"),
-    ).rows;
     const sameRow = (
-      current: (typeof currentRows)[number] | undefined,
+      current: SessionTranscriptIndexProjectionRow | undefined,
       expected: SessionTranscriptIndexProjectionRow | undefined,
     ): boolean =>
-      current?.active_position === expected?.activePosition &&
-      current?.context_eligible === expected?.contextEligible &&
-      current?.event_seq === expected?.eventSeq &&
-      current?.message_position === expected?.messagePosition;
-    const expectedCurrentRows = previous.activeRows.filter(
+      current?.activePosition === expected?.activePosition &&
+      current?.contextEligible === expected?.contextEligible &&
+      current?.eventSeq === expected?.eventSeq &&
+      current?.messagePosition === expected?.messagePosition;
+    // The canonical source and both projections were prepared in this write transaction.
+    const previousPrefix = previous.activeRows.filter(
       (row) => row.eventSeq < params.unchangedBeforeSeq,
     );
-    if (
-      currentRows.length !== expectedCurrentRows.length ||
-      currentRows.some((row, index) => !sameRow(row, expectedCurrentRows[index]))
-    ) {
-      throw new Error(`Transcript projection changed before suffix replacement: ${sessionId}`);
-    }
     const prefixCount = params.next.activeRows.findIndex(
       (row) => row.eventSeq >= params.unchangedBeforeSeq,
     );
     retainedCount = prefixCount < 0 ? params.next.activeRows.length : prefixCount;
     if (
-      retainedCount !== expectedCurrentRows.length ||
+      retainedCount !== previousPrefix.length ||
       params.next.activeRows
         .slice(0, retainedCount)
-        .some((row, index) => !sameRow(currentRows[index], row))
+        .some((row, index) => !sameRow(previousPrefix[index], row))
     ) {
       throw new Error(
         `Transcript projection prefix changed before suffix replacement: ${sessionId}`,

@@ -13,11 +13,12 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
-import { applySessionGoalOperation, readSessionGoalOperationReceipt } from "./goals-operations.js";
+import { applySessionGoalOperation } from "./goals-operation-policy.js";
+import { readSessionGoalOperationReceipt } from "./goals-operations.js";
 import {
   readSessionPendingInputWorkerReceipt,
-  resolveSessionPendingInputAppend,
   runWithSessionPendingInputWorkerCustody,
+  resolveSessionPendingInputAppend,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
@@ -30,6 +31,7 @@ import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worke
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
+import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import { prepareSessionTurnRouting } from "./session-turn-predicate.js";
 import {
   createSessionTranscriptTurnKernel,
@@ -194,6 +196,11 @@ export function prepareSessionTurn(
       messages,
       coldArchive: undefined,
       version: transcriptState?.version,
+      expectedSessionState:
+        expectedEntry &&
+        buildRestartRecoveryExpectedState(
+          selected?.entry ?? { sessionId: scope.sessionId, updatedAt: 0 },
+        ),
       goalId:
         mutation && !result && expectedEntry && input.options.messages.length
           ? applySessionGoalOperation(expectedEntry, mutation.operation, Date.now())?.id
@@ -290,25 +297,6 @@ export function applySessionTurn<T>(
               },
               assertRouting,
             );
-            // Prepared host hooks are never replayed after a foreign writer changes their idempotency decision.
-            for (const append of input.options.messages) {
-              if (!append.preparedMessage?.prepared) {
-                continue;
-              }
-              const key = readMessageIdempotencyKey(append.message);
-              const current =
-                key && append.idempotencyLookup !== "caller-checked"
-                  ? readTranscriptMessageByScopedIdempotencyKey(
-                      database,
-                      scope,
-                      key,
-                      append.idempotencyLookup,
-                    )
-                  : undefined;
-              if (!isDeepStrictEqual(current, append.preparedMessage.expected)) {
-                throw new Error("Transcript idempotency changed while preparing the turn");
-              }
-            }
             let projectionNeedsReconcile = false;
             const committed = kernel.commit(
               database,
@@ -360,7 +348,7 @@ export function applySessionTurn<T>(
                     maintenancePlans: [],
                   },
                   database,
-                  { captureFullFacts: true },
+                  { captureFullFacts: true, postimages: committed.postimages },
                 )
               : undefined;
             const custodyEntry =

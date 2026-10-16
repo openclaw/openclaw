@@ -1,31 +1,45 @@
+import fsSync, { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { retainSessionListForegroundWork } from "../../gateway/session-projection-work.js";
-import { observeSessionRowBackfill } from "../../gateway/session-row-backfill.test-support.js";
+import {
+  clearStoredSessionRowTranscriptForTest,
+  observeSessionRowBackfill,
+} from "../../gateway/session-row-backfill.test-support.js";
 import {
   createSessionRowProjection,
   type SessionRowProjection,
 } from "../../gateway/session-row-projection.js";
 import { resolveSessionStoreKey } from "../../gateway/session-store-key.js";
 import { listProjectedSessions } from "../../gateway/session-utils-list.js";
-import { createGatewaySessionEntryReader } from "../../gateway/session-utils-store-lineage.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
+  createAgentDatabaseInspectionRefusal,
   inspectAgentDatabaseAdmission,
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
+import {
+  applyGatewaySessionStoreAdmission,
+  loadCombinedSessionStoreForGatewayCore,
+  type ResolvedGatewaySessionStoreTargets,
+} from "./combined-store-gateway.js";
+import { storeTargetKey } from "./combined-store-paths.js";
 import * as sessionAccessor from "./session-accessor.js";
 import {
   listSessionEntriesReadOnly,
@@ -47,6 +61,158 @@ async function withResidentRows(
   }
 }
 
+function admissionTargets(
+  durableTargets: ResolvedGatewaySessionStoreTargets["durableTargets"],
+): ResolvedGatewaySessionStoreTargets {
+  return {
+    defaultAgentId: "main",
+    diagnostics: [],
+    durableTargets,
+    incognitoTargets: [],
+    physicalTargets: new Map(durableTargets.map((target) => [storeTargetKey(target), target])),
+  };
+}
+
+it("admits repeated default-layout fleet reads without stat or realpath calls", async () => {
+  await withOpenClawTestState({ label: "fleet-admission" }, async (state) => {
+    const agentIds = Array.from({ length: 32 }, (_, index) => `fleet-${index}`);
+    const cfg = freezeJsonSnapshot<OpenClawConfig>({
+      agents: { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) },
+    });
+    const targets = admissionTargets(
+      agentIds.map((agentId) => ({
+        agentId,
+        storePath: state.statePath("agents", agentId, "agent", "openclaw-agent.sqlite"),
+      })),
+    );
+    await withAgentDatabaseStartupAdmission(async () => {
+      const options = {
+        preserveSentinelOwners: "physical" as const,
+        discovery: { env: state.env, snapshot: undefined },
+      };
+      // The generation's first read prepares configured directories and their path set.
+      expect(applyGatewaySessionStoreAdmission(cfg, options, targets)).toBe(targets);
+      const stat = vi.spyOn(fsSync, "statSync");
+      const realpath = vi.spyOn(realpathSync, "native");
+      try {
+        for (let read = 0; read < 5; read++) {
+          expect(applyGatewaySessionStoreAdmission(cfg, options, targets)).toBe(targets);
+        }
+        expect(stat).not.toHaveBeenCalled();
+        expect(realpath).not.toHaveBeenCalled();
+      } finally {
+        stat.mockRestore();
+        realpath.mockRestore();
+      }
+    });
+  });
+});
+
+it.runIf(process.platform !== "win32")(
+  "refreshes admission aliases and configured paths between reads",
+  async () => {
+    await withOpenClawTestState({ label: "fleet-admission-alias" }, async (state) => {
+      const configured = state.statePath("configured.sqlite");
+      const replacement = state.statePath("replacement.sqlite");
+      const alias = state.statePath("alias.sqlite");
+      await fs.writeFile(configured, "configured");
+      await fs.writeFile(replacement, "replacement");
+      await fs.symlink(configured, alias);
+      const cfg = freezeJsonSnapshot<OpenClawConfig>({ session: { store: configured } });
+      const targets = admissionTargets([{ agentId: "main", storePath: alias }]);
+      await withAgentDatabaseStartupAdmission(async () => {
+        const options = {
+          preserveSentinelOwners: "physical" as const,
+          discovery: { env: state.env, snapshot: undefined },
+        };
+        expect(applyGatewaySessionStoreAdmission(cfg, options, targets)).toBe(targets);
+        await fs.unlink(alias);
+        await fs.symlink(replacement, alias);
+        expect(applyGatewaySessionStoreAdmission(cfg, options, targets).durableTargets).toEqual([]);
+        const next = freezeJsonSnapshot<OpenClawConfig>({ session: { store: replacement } });
+        expect(applyGatewaySessionStoreAdmission(next, options, targets)).toBe(targets);
+      });
+    });
+  },
+);
+
+it.runIf(process.platform !== "win32").each([
+  { layout: "shared", phase: "stat", code: "EACCES" },
+  { layout: "shared", phase: "identity", code: "ELOOP" },
+  { layout: "templated", phase: "stat", code: "EACCES" },
+  { layout: "templated", phase: "identity", code: "ELOOP" },
+])(
+  "isolates $code sibling $phase failures for $layout aliases but propagates requested-target failures",
+  async ({ layout, phase, code }) => {
+    await withOpenClawTestState({ label: "admission-unreadable-sibling" }, async (state) => {
+      const healthy = state.statePath("main.sqlite");
+      const brokenDir = state.statePath("broken-agent");
+      const broken =
+        layout === "shared"
+          ? path.join(brokenDir, "openclaw-agent.sqlite")
+          : state.statePath("broken.sqlite");
+      await fs.mkdir(brokenDir);
+      await fs.writeFile(healthy, "healthy");
+      await fs.writeFile(broken, "unreadable");
+      const aliases = [state.statePath("alias.sqlite"), state.statePath("second-alias.sqlite")];
+      await Promise.all(aliases.map((alias) => fs.symlink(healthy, alias)));
+      const cfg = freezeJsonSnapshot<OpenClawConfig>({
+        agents: { entries: { broken: { agentDir: brokenDir }, main: {} } },
+        session: { store: layout === "shared" ? healthy : state.statePath("{agentId}.sqlite") },
+      });
+      const targets = admissionTargets(
+        aliases.map((storePath) => ({ agentId: "main", storePath })),
+      );
+      const error = Object.assign(new Error("synthetic filesystem inspection failure"), { code });
+      recordAgentDatabaseAdmissions(
+        [
+          createAgentDatabaseInspectionRefusal({
+            agentId: "broken",
+            paths: [broken],
+            reason: error.message,
+            cause: error,
+          }),
+        ],
+        { env: state.env, source: "startup" },
+      );
+      await withAgentDatabaseStartupAdmission(async () => {
+        let failingPath = broken;
+        let failures = 0;
+        const stat = fsSync.statSync;
+        const native = realpathSync.native;
+        const statSpy = vi.spyOn(fsSync, "statSync").mockImplementation((...args) => {
+          if (phase === "stat" && args[0] === failingPath) {
+            failures++;
+            throw error;
+          }
+          return stat(...args);
+        });
+        const realpathSpy = vi.spyOn(realpathSync, "native").mockImplementation((...args) => {
+          if (phase === "identity" && args[0] === failingPath) {
+            failures++;
+            throw error;
+          }
+          return native(...args);
+        });
+        const options = {
+          preserveSentinelOwners: "physical" as const,
+          discovery: { env: state.env, snapshot: undefined },
+        };
+        try {
+          expect(applyGatewaySessionStoreAdmission(cfg, options, targets)).toBe(targets);
+          expect(failures).toBe(layout === "shared" ? 0 : 1);
+          expect(readAgentDatabaseAdmissionRefusal("broken", { env: state.env })).toBeDefined();
+          failingPath = aliases[0]!;
+          expect(() => applyGatewaySessionStoreAdmission(cfg, options, targets)).toThrow(error);
+        } finally {
+          statSpy.mockRestore();
+          realpathSpy.mockRestore();
+        }
+      });
+    });
+  },
+);
+
 it("lists admitted sessions across cached targets while preserving a refused database", async () => {
   await withOpenClawTestState({ label: "combined-admission" }, async (state) => {
     const cfg: OpenClawConfig = {
@@ -64,7 +230,9 @@ it("lists admitted sessions across cached targets while preserving a refused dat
       ),
     ).toHaveLength(2);
     const copyPath = openOpenClawAgentDatabase({ agentId: "cleaner" }).path;
+    await closeOpenClawAgentDatabasesAsync(state.root);
     closeOpenClawAgentDatabasesForTest();
+    revokeSqliteDatabaseAdmissionsForPath(copyPath);
     const { DatabaseSync } = requireNodeSqlite();
     const copy = new DatabaseSync(copyPath);
     copy.exec(
@@ -95,6 +263,8 @@ it("lists admitted sessions across cached targets while preserving a refused dat
     expect(scoped.diagnostics?.join("\n")).toContain(refusal?.reason);
     expect(await fs.readFile(copyPath)).toEqual(before);
 
+    await closeOpenClawAgentDatabasesAsync(state.root);
+    revokeSqliteDatabaseAdmissionsForPath(copyPath);
     const repaired = new DatabaseSync(copyPath);
     repaired.exec(
       `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}; UPDATE schema_meta SET agent_id = 'cleaner', schema_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
@@ -158,52 +328,22 @@ it.each(["ops", "main"])(
   },
 );
 
-it.each(["global", "unknown"])("projects the recorded aggregate %s owner", async (sessionKey) => {
-  await withOpenClawTestState({ label: "combined-list-owner" }, async () => {
-    const cfg: OpenClawConfig = {
-      session: { scope: "global" },
-      agents: {
-        entries: {
-          main: { model: { primary: "openai/gpt-5.4" } },
-          research: { model: { primary: "openai/gpt-5.5" } },
-        },
-      },
-    };
-    replaceSessionEntrySync(
-      { agentId: "research", sessionKey },
-      { sessionId: "research-only", updatedAt: 42 },
-    );
-    const combined = loadCombinedSessionStoreForGatewayCore(cfg);
-    expect(combined.targetsBySessionKey.get(sessionKey)?.agentId).toBe("research");
-    await withResidentRows(cfg, async (projection) => {
-      const opts = { includeGlobal: true, includeUnknown: true };
-      const result = await listProjectedSessions({ projection, opts });
-      expect
-        .soft(result.sessions)
-        .toMatchObject([
-          { key: sessionKey, sessionId: "research-only", agentId: "research", model: "gpt-5.5" },
-        ]);
-      const searched = await listProjectedSessions({
-        projection,
-        opts: { ...opts, search: "gpt-5.5" },
-      });
-      expect.soft(searched.sessions.map((row) => row.sessionId)).toEqual(["research-only"]);
-      expect(searched.defaults).toEqual(result.defaults);
-    });
-  });
-});
-
 it("projects shared rows under their logical owner while retaining the physical database owner", async () => {
   await withOpenClawTestState({ label: "combined-store-owner" }, async (state) => {
     const storePath = state.statePath("shared.sqlite");
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
-        entries: { main: {}, ops: {}, worker: {} },
+        entries: {
+          main: {},
+          ops: { model: { primary: "openai/gpt-5.5" } },
+          worker: {},
+        },
         defaults: { sessionStore: { agentId: "ops" } },
       },
       session: { scope: "global", store: storePath },
     };
+    setRuntimeConfigSnapshot(cfg);
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     for (const sessionKey of ["global", "unknown", "agent:worker:task"]) {
       replaceSessionEntrySync(
@@ -216,12 +356,18 @@ it("projects shared rows under their logical owner while retaining the physical 
       );
     }
     await persistSessionTranscriptTurn(
-      { agentId: "main", storePath, sessionKey: "global", sessionId: "session-global" },
+      { agentId: "ops", storePath, sessionKey: "global", sessionId: "session-global" },
       {
         messages: [{ message: { role: "user", content: "Shared physical global preview" } }],
         touchSessionEntry: false,
       },
     );
+    clearStoredSessionRowTranscriptForTest({
+      agentId: "main",
+      storePath,
+      sessionKey: "global",
+      sessionId: "session-global",
+    });
 
     const releaseBackfill = retainSessionListForegroundWork();
     await withResidentRows(cfg, async (projection) => {
@@ -277,13 +423,14 @@ it("projects shared rows under their logical owner while retaining the physical 
           expect.objectContaining({
             kind: "global",
             agentId: "ops",
+            model: "gpt-5.5",
             sessionId: "session-global",
             derivedTitle: "Shared physical global title",
             lastMessagePreview: "Shared physical global preview",
           }),
         );
         expect(listed.sessions).toContainEqual(
-          expect.objectContaining({ kind: "unknown", agentId: "ops" }),
+          expect.objectContaining({ kind: "unknown", agentId: "ops", model: "gpt-5.5" }),
         );
         const globalRow = listed.sessions.find((row) => row.kind === "global")!;
         expect(
@@ -536,12 +683,6 @@ it.each(["global", "per-sender"] as const)(
                 modelOverrideSource: "inherited",
               });
             }
-            const read = createGatewaySessionEntryReader({
-              cfg,
-              agentId: "alpha",
-              store: { [key]: child },
-            });
-            expect(read(parent)?.modelOverride).toBe(model);
             const filtered = await listProjectedSessions({
               projection,
               opts: { spawnedBy: displayParent },

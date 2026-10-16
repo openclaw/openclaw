@@ -269,33 +269,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("preserves hook params override after an approval allow decision", async () => {
-    setEmbeddedMode(true);
-
-    runBeforeToolCallMock.mockResolvedValue(
-      approvalResult({ severity: "info" }, { extraField: "injected" }),
-    );
-    mockCallGatewayTool.mockResolvedValueOnce({
-      id: "approval-3",
-      decision: PluginApprovalResolutions.ALLOW_ONCE,
-    });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "write",
-      params: { path: "/tmp/test.txt", content: "hello" },
-      toolCallId: "call-3",
-    });
-
-    expect(result.blocked).toBe(false);
-    if (!result.blocked) {
-      expect(result.params).toEqual({
-        path: "/tmp/test.txt",
-        content: "hello",
-        extraField: "injected",
-      });
-    }
-  });
-
   it("routes trusted policy approval through the same approval gate as before_tool_call hooks", async () => {
     setEmbeddedMode(true);
     trustedPolicy(

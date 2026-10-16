@@ -86,8 +86,9 @@ export async function preparePackageBundledPlugins(
         `Built plugin ${id} does not match source metadata; rebuild before packaging`,
       );
     }
+    const extension = path.extname(builtPackage.openclaw?.extensions?.[0] ?? "index.js");
     for (const entry of sourceEntries) {
-      await fs.access(path.join(pluginRoot, entry.replace(/\.[^.]+$/u, ".js")));
+      await fs.access(path.join(pluginRoot, entry.replace(/\.[^.]+$/u, extension)));
     }
     pluginPackages.set(`dist/extensions/${id}/package.json`, builtPackage);
   }

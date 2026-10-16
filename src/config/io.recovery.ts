@@ -1,5 +1,6 @@
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
 import type { ConfigIoContext } from "./io.context.js";
 import {
@@ -7,7 +8,7 @@ import {
   resolveConfigForRead,
   resolveConfigIncludesForRead,
 } from "./io.read-helpers.js";
-import { resolveIsConfigReadOnly } from "./paths.js";
+import { resolveIsConfigReadOnly, resolveStateDir } from "./paths.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -94,18 +95,28 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
     raw: snapshot.raw,
     observedAt: new Date().toISOString(),
   });
+  if (clobberedPath === null) {
+    context.deps.logger.warn(
+      `Config prefix recovery deferred: ${context.configPath}; original config snapshot could not be saved. Retry recovery.`,
+    );
+    return false;
+  }
   // Recovery must publish by rename; a copy fallback can truncate the live config.
   await replaceFileAtomic({
     filePath: context.configPath,
     content: suffixRecovery.raw,
-    dirMode: 0o700,
+    dirMode:
+      readExistingStateRootMode(
+        path.dirname(context.configPath),
+        resolveStateDir(context.deps.env, context.deps.homedir),
+        context.deps.fs,
+      ) ?? 0o700,
     mode: 0o600,
     tempPrefix: path.basename(context.configPath),
     fileSystem: context.deps.fs,
   });
   context.deps.logger.warn(
-    `Config auto-stripped non-JSON prefix: ${context.configPath}` +
-      (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),
+    `Config auto-stripped non-JSON prefix: ${context.configPath} (original saved as ${clobberedPath})`,
   );
   return true;
 }

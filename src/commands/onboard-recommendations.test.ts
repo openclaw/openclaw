@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRuntimeConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   createOnboardingRecommendationsStore,
@@ -15,7 +15,12 @@ import {
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
-  return { ...actual, getRuntimeConfig: vi.fn(actual.getRuntimeConfig) };
+  const loadConfigMock = vi.fn(actual.loadConfig);
+  return {
+    ...actual,
+    loadConfig: loadConfigMock,
+    captureRuntimeConfigAsyncReader: () => async () => loadConfigMock(),
+  };
 });
 
 vi.mock("../state/onboarding-recommendations.js", async (importOriginal) => {
@@ -117,7 +122,7 @@ describe("onboard recommendations command", () => {
   let store: OnboardingRecommendationsStore;
 
   beforeEach(() => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
+    vi.mocked(loadConfig).mockReturnValue({
       agents: { entries: { main: { workspace: "/tmp/onboard-recommendations-test" } } },
     });
     store = {
@@ -132,7 +137,7 @@ describe("onboard recommendations command", () => {
   });
 
   afterEach(() => {
-    vi.mocked(getRuntimeConfig).mockReset();
+    vi.mocked(loadConfig).mockReset();
     vi.mocked(createOnboardingRecommendationsStore).mockReset();
   });
 

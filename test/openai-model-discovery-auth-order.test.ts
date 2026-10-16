@@ -17,7 +17,7 @@ import type { AuthProfileStore, OAuthCredential } from "../src/agents/auth-profi
 import { planOpenClawModelsJson } from "../src/agents/models-config.plan.js";
 import * as catalogContext from "../src/agents/models-config.providers.catalog-context.js";
 import { resolveImplicitProviders } from "../src/agents/models-config.providers.implicit.js";
-import { prepareModelCatalogPublication } from "../src/agents/prepared-model-runtime.full-catalog.js";
+import { prepareModelCatalogPublication } from "../src/agents/prepared-model-runtime.catalog-publication.js";
 import type { ModelProviderConfig } from "../src/config/types.models.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createTestPluginApi } from "../src/plugin-sdk/plugin-test-api.js";
@@ -41,12 +41,13 @@ vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
 
+// mock-isolation: Discovery and runtime hooks share fixture providers without real plugin loading.
 vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
   const { createProviderHookRuntime } =
     await import("../src/plugins/provider-hook-runtime-core.js");
   const { matchesProviderPluginRef } = await import("../src/plugins/provider-registry-shared.js");
   const selectProviders = (params: {
-    onlyPluginIds?: string[];
+    onlyPluginIds?: readonly string[];
     providerRefs?: readonly string[];
   }) =>
     discovery.providers.filter(
@@ -55,7 +56,6 @@ vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
         (!params.providerRefs?.length ||
           params.providerRefs.some((ref) => matchesProviderPluginRef(provider, ref))),
     );
-  // Discovery and runtime hooks use the same fixture providers; no plugin loading is under test.
   return createProviderHookRuntime({
     isPluginProvidersLoadInFlight: () => false,
     resolvePluginProviderRegistryCore: (params) => {
@@ -640,7 +640,6 @@ describe("Provider model discovery auth preparation", () => {
         undefined,
         auth,
         (provider) => provider,
-        new Map(),
       );
 
       const plan = await planCatalog(config, store, { providerId, outcomes });
@@ -657,7 +656,6 @@ describe("Provider model discovery auth preparation", () => {
         { ...previous, providers: new Map() },
         auth,
         (provider) => provider,
-        new Map(),
       );
 
       expect(published.catalog.entries).toContainEqual(priorModel);

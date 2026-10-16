@@ -32,7 +32,7 @@ function askRequest(
 function createHarness(overrides?: {
   scheduler?: GatewayScheduler;
   now?: () => number;
-  currentSessionId?: () => string | undefined;
+  currentSessionId?: () => string | undefined | Promise<string | undefined>;
   readContext?: () => ReturnType<SessionCompanionContextReader["read"]>;
   run?: (params: {
     messages: Array<{ role: "user" | "assistant"; content: string; ts: number }>;
@@ -41,7 +41,9 @@ function createHarness(overrides?: {
   snapshot?: () => SessionObserverCompanionSnapshot;
 }) {
   const cfg: OpenClawConfig = {};
-  const currentSessionId = vi.fn(overrides?.currentSessionId ?? (() => "session-1"));
+  const currentSessionId = vi.fn(async () =>
+    overrides?.currentSessionId ? await overrides.currentSessionId() : "session-1",
+  );
   const readContext = vi.fn(
     overrides?.readContext ??
       (async () => ({
@@ -221,6 +223,48 @@ describe("session companion asks", () => {
     harness.service.dispose();
   });
 
+  it.each(["execution", "reply"] as const)(
+    "checks source authority after the awaited %s identity read",
+    async (phase) => {
+      vi.useFakeTimers();
+      const reading = createDeferredCore();
+      const release = createDeferredCore();
+      let authorized = true;
+      let reads = 0;
+      const harness = createHarness({
+        currentSessionId: async () => {
+          if (++reads === (phase === "execution" ? 1 : 2)) {
+            reading.resolve();
+            await release.promise;
+          }
+          return "session-1";
+        },
+      });
+      const pending = harness.service
+        .ask({
+          ...askRequest("What changed?"),
+          assertSourceCurrent: () => {
+            if (!authorized) {
+              throw new SessionCompanionAskError("session-missing", "Side chat is unavailable.");
+            }
+          },
+        })
+        .catch((error: unknown) => error);
+      try {
+        await reading.promise;
+        authorized = false;
+        release.resolve();
+        await expect(pending).resolves.toMatchObject({ reason: "session-missing" });
+        expect(harness.run).toHaveBeenCalledTimes(phase === "execution" ? 0 : 1);
+        expect(harness.service.state(askRequest("What changed?"))).toEqual({ exchanges: [] });
+      } finally {
+        release.resolve();
+        await pending;
+        harness.service.dispose();
+      }
+    },
+  );
+
   it("distinguishes a genuinely empty session from a missing session", async () => {
     vi.useFakeTimers();
     const empty = createHarness({
@@ -329,38 +373,6 @@ describe("session companion asks", () => {
 
     pending.resolve("first answer");
     await expect(first).resolves.toMatchObject({ answer: "first answer" });
-    harness.service.dispose();
-  });
-
-  it("isolates the same bare session key by owning agent", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness();
-    await harness.service.ask({
-      agentId: "main",
-      sessionKey: "global",
-      question: "Main?",
-      connId: "conn-main",
-    });
-    await harness.service.ask({
-      agentId: "work",
-      sessionKey: "global",
-      question: "Work?",
-      connId: "conn-work",
-    });
-
-    expect(harness.service.state({ agentId: "main", sessionKey: "global" }).exchanges).toEqual([
-      expect.objectContaining({ question: "Main?" }),
-    ]);
-    expect(harness.service.state({ agentId: "work", sessionKey: "global" }).exchanges).toEqual([
-      expect.objectContaining({ question: "Work?" }),
-    ]);
-    harness.service.reset({ agentId: "main", sessionKey: "global" });
-    expect(harness.service.state({ agentId: "main", sessionKey: "global" })).toEqual({
-      exchanges: [],
-    });
-    expect(harness.service.state({ agentId: "work", sessionKey: "global" }).exchanges).toHaveLength(
-      1,
-    );
     harness.service.dispose();
   });
 
@@ -486,14 +498,6 @@ describe("session companion asks", () => {
         0,
       ),
     ).toBeLessThanOrEqual(48 * 1024);
-  });
-
-  it("truncates answers without splitting a UTF-16 surrogate pair", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness({ run: async () => "🦞".repeat(601) });
-    const result = await harness.service.ask(askRequest("Long answer?"));
-    expect(result.answer).toBe("🦞".repeat(600));
-    harness.service.dispose();
   });
 
   it("sweeps idle threads after two hours", async () => {

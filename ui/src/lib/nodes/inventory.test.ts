@@ -28,7 +28,7 @@ const hostStats = {
   memoryTotalBytes: 192 * 1024 ** 3,
   memoryFreeBytes: 41 * 1024 ** 3,
   diskTotalBytes: 2 * 1024 ** 4,
-  diskAvailableBytes: 1.2 * 1024 ** 4,
+  diskAvailableBytes: Math.round(1.2 * 1024 ** 4),
   updatedAtMs: 1_700_000_000_000,
 };
 
@@ -134,6 +134,7 @@ describe("buildDeviceInventory", () => {
     ["numeric strings", { ...hostStats, cpuCount: "24" }],
     ["zero cores", { ...hostStats, cpuCount: 0 }],
     ["fractional cores", { ...hostStats, cpuCount: 1.5 }],
+    ["fractional bytes", { ...hostStats, memoryFreeBytes: 1.5 }],
     ["nonfinite memory", { ...hostStats, memoryTotalBytes: Number.POSITIVE_INFINITY }],
     ["negative memory", { ...hostStats, memoryFreeBytes: -1 }],
     [
@@ -144,6 +145,7 @@ describe("buildDeviceInventory", () => {
     ["invalid load average", { ...hostStats, loadAverage: [3.2, Number.NaN, 2.4] }],
     ["negative load average", { ...hostStats, loadAverage: [-1, 2.8, 2.4] }],
     ["zero disk size", { ...hostStats, diskTotalBytes: 0 }],
+    ["unpaired disk values", { ...hostStats, diskTotalBytes: undefined }],
     ["free disk exceeds total", { ...hostStats, diskAvailableBytes: hostStats.diskTotalBytes + 1 }],
     ["missing timestamp", { ...hostStats, updatedAtMs: undefined }],
   ])("drops malformed host stats (%s) while retaining the node", (_description, stats) => {

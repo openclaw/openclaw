@@ -12,7 +12,7 @@ import { hasGatewayContextOwner } from "../../plugins/runtime/gateway-request-sc
 import { agentSessionKeysMatchByRequestKey } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { settlesWithin } from "../../shared/settle-within.js";
-import * as replyRunSettle from "./reply-run-finalization-lease.js";
+import type { ReplyOperationStaleReason } from "./reply-run-finalization-lease.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyMessageInjectionTargetOwner,
@@ -33,20 +33,15 @@ import {
   isReplyOperationPreBackendPhase,
   isReplyRunCompacting,
   isReplyRunEvidenceStale,
-  mergeReplyRunAdmissionSource,
   replyRunState,
   resolveReplyRunForCurrentSessionId,
   resolveReplyRunWaitKey,
   type ReplyRunAdmissionBarrier,
-  type ReplyRunAdmissionSource,
   type ReplyRunWaiter,
 } from "./reply-run-registry.state.js";
 
-type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
-
 type ReplyRunAdmissionSettlement = {
   settled: boolean;
-  sources?: ReplyRunAdmissionSource[];
 };
 
 type ReplyOperationSessionTarget = {
@@ -87,13 +82,15 @@ export function resolveReplyOperationsForSession(params: ReplyOperationSessionTa
 
 export async function waitForReplyOperationOwnerSettlement(
   operation: ReplyOperation,
-  timeoutMs: number,
+  timeoutMs: number | null,
 ): Promise<boolean> {
   const settlement = operation.ownerSettlement;
   if (!settlement) {
     return true;
   }
-  return settlesWithin(settlement, resolveTimerTimeoutMs(timeoutMs, 100, 100));
+  return timeoutMs === null
+    ? settlement.then(() => true)
+    : settlesWithin(settlement, resolveTimerTimeoutMs(timeoutMs, 100, 100));
 }
 
 export function expireStaleReplyRunBySessionId(
@@ -335,14 +332,13 @@ async function waitForReplyRunAdmissionBarrier(params: {
       ? Date.now() +
         resolveTimerTimeoutMs(params.timeoutMs, params.minimumTimeoutMs, params.minimumTimeoutMs)
       : undefined;
-  const sources = new Map<ReplyRunAdmissionSource["databaseIdentity"], ReplyRunAdmissionSource>();
   while (true) {
     if (params.signal?.aborted) {
       return { settled: false };
     }
     const barrier = params.barriersByKey.get(params.sessionKey);
     if (!barrier) {
-      return { settled: true, ...(sources.size ? { sources: [...sources.values()] } : {}) };
+      return { settled: true };
     }
     const remainingMs = deadline === undefined ? undefined : deadline - Date.now();
     if (remainingMs !== undefined && remainingMs <= 0) {
@@ -364,15 +360,6 @@ async function waitForReplyRunAdmissionBarrier(params: {
     params.signal?.removeEventListener("abort", abortHandler);
     if (!outcome) {
       return { settled: false };
-    }
-    for (const [identity, source] of barrier.sources) {
-      sources.set(
-        identity,
-        mergeReplyRunAdmissionSource(
-          { ...source, sessionIds: new Set(source.sessionIds) },
-          sources.get(identity),
-        ),
-      );
     }
   }
 }
@@ -493,22 +480,8 @@ function evictPriorLifecycleReplyRuns(): void {
       continue;
     }
     const evict = evictReplyOperationByOperation.get(operation);
-    if (evict) {
-      if (attempt(evict)) {
-        continue;
-      }
-    } else {
-      // Pre-generation hot-loaded operations have no retained callback, but their
-      // public method still closes over the module instance that owns the backend.
-      attempt(() => {
-        if (!operation.abortForRestart()) {
-          throw new Error(`Stale reply operation was not abortable: ${operation.key}`);
-        }
-      });
-      // Admission stays occupied until the old closure clears it. If abort
-      // synchronously clears and replaces the slot, its captured stateCleared
-      // makes this completion idempotent instead of erasing the replacement.
-      attempt(() => operation.complete());
+    if (evict && attempt(evict)) {
+      continue;
     }
     attempt(() => clearReplyRunState(operation));
   }
@@ -518,34 +491,3 @@ function evictPriorLifecycleReplyRuns(): void {
 }
 
 registerAgentEventLifecycleRotationHandler("reply-runs", evictPriorLifecycleReplyRuns);
-
-const replyRunRegistryTestApi = {
-  resetReplyRunRegistry(): void {
-    for (const [sessionKey, operation] of replyRunState.activeRunsByKey) {
-      markDiagnosticRunProgress({
-        sessionKey,
-        sessionId: operation.sessionId,
-        reason: "reply_operation:registry_reset",
-      });
-    }
-    replyRunState.activeRunsByKey.clear();
-    replyRunState.activeKeysBySessionId.clear();
-    replyRunState.waitKeysBySessionId.clear();
-    replyRunState.sourceTurnByKey.clear();
-    replyRunState.completionObservationsByKey?.clear();
-    replyRunSettle.resetReplyRunSettleTimersForTesting();
-    for (const waiters of replyRunState.waitersByKey.values()) {
-      for (const waiter of waiters) {
-        waiter(false);
-      }
-    }
-    replyRunState.waitersByKey.clear();
-    replyRunState.followupAdmissionBarriersByKey.clear();
-    replyRunState.successorAdmissionBarriersByKey.clear();
-  },
-};
-
-if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.replyRunRegistryTestApi")] =
-    replyRunRegistryTestApi;
-}

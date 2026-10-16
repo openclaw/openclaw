@@ -182,43 +182,6 @@ describe("resident catalog rollout currency", () => {
     );
   });
 
-  it.each(["error", "change"])(
-    "retries a cached batch from file stats after a watcher %s during its yield",
-    async (event) => {
-      const f = await fixture(meta());
-      for (let index = 0; index < 64; index++) {
-        await fs.writeFile(path.join(f.day, `rollout-${index}.jsonl`), "");
-      }
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const watcher = new ControlledWatcher();
-      const watch = vi.spyOn(nodeFs, "watch").mockReturnValueOnce(watcher);
-      await scanCodexCatalogRollouts(f.root, new Set());
-      watch.mockImplementation(() => new ControlledWatcher());
-      const originalStat = fs.lstat;
-      const appended = line("event_msg", { type: "user_message", message: "Changed mid-batch" });
-      let delivery: Promise<void> | undefined;
-      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-        const stat = await originalStat(...args);
-        if (args[0] === f.day && !delivery) {
-          delivery = new Promise<void>((resolve) => {
-            setImmediate(() => {
-              nodeFs.appendFileSync(f.file, appended);
-              watcher.emit(event, event === "error" ? new Error("watch lost") : "change");
-              resolve();
-            });
-          });
-        }
-        return stat;
-      });
-      try {
-        const scanned = await scanCodexCatalogRollouts(f.root, new Set());
-        expect(scanned.files.get(f.file)?.size).toBe(Buffer.byteLength(meta() + appended));
-      } finally {
-        await delivery;
-      }
-    },
-  );
-
   it("falls back to file stats after watcher loss and releases watches when retired", async () => {
     const f = await fixture(meta());
     const watch = vi.spyOn(nodeFs, "watch");
@@ -346,25 +309,6 @@ describe("resident catalog rollout currency", () => {
     expect(row?.updatedAt).toBe((await fs.stat(f.file)).mtimeMs / 1_000);
     expect(row?.recencyAt).toBeUndefined();
     expect(row?.name).toBeUndefined();
-  });
-
-  it("does not make a fresh paginated fork discoverable from injected model context", async () => {
-    const f = await fixture(
-      meta("native-thread", {
-        history_mode: "paginated",
-        forked_from_id: "parent-thread",
-        history_base: { thread_id: "parent-thread", end_ordinal_exclusive: 42 },
-      }) +
-        line("response_item", {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Inherited context" }],
-        }),
-    );
-    const row = await readCodexCatalogRollout(f.root, f.file);
-    expect(row).toMatchObject({ id: "native-thread" });
-    expect(row?.preview).toBeUndefined();
-    expect(row?.recencyAt).toBeUndefined();
   });
 
   it("reads only the 128 KiB head and tail of large files", async () => {

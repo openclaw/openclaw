@@ -11,7 +11,6 @@ import {
   dispatchWorkboard,
   filterWorkboardCards,
   workboardCardMatchesHealthKey,
-  getWorkboardState,
   workboardHasActiveWrites,
   WORKBOARD_PRIORITIES,
   type WorkboardCard,
@@ -37,6 +36,7 @@ import {
   formatPriorityLabel,
   workboardErrorMessage,
   workboardMutationContext,
+  workboardViewState,
   PriorityIcon,
   dispatchSummaryMessage,
   refreshStatusLabel,
@@ -52,10 +52,7 @@ import type { WorkboardSelectOption } from "./workboard-select.ts";
 const workboardFilterPopoverId = "workboard-filter-popover";
 
 function AgentControl(props: { workboard: WorkboardProps; options: WorkboardSelectOption[] }) {
-  const state = () => {
-    void props.workboard.revision;
-    return getWorkboardState(props.workboard.host);
-  };
+  const state = workboardViewState(() => props.workboard);
   return (
     <>
       {props.workboard.scopeControl ? (
@@ -83,10 +80,7 @@ function WorkboardColumns(props: {
   statuses: WorkboardStatus[];
   byStatus: Map<WorkboardStatus, WorkboardCard[]>;
 }) {
-  const state = () => {
-    void props.workboard.revision;
-    return getWorkboardState(props.workboard.host);
-  };
+  const state = workboardViewState(() => props.workboard);
   const boardEdges = boardScrollEdgesRef();
   return (
     <div
@@ -131,10 +125,7 @@ function WorkboardColumns(props: {
 }
 
 export function WorkboardView(props: WorkboardProps & { onRefresh: () => void }) {
-  const state = () => {
-    void props.revision;
-    return getWorkboardState(props.host);
-  };
+  const state = workboardViewState(() => props);
   const view = createMemo(() => {
     const current = state();
     const agentOptions = buildAgentFilterOptions(props.agentsList, current.cards);

@@ -1,6 +1,8 @@
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
-import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
+import {
+  createStreamingDirectiveAccumulator,
+  splitTrailingDirective,
+} from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
 import {
   assistantVisibleTextFilters,
@@ -18,6 +20,7 @@ import type {
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import {
+  createAssistantStreamBlockState,
   prepareAssistantVisibleText,
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
@@ -46,26 +49,26 @@ export function extractAssistantStreamSnapshot(
   } else if (options?.observedText !== undefined) {
     observedMessage = { ...message, content: [{ type: "text", text: options.observedText }] };
   }
-  const state: EmbeddedAgentSubscribeState["partialBlockState"] = {
-    thinking: false,
-    final: false,
-    inlineCode: createInlineCodeState(),
-  };
+  const state: EmbeddedAgentSubscribeState["partialBlockState"] = createAssistantStreamBlockState();
   let rawText = "";
+  const protocol = createStreamingDirectiveAccumulator();
   const blockSources: { text: string; separator: string; finalAnswer: boolean }[] = [];
   const parts: { separator: string; index?: number }[] = [];
   const renderText = prepareAssistantVisibleText(observedMessage, (part, final, phase, index) => {
     // Native blocks can divide a tag or fence; only complete visible parts get a separator.
     const separator =
-      rawText && !state.pendingTagFragment && !state.pendingFenceFragment ? "\n" : "";
+      protocol.sourceText && !state.pendingTagFragment && !state.pendingFenceFragment ? "\n" : "";
     const previousIndex = parts.at(-1)?.index;
     parts.push({ separator, index });
-    rawText += `${separator}${part}`;
+    rawText += part;
+    const preparedStart = protocol.sourceText.length;
+    protocol.consume(part, { final: final && options?.final !== false });
+    const preparedPart = protocol.sourceText.slice(preparedStart);
     // Final prose preserves inline tag examples; generic streams still hide reasoning.
     const preparedFinal = phase === "final_answer" && !ctx.params.enforceFinalTag;
     const visible = preparedFinal
-      ? `${separator}${part}`
-      : ctx.stripBlockTags(`${separator}${part}`, state, {
+      ? `${separator}${preparedPart}`
+      : ctx.stripBlockTags(`${separator}${preparedPart}`, state, {
           final: final && options?.final !== false,
         });
     const previous = blockSources.at(-1);
@@ -83,7 +86,7 @@ export function extractAssistantStreamSnapshot(
         finalAnswer: preparedFinal,
       });
     }
-    return preparedFinal ? part : visible;
+    return preparedFinal ? preparedPart : visible;
   });
   const visibleBlockSource = blockSources
     .map(({ text, separator, finalAnswer }) => ({
@@ -142,11 +145,11 @@ export function reconcileBlockReplySnapshot(
     if (index > (snapshot.parts.at(-1)?.index ?? 0)) {
       return snapshot.blockText;
     }
-    return extractAssistantStreamSnapshot(ctx, snapshot.message, {
-      throughIndex: index,
-      observedText: "",
+    const prefix = extractAssistantStreamSnapshot(ctx, snapshot.message, {
+      throughIndex: index - 1,
       final: false,
     }).blockText;
+    return prefix + (snapshot.parts.find((part) => part.index === index)?.separator ?? "");
   };
   const scope = ctx.state.blockReplyScopeStart;
   const scopePosition = (snapshot: typeof next) => {

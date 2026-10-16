@@ -50,6 +50,7 @@ export async function createContextEngineLogicalTurnLease(params: {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  awaitSessionDiffBaseline?: () => Promise<void>;
   warn?: (message: string) => void;
 }): Promise<ContextEngineLogicalTurnLease> {
   const { runId, sessionId } = params.identity;
@@ -57,6 +58,7 @@ export async function createContextEngineLogicalTurnLease(params: {
     initialize: ensureContextEnginesInitialized,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
+    beforeCustomEngine: params.awaitSessionDiffBaseline,
     onCleanupFailure: recordAgentCleanupFailure,
   });
   let state: LogicalTurnSelectionState = "unselected";

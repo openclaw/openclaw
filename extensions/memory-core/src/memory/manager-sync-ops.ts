@@ -10,7 +10,6 @@ import type { SessionTranscriptCorpusEntry } from "openclaw/plugin-sdk/memory-co
 import {
   formatMemoryIndexRebuildGuidance,
   MEMORY_CHUNKING_VERSION,
-  MEMORY_INDEX_VECTOR_TABLE,
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -19,10 +18,10 @@ import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
+  type EmbeddingProviderResult,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { memoryDatabaseTableExists, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import { cleanupAgedMemoryReindexTempFiles, removeMemoryDatabaseFiles } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
@@ -45,14 +44,16 @@ import { MEMORY_INDEX_META_KEY } from "./manager-retrieval-read.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import { MemoryManagerSourceSyncOps } from "./manager-source-sync-ops.js";
 import type { MemoryEmbeddingBatchConfig, MemorySyncProgressState } from "./manager-sync-base.js";
-import { hasTargetedSessionSyncParams } from "./manager-sync-control.js";
+import {
+  hasTargetedSessionSyncParams,
+  MemoryBackgroundRebuildInterruptedError,
+} from "./manager-sync-control.js";
 import { MEMORY_SYNC_DEFERRED, type MemorySyncOutcome } from "./manager-sync-outcome.js";
 
 export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
 type MemorySyncProviderGenerationBase = {
   database: MemoryIndexDatabase;
-  databaseRevision: number;
   cacheWritesInvalidated: boolean;
   providerKey: string;
   identities: MemoryIndexProviderIdentity[];
@@ -98,6 +99,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
 
   protected abstract readonly createProvider: MemoryManagerProviderFactory;
   protected fallbackProviderInitPromise: Promise<boolean> | null = null;
+  protected providerInitialized = false;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
 
   protected abstract beginSyncProviderGeneration(options?: { forceFtsOnly?: boolean }): void;
@@ -120,6 +122,18 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected abstract retireCurrentProvider(): Promise<void>;
+
+  protected applyProviderResult(result: EmbeddingProviderResult): void {
+    this.provider = result.provider;
+    this.fallbackFrom = result.fallbackFrom;
+    this.fallbackReason = result.fallbackReason;
+    this.providerUnavailableReason = result.providerUnavailableReason;
+    this.providerLifecycle = resolveMemoryProviderLifecycle(result);
+    this.providerRuntime = result.runtime;
+    this.providerInitialized = true;
+    this.providerKey = this.computeProviderKey();
+    this.batch = this.resolveBatchConfig();
+  }
 
   protected createConfiguredEmbeddingProvider(
     request = resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
@@ -208,6 +222,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       // the vector extension before text and FTS indexing can proceed.
       const vectorReady = syncProvider ? await this.ensureVectorReady() : false;
       const meta = this.readMeta();
+      // A sibling manager can publish different dimensions or an empty rebuild.
+      if (this.database.ensuredVectorDimensions !== meta?.vectorDims) {
+        this.database.ensuredVectorDimensions = undefined;
+      }
       // Resolve and index a targeted session against one corpus snapshot. A reset
       // between separate enumerations could otherwise replace the chosen identity.
       const targetSessionSync = hasTargetSessionRequest
@@ -301,6 +319,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       if (deferAutomaticFullReindex && !hasTargetArchiveFiles) {
         // Automatic identity repair honors the failure cooldown. An explicit
         // CLI index request still retries immediately.
+        this.requestSessionIndexRetry();
         return MEMORY_SYNC_DEFERRED;
       }
       needsFullReindex =
@@ -385,11 +404,14 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             needsFullReindex = true;
             this.beginSyncProviderGeneration();
             await this.runInPlaceReindex(progress);
+          } else {
+            this.requestSessionIndexRetry(true);
           }
           return;
         }
         if (!this.provider && this.fts.enabled && isMemoryEmbeddingOperationError(err)) {
-          this.syncOutcomes.recordActiveFailure(err);
+          this.requestSessionIndexRetry();
+          this.syncOutcomes.recordFailure(err);
           log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
           return;
         }
@@ -448,7 +470,8 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     this.sessionsDirty =
       sessionsFullRetryDirty || sessionsReconcileDirty || sessionsDirtyFiles.size > 0;
     if (failure) {
-      this.syncOutcomes.recordActiveFailure(failure.error);
+      this.requestSessionIndexRetry(true);
+      this.syncOutcomes.recordFailure(failure.error);
     }
     return true;
   }
@@ -525,20 +548,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       return false;
     }
 
-    this.providerLifecycle = resolveMemoryProviderLifecycle({
-      provider: fallbackResult.provider,
-      runtime: fallbackResult.runtime,
+    this.applyProviderResult({
+      ...fallbackResult,
       requestedProvider: currentProviderId,
       fallbackFrom: currentProviderId,
       fallbackReason: reason,
+      providerUnavailableReason: undefined,
     });
-    this.fallbackFrom = currentProviderId;
-    this.fallbackReason = reason;
-    this.provider = fallbackResult.provider;
-    this.providerRuntime = fallbackResult.runtime;
-    this.providerUnavailableReason = undefined;
-    this.providerKey = this.computeProviderKey();
-    this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallbackRequest.provider})`, {
       reason,
     });
@@ -550,7 +566,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     // in one short transaction so failed rebuilds leave the current index usable.
     const dbPath = resolveUserPath(this.settings.store.databasePath);
     const tempDbPath = `${dbPath}.memory-reindex-${randomUUID()}`;
-    const originalDb = this.db;
+    const originalDatabase = this.database;
     const originalRetryState = this.snapshotReindexRetryState();
     const withEmbeddings = this.syncProviderGeneration?.kind === "semantic";
     const shouldRetryMemoryOnFailure = this.sources.has("memory");
@@ -558,8 +574,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     let shadowCleanup: MemoryIndexDatabase | undefined;
     try {
       await cleanupAgedMemoryReindexTempFiles(dbPath);
-      const originalRevision = readMemoryDatabaseRevision(originalDb);
-      const shadow = MemoryIndexDatabase.openShadow(tempDbPath, this.settings.store.vector.enabled);
+      const originalRevision = this.database.facts.revision;
+      const shadow = await MemoryIndexDatabase.openShadow(
+        tempDbPath,
+        this.settings.store.vector.enabled,
+      );
       shadowCleanup = shadow;
       shadow.vector.enabled = this.vector.enabled;
       shadow.vector.extensionPath = this.vector.extensionPath;
@@ -586,7 +605,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           const syncProvider = this.syncProviderGeneration
             ? this.syncProviderGeneration.provider
             : this.provider;
-          const vectorIndexComplete = syncProvider === null || this.vector.available === true;
+          // Empty rebuilds have no missing vectors, even before the extension is needed.
+          const vectorIndexComplete =
+            syncProvider === null ||
+            !shadow.facts.hasIndexedChunks ||
+            this.vector.available === true;
           const nextMeta: MemoryIndexMeta = {
             model: syncProvider?.model ?? "fts-only",
             provider: syncProvider?.id ?? "none",
@@ -612,11 +635,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             nextMeta.vectorDims = this.vector.dims;
           }
 
-          await this.withDatabaseWrite(() => this.writeMeta(nextMeta));
+          await this.writeMeta(nextMeta);
           return {
             nextMeta,
             vectorIndexComplete,
-            hasVectors: memoryDatabaseTableExists(shadow.db, "main", MEMORY_INDEX_VECTOR_TABLE),
+            hasVectors: shadow.facts.hasVectorTable,
           };
         } finally {
           // Escaped continuations must fail closed, never write to the live DB.
@@ -641,8 +664,8 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
                 this.closed ||
                 this.publishedDatabase.closed ||
                 this.publishedDatabase.readOnly ||
-                this.publishedDatabase.db !== originalDb ||
-                !originalDb.isOpen
+                this.publishedDatabase !== originalDatabase ||
+                !originalDatabase.isOpen
               ) {
                 throw new Error("Memory publication owner changed before reindex publication");
               }
@@ -652,8 +675,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         });
       });
 
-      this.database.lastMetaSerialized = null;
-      this.resetVectorState();
+      this.resetVectorState(rebuilt.vectorIndexComplete);
       this.fts.available = shadow.fts.available;
       this.fts.loadError = shadow.fts.loadError;
       this.vector.dims = rebuilt.nextMeta.vectorDims;
@@ -667,7 +689,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         memory: shouldRetryMemoryOnFailure,
         sessions: shouldRetrySessionsOnFailure,
       });
-      this.recordFullReindexFailure(withEmbeddings);
+      if (!(err instanceof MemoryBackgroundRebuildInterruptedError)) {
+        this.recordFullReindexFailure(withEmbeddings);
+      }
       throw err;
     } finally {
       try {

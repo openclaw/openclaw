@@ -1,8 +1,7 @@
-import vm from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
 
-const native = vi.hoisted(() => ({ spawn: vi.fn(), read: vi.fn() }));
+const native = vi.hoisted(() => ({ spawn: vi.fn(), read: vi.fn(), coalition: vi.fn() }));
 vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
   spawnSync: native.spawn,
@@ -10,6 +9,11 @@ vi.mock("node:child_process", async (original) => ({
 vi.mock("node:fs", async (original) => ({
   ...(await original<typeof import("node:fs")>()),
   readFileSync: native.read,
+}));
+
+vi.mock("@openclaw/proc-safe/darwin", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/darwin")>()),
+  readProcessCoalition: native.coalition,
 }));
 
 const gatewayPid = process.pid + 1_000;
@@ -33,6 +37,9 @@ const uncontained = (pid: number) => `pid/${pid} = {\n  type = pid\n}`;
 beforeEach(() => {
   vi.resetAllMocks();
   native.spawn.mockReturnValue({ status: 1, stdout: "" });
+  native.coalition.mockImplementation(() => {
+    throw new Error("unavailable");
+  });
   native.read.mockImplementation(() => {
     throw new Error("native observation unavailable");
   });
@@ -184,20 +191,19 @@ describe("launchd process membership when launchctl denies PID domains", () => {
     stdout: "",
     stderr: "Could not print domain: 1: Operation not permitted",
   };
-  const nativeRow = (id: number, name?: string) => ({
-    status: 0,
-    stdout: JSON.stringify({ id: String(id), name }),
-  });
-  const observe = (caller: object, gateway: object, launchctl: object = denied) =>
-    native.spawn.mockImplementation((command: string, args: string[]) =>
-      command === "ps"
-        ? { status: 0, stdout: groupRows(901) }
-        : command === process.execPath
-          ? Number(args[4]) === process.pid
-            ? caller
-            : gateway
-          : launchctl,
+  const nativeRow = (id: number, name?: string) => ({ id: BigInt(id), name });
+  const observe = (caller: object | null, gateway: object | null, launchctl: object = denied) => {
+    native.spawn.mockImplementation((command: string) =>
+      command === "ps" ? { status: 0, stdout: groupRows(901) } : launchctl,
     );
+    native.coalition.mockImplementation((pid: number) => {
+      const value = pid === process.pid ? caller : gateway;
+      if (value instanceof Error) {
+        throw value;
+      }
+      return value;
+    });
+  };
 
   it.each([
     {
@@ -225,20 +231,20 @@ describe("launchd process membership when launchctl denies PID domains", () => {
       expected: "unknown",
     },
     {
-      label: "a crashed native probe",
-      caller: { status: null, signal: "SIGSEGV", stdout: "" },
+      label: "an unavailable native probe",
+      caller: new Error("unavailable"),
       gateway: nativeRow(1203, "ai.openclaw.gateway"),
       expected: "unknown",
     },
     {
       label: "an invalid coalition ID",
-      caller: { status: 0, stdout: JSON.stringify({ id: "0", name: "com.apple.Terminal" }) },
+      caller: nativeRow(0, "com.apple.Terminal"),
       gateway: nativeRow(1203, "ai.openclaw.gateway"),
       expected: "unknown",
     },
     {
-      label: "unparseable native output",
-      caller: { status: 0, stdout: "{" },
+      label: "a denied native query",
+      caller: new Error("access denied"),
       gateway: nativeRow(1203, "ai.openclaw.gateway"),
       expected: "unknown",
     },
@@ -247,52 +253,6 @@ describe("launchd process membership when launchctl denies PID domains", () => {
     expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe(expected);
   });
 
-  it.each(["missing-record", "empty-coalition", "available"] as const)(
-    "renders a naturally completing native probe for %s",
-    (mode) => {
-      observe(nativeRow(1204, "com.apple.Terminal"), nativeRow(1203, "ai.openclaw.gateway"));
-      inspectServiceProcessMembershipSync(gatewayPid, "darwin");
-      const invocation = native.spawn.mock.calls.find(([command]) => command === process.execPath);
-      const script = invocation?.[1]?.[2];
-      expect(typeof script).toBe("string");
-      if (typeof script !== "string") {
-        throw new Error("Native coalition probe was not invoked");
-      }
-      const write = vi.fn();
-      const childProcess = {
-        argv: ["node", "koffi-fixture", "42"],
-        exitCode: undefined as number | undefined,
-        stdout: { write },
-        exit: () => {
-          throw new Error("Forced exit bypassed native probe completion");
-        },
-      };
-      vm.runInNewContext(script, {
-        Buffer,
-        process: childProcess,
-        require: () => ({
-          load: (name: string) => {
-            if (name !== "/usr/lib/libproc.dylib") {
-              throw new Error("Optional coalition name unavailable");
-            }
-            return {
-              func: () => (_pid: number, _kind: number, _arg: number, info: Buffer) => {
-                info.writeBigUInt64LE(mode === "empty-coalition" ? 0n : 42n);
-                return mode === "missing-record" ? 0 : info.length;
-              },
-            };
-          },
-        }),
-      });
-      expect(childProcess.exitCode).toBe(mode === "available" ? undefined : 1);
-      if (mode === "available") {
-        expect(write).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ id: "42" }));
-      } else {
-        expect(write).not.toHaveBeenCalled();
-      }
-    },
-  );
-
   it("does not query natively when launchctl itself fails to run", () => {
     observe(nativeRow(1204, "com.apple.Terminal"), nativeRow(1203, "ai.openclaw.gateway"), {
       status: null,
@@ -300,7 +260,7 @@ describe("launchd process membership when launchctl denies PID domains", () => {
       error: new Error("timeout"),
     });
     expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe("unknown");
-    expect(native.spawn.mock.calls.some(([command]) => command === process.execPath)).toBe(false);
+    expect(native.coalition).not.toHaveBeenCalled();
   });
 });
 

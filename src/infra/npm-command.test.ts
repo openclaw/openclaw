@@ -19,7 +19,7 @@ afterEach(() => {
 describe("npm invocation", () => {
   it.each([
     { bun: undefined, args: ["view", "@openclaw/irc", "version"], command: ["npm"] },
-    { bun: "1.4.2", args: ["install", "--ignore-scripts"], command: [process.execPath, cliPath] },
+    { bun: "1.4.3", args: ["install", "--ignore-scripts"], command: [process.execPath, cliPath] },
   ])("preserves npm arguments with Bun version $bun", ({ bun, args, command }) => {
     Object.defineProperty(process, "versions", { value: { ...originalVersions, bun } });
     const stat = vi.spyOn(fs, "statSync");
@@ -30,7 +30,7 @@ describe("npm invocation", () => {
   });
 
   it("fails with a typed missing-file error instead of falling back to PATH npm", () => {
-    Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: "1.4.2" } });
+    Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: "1.4.3" } });
     vi.spyOn(fs, "statSync").mockImplementation(() => {
       throw Object.assign(new Error("missing"), { code: "ENOENT" });
     });

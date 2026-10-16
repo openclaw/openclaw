@@ -151,6 +151,13 @@ export function buildMistralRealtimeTranscriptionProvider({
   PluginCapabilityCatalogContext,
   "createRealtimeTranscriptionWebSocketSession"
 >): RealtimeTranscriptionProviderPlugin {
+  const isConfigured: NonNullable<RealtimeTranscriptionProviderPlugin["isConfigured"]> = ({
+    providerConfig,
+  }) =>
+    Boolean(
+      normalizeProviderConfig(providerConfig).apiKey ||
+      normalizeMistralApiKey(process.env.MISTRAL_API_KEY),
+    );
   return {
     id: "mistral",
     label: "Mistral Realtime Transcription",
@@ -158,11 +165,9 @@ export function buildMistralRealtimeTranscriptionProvider({
     defaultModel: MISTRAL_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 45,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(
-        normalizeProviderConfig(providerConfig).apiKey ||
-        normalizeMistralApiKey(process.env.MISTRAL_API_KEY),
-      ),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = config.apiKey || normalizeMistralApiKey(process.env.MISTRAL_API_KEY);
@@ -170,7 +175,6 @@ export function buildMistralRealtimeTranscriptionProvider({
         throw new Error("Mistral API key missing");
       }
       const baseUrl = normalizeMistralRealtimeBaseUrl(config.baseUrl);
-      const callbacks = { ...req };
       let partialText = "";
       let partialBytes = 0;
       let hasFinalSegment = false;
@@ -186,7 +190,7 @@ export function buildMistralRealtimeTranscriptionProvider({
           return;
         }
         hasFinalSegment ||= source === "segment";
-        callbacks.onTranscript?.(text);
+        req.onTranscript?.(text);
       };
 
       const failTerminal = (error: Error, transport: RealtimeTranscriptionWebSocketTransport) => {
@@ -196,19 +200,14 @@ export function buildMistralRealtimeTranscriptionProvider({
         terminal = true;
         clearPartial();
         transport.closeNow();
-        try {
-          callbacks.onError?.(error);
-        } catch {
-          // The terminal provider error already owns the outcome. Do not let an
-          // observer exception re-enter shared error dispatch and emit it twice.
-        }
+        req.onError?.(error);
       };
 
       return createRealtimeTranscriptionWebSocketSession<MistralRealtimeTranscriptionEvent>({
         providerId: "mistral",
-        callbacks,
+        callbacks: req,
         url: () => {
-          const base = new URL(`${normalizeMistralRealtimeBaseUrl(baseUrl)}/`);
+          const base = new URL(`${baseUrl}/`);
           const url = new URL("v1/audio/transcriptions/realtime", base);
           url.searchParams.set("model", config.model ?? MISTRAL_REALTIME_DEFAULT_MODEL);
           url.searchParams.set(
@@ -271,7 +270,7 @@ export function buildMistralRealtimeTranscriptionProvider({
                 }
                 partialText += event.text;
                 partialBytes += deltaBytes;
-                callbacks.onPartial?.(partialText);
+                req.onPartial?.(partialText);
               }
               return;
             case "transcription.segment":

@@ -39,3 +39,38 @@ export function configPageForSection(sectionKey: string): ConfigPageId | "plugin
   // Sections without a curated home render on the Advanced page.
   return CONFIG_PAGE_BY_SECTION.get(sectionKey) ?? "advanced";
 }
+
+export type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+
+export function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
+  const activeSection = configSectionKeysForPage(pageId)?.[0] ?? null;
+  if (activeSection === null && pageId !== "advanced") {
+    throw new Error("Unknown config page");
+  }
+  return { activeSection, activeSubsection: null };
+}
+
+export function normalizeConfigSelection(
+  pageId: ConfigPageId,
+  activeSection: string | null,
+  activeSubsection: string | null,
+): ConfigSelection {
+  const sections = configSectionKeysForPage(pageId) ?? null;
+  // Advanced renders without an include list; sections that have a curated
+  // home elsewhere must not activate here.
+  if (pageId === "advanced" && activeSection && SCOPED_CONFIG_SECTION_KEYS.has(activeSection)) {
+    return { activeSection: null, activeSubsection: null };
+  }
+  if (sections && (!activeSection || !sections.includes(activeSection))) {
+    return defaultConfigSelection(pageId);
+  }
+  return { activeSection, activeSubsection };
+}
+
+export function configSelectionFromSearch(pageId: ConfigPageId, search: string): ConfigSelection {
+  const section = new URLSearchParams(search).get("section");
+  if (!section) {
+    return defaultConfigSelection(pageId);
+  }
+  return normalizeConfigSelection(pageId, section, null);
+}

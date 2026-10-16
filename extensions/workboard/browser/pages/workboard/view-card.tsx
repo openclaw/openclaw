@@ -11,13 +11,10 @@ import {
 } from "../../lib/workboard/index.ts";
 import {
   getCardActionState,
-  ArchiveCardAction,
+  CardAction,
   CardMoveControl,
-  DeleteCardAction,
-  EditCardAction,
   OpenSessionCardAction,
   StartExecutionButton,
-  StopCardAction,
 } from "./view-card-actions.tsx";
 import {
   CardAlertView,
@@ -67,73 +64,10 @@ export function WorkboardCardView(input: {
         : undefined,
     ),
   );
-  const StartAction = () => (
-    <>
-      {!widget() && action().showStartControls ? (
-        <StartExecutionButton
-          workboard={input.workboard}
-          card={input.card}
-          engine={null}
-          mode={"autonomous"}
-        />
-      ) : null}
-    </>
-  );
-  const EditAction = () => (
-    <>
-      {!widget() && action().writable && !action().archived ? (
-        <EditCardAction workboard={input.workboard} card={input.card} />
-      ) : null}
-    </>
-  );
-  const ArchiveAction = () => (
-    <>
-      {!widget() && action().writable ? (
-        <ArchiveCardAction
-          workboard={input.workboard}
-          card={input.card}
-          busy={action().busy}
-          archived={action().archived}
-        />
-      ) : null}
-    </>
-  );
   const showDetails = () => {
     openCardDetails(action().state, input.card);
     input.workboard.onRequestUpdate?.();
   };
-  const DetailAction = () => (
-    <>
-      {widget() ? null : (
-        <button
-          class="btn"
-          type="button"
-          aria-label={t("workboard.viewDetails")}
-          aria-haspopup="dialog"
-          aria-expanded={action().state.detailCardId === input.card.id ? "true" : "false"}
-          aria-controls={workboardCardDetailDrawerId}
-          onClick={showDetails}
-        >
-          {icons.eye}
-          <span>{t("workboard.viewDetails")}</span>
-        </button>
-      )}
-    </>
-  );
-  const SessionAction = () => (
-    <>
-      {widget() ? null : (
-        <OpenSessionCardAction workboard={input.workboard} session={action().sessionTarget} />
-      )}
-    </>
-  );
-  const StopAction = () => (
-    <>
-      {!widget() && action().writable && action().linkedSessionKey && action().live ? (
-        <StopCardAction workboard={input.workboard} card={input.card} busy={action().busy} />
-      ) : null}
-    </>
-  );
   const MoveAction = () => (
     <>
       {!action().archived && (action().writable || widget()) ? (
@@ -145,13 +79,6 @@ export function WorkboardCardView(input: {
             wide: widget(),
           }}
         />
-      ) : null}
-    </>
-  );
-  const DeleteAction = () => (
-    <>
-      {!widget() && action().writable ? (
-        <DeleteCardAction workboard={input.workboard} card={input.card} busy={action().busy} />
       ) : null}
     </>
   );
@@ -196,13 +123,46 @@ export function WorkboardCardView(input: {
             onClick={closeWorkboardPopoverOnAction}
           >
             <div class="workboard-card__menu-group">
-              <DetailAction /> <EditAction />
+              <button
+                class="btn"
+                type="button"
+                aria-label={t("workboard.viewDetails")}
+                aria-haspopup="dialog"
+                aria-expanded={action().state.detailCardId === input.card.id ? "true" : "false"}
+                aria-controls={workboardCardDetailDrawerId}
+                onClick={showDetails}
+              >
+                {icons.eye}
+                <span>{t("workboard.viewDetails")}</span>
+              </button>{" "}
+              {action().writable && !action().archived ? (
+                <CardAction kind="edit" workboard={input.workboard} card={input.card} />
+              ) : null}
             </div>
             {action().showStartControls ||
             action().sessionTarget ||
             (action().writable && action().linkedSessionKey && action().live) ? (
               <div class="workboard-card__menu-group">
-                <StartAction /> <SessionAction /> <StopAction />
+                {action().showStartControls ? (
+                  <StartExecutionButton
+                    workboard={input.workboard}
+                    card={input.card}
+                    engine={null}
+                    mode="autonomous"
+                  />
+                ) : null}{" "}
+                <OpenSessionCardAction
+                  workboard={input.workboard}
+                  session={action().sessionTarget}
+                />{" "}
+                {action().writable && action().linkedSessionKey && action().live ? (
+                  <CardAction
+                    kind="stop"
+                    workboard={input.workboard}
+                    card={input.card}
+                    busy={action().busy}
+                  />
+                ) : null}
               </div>
             ) : null}
             {!(!action().archived && (action().writable || widget())) ? null : (
@@ -213,7 +173,19 @@ export function WorkboardCardView(input: {
             )}
             {action().writable ? (
               <div class="workboard-card__menu-group">
-                <ArchiveAction /> <DeleteAction />
+                <CardAction
+                  kind="archive"
+                  workboard={input.workboard}
+                  card={input.card}
+                  busy={action().busy}
+                  archived={action().archived}
+                />{" "}
+                <CardAction
+                  kind="delete"
+                  workboard={input.workboard}
+                  card={input.card}
+                  busy={action().busy}
+                />
               </div>
             ) : null}
           </div>
@@ -326,14 +298,10 @@ export function WorkboardCardView(input: {
       draggable={
         action().writable && !action().archived && !action().state.dispatching ? "true" : "false"
       }
-      onMouseDown={(event: MouseEvent) => {
+      onMouseDown={(event) => {
         if (event.button === 0 && event.shiftKey && selectable() && !isCardActionTarget(event)) {
           event.preventDefault();
-          if (event.currentTarget instanceof HTMLElement) {
-            event.currentTarget.focus({
-              preventScroll: true,
-            });
-          }
+          event.currentTarget.focus({ preventScroll: true });
         }
       }}
       onClick={(event: MouseEvent) => {
@@ -356,7 +324,7 @@ export function WorkboardCardView(input: {
         }
         event.preventDefault();
       }}
-      onDragStart={(event: DragEvent) => {
+      onDragStart={(event) => {
         if (!action().writable || action().archived || action().state.dispatching) {
           event.preventDefault();
           return;
@@ -368,9 +336,6 @@ export function WorkboardCardView(input: {
           event.dataTransfer.effectAllowed = "move";
           event.dataTransfer.setData("text/plain", input.card.id);
           const source = event.currentTarget;
-          if (!(source instanceof HTMLElement)) {
-            return;
-          }
           const bounds = source.getBoundingClientRect();
           event.dataTransfer.setDragImage(
             source,

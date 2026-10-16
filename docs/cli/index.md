@@ -24,7 +24,7 @@ Setup commands by intent:
 | Area                         | Commands                                                                                                                                                                                                                              |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Setup and onboarding         | [`openclaw`](/cli/openclaw) · [`setup`](/cli/setup) · [`onboard`](/cli/onboard) · [`configure`](/cli/configure) · [`config`](/cli/config) · [`completion`](/cli/completion) · [`doctor`](/cli/doctor) · [`dashboard`](/cli/dashboard) |
-| Reset, backup, and migration | [`backup`](/cli/backup) · [`database`](/reference/database-schemas) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                     |
+| Reset, backup, and migration | [`backup`](/cli/backup) · [`database`](/cli#database) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                                   |
 | Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`claws`](/cli/claws) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                                 |
 | Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`triage`](/cli/triage) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                           |
 | Gateway and logs             | [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                                             |
@@ -77,6 +77,7 @@ Use `--` to stop option parsing. Command words still dispatch after it: for exam
 - Long-running commands show a progress indicator (`OSC 9;4` when supported).
 - Connection failures give a short explanation and a status-check command. If a request may have completed, check its result before retrying. Unexpected failures point to a recovery command; use `OPENCLAW_DEBUG=1` when rerunning to include diagnostics. JSON failures keep their diagnostic fields.
 - Update failures keep their reason on stderr, including in JSON mode.
+- Resource cleanup failures are reported on stderr without replacing the command's result. Cleanup that exceeds its reporting deadline remains tracked and reports any later failure.
 
 ### JSON failures
 
@@ -145,7 +146,10 @@ openclaw [--dev] [--profile <name>] <command>
     schema
     validate
   database
+    port
     preflight
+    preflight-agent
+    verify-preservation
     ownership
       status
       claim
@@ -501,6 +505,32 @@ Plugins can add additional top-level commands, such as
 [`openclaw workboard`](/cli/workboard) or `openclaw voicecall`.
 
 </Accordion>
+
+## Database
+
+`openclaw database` provides schema preflight, preservation verification,
+shared-state ownership, and offline workboard engine porting. See
+[database schemas](/reference/database-schemas) for compatibility contracts.
+
+```bash
+openclaw database port --to <postgres|sqlite> [--dry-run] [--json]
+openclaw database port --resume <manifest> [--json]
+openclaw database port --rollback <manifest> [--json]
+```
+
+Stop the Gateway and embedded agents first. `--to` selects the destination for
+all existing registered workboard stores; shared state and agent databases remain
+on SQLite. `--dry-run` checks read-only prerequisites without creating migration
+artifacts. Recovery requires the active manifest at
+`<stateDir>/recovery/database-port/manifest.json`; `--resume` and `--rollback` are
+mutually exclusive and cannot be combined with `--to` or `--dry-run`.
+
+Completed ports retain exact original captures and an archived manifest under
+`<stateDir>/recovery/database-port/<operation-id>/`. To keep later writes when
+returning to SQLite, run a new `--to sqlite` port; completed manifests are not an
+undo mechanism. Reverse-port before a raw package-manager downgrade. See the
+[port runbook](/reference/database-engines#port-existing-workboard-stores) for
+backup contents, interruption recovery, and restart guidance.
 
 ## Chat slash commands
 

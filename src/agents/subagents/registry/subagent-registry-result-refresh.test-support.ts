@@ -39,6 +39,7 @@ export function registerSubagentResultRefreshCases(params: {
       await mod.registerSubagentRun({
         runId: "run-refresh-admission-old",
         childSessionKey,
+        sessionEntry: { sessionId: "sess-refresh-admission" },
         task: "capture replacement completion",
         expectsCompletionMessage: true,
       });
@@ -57,6 +58,10 @@ export function registerSubagentResultRefreshCases(params: {
             status: "terminal" as const,
             endedAt: Date.now(),
             outcome: { status: "ok" as const },
+          },
+          completion: {
+            required: true,
+            terminalReply: { disposition: "visible" as const, text: "replacement final reply" },
           },
         };
         return { value: undefined, postimages: new Map([[entry.runId, next]]) };

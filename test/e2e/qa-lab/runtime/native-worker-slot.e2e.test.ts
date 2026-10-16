@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { AgentJobTerminalSnapshot } from "../../../../src/gateway/agent-turn/types.js";
@@ -18,21 +18,21 @@ import {
   parseNodeWorkerLaunchInput,
 } from "../../../../src/worker/node-supervisor-protocol.js";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
-import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runQaGatewayTestFixture } from "../../../helpers/qa-gateway-test-lifetime.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import {
   closeWireServer,
   connectWireClient,
   createPairedNodeWorkerHost,
   createPublishedWireWorkspace,
+  createWireWorkspaceSettlementWaiter,
   startPairedNodeWorkerGateway,
   wireMessageText,
   type PairedNodeWorkerHost,
   type WireGateway,
 } from "./paired-node-worker-wire-fixture.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const [providerId, modelId] = MODEL_REF.split("/");
 
 async function providerFixture() {
@@ -126,41 +126,48 @@ function readPlacement(gateway: WireGateway, key: string) {
 // installed worker + native HTTP -> real workspace settlement -> the SAME physical slot.
 it.skipIf(process.platform === "win32")(
   "settles native A, deletes it, then runs B on the same one-slot node",
-  async ({ signal }) => {
-    const root = tempDirs.make("native-slot-lifecycle-");
-    const provider = await providerFixture();
-    const published = await createPublishedWireWorkspace(root);
+  async (context) => {
+    process.stderr.write("[native-slot] starting one-slot proof\n");
     const gatewayOwner = createQaGatewayChild();
-    const identity = loadOrCreateDeviceIdentity({ path: path.join(root, "node-identity.sqlite") });
-    const nodeHostRoot = path.join(root, "node-state", "node-host");
-    await mkdir(nodeHostRoot, { recursive: true });
-    const config = {
-      models: {
-        providers: {
-          [providerId!]: {
-            apiKey: "synthetic-native-slot-key",
-            api: "openai-completions",
-            baseUrl: provider.baseUrl,
-            models: [
-              {
-                id: modelId!,
-                name: modelId!,
-                contextWindow: 32768,
-                maxTokens: 128,
-                reasoning: true,
-                thinkingLevelMap: { medium: "medium" },
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              },
-            ],
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const settlement = createWireWorkspaceSettlementWaiter();
+    let providerResource: Awaited<ReturnType<typeof providerFixture>> | undefined;
+    let publishedResource: Awaited<ReturnType<typeof createPublishedWireWorkspace>> | undefined;
     let node: PairedNodeWorkerHost | undefined;
     let operator: Awaited<ReturnType<typeof connectWireClient>> | undefined;
-    await runQaGatewayFixture(
-      async () => {
+    await runQaGatewayTestFixture(
+      context,
+      async ({ signal, createTempDir }) => {
+        const root = createTempDir("native-slot-lifecycle-");
+        const provider = (providerResource = await providerFixture());
+        const published = (publishedResource = await createPublishedWireWorkspace(root));
+        const identity = loadOrCreateDeviceIdentity({
+          path: path.join(root, "node-identity.sqlite"),
+        });
+        const nodeHostRoot = path.join(root, "node-state", "node-host");
+        await mkdir(nodeHostRoot, { recursive: true });
+        const config: OpenClawConfig = {
+          models: {
+            providers: {
+              [providerId!]: {
+                apiKey: "synthetic-native-slot-key",
+                api: "openai-completions",
+                baseUrl: provider.baseUrl,
+                models: [
+                  {
+                    id: modelId!,
+                    name: modelId!,
+                    contextWindow: 32768,
+                    maxTokens: 128,
+                    reasoning: true,
+                    thinkingLevelMap: { medium: "medium" },
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+              },
+            },
+          },
+        };
         const gateway = await startPairedNodeWorkerGateway({
           owner: gatewayOwner,
           // A Gateway model request must fail rather than accidentally supply this proof's reply.
@@ -174,7 +181,13 @@ it.skipIf(process.platform === "win32")(
             tempParentDir: root,
           },
         });
-        operator = await connectWireClient({ gateway, role: "operator", identity: null });
+        operator = await connectWireClient({
+          gateway,
+          role: "operator",
+          identity: null,
+          onEvent: settlement.onEvent,
+        });
+        await operator.request("sessions.subscribe", {});
         node = await createPairedNodeWorkerHost({
           gateway,
           operator,
@@ -239,6 +252,7 @@ it.skipIf(process.platform === "win32")(
         expect(readPlacement(gateway, keys.A).placement?.turn_claim_id).toBeTruthy();
         provider.releases.A.resolve();
         expect(await wait("native-slot-a")).toMatchObject({ status: "ok" });
+        await settlement.wait(operator, keys.A, signal);
         const settled = readPlacement(gateway, keys.A);
         expect(settled.placement).toMatchObject({
           state: "active",
@@ -282,6 +296,7 @@ it.skipIf(process.platform === "win32")(
         expect(await node.supervisor.status(activeB.launchId)).toMatchObject({ state: "running" });
         provider.releases.B.resolve();
         expect(await wait("native-slot-b")).toMatchObject({ status: "ok" });
+        await settlement.wait(operator, keys.B, signal);
         expect(readPlacement(gateway, keys.B)).toMatchObject({
           placement: { state: "active", turn_claim_id: null },
           pending: undefined,
@@ -307,16 +322,16 @@ it.skipIf(process.platform === "win32")(
         );
       },
       async () => {
-        provider.releases.A.resolve();
-        provider.releases.B.resolve();
+        providerResource?.releases.A.resolve();
+        providerResource?.releases.B.resolve();
         await node?.stop();
       },
       async () => {
         await operator?.stopAndWait({ timeoutMs: 2000 });
       },
       () => stopQaGatewayFixture(gatewayOwner),
-      () => closeWireServer(provider.server),
-      () => closeWireServer(published.server),
+      () => (providerResource ? closeWireServer(providerResource.server) : undefined),
+      () => (publishedResource ? closeWireServer(publishedResource.server) : undefined),
     );
   },
   PROOF_TIMEOUT_MS + 180_000,

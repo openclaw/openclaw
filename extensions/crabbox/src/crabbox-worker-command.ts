@@ -7,6 +7,10 @@ import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_COMMAND_DETAIL_CHARS = 512;
 
+export function sanitizeCrabboxNotice(text: string): string {
+  return sliceUtf16Safe(redactToolPayloadText(text).replace(/\s+/gu, " ").trim(), 0, 512);
+}
+
 export type LeaseCommandContext = { binary: string; id: string; provider: string };
 
 export function leaseRunArgs(
@@ -37,6 +41,8 @@ export type CrabboxCommandRunner = (
   argv: string[],
   options: {
     killProcessTree: boolean;
+    requireProcessTreeExtinction?: boolean;
+    killGraceMs?: number;
     env?: NodeJS.ProcessEnv;
     input?: string | Uint8Array;
     maxOutputBytes: number;
@@ -178,7 +184,7 @@ export async function runCrabboxCommandWithCoordinatorRetry(
     sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   },
 ): Promise<CrabboxCommandResult> {
-  const deadline = Date.now() + params.timeoutMs;
+  const deadline = performance.now() + params.timeoutMs;
   const sleep = params.sleep ?? ((ms, signal) => delay(ms, undefined, { signal }));
   let timeoutMs = params.timeoutMs;
   let coordinatorDetail: string | undefined;
@@ -193,12 +199,12 @@ export async function runCrabboxCommandWithCoordinatorRetry(
         ? { ...result, coordinatorAttempts: attempt, coordinatorDetail }
         : result;
     const backoffMs = 1_000 * 2 ** (attempt - 1);
-    if (!transient || attempt === 3 || deadline - Date.now() <= backoffMs) {
+    if (!transient || attempt === 3 || deadline - performance.now() <= backoffMs) {
       return observed;
     }
     await sleep(backoffMs, params.signal);
     params.signal?.throwIfAborted();
-    timeoutMs = deadline - Date.now();
+    timeoutMs = deadline - performance.now();
     if (timeoutMs <= 0) {
       return observed;
     }
@@ -282,7 +288,7 @@ export async function stopCrabboxLease(params: {
   warn: (message: string) => void;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }): Promise<void> {
-  const deadline = Date.now() + CRABBOX_STOP_TIMEOUT_MS;
+  const deadline = performance.now() + CRABBOX_STOP_TIMEOUT_MS;
   let result = await runCrabboxCommandWithCoordinatorRetry({
     action: "stop",
     args: ["stop", "--provider", params.provider, "--id", params.id],
@@ -305,7 +311,7 @@ export async function stopCrabboxLease(params: {
     output.includes("Azure fixed lease cannot be adopted without its create intent")
   ) {
     // Recovery shares the cleanup allowance reserved by the provider lifecycle.
-    const remainingMs = deadline - Date.now();
+    const remainingMs = deadline - performance.now();
     if (remainingMs <= 0) {
       throw new Error("Crabbox stop timed out before Azure fixed-lease recovery", {
         cause: crabboxCommandError("stop", result),

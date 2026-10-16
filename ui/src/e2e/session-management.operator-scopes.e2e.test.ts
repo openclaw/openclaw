@@ -107,23 +107,21 @@ suite.define(() => {
         const model = activePane.locator("[data-chat-model-select]");
         const permission = activePane.locator("[data-chat-permission-select]");
         const menu = page.locator("openclaw-session-menu");
-        const rename = menu.locator('wa-dropdown-item[value="rename"]');
-        const archive = menu.locator('wa-dropdown-item[value="toggle-archived"]');
-        const fork = menu.locator('wa-dropdown-item[value="fork"]');
+        const rename = menu.locator('[data-value="rename"]');
+        const archive = menu.locator('[data-value="toggle-archived"]');
+        const fork = menu.locator('[data-value="fork"]');
         const ownRow = page.locator(`.sidebar-recent-session[data-session-key="${own.key}"]`);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, own.key));
         await historyText.waitFor();
-        // Both authorized rows are needed to compare own-session writes with shared read-only access.
-        await page
-          .locator(".sidebar-navigation-scope")
-          .getByRole("button", { name: "All", exact: true })
-          .click();
         await ownRow.click({ button: "right" });
         await rename.waitFor();
-        await captureUiProof(suite, page, `${name}-owned-menu.png`, menu.locator('[part="menu"]'), [
-          rename,
-          archive,
-        ]);
+        await captureUiProof(
+          suite,
+          page,
+          `${name}-owned-menu.png`,
+          menu.locator(".session-menu__panel"),
+          [rename, archive],
+        );
         await page.keyboard.press("Escape");
         await navigateToControlUiSession(page, shared.key);
         await historyText.waitFor();
@@ -169,7 +167,7 @@ suite.define(() => {
         expect(await send.isDisabled()).toBe(true);
         expect(await model.getAttribute("aria-disabled")).toBe("true");
         expect(await permission.isDisabled()).toBe(true);
-        const create = page.locator(".sidebar-brand__new-thread");
+        const create = page.locator(".sidebar-rail .sidebar-new-session");
         expect(await create.isDisabled()).toBe(!canOrganize);
         if (!canOrganize) {
           await create.click({ force: true });
@@ -205,7 +203,7 @@ suite.define(() => {
         expect((await archive.getAttribute("disabled")) === null).toBe(canOrganize);
         expect(await fork.getAttribute("disabled")).not.toBeNull();
         for (const action of [
-          menu.locator('wa-dropdown-item[value="toggle-unread"]'),
+          menu.locator('[data-value="toggle-unread"]'),
           menu.getByRole("menuitem", { name: "Move to group" }),
         ]) {
           expect(await action.getAttribute("disabled")).not.toBeNull();
@@ -246,7 +244,7 @@ suite.define(() => {
           await archivedRow.waitFor();
           await archivedRow.getByRole("button", { name: "Open session menu", exact: true }).click();
           await openSessionMenuSubmenu(page, "Advanced");
-          const remove = menu.locator('wa-dropdown-item[value="delete"]');
+          const remove = menu.locator('[data-value="delete"]');
           await remove.waitFor();
           expect(await remove.getAttribute("disabled")).not.toBeNull();
           await remove.click({ force: true });
@@ -254,7 +252,7 @@ suite.define(() => {
             suite,
             page,
             `${name}-archived-controls.png`,
-            menu.locator('[part="menu"]'),
+            menu.locator(".session-menu__panel"),
             [remove, archive],
           );
           await page.keyboard.press("ArrowLeft");
@@ -290,7 +288,7 @@ suite.define(() => {
             page.evaluate(
               (key) =>
                 JSON.parse(localStorage.getItem(key) ?? "{}").navigationByProfile?.["scope-reader"]
-                  ?.sidebarEntries,
+                  ?.railShortcuts,
               controlUiBundledSettingsStorageKey(suite.server.baseUrl),
             ),
           )

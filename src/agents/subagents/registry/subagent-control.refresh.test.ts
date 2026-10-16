@@ -3,7 +3,7 @@
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 /** A transient discovery failure must survive successful runtime cancellation. */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import * as sessions from "../../../config/sessions/session-accessor.js";
@@ -31,6 +31,10 @@ import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ agents: { defaults: { workspace: fixture.stateDir } } });
+});
+
 it.for(["complete", "reject undefined"] as const)(
   "coalesces fresh refresh batches in the enclosing scope before %s",
   async (completion, { signal }) => {
@@ -55,6 +59,10 @@ it.for(["complete", "reject undefined"] as const)(
         runId: "refresh-" + id,
         childAgentId: agentId(id),
         childSessionKey: key(id),
+        sessionEntry: {
+          sessionId: "refresh-" + id + "-session",
+          lifecycleRevision: "refresh-" + id + "-revision",
+        },
         requesterSessionKey: id === "root" ? "agent:main:main" : rootKey,
         controllerSessionKey: id === "root" ? "agent:main:main" : rootKey,
         requesterAgentId: "main",
@@ -70,6 +78,7 @@ it.for(["complete", "reject undefined"] as const)(
         agentId: agentId(id),
         sessionKey: key(id),
         defaultSessionId: "refresh-" + id + "-session",
+        lifecycleRevision: "refresh-" + id + "-revision",
       });
     }
     await register("root");
@@ -215,10 +224,16 @@ it("retires queued refreshes after an escaping native failure and an undefined c
     agentId: "main",
     sessionKey: rootKey,
     defaultSessionId: "refresh-failure-session",
+    lifecycleRevision: "refresh-failure-revision",
   });
   await registerSubagentRun({
     runId: "refresh-failure",
     childSessionKey: rootKey,
+    childAgentId: "main",
+    sessionEntry: {
+      sessionId: "refresh-failure-session",
+      lifecycleRevision: "refresh-failure-revision",
+    },
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -328,10 +343,13 @@ it("retains a captured child prefix when the next child's session preparation fa
       agentId: "main",
       sessionKey,
       defaultSessionId: `${runId}-session`,
+      lifecycleRevision: `${runId}-revision`,
     });
     await registerSubagentRun({
       runId,
       childSessionKey: sessionKey,
+      childAgentId: "main",
+      sessionEntry: { sessionId: `${runId}-session`, lifecycleRevision: `${runId}-revision` },
       requesterSessionKey,
       controllerSessionKey: requesterSessionKey,
       requesterAgentId: "main",
@@ -447,6 +465,11 @@ it.each([
         await registerSubagentRun({
           runId,
           childSessionKey: sessionKey,
+          childAgentId: "main",
+          sessionEntry: {
+            sessionId: `${runId}-session`,
+            lifecycleRevision: `${runId}-revision`,
+          },
           requesterSessionKey,
           controllerSessionKey: requesterSessionKey,
           requesterAgentId: "main",
@@ -561,6 +584,8 @@ it.each([
         await registerSubagentRun({
           runId: "g",
           childSessionKey: gKey,
+          childAgentId: "main",
+          sessionEntry: { sessionId: "g-session", lifecycleRevision: "g-revision" },
           requesterSessionKey: dKey,
           controllerSessionKey: dKey,
           requesterAgentId: "main",

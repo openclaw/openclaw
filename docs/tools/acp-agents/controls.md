@@ -34,7 +34,12 @@ harness. Owner-aware manager calls carry `agentId`; `agent` remains the harness
 name. Configured bindings use their OpenClaw agent owner and their configured
 ACP harness independently. `sessions_spawn` uses the requester as owner for raw
 harnesses and the configured agent as owner for ACP aliases. `/acp spawn`
-retains its existing harness namespace.
+also keeps raw harness sessions under the requesting OpenClaw agent; a harness
+that is itself a configured agent keeps its configured namespace. The session
+key, participant history, and transcripts use that owner while ACP metadata
+records the selected harness. Existing harness-namespaced sessions and bindings
+keep their original keys and storage; bound turns use the inspected channel owner
+for Gateway dispatch. Spawning does not migrate existing sessions.
 
 Bare keys such as `global` require an explicit owner when ownership is explicit.
 ACP keeps arbitrary logical keys such as `shared-project` unchanged; ACPX scopes

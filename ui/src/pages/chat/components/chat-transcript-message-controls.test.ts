@@ -1,11 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import { renderTranscriptSearch, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import {
+  render,
+  renderChatThread,
+  renderTranscriptSearch,
+} from "../test-helpers/chat-transcript-native.tsx";
+import { toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,

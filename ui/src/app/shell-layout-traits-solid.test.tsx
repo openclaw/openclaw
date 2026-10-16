@@ -1,8 +1,11 @@
 import { cleanup, render } from "@solidjs/testing-library";
-import { Show, createEffect, createSignal, flush } from "solid-js";
+import { Show, createEffect, createSignal, flush, onSettled } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { SettingsPage, SettingsPageHeader } from "../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../components/solid/settings-workspace.tsx";
+import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { renderModelProvidersPageShell } from "../pages/model-providers/view.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { ShellLayoutOwner } from "./shell-layout-owner.ts";
 import { ShellLayoutProvider } from "./shell-layout-traits-solid.tsx";
 
@@ -20,6 +23,38 @@ it("renders standalone settings without a shell layout owner", () => {
     </SettingsWorkspace>
   ));
   expect(view.getByRole("heading", { name: "Standalone settings" })).toBeTruthy();
+});
+
+it("reserves the Models page column before its body finishes loading", () => {
+  const content = document.createElement("main");
+  content.className = "content";
+  document.body.append(content);
+  const owner = new ShellLayoutOwner();
+  owner.contentRef(content);
+  const [loaded, setLoaded] = createSignal(false);
+  render(
+    () => (
+      <ShellLayoutProvider value={{ owner, host: content }}>
+        {renderModelProvidersPageShell({
+          get body() {
+            return (
+              <Show when={loaded()} fallback={<span>Loading models</span>}>
+                <SettingsPage>Models ready</SettingsPage>
+              </Show>
+            );
+          },
+          login: undefined,
+        })}
+      </ShellLayoutProvider>
+    ),
+    { container: content },
+  );
+  expect(content.classList.contains("content--settings-page")).toBe(true);
+  expect(content.textContent).toContain("Loading models");
+  setLoaded(true);
+  flush();
+  expect(content.classList.contains("content--settings-page")).toBe(true);
+  expect(content.textContent).toContain("Models ready");
 });
 
 it("publishes settings layout before descendants render and measure updates", () => {
@@ -90,3 +125,65 @@ it("retires only the departing Solid reporter and preserves retained sibling fac
   expect(content.classList.contains("content--settings-wide")).toBe(false);
   expect(content.querySelector("[hidden]")?.textContent).toBe("Retained");
 });
+
+const BridgedSettingsPage = defineSolidBridge(
+  "openclaw-layout-test-page",
+  () => (
+    <SettingsPage wide>
+      <SettingsPageHeader title="Native settings" />
+    </SettingsPage>
+  ),
+  { properties: {} },
+);
+
+it.each([
+  { bridged: false, detached: false },
+  { bridged: true, detached: false },
+  { bridged: true, detached: true },
+])(
+  "publishes initial page layout ($bridged bridge, $detached detached)",
+  async ({ bridged, detached }) => {
+    const owner = new ShellLayoutOwner();
+    let content!: HTMLElement;
+    const container = detached ? document.createElement("div") : undefined;
+    mountSolid(
+      () => (
+        <main
+          class="content"
+          ref={(element) => {
+            content = element;
+            owner.contentRef(element);
+          }}
+        >
+          <ShellLayoutProvider
+            value={{
+              owner,
+              get host() {
+                return content;
+              },
+            }}
+          >
+            {bridged ? (
+              <BridgedSettingsPage />
+            ) : (
+              <SettingsPage wide>
+                <SettingsPageHeader title="Native settings" />
+              </SettingsPage>
+            )}
+          </ShellLayoutProvider>
+        </main>
+      ),
+      { container },
+    );
+    if (container) {
+      await Promise.resolve();
+      document.body.append(container);
+    }
+    await new Promise<void>((resolve) => {
+      onSettled(resolve);
+    });
+    expect(content.classList.contains("content--settings-page")).toBe(true);
+    expect(content.classList.contains("content--settings-wide")).toBe(true);
+    expect(content.classList.contains("content--toolbar-header")).toBe(true);
+  },
+);

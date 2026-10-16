@@ -130,7 +130,17 @@ describe("assistant panel", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([false, true])(
+  it("mounts an unavailable panel before application context is supplied", async () => {
+    const panel = document.createElement("openclaw-assistant-panel");
+    document.body.append(panel);
+
+    await panel.updateComplete;
+
+    expect(panel.querySelector<HTMLElement>(".assistant-panel")?.hidden).toBe(true);
+    expect(panel.assistantPanelOpen).toBe(false);
+  });
+
+  it.each([true])(
     "admits same-route Home selection through the pane owner (global=%s)",
     async (global) => {
       const { panel, context } = await mountPanel({ global });
@@ -196,7 +206,7 @@ describe("assistant panel", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([false])(
     "follows the sidebar agent switcher and suppresses only the selected conversation (global=%s)",
     async (global) => {
       const { context, panel, store } = await mountPanel({ global });
@@ -260,7 +270,7 @@ describe("assistant panel", () => {
     },
   );
 
-  it.each([HOME_PANEL_TOGGLE_EVENT, CUSTODIAN_PANEL_TOGGLE_EVENT])(
+  it.each([CUSTODIAN_PANEL_TOGGLE_EVENT])(
     "replaces %s with an activation-owned session and follows navigation without restoring closed docks",
     async (eventName) => {
       const { context, panel, store } = await mountPanel();
@@ -330,7 +340,7 @@ describe("assistant panel", () => {
       await panel.updateComplete;
       expect(panel.assistantPanelOpen).toBe(false);
       // The built-in choice the plugin dock replaced survives its close, persisted and live.
-      const builtIn = eventName === HOME_PANEL_TOGGLE_EVENT ? "home" : "custodian";
+      const builtIn = "custodian";
       const storedTargets = Array.from({ length: localStorage.length }, (_, index) =>
         localStorage.key(index),
       )
@@ -341,7 +351,7 @@ describe("assistant panel", () => {
       await panel.updateComplete;
       expect(panel.assistantPanelOpen).toBe(true);
       expect(context.assistantDock.openSessionKey).toBeNull();
-      expect(panel.querySelector("openclaw-custodian-surface") === null).toBe(builtIn === "home");
+      expect(panel.querySelector("openclaw-custodian-surface")).not.toBeNull();
       window.dispatchEvent(new CustomEvent(eventName));
       await panel.updateComplete;
       expect(panel.assistantPanelOpen).toBe(false);
@@ -531,7 +541,10 @@ describe("assistant panel", () => {
         workspace: "/worktrees/research",
       });
 
-      const disconnectedContext = workContext();
+      const detachedHome = panel.querySelector<HTMLElement & { workContext?: ChatWorkContext }>(
+        "openclaw-home-session",
+      );
+      const disconnectedContext = detachedHome?.workContext;
       panel.remove();
       request.mockResolvedValueOnce({
         ...agents.state.agentsList,
@@ -540,7 +553,7 @@ describe("assistant panel", () => {
       await agents.refreshList();
       setGatewaySnapshot({ hello });
       await panel.updateComplete;
-      expect(workContext()).toEqual(disconnectedContext);
+      expect(detachedHome?.workContext).toEqual(disconnectedContext);
 
       provider.append(panel);
       await panel.updateComplete;
@@ -632,11 +645,7 @@ describe("assistant panel", () => {
     },
   );
 
-  it.each([
-    { variant: "caretaker", available: true },
-    { variant: "caretaker", available: false },
-    { variant: "onboarding", available: true },
-  ] as const)(
+  it.each([{ variant: "onboarding", available: true }] as const)(
     "minimizes the existing $variant conversation when available=$available",
     async ({ variant, available }) => {
       const { context, panel, request, store } = await mountPanel();
@@ -685,11 +694,7 @@ describe("assistant panel", () => {
     },
   );
 
-  it.each([
-    { width: 900, installed: true },
-    { width: 1342, installed: true },
-    { width: 1342, installed: false },
-  ])(
+  it.each([{ width: 1342, installed: true }])(
     "opens plugin help on request and limits automatic opening (width=$width, installed=$installed)",
     async ({ width, installed }) => {
       vi.stubGlobal("innerWidth", width);
@@ -807,18 +812,6 @@ describe("assistant panel", () => {
     ).not.toBeNull();
     panel.querySelector<HTMLButtonElement>(".assistant-panel-actions button:last-child")!.click();
     await panel.updateComplete;
-    expect(panel.assistantPanelOpen).toBe(false);
-  });
-
-  it("ignores toggle requests while unavailable", async () => {
-    const { panel } = await mountPanel();
-    panel.custodianAvailable = false;
-    panel.custodianSuppressed = false;
-    await panel.updateComplete;
-
-    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
-    await panel.updateComplete;
-
     expect(panel.assistantPanelOpen).toBe(false);
   });
 

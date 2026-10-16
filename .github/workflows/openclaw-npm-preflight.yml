@@ -63,7 +63,12 @@ jobs:
     if: ${{ inputs.preflight_phase != 'prepare' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '') }}
     # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
     # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
+    runs-on: &linux_runner_xlarge >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' ||
+      inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) ||
+      ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04'
+      || 'blacksmith-32vcpu-ubuntu-2404') }}
     outputs:
       source_check_json: ${{ steps.source_evidence.outputs.bundle_json }}
     steps:
@@ -147,7 +152,7 @@ jobs:
             scripts
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -249,7 +254,7 @@ jobs:
     if: ${{ inputs.preflight_phase == 'prepare' || inputs.preflight_phase == 'all' }}
     # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
     # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
+    runs-on: *linux_runner_xlarge
     outputs:
       prepared_bundle_json: ${{ steps.describe.outputs.bundle_json }}
     steps:
@@ -259,7 +264,7 @@ jobs:
       - *checkout_npm_source
       - *checkout_npm_harness
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -383,7 +388,7 @@ jobs:
 
       - name: Upload publishable npm package set
         id: artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-npm-package-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-npm-package
@@ -405,7 +410,7 @@ jobs:
             > "$RUNNER_TEMP/prepared-npm-bundle.json"
 
       - name: Upload immutable npm package descriptor
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-npm-package-descriptor-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/prepared-npm-bundle.json
@@ -414,7 +419,7 @@ jobs:
   check_sdk_npm:
     name: Check npm Plugin SDK
     if: ${{ inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
+    runs-on: *linux_runner_xlarge
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
@@ -511,7 +516,7 @@ jobs:
       - name: Upload npm sdk proof
         id: artifact
         if: ${{ always() && hashFiles('.artifacts/npm-sdk-proof/plugin-sdk-api-release-evidence.json') != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-npm-sdk-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/npm-sdk-proof
@@ -543,7 +548,7 @@ jobs:
   check_dependencies_npm:
     name: Check npm dependencies
     if: ${{ inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
+    runs-on: *linux_runner_xlarge
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
@@ -658,7 +663,7 @@ jobs:
       - name: Upload npm dependencies proof
         id: artifact
         if: ${{ always() && steps.dependency_evidence.outputs.dir != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-npm-dependencies-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-release-dependency-evidence
@@ -685,7 +690,7 @@ jobs:
     if: >-
       ${{ !cancelled() && (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') &&
           (needs.prepare_openclaw_npm.result == 'success' || inputs.preflight_phase == 'verify') }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
+    runs-on: *linux_runner_xlarge
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
@@ -812,7 +817,7 @@ jobs:
 
       - name: Upload extended-stable plugin npm packages
         if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-plugin-npm-preflight-${{ inputs.tag }}
           path: ${{ steps.plugin_npm_preflight.outputs.dir }}
@@ -852,7 +857,7 @@ jobs:
           (needs.check_openclaw_npm.result == 'success' || inputs.source_check_json != '') &&
           needs.check_sdk_npm.result == 'success' && needs.check_dependencies_npm.result == 'success' &&
           needs.check_contents_npm.result == 'success' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
+    runs-on: *linux_runner_xlarge
     outputs:
       qualified_preflight_bundle_json: ${{ steps.qualified_bundle.outputs.bundle_json }}
     steps:
@@ -870,7 +875,7 @@ jobs:
           persist-credentials: false
       - *checkout_npm_harness
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
       - *acquire_prepared_npm
@@ -905,7 +910,7 @@ jobs:
           echo "dir=$RUNNER_TEMP/openclaw-npm-preflight" >> "$GITHUB_OUTPUT"
 
       - name: Upload Plugin SDK API release diff
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-sdk-api-release-diff-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -914,7 +919,7 @@ jobs:
           retention-days: 30
 
       - name: Upload dependency release evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-release-dependency-evidence-${{ inputs.tag }}
           path: ${{ runner.temp }}/openclaw-prepared-npm/qualification/dependencies
@@ -922,7 +927,7 @@ jobs:
 
       - name: Upload dependency release evidence tag alias
         if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-release-dependency-evidence-${{ steps.packed_tarball.outputs.release_tag }}
           path: ${{ runner.temp }}/openclaw-prepared-npm/qualification/dependencies
@@ -930,7 +935,7 @@ jobs:
 
       - name: Upload prepared npm publish bundle
         id: artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-npm-preflight-${{ inputs.tag }}
           path: ${{ steps.packed_tarball.outputs.dir }}
@@ -938,7 +943,7 @@ jobs:
 
       - name: Upload prepared npm publish bundle tag alias
         if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-npm-preflight-${{ steps.packed_tarball.outputs.release_tag }}
           path: ${{ steps.packed_tarball.outputs.dir }}

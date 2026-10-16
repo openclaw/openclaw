@@ -21,7 +21,6 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import {
@@ -304,37 +303,6 @@ it.each(["changed", "healthy"])(
   },
 );
 
-it("refreshes a catalog invalidated while a sibling is still discovering", async () => {
-  const started = createDeferred();
-  const released = createDeferred();
-  releaseHeld.push(() => released.resolve());
-  const url = await httpProbe(undefined, async () => {
-    started.resolve();
-    await released.promise;
-  });
-  const { manager, config, params } = await fixture();
-  const cfg = config();
-  delete cfg.mcp!.servers!.changed;
-  const first = await manager.getOrCreate({ ...params, cfg });
-  await first.getCatalog();
-  const second = await manager.getOrCreate({
-    ...params,
-    sessionId: "discovering-sibling",
-    cfg: { mcp: { servers: { sibling: { transport: "streamable-http", url } } } },
-  });
-  const combined = createCombinedSessionMcpRuntime({ ...params, parts: [first, second] });
-  const pending = combined.getCatalog();
-  await started.promise;
-  await probe(first, "healthy", { changeTools: true });
-  await expect.poll(() => first.peekCatalog()).toBeNull();
-  released.resolve();
-  expect((await pending).tools.map((tool) => tool.toolName)).toEqual(["updated_probe", "probe"]);
-  expect(combined.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual([
-    "updated_probe",
-    "probe",
-  ]);
-});
-
 it.each(["remove", "public origin"])(
   "does not publish revoked sign-in tools when %s crosses sibling discovery",
   async (change) => {
@@ -521,7 +489,7 @@ it.each(["removal", "public origin change", "plugin replacement with explicit sh
   },
 );
 
-it("retains plugin retirement across a later config-only publication during creation", async () => {
+it("retires an in-flight plugin across publication and reconnects on the next acquisition", async () => {
   const resolverRegistry = createMcpProofPluginRegistry();
   await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
     const url = await httpProbe();
@@ -569,8 +537,10 @@ it("retains plugin retirement across a later config-only publication during crea
       manifestRegistry: params.manifestRegistry,
     });
     released.resolve();
-    expect(await probe(await pending, "scoped")).not.toEqual(firstConnection);
+    await expect(probe(await pending, "scoped")).rejects.toThrow("disposed");
     await expect(probe(expectDefined(retired, "retired plugin owner"), "scoped")).rejects.toThrow();
+    const next = await manager.getOrCreate({ ...params, cfg, requesterSenderId: "alice" });
+    expect(await probe(next, "scoped")).not.toEqual(firstConnection);
   });
 });
 

@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalogSession,
@@ -13,6 +12,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
@@ -21,7 +21,7 @@ import {
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
 import * as chatThreadBuild from "./chat-thread-build.ts";
-import { renderChat } from "./chat-view.ts";
+import { renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -111,11 +111,15 @@ describe("catalog transcript cache", () => {
     state.chatToolMessages = [
       { role: "toolResult", toolName: "read", content: "Unrelated live tool", toolCallId: "live" },
     ];
-    const container = document.body.appendChild(document.createElement("div"));
+    const container = document.body.appendChild(createApplicationContextProvider(context));
     const build = vi.spyOn(chatThreadBuild, "buildChatItems");
     const draw = () => {
       pane.render();
-      render(renderChat(expectDefined(pane.chatProps, "rendered catalog props")), container);
+      renderChatPropsInto(
+        container,
+        expectDefined(pane.chatProps, "rendered catalog props"),
+        context,
+      );
     };
 
     draw();

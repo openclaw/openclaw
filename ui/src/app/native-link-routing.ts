@@ -24,7 +24,7 @@ type NativeLinkRouting = {
 
 type NativeLinkRoutingOptions = {
   signal?: AbortSignal;
-  onNativeUpdateDeclined?: () => void;
+  prepareNativeUpdateFallback?: () => { isCurrent: () => boolean; run: () => void };
   shouldOpenInControlUiBrowser?: () => boolean;
   shouldOpenExternally?: () => boolean;
   canPresentBrowserPanel?: () => boolean;
@@ -117,23 +117,25 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     !postMessage &&
     !hasNativeBrowserBridge() &&
     !options.shouldOpenInControlUiBrowser &&
-    !options.onNativeUpdateDeclined
+    !options.prepareNativeUpdateFallback
   ) {
     return { dispose() {} };
   }
   let menu: NativeLinkMenu | null = null;
   let menuRequest = 0;
   let disposed = false;
-  let nativeUpdatePending = false;
+  let nativeUpdatePending:
+    | ReturnType<NonNullable<NativeLinkRoutingOptions["prepareNativeUpdateFallback"]>>
+    | undefined;
   const handleNativeUpdatePosted = () => {
-    nativeUpdatePending = true;
+    nativeUpdatePending = options.prepareNativeUpdateFallback?.();
   };
   const handleNativeUpdateDeclined = () => {
-    if (!nativeUpdatePending) {
-      return;
+    const pending = nativeUpdatePending;
+    nativeUpdatePending = undefined;
+    if (pending?.isCurrent()) {
+      pending.run();
     }
-    nativeUpdatePending = false;
-    options.onNativeUpdateDeclined?.();
   };
   const closeMenu = (expected?: NativeLinkMenu) => {
     if (expected && menu !== expected) {
@@ -240,6 +242,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
 
   const dispose = () => {
     disposed = true;
+    nativeUpdatePending = undefined;
     options.signal?.removeEventListener("abort", dispose);
     window.removeEventListener("click", handleClick);
     window.removeEventListener("auxclick", handleClick);

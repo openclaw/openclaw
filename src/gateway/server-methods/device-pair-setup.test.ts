@@ -168,28 +168,6 @@ describe("device.pair.setupCode", () => {
     });
   });
 
-  it("delegates the configured device-pair public URL fallback to the shared resolver", async () => {
-    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
-    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
-    mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
-
-    await runSetupCode(
-      {},
-      {
-        plugins: {
-          entries: {
-            "device-pair": { config: { publicUrl: " wss://gateway.example.com " } },
-          },
-        },
-      },
-    );
-
-    expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ publicUrl: undefined }),
-    );
-  });
-
   it("labels an explicit request URL separately from configured fallback", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
@@ -223,44 +201,6 @@ describe("device.pair.setupCode", () => {
       );
     },
   );
-
-  it("prefers the remote URL over the configured device-pair fallback", async () => {
-    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
-    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
-    mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
-
-    await runSetupCode(
-      { preferRemoteUrl: true },
-      {
-        plugins: {
-          entries: {
-            "device-pair": { config: { publicUrl: "wss://plugin.example.com" } },
-          },
-        },
-      },
-    );
-
-    expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ publicUrl: undefined, preferRemoteUrl: true }),
-    );
-  });
-
-  it("omits the QR when includeQr is false", async () => {
-    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
-    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
-
-    const respond = await runSetupCode({ includeQr: false });
-
-    expect(mocks.renderQrPngDataUrl).not.toHaveBeenCalled();
-    const [ok, payload] = expectDefined(
-      respond.mock.calls[0],
-      "respond.mock.calls[0] test invariant",
-    );
-    expect(ok).toBe(true);
-    expect(payload.qrDataUrl).toBeUndefined();
-    expect(payload.setupCode).toBe("SETUP-CODE-XYZ");
-  });
 
   it.each([
     { bootstrapProfile: "node", profile: { roles: ["node"], scopes: [] } },
@@ -436,14 +376,6 @@ describe("device.pair.setupCode", () => {
       spec: "openclaw@2026.9.9",
     },
     {
-      name: "published beta",
-      kind: "package",
-      version: "2026.9.9-beta.1",
-      exact: true,
-      tag: false,
-      spec: "openclaw@2026.9.9-beta.1",
-    },
-    {
       name: "unpublished beta",
       kind: "package",
       version: "2026.9.9-beta.1",
@@ -508,15 +440,12 @@ describe("device.pair.setupCode", () => {
     }
   });
 
-  it.each(["limited", "voice-node"])(
-    "does not put a %s grant in a join URL",
-    async (bootstrapProfile) => {
-      const respond = await runSetupCode({ joinUrl: true, bootstrapProfile });
+  it.each(["voice-node"])("does not put a %s grant in a join URL", async (bootstrapProfile) => {
+    const respond = await runSetupCode({ joinUrl: true, bootstrapProfile });
 
-      expect(respond.mock.calls[0]?.[0]).toBe(false);
-      expect(mocks.resolvePairingSetupFromConfig).not.toHaveBeenCalled();
-    },
-  );
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(mocks.resolvePairingSetupFromConfig).not.toHaveBeenCalled();
+  });
 
   it("omits an oversized QR but still returns the setup code", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);

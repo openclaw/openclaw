@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { Type } from "typebox";
 import { onTestFinished, vi } from "vitest";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
-import { createNativeSubagentAssignmentStore } from "./native-subagent-assignment-store.js";
+import {
+  createNativeSubagentAssignmentStore,
+  createNativeSubagentSessionAuthority,
+} from "./native-subagent-assignment-store.js";
+import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
@@ -31,7 +37,8 @@ export async function fixture() {
   const identity = {
     kind: "session" as const,
     agentId: "main",
-    sessionId: "physical-1",
+    // Session entry cleanup preserves history, so fixtures need distinct physical transcripts.
+    sessionId: randomUUID(),
     sessionKey: "agent:main:inventory",
   };
   await seedRunSessionOwnerForTest(identity.sessionId, identity.sessionKey, {
@@ -48,8 +55,9 @@ export async function fixture() {
     vi.useRealTimers();
   });
   const lifecycleRevision = entry.lifecycleRevision;
-  const historyOwner = (parentThreadId = "parent-thread") => ({
+  const historyOwner = (parentThreadId = "parent-thread"): CodexNativeSubagentHistoryOwner => ({
     ...nativeHistoryOwner(parentThreadId),
+    sessionId: identity.sessionId,
     lifecycleRevision,
   });
   const binding = {
@@ -96,25 +104,36 @@ export async function fixture() {
     });
     assert(host.agentHarnessCompletionScope);
     const completionScope = host.agentHarnessCompletionScope;
+    const parent = await captureSessionEntryCurrentCheckAsync({
+      agentId: identity.agentId,
+      sessionKey: identity.sessionKey,
+      storePath: resolveStorePath(undefined, { agentId: identity.agentId }),
+    });
+    const authority = createNativeSubagentSessionAuthority(parent);
     const assignmentStore = createNativeSubagentAssignmentStore({
       bindingStore: registrationStore,
       identity,
       owner,
+      assertLifecycleCurrentAsync: parent.assertCurrent,
+      authority,
     });
     const submissionStore: CodexNativeSubagentSubmissionStore = {
       assertCurrent: () => assignmentStore.assertCurrent(),
+      assertCurrentAsync: () => assignmentStore.assertCurrentAsync(),
       read: () => registrationStore.readNativeSubagentSubmissions(identity, owner),
       record: (receipt, assertCurrent) =>
         registrationStore.mutate(
           identity,
           { kind: "record-native-subagent-submission", owner, receipt },
           assertCurrent,
+          authority,
         ),
       consume: (receipt, assertCurrent) =>
         registrationStore.mutate(
           identity,
           { kind: "consume-native-subagent-submission", owner, receipt },
           assertCurrent,
+          authority,
         ),
     };
     ensureCodexAppServerClientRuntime(client.client, { agentDir: tempDir });
@@ -136,6 +155,7 @@ export async function fixture() {
               historyOwner: owner,
               assignmentStore,
               submissionStore,
+              assertCurrentAsync: parent.assertCurrent,
               runtime,
               configurationQualification,
               retainParentThread: options.retainParentThread,
@@ -185,6 +205,7 @@ export async function fixture() {
   return {
     identity,
     binding,
+    state,
     store,
     deliver,
     register,

@@ -5,19 +5,17 @@ import type { ClickClackMessage } from "./types.js";
 
 type ActivityClient = Parameters<typeof createClickClackActivityPublisher>[0]["client"];
 
-function createClientMock(): {
-  client: ActivityClient;
-  createActivityMessage: ReturnType<typeof vi.fn>;
-  updateMessageBody: ReturnType<typeof vi.fn>;
-} {
+function createClientMock() {
   let counter = 0;
-  const createActivityMessage = vi.fn(async () => {
+  const createActivityMessage = vi.fn<ActivityClient["createActivityMessage"]>(async () => {
     counter += 1;
     return { id: `msg_${counter}` } as ClickClackMessage;
   });
-  const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
+  const updateMessageBody = vi.fn<ActivityClient["updateMessageBody"]>(
+    async () => ({}) as ClickClackMessage,
+  );
   return {
-    client: { createActivityMessage, updateMessageBody } as ActivityClient,
+    client: { createActivityMessage, updateMessageBody },
     createActivityMessage,
     updateMessageBody,
   };
@@ -45,39 +43,6 @@ describe("createClickClackActivityPublisher", () => {
     vi.useRealTimers();
   });
 
-  it("coalesces cumulative commentary snapshots into one POST per segment", async () => {
-    const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createPublisher(client);
-
-    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "Looking at" });
-    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "Looking at the repo" });
-    await publisher.finalize();
-
-    expect(createActivityMessage).toHaveBeenCalledTimes(1);
-    expect(createActivityMessage).toHaveBeenCalledWith({
-      channelId: "chn_1",
-      conversationId: undefined,
-      body: "Looking at the repo",
-      kind: "agent_commentary",
-      turnId: "msg_turn",
-    });
-    expect(updateMessageBody).not.toHaveBeenCalled();
-  });
-
-  it("PATCHes the commentary row when the snapshot grows after a debounce flush", async () => {
-    const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createPublisher(client, { flushMs: 10 });
-
-    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First" });
-    await vi.advanceTimersByTimeAsync(20);
-    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First and second" });
-    await publisher.finalize();
-
-    expect(createActivityMessage).toHaveBeenCalledTimes(1);
-    expect(updateMessageBody).toHaveBeenCalledTimes(1);
-    expect(updateMessageBody).toHaveBeenCalledWith("msg_1", "First and second");
-  });
-
   it("keeps complete commentary during a partial successor and accepts shorter completion", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
     const publisher = createPublisher(client, { flushMs: 10 });
@@ -103,23 +68,6 @@ describe("createClickClackActivityPublisher", () => {
     expect(updateMessageBody).toHaveBeenLastCalledWith("msg_1", "");
   });
 
-  it("opens a new durable row for each commentary segment (item id)", async () => {
-    const { client, createActivityMessage } = createClientMock();
-    const publisher = createPublisher(client, {
-      target: { conversationId: "dcn_1" },
-    });
-
-    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "before tool" });
-    publisher.onItemEvent({ itemId: "c2", kind: "preamble", progressText: "after tool" });
-    await publisher.finalize();
-
-    expect(createActivityMessage).toHaveBeenCalledTimes(2);
-    const bodies = createActivityMessage.mock.calls.map(
-      (call) => (call[0] as { body: string }).body,
-    );
-    expect(bodies).toEqual(["before tool", "after tool"]);
-  });
-
   it("consumes canonical item ownership without rendering suppressed diagnostic siblings", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
     const publisher = createPublisher(client);
@@ -131,6 +79,8 @@ describe("createClickClackActivityPublisher", () => {
       toolCallId: "toolu_1",
       kind: "tool",
       name: "exec",
+      meta: "echo private-sentinel",
+      commandBearing: true,
     });
     await publisher.finalize();
     publisher.onItemEvent({
@@ -156,6 +106,7 @@ describe("createClickClackActivityPublisher", () => {
       body: "Exec",
     });
     expect(updateMessageBody).not.toHaveBeenCalled();
+    expect(JSON.stringify(createActivityMessage.mock.calls)).not.toContain("private-sentinel");
   });
 
   it("updates a durable row when only the outcome changes to failed", async () => {
@@ -181,26 +132,6 @@ describe("createClickClackActivityPublisher", () => {
     expect(updateMessageBody).toHaveBeenCalledWith("msg_1", expect.stringContaining("Read sample"));
   });
 
-  it("hides command metadata from item-only durable activity", async () => {
-    const { client, createActivityMessage } = createClientMock();
-    const publisher = createPublisher(client);
-
-    publisher.onItemEvent({
-      itemId: "tool:toolu_1",
-      toolCallId: "toolu_1",
-      kind: "tool",
-      name: "server.exec",
-      meta: "echo private-sentinel",
-      commandBearing: true,
-    });
-    await publisher.finalize();
-
-    expect(createActivityMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "Server.exec", kind: "agent_tool" }),
-    );
-    expect(JSON.stringify(createActivityMessage.mock.calls)).not.toContain("private-sentinel");
-  });
-
   it("posts the upgraded body directly when frames land before the first POST runs", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
     const publisher = createPublisher(client);
@@ -219,6 +150,67 @@ describe("createClickClackActivityPublisher", () => {
       kind: "agent_tool",
       body: "Read: Done",
     });
+    expect(updateMessageBody).not.toHaveBeenCalled();
+  });
+
+  it.each(["POST", "PATCH"])(
+    "publishes updates arriving during an activity %s",
+    async (operation) => {
+      const { client, createActivityMessage, updateMessageBody } = createClientMock();
+      const entered = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      let remoteBody = "";
+      let blocked = false;
+      const write = async (method: string, body: string): Promise<ClickClackMessage> => {
+        if (method === operation && !blocked) {
+          blocked = true;
+          entered.resolve();
+          await resume.promise;
+        }
+        remoteBody = body;
+        return {
+          id: "msg_1",
+          workspace_id: "wsp_1",
+          author_id: "usr_agent",
+          thread_root_id: "msg_turn",
+          body,
+          body_format: "markdown",
+          created_at: "2026-10-15T00:00:00.000Z",
+        };
+      };
+      createActivityMessage.mockImplementation(async ({ body }) => write("POST", body));
+      updateMessageBody.mockImplementation(async (_id, body) => write("PATCH", body));
+      const publisher = createPublisher(client);
+      const event = { itemId: "work", kind: "tool", name: "read" };
+
+      publisher.onItemEvent({ ...event, progressText: "First" });
+      if (operation === "PATCH") {
+        await publisher.finalize();
+        publisher.onItemEvent({ ...event, progressText: "Second" });
+      }
+      await entered.promise;
+      publisher.onItemEvent({ ...event, progressText: "Latest" });
+      resume.resolve();
+      await publisher.finalize();
+
+      expect(remoteBody).toBe("Read: Latest");
+    },
+  );
+
+  it("does not retry an ambiguous failed activity POST when a later frame arrives", async () => {
+    const { client, createActivityMessage, updateMessageBody } = createClientMock();
+    const onError = vi.fn();
+    createActivityMessage.mockRejectedValueOnce(new Error("connection lost after dispatch"));
+    const publisher = createPublisher(client, { onError });
+    const event = { itemId: "work", kind: "tool", name: "read" };
+
+    publisher.onItemEvent({ ...event, progressText: "First" });
+    await publisher.finalize();
+    publisher.onItemEvent({ ...event, progressText: "Latest" });
+    await publisher.finalize();
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(createActivityMessage).toHaveBeenCalledOnce();
     expect(updateMessageBody).not.toHaveBeenCalled();
   });
 

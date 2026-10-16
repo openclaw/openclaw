@@ -35,6 +35,7 @@ import type {
   HookOutcome,
 } from "./agent-tools.before-tool-call.types.js";
 import { registerActiveEmbeddedRunHumanInputWaitForRun } from "./embedded-agent-runner/run-state.js";
+import { hasInProcessGatewayToolCaller } from "./tools/gateway-caller-availability.js";
 import { withGatewayToolApprovalOwner } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -320,6 +321,8 @@ async function requestPluginToolApprovalDecision(
       );
     }
 
+    // A hosted in-process request can await its own decision without a second approval-scoped RPC.
+    const singlePhase = hasInProcessGatewayToolCaller();
     gatewayApprovalPhase = "request";
     const requestResult: {
       id?: string;
@@ -344,9 +347,9 @@ async function requestPluginToolApprovalDecision(
               ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
               : {}),
             timeoutMs,
-            twoPhase: true,
+            twoPhase: !singlePhase,
           },
-          { expectFinal: false, signal: params.signal },
+          { expectFinal: singlePhase, signal: params.signal },
         ),
     );
     gatewayApprovalPhase = "none";
@@ -491,18 +494,19 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
     params.result?.params === undefined
       ? undefined
       : cloneHookIsolationValue("before_tool_call", params.result.params);
+  const createDeferredApproval = () => ({
+    approval,
+    toolName: params.toolName,
+    ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+    ...(params.ctx ? { ctx: params.ctx } : {}),
+    baseParams: baseParamsSnapshot,
+    overrideParams: overrideParamsSnapshot,
+  });
   if (params.approvalMode === "defer") {
     return {
       blocked: false,
       params: cloneHookIsolationValue("before_tool_call", baseParamsSnapshot),
-      deferredApproval: {
-        approval,
-        toolName: params.toolName,
-        ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
-        ...(params.ctx ? { ctx: params.ctx } : {}),
-        baseParams: baseParamsSnapshot,
-        overrideParams: overrideParamsSnapshot,
-      },
+      deferredApproval: createDeferredApproval(),
     };
   }
   if (params.approvalMode === "report") {
@@ -524,12 +528,7 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
     };
   }
   return await requestPluginToolApproval({
-    approval,
-    toolName: params.toolName,
-    ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
-    ...(params.ctx ? { ctx: params.ctx } : {}),
+    ...createDeferredApproval(),
     signal: params.signal,
-    baseParams: baseParamsSnapshot,
-    overrideParams: overrideParamsSnapshot,
   });
 }

@@ -126,16 +126,12 @@ class NodeWorkerSupervisor {
       return this.initializationPromise;
     }
     const initialization = (async () => {
-      if (this.containerLifecycle) {
-        await this.containerLifecycle.initialize();
-      }
+      await this.containerLifecycle?.initialize();
       await this.capacity.initialize(async (receipt) => {
         await this.recoverRunning(receipt, false);
       });
     })().catch((error: unknown) => {
-      if (this.initializationPromise === initialization) {
-        this.initializationPromise = undefined;
-      }
+      this.initializationPromise = undefined;
       throw error;
     });
     return (this.initializationPromise = initialization);
@@ -202,13 +198,11 @@ class NodeWorkerSupervisor {
       return await admission.done;
     }
     const abort = new AbortController();
-    const idleGeneration =
+    const idleRetention =
       input.idleRetention &&
       descriptor.admission.handshake.protocolFeatures.includes(
         NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
-      )
-        ? this.children.idleGeneration
-        : undefined;
+      );
     const admissionSignal = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
     const done = (async () => {
       const workspace = await this.workspace.acquirePreparedWorkspace({
@@ -227,7 +221,8 @@ class NodeWorkerSupervisor {
           claimInput,
           admissionSignal,
           workspace?.homeDir,
-          idleGeneration,
+          idleRetention,
+          workspace?.assertCurrent,
         );
       } finally {
         workspace?.release();
@@ -244,9 +239,7 @@ class NodeWorkerSupervisor {
     try {
       return await done;
     } finally {
-      if (this.admissions.get(key) === pending) {
-        this.admissions.delete(key);
-      }
+      this.admissions.delete(key);
     }
   }
 
@@ -256,7 +249,8 @@ class NodeWorkerSupervisor {
     claimInput: NodeWorkerLaunchClaim,
     signal: AbortSignal,
     homeDir?: string,
-    idleGeneration?: number,
+    idleRetention?: boolean,
+    assertWorkspaceCurrent?: () => void,
   ): Promise<NodeWorkerLaunchReceipt> {
     await this.initialize();
     const supervisor = (this.supervisorIdentity ??= requireNodeWorkerProcessIdentity(process.pid));
@@ -321,7 +315,14 @@ class NodeWorkerSupervisor {
         signal.throwIfAborted();
         continue;
       }
-      return await this.children.startTurn(owner, descriptor, claimInput, signal, idleGeneration);
+      return await this.children.startTurn(
+        owner,
+        descriptor,
+        claimInput,
+        signal,
+        idleRetention,
+        assertWorkspaceCurrent,
+      );
     }
     const claim = await this.capacity.claim(claimInput, supervisor, signal, () =>
       this.children.reclaimIdle(),
@@ -335,9 +336,15 @@ class NodeWorkerSupervisor {
       throw new Error("node worker turn receipt expired; request a fresh turn");
     }
     try {
+      assertWorkspaceCurrent?.();
       await this.turns.claim(
         { claim: claimInput, ownerLaunchId: input.launchId, supervisor },
-        { assertCurrent: () => signal.throwIfAborted() },
+        {
+          assertCurrent: () => {
+            signal.throwIfAborted();
+            assertWorkspaceCurrent?.();
+          },
+        },
       );
     } catch (error) {
       await this.capacity.finish({
@@ -359,12 +366,14 @@ class NodeWorkerSupervisor {
     signal?.addEventListener("abort", cancelClaimed, { once: true });
     const startup = this.children.startChild({
       workerEnv: homeDir ? snapshotNodeWorkerEnv(this.workerEnv, homeDir) : this.workerEnv,
+      homeDir,
       input,
       descriptor,
       supervisor,
       signal,
       claim: claimInput,
-      idleGeneration,
+      idleRetention,
+      assertWorkspaceCurrent,
     });
     this.starting.set(input.launchId, startup);
     if (signal?.aborted) {
@@ -375,9 +384,7 @@ class NodeWorkerSupervisor {
       return cancellation ? ((await cancellation) ?? receipt) : receipt;
     } finally {
       signal?.removeEventListener("abort", cancelClaimed);
-      if (this.starting.get(input.launchId) === startup) {
-        this.starting.delete(input.launchId);
-      }
+      this.starting.delete(input.launchId);
     }
   }
 
@@ -674,9 +681,7 @@ class NodeWorkerSupervisor {
       this.closeCompleted = true;
     });
     const closePromise = operation.finally(() => {
-      if (this.closePromise === closePromise) {
-        this.closePromise = undefined;
-      }
+      this.closePromise = undefined;
     });
     return (this.closePromise = closePromise);
   }

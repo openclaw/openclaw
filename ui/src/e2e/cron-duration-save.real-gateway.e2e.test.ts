@@ -13,7 +13,7 @@ import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { CronJob } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { openPicker, pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let instance: OpenClawTestInstance | undefined;
@@ -25,6 +25,7 @@ const suite = createControlUiE2eSuite({
       name: "control-ui-exact-stagger",
       config: {
         gateway: { controlUi: { enabled: true } },
+        agents: { defaults: { model: "openai/gpt-4.1" } },
         cron: {
           enabled: false,
           failureAlert: {
@@ -40,6 +41,16 @@ const suite = createControlUiE2eSuite({
     });
     instance = owner;
     try {
+      await owner.state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          "openai:cron-duration-fixture": {
+            type: "api_key",
+            provider: "openai",
+            key: "synthetic-cron-duration-inference-key",
+          },
+        },
+      });
       await owner.startGateway();
       return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
     } catch (error) {
@@ -109,12 +120,18 @@ catalogSuite.define(() => {
     }
     const url = new URL("cron", browserUrl);
     url.hash = new URL(browserUrl).hash;
-    const frames: unknown[] = [];
+    const frames: Array<{
+      direction: "sent" | "received";
+      frame: Record<string, unknown>;
+      transportFailure?: boolean;
+    }> = [];
     const catalogRequests = new Set<string>();
     const commands: unknown[] = [];
     let rejectCatalogReplies = false;
     const rejected = new Set<string>();
-    const publish = async (id: string) => {
+    type PublicationPhase = "published" | "held" | "recovered";
+    let publication: { phase: PublicationPhase; frameStart: number; logStart: number } | undefined;
+    const publish = async (id: PublicationPhase) => {
       const args = [
         "config",
         "set",
@@ -123,6 +140,7 @@ catalogSuite.define(() => {
         "--strict-json",
         "--replace",
       ];
+      publication = { phase: id, frameStart: frames.length, logStart: owner.logs().length };
       const result = await owner.cli(args);
       commands.push({ args, ...result });
       expect(result.code, result.stderr).toBe(0);
@@ -186,15 +204,71 @@ catalogSuite.define(() => {
           await page.locator("#cron-payload-text").fill("Do not submit this draft");
           const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
+            .poll(async () => {
+              await openPicker(picker);
+              return picker.locator('[role="option"][data-value="fixture/retiring"]').count();
+            })
             .toBe(1);
           if (captureEnabled) {
             await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
           }
           await publish("published");
-          await expect
-            .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
-            .toBe(1);
+          try {
+            await expect
+              .poll(async () => {
+                await openPicker(picker);
+                return picker.locator('[role="option"][data-value="fixture/published"]').count();
+              })
+              .toBe(1);
+          } catch (error) {
+            try {
+              const sequence = frames.flatMap<{
+                kind: string;
+                ok?: boolean;
+                fixtureModels?: string[];
+              }>((entry) => {
+                const frame = requireRecord(requireRecord(entry).frame);
+                if (frame.event === "config.changed" || frame.event === "chat.metadata.changed") {
+                  return [{ kind: frame.event }];
+                }
+                if (frame.method === "models.list") {
+                  return [{ kind: "models.request" }];
+                }
+                if (frame.type !== "res") {
+                  return [];
+                }
+                const models = frame.ok === true ? requireRecord(frame.payload).models : [];
+                return [
+                  {
+                    kind: "models.reply",
+                    ok: frame.ok === true,
+                    fixtureModels: ["anchor", "retiring", "published"].filter(
+                      (id) =>
+                        Array.isArray(models) &&
+                        models.some((model) => {
+                          const row = requireRecord(model);
+                          return row.provider === "fixture" && row.id === id;
+                        }),
+                    ),
+                  },
+                ];
+              });
+              console.error(
+                "[automation-catalog-publication]",
+                JSON.stringify({
+                  sequence: sequence.slice(-20),
+                  publicationCount: commands.length,
+                  pickerCount: await picker.count(),
+                  retiringOptionCount: await picker
+                    .locator('[role="option"][data-value="fixture/retiring"]')
+                    .count(),
+                }),
+              );
+            } catch {
+              console.error("[automation-catalog-publication] diagnostic unavailable");
+            }
+            throw error;
+          }
           expect(
             await picker.locator('[role="option"][data-value="fixture/retiring"]').count(),
           ).toBe(0);
@@ -208,6 +282,7 @@ catalogSuite.define(() => {
           const error = page.locator(".cron-error-banner");
           await error.waitFor({ state: "visible" });
           expect(await error.textContent()).toContain("Catalog transport unavailable");
+          await openPicker(picker);
           expect(
             await picker.locator('[role="option"][data-value="fixture/published"]').count(),
           ).toBe(1);
@@ -220,7 +295,10 @@ catalogSuite.define(() => {
           rejectCatalogReplies = false;
           await publish("recovered");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="fixture/recovered"]').count())
+            .poll(async () => {
+              await openPicker(picker);
+              return picker.locator('[role="option"][data-value="fixture/recovered"]').count();
+            })
             .toBe(1);
           await error.waitFor({ state: "hidden" });
           expect(await page.locator("#cron-name").inputValue()).toBe("Retain this draft");
@@ -232,6 +310,57 @@ catalogSuite.define(() => {
           }
         },
       );
+    } catch (error) {
+      const observed = publication ? frames.slice(publication.frameStart) : [];
+      const requests = new Set(
+        observed.flatMap(({ direction, frame }) =>
+          direction === "sent" && frame.method === "models.list" && typeof frame.id === "string"
+            ? [frame.id]
+            : [],
+        ),
+      );
+      const replies = observed.filter(
+        ({ direction, frame }) =>
+          direction === "received" && typeof frame.id === "string" && requests.has(frame.id),
+      );
+      const successfulReply = replies.findLast(({ frame }) => frame.ok === true);
+      const payload = successfulReply?.frame.payload;
+      const models =
+        payload &&
+        typeof payload === "object" &&
+        "models" in payload &&
+        Array.isArray(payload.models)
+          ? payload.models
+          : [];
+      console.error("Automation catalog publication diagnostics", {
+        phase: publication?.phase ?? null,
+        configEvents: observed.filter(({ frame }) => frame.event === "config.changed").length,
+        metadataEvents: observed.filter(({ frame }) => frame.event === "chat.metadata.changed")
+          .length,
+        catalogRequests: requests.size,
+        catalogSuccesses: replies.filter(({ frame }) => frame.ok === true).length,
+        catalogFailures: replies.filter(({ frame }) => frame.ok === false).length,
+        latestSuccessfulReplyHasExpectedModel: successfulReply
+          ? models.some(
+              (model: unknown) =>
+                model !== null &&
+                typeof model === "object" &&
+                "provider" in model &&
+                "id" in model &&
+                model.provider === "fixture" &&
+                model.id === publication?.phase,
+            )
+          : null,
+        latestReplyWasTransportFailure: replies.at(-1)?.transportFailure ?? null,
+        publicationCommands: commands.length,
+        leaseVerificationFailed: publication
+          ? owner
+              .logs()
+              .slice(publication.logStart)
+              .includes("failed to verify plugin lifecycle lease")
+          : false,
+      });
+      throw error;
     } finally {
       const redact = (text: string) =>
         text
@@ -295,7 +424,7 @@ async function withGatewayCommands(artifactName: string, run: (cliJson: CliJson)
       stdout:
         args[0] === "dashboard" ? "[one-time browser handoff omitted]" : redact(result.stdout),
     });
-    expect(result.code, args.join(" ")).toBe(0);
+    expect(result.code, `${args.join(" ")}\n${redact(result.stderr)}`).toBe(0);
     expect(result.signal).toBeNull();
     return requireRecord(JSON.parse(result.stdout));
   };
@@ -499,7 +628,6 @@ suite.define(() => {
       const jobId = cronJobId(job);
       await withCronJobPage(cliJson, jobId, async (evidence) => {
         const { page, servedDocumentSha256, servedAssets } = evidence;
-        await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
         await page.locator("details.cron-advanced > summary").click();
         const timeout = page.locator("#cron-timeout-seconds");
         expect(await timeout.inputValue()).toBe("90");
@@ -625,9 +753,9 @@ suite.define(() => {
         const saved = await submitCronForm(evidence, cliJson, "cron.update");
         const savedFields = await readAlertFields(page);
         await capture(page, "real-alert-saved", { ...saved, savedFields });
-        const menu = page.locator(".cron-detail-actions wa-dropdown");
-        await menu.locator('button[slot="trigger"]').click();
-        await menu.locator('wa-dropdown-item[value="clone"]').click();
+        const menu = page.locator(".cron-detail-actions .cron-job-menu");
+        await menu.locator(".cron-job-menu__trigger").click();
+        await menu.locator('[data-value="clone"]').click();
         await page.locator("#cron-name").fill("Cloned partial failure policy");
         const cloned = await submitCronForm(evidence, cliJson, "cron.add");
         const cloneId = cronJobId(cloned.stored);
@@ -789,9 +917,9 @@ suite.define(() => {
             original,
             servedDocumentSha256,
           });
-          const menu = page.locator(".cron-detail-actions wa-dropdown");
-          await menu.locator('button[slot="trigger"]').click();
-          await menu.locator('wa-dropdown-item[value="clone"]').click();
+          const menu = page.locator(".cron-detail-actions .cron-job-menu");
+          await menu.locator(".cron-job-menu__trigger").click();
+          await menu.locator('[data-value="clone"]').click();
           await page.locator('.cron-page[data-panel-mode="create"]').waitFor();
           await expect
             .poll(() => page.locator("#cron-name").inputValue())

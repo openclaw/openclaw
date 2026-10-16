@@ -1,11 +1,17 @@
 // Plugin management read tests cover inventory, inspection, and catalog DTOs.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { Compile } from "typebox/compile";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PluginsListResultSchema } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { encodePluginDiscoveryId } from "../../plugins/catalog-discovery.js";
 import { emptyInstalledPluginComponents } from "../../plugins/installed-plugin-components.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  withPluginRuntimePluginScope,
+  withPluginRuntimeRegistryScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const managementMocks = vi.hoisted(() => ({
@@ -92,37 +98,63 @@ describe("plugin management Gateway handlers", () => {
     catalogMocks.detail.mockReset();
   });
 
-  it("projects opaque local identities without inventing ClawHub publication", async () => {
-    managementMocks.list.mockResolvedValue({
-      plugins: [
-        { ...workboard, clawhubPackage: "@openclaw/workboard" },
-        {
-          id: "diffs",
-          name: "Diffs",
-          installed: false,
-          enabled: false,
-          state: "not-installed",
-          clawhubPackage: "@openclaw/diffs",
-        },
-        { ...workboard, id: "local-only", name: "Local only" },
-      ],
-      diagnostics: [],
-      mutationAllowed: true,
-    });
-
-    const result = await callHandler("plugins.list", {});
-
-    expect(result.response).toMatchObject({
-      plugins: [
-        { clawhubPackage: "@openclaw/workboard", catalogId: "ch_QG9wZW5jbGF3L3dvcmtib2FyZA" },
-        { clawhubPackage: "@openclaw/diffs", catalogId: "ch_QG9wZW5jbGF3L2RpZmZz" },
-        { id: "local-only", catalogId: "local_bG9jYWwtb25seQ" },
-      ],
-    });
-    expect(
-      (result.response as { plugins: Array<{ clawhubPackage?: string }> }).plugins[2]
-        ?.clawhubPackage,
-    ).toBeUndefined();
+  it("returns observed SDK compatibility per plugin without changing runtime state", async () => {
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      withPluginRuntimePluginScope({ pluginId: "deprecated-sdk-fixture" }, () =>
+        warnPluginSdkDeprecation({
+          family: "session-store",
+          method: "getSessionEntry",
+          replacement: "getSessionEntryAsync",
+        }),
+      );
+      managementMocks.list.mockResolvedValue({
+        plugins: [
+          {
+            ...workboard,
+            id: "deprecated-sdk-fixture",
+            clawhubPackage: "@openclaw/workboard",
+          },
+          { ...workboard, id: "local-only" },
+        ],
+        diagnostics: [],
+        mutationAllowed: true,
+      });
+      const result = await callHandler("plugins.list", {});
+      expect(result.ok).toBe(true);
+      expect(result.response).toMatchObject({
+        plugins: [
+          {
+            id: "deprecated-sdk-fixture",
+            clawhubPackage: "@openclaw/workboard",
+            catalogId: "ch_QG9wZW5jbGF3L3dvcmtib2FyZA",
+            runtime: { state: "unloaded" },
+            compatibilityNotices: [
+              {
+                code: "deprecated-sdk-api",
+                severity: "info",
+                removalDate: "2026-12-31",
+                apis: [
+                  {
+                    displayName: "getSessionEntry",
+                    replacement: "getSessionEntryAsync",
+                    removeAfter: "2026-12-31",
+                  },
+                ],
+              },
+            ],
+          },
+          { id: "local-only", catalogId: "local_bG9jYWwtb25seQ", compatibilityNotices: [] },
+        ],
+      });
+      expect(
+        (result.response as { plugins: Array<{ clawhubPackage?: string }> }).plugins[1]
+          ?.clawhubPackage,
+      ).toBeUndefined();
+      expect(Compile(PluginsListResultSchema).Check(result.response)).toBe(true);
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it.each([

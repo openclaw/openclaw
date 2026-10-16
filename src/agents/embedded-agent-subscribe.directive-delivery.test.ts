@@ -467,7 +467,7 @@ it.each([
     .toEqual(scenario.expectedMedia);
 });
 
-it.each(["literal", "voice", "silent"] as const)(
+it.each(["literal", "voice", "token"] as const)(
   "preserves terminal voice semantics for %s",
   async (kind) => {
     const { delivered, blocks, emit, flush } = createDeliveryHarness({
@@ -477,7 +477,7 @@ it.each(["literal", "voice", "silent"] as const)(
     const parts =
       kind === "literal"
         ? ["Use `" + "x".repeat(60), ` ${marker}\` literally.`]
-        : [marker + (kind === "silent" ? "NO_REPLY" : "")];
+        : [marker + (kind === "token" ? "NO_REPLY" : "")];
     emit({ type: "message_start", message: createAssistantOutput(googleModel) });
     emit({ type: "message_end", message: textMessage(parts) });
     await flush();
@@ -498,7 +498,7 @@ it.each(["literal", "voice", "silent"] as const)(
           silentReply: getReplyPayloadMetadata(payload)?.silentReply,
         })),
       ).toEqual([
-        { text: "", audioAsVoice: true, silentReply: kind === "silent" ? true : undefined },
+        { text: kind === "token" ? "NO_REPLY" : "", audioAsVoice: true, silentReply: undefined },
       ]);
     }
   },
@@ -586,7 +586,7 @@ it("appends visible text across long blank runs without stalling the media scan"
       previousCleaned: "",
       visibleDelta: delta,
       appendDelta: delta,
-      parsedStreamDirectives: { text: delta, replyToTag: false, isSilent: false },
+      parsedStreamDirectives: { text: delta, replyToTag: false },
       previousAudioDirectiveCount: 0,
     }),
   ).toEqual({
@@ -594,8 +594,27 @@ it("appends visible text across long blank runs without stalling the media scan"
     delta,
     replace: false,
     hasText: true,
-    replyDirectives: { text: delta, replyToTag: false, isSilent: false },
+    replyDirectives: { text: delta, replyToTag: false },
     audioDirectiveCount: 0,
   });
   expect(performance.now() - started).toBeLessThan(1_000);
+});
+
+it("streams a long reply-tagged answer without a quadratic slowdown", () => {
+  const body = `${"Paragraph with `code` and **bold** text.\n\n- item `one`\n- item two\n\n".repeat(100)}\`\`\`ts\nconst x = 1;\n\`\`\`\n\nDone.`;
+  const text = `[[reply_to_current]] Intro.\n\n${body}`;
+  const partials: ReplyPayload[] = [];
+  const { emit } = createSubscribedSessionHarness({
+    runId: "run-tagged-stream",
+    onPartialReply: (payload) => {
+      partials.push(payload);
+    },
+  });
+  emit({ type: "message_start", message: textMessage("") });
+  const started = performance.now();
+  for (let end = 40; end - 40 < text.length; end += 40) {
+    emitText(emit, "text_delta", text.slice(0, end), { delta: text.slice(end - 40, end) });
+  }
+  expect(performance.now() - started).toBeLessThan(1_000);
+  expect(partials.at(-1)?.text).toBe(`Intro.\n\n${body}`);
 });

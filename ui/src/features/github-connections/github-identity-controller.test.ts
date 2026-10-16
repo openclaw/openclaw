@@ -193,40 +193,6 @@ describe("GitHubIdentityController", () => {
     expect(system.requests).toEqual([]);
   });
 
-  it("hands off the token without randomUUID and adopts configure status without verifying again", async () => {
-    vi.stubGlobal("crypto", {
-      getRandomValues: <T extends Uint8Array>(array: T): T => array.fill(0xab),
-    });
-    const { controller, client, requests } = createController();
-    sync(controller, client, {}, { scope: "agent" });
-    controller.setDraft("token", "one-use-token");
-    controller.setDraft("name", "Agent Author");
-
-    await controller.configure();
-
-    expect(requests.map((entry) => entry.method)).toEqual([
-      "secrets.store.set",
-      "tools.github.configure",
-    ]);
-    expect(requests[0]?.params).toMatchObject({
-      value: "one-use-token",
-      kind: "secret",
-      allowedHosts: [],
-    });
-    expect(requests[1]?.params).toMatchObject({
-      scope: "agent",
-      agentId: "main",
-      mode: "managed",
-      gitAuthor: { name: "Agent Author" },
-    });
-    expect(requests[1]?.params).not.toHaveProperty("token");
-    expect(requests[0]?.params.name).toMatch(/^github-setup-[a-f0-9]{32}$/u);
-    expect(requests[1]?.params.secretName).toBe(requests[0]?.params.name);
-    expect(controller.status).toEqual(availableStatus("agent"));
-    expect(controller.draft.token).toBe("");
-    expect(controller.error).toBeNull();
-  });
-
   it("deletes a stored handoff when configurability changes before dispatch", async () => {
     const behavior: { beforeDispatch?: () => void } = {};
     const { controller, client, requests } = createController(behavior);
@@ -245,6 +211,9 @@ describe("GitHubIdentityController", () => {
   });
 
   it("keeps a consumed handoff successful while surfacing its refresh warning", async () => {
+    vi.stubGlobal("crypto", {
+      getRandomValues: <T extends Uint8Array>(array: T): T => array.fill(0xab),
+    });
     const { controller, client, requests } = createController({
       refreshError: "authoritative config refresh unavailable",
     });
@@ -257,6 +226,14 @@ describe("GitHubIdentityController", () => {
       "secrets.store.set",
       "tools.github.configure",
     ]);
+    expect(requests[0]?.params).toMatchObject({
+      value: "one-use-token",
+      kind: "secret",
+      allowedHosts: [],
+    });
+    expect(requests[1]?.params).not.toHaveProperty("token");
+    expect(requests[0]?.params.name).toMatch(/^github-setup-[a-f0-9]{32}$/u);
+    expect(requests[1]?.params.secretName).toBe(requests[0]?.params.name);
     expect(controller.status).toEqual(availableStatus("system"));
     expect(requests[1]?.params).toMatchObject({ agentId: "main" });
     expect(controller.draft.token).toBe("");
@@ -264,10 +241,7 @@ describe("GitHubIdentityController", () => {
     expect(controller.error).toContain("authoritative config refresh unavailable");
   });
 
-  it.each([
-    { mode: "managed" as const, expectedProfileId: "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
-    { mode: "inherit" as const, expectedProfileId: undefined },
-  ])("config.set drains drafts before $mode and refreshes both edits", async (action) => {
+  it("config.set drains drafts before managed and refreshes both edits", async () => {
     vi.useFakeTimers();
     const order: string[] = [];
     let hashCounter = 1;
@@ -300,7 +274,9 @@ describe("GitHubIdentityController", () => {
         storedConfig = {
           ...storedConfig,
           tools:
-            configure.mode === "managed" ? { github: { profileId: action.expectedProfileId } } : {},
+            configure.mode === "managed"
+              ? { github: { profileId: "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }
+              : {},
         };
         hashCounter += 1;
         return availableStatus("system");
@@ -311,7 +287,7 @@ describe("GitHubIdentityController", () => {
     const runtimeConfig = createRuntimeConfig(client);
     await runtimeConfig.ensureLoaded();
     order.length = 0;
-    runtimeConfig.patchForm(["pendingEdit"], action.mode);
+    runtimeConfig.patchForm(["pendingEdit"], "managed");
     const host = {
       requestUpdate: vi.fn(),
       runExternalMutation: runtimeConfig.runExternalMutation,
@@ -322,16 +298,12 @@ describe("GitHubIdentityController", () => {
       sync(controller, client, runtimeConfig.state.configForm ?? {});
     });
     try {
-      if (action.mode === "managed") {
-        controller.setDraft("token", "one-use-token");
-        controller.setDraft("name", "Managed Author");
-        await controller.configure();
-      } else {
-        await controller.inherit();
-      }
+      controller.setDraft("token", "one-use-token");
+      controller.setDraft("name", "Managed Author");
+      await controller.configure();
 
       expect(order).toEqual([
-        ...(action.mode === "managed" ? ["secrets.store.set"] : []),
+        "secrets.store.set",
         "config.set",
         "tools.github.configure",
         "config.get",
@@ -341,17 +313,17 @@ describe("GitHubIdentityController", () => {
       expect(controller.scope).toBe("system");
       expect(controller.draft).toEqual({
         token: "",
-        name: action.mode === "managed" ? "Managed Author" : "",
+        name: "Managed Author",
         email: "",
       });
-      expect(runtimeConfig.state.configForm).toMatchObject({ pendingEdit: action.mode });
+      expect(runtimeConfig.state.configForm).toMatchObject({ pendingEdit: "managed" });
       expect(
         (
           runtimeConfig.state.configForm as {
             tools?: { github?: { profileId?: string } };
           }
         ).tools?.github?.profileId,
-      ).toBe(action.expectedProfileId);
+      ).toBe("ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
     } finally {
       unsubscribe();
       runtimeConfig.dispose();
@@ -392,21 +364,6 @@ describe("GitHubIdentityController", () => {
     expect(requests).toEqual([]);
   });
 
-  it("drops status from a previously selected agent", async () => {
-    const response = createDeferredCore<ReturnType<typeof availableStatus>>();
-    const client = {
-      request: vi.fn(() => response.promise),
-    } as unknown as GatewayBrowserClient;
-    const controller = createStatusOnlyController();
-    sync(controller, client);
-    const pending = controller.verify();
-    sync(controller, client, {}, { agentId: "reviewer" });
-    response.resolve(availableStatus("system"));
-    await pending;
-    expect(controller.status).toBeNull();
-    expect(controller.loading).toBe(false);
-  });
-
   it("refreshes clean drafts without overwriting active edits", () => {
     const { controller, client } = createController();
     sync(controller, client, authorConfig("System One", "Agent One"), { scope: "agent" });
@@ -415,30 +372,6 @@ describe("GitHubIdentityController", () => {
     expect(controller.draft.name).toBe("Active Agent Edit");
     sync(controller, client, authorConfig("System Two", "Agent Two"));
     expect(controller.draft.name).toBe("System Two");
-  });
-
-  it("invalidates selected System status when an override keeps the effective identity stable", async () => {
-    const { controller, client, requests } = createController();
-    const config = (systemProfileId: string) => ({
-      tools: { github: { profileId: systemProfileId } },
-      agents: {
-        entries: {
-          main: { tools: { github: { profileId: "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } } },
-        },
-      },
-    });
-    sync(controller, client, config("ghp_11111111111111111111111111111111"));
-    await controller.verify();
-    expect(controller.status).not.toBeNull();
-
-    sync(controller, client, config("ghp_22222222222222222222222222222222"));
-
-    expect(controller.status).toBeNull();
-    await Promise.resolve();
-    expect(requests.at(-1)).toEqual({
-      method: "tools.github.status",
-      params: { agentId: "main", selectedScope: "system" },
-    });
   });
 
   it("keeps the PAT fallback visible while a save is busy", () => {

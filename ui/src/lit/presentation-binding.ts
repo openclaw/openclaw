@@ -15,7 +15,7 @@ export type PresentationBinding = {
 export type PresentationValue = boolean | PresentationBinding;
 
 /** Owns subscriptions while a directive follows a retained surface's presentation. */
-export abstract class PresentationAsyncDirective extends AsyncDirective {
+abstract class PresentationAsyncDirective extends AsyncDirective {
   private binding?: PresentationBinding;
   private readonly handlePresentationChange = () => this.presentationChanged(this.binding);
 
@@ -84,8 +84,4 @@ export function livePresentation(value: PresentationValue, inverted = false) {
 
 export function presentedContent(value: PresentationValue, content: unknown) {
   return presentation(value, (presented) => (presented ? content : nothing));
-}
-
-export function presentedProperty<T>(value: PresentationValue, shown: T, hidden: T) {
-  return presentation(value, (presented) => live(presented ? shown : hidden));
 }

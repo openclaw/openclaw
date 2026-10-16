@@ -1,5 +1,8 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { SessionsListResult } from "../api/types.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import type { ApplicationGateway } from "../app/gateway.ts";
 import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
   storeSidebarSessionOwnerFilter,
@@ -7,23 +10,21 @@ import {
 } from "./app-sidebar-session-types.ts";
 
 type SessionOwnerFilterContext = {
-  gateway: {
-    connection: { gatewayUrl: string };
-    snapshot: { selfUser?: { id: string } | null };
-  };
+  gateway: ApplicationGateway;
 };
 
-/** Owns saved All filters and invalidates only changes to the effective list query. */
-export class SessionOwnerFilterController implements ReactiveController {
+/** Owns the saved owner filter and invalidates changes to the effective list query. */
+export class SessionOwnerFilterController implements SolidController {
   ownerId: string | null = null;
   involvingMe = false;
   private scope: string | null = null;
   private previous?: SidebarSessionOwnerFilter & { scope: string | null };
   private pendingFacetRefresh: Promise<void> | null = null;
   private userIntent = false;
+  private ownerFacet: { agentId: string; multiple: boolean } | null = null;
 
   constructor(
-    private readonly host: ReactiveControllerHost & {
+    private readonly host: SolidControllerHost & {
       isConnected: boolean;
       sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
       sessionData: {
@@ -33,9 +34,7 @@ export class SessionOwnerFilterController implements ReactiveController {
       };
     },
     private readonly getContext: () => SessionOwnerFilterContext | undefined,
-    // Only the current All query may validate the saved filter. Mine and the
-    // navigation-count summary are not evidence that an All owner disappeared.
-    private readonly getAllFacet: () => SessionListSnapshot | undefined,
+    private readonly getFacet: () => SessionListSnapshot | undefined,
   ) {
     host.addController(this);
   }
@@ -80,7 +79,7 @@ export class SessionOwnerFilterController implements ReactiveController {
       });
       return;
     }
-    const facet = this.getAllFacet();
+    const facet = this.getFacet();
     if (
       !this.pendingFacetRefresh &&
       facet &&
@@ -90,6 +89,7 @@ export class SessionOwnerFilterController implements ReactiveController {
       facet.readSucceeded !== false &&
       facet.result?.owners &&
       this.ownerId &&
+      this.ownerId !== this.selfUserId &&
       !facet.result.owners.some((owner) => owner.id === this.ownerId)
     ) {
       this.set(null, false, { automatic: true });
@@ -102,9 +102,23 @@ export class SessionOwnerFilterController implements ReactiveController {
     this.userIntent = false;
   }
 
-  markUserIntent(): void {
+  hasMultipleOwners(agentId: string): boolean {
     this.restore();
-    this.userIntent = true;
+    return this.ownerFacet?.agentId === agentId && this.ownerFacet.multiple;
+  }
+
+  observeOwnerFacet(agentId: string, owners: SessionsListResult["owners"]): void {
+    this.restore();
+    // Pending replacement rows must not reverse the query their owner inventory selected.
+    if (owners !== undefined) {
+      // Participants in filtered rows govern attribution UI, not query membership.
+      // The complete owner facet stays authoritative when those rows disappear.
+      const selfUserId = this.selfUserId;
+      this.ownerFacet = {
+        agentId,
+        multiple: owners.some((owner) => owner.type !== "human" || owner.id !== selfUserId),
+      };
+    }
   }
 
   set(ownerId: string | null, involvingMe = false, options?: { automatic: true }): void {
@@ -112,10 +126,10 @@ export class SessionOwnerFilterController implements ReactiveController {
     this.ownerId = involvingMe ? null : ownerId?.trim() || null;
     this.involvingMe = involvingMe;
     if (!options?.automatic) {
-      this.markUserIntent();
+      this.userIntent = true;
     }
     const context = this.getContext();
-    const selfUserId = context?.gateway.snapshot.selfUser?.id.trim();
+    const selfUserId = this.selfUserId;
     if (context && selfUserId) {
       storeSidebarSessionOwnerFilter(context.gateway.connection.gatewayUrl, selfUserId, {
         ownerId: this.ownerId,
@@ -127,7 +141,7 @@ export class SessionOwnerFilterController implements ReactiveController {
 
   private restore(): void {
     const context = this.getContext();
-    const selfUserId = context?.gateway.snapshot.selfUser?.id.trim();
+    const selfUserId = this.selfUserId;
     const nextScope =
       context && selfUserId
         ? JSON.stringify([context.gateway.connection.gatewayUrl, selfUserId])
@@ -137,6 +151,7 @@ export class SessionOwnerFilterController implements ReactiveController {
     }
     this.scope = nextScope;
     this.userIntent = false;
+    this.ownerFacet = null;
     const stored =
       context && selfUserId
         ? loadStoredSidebarSessionOwnerFilter(context.gateway.connection.gatewayUrl, selfUserId)
@@ -144,5 +159,10 @@ export class SessionOwnerFilterController implements ReactiveController {
     this.ownerId = stored.ownerId;
     this.involvingMe = stored.involvingMe;
     this.host.requestUpdate();
+  }
+
+  private get selfUserId(): string | undefined {
+    const context = this.getContext();
+    return context ? gatewayPresentationScope(context.gateway).displayUser?.id.trim() : undefined;
   }
 }

@@ -1,119 +1,177 @@
-import { text as readText } from "node:stream/consumers";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runIsolatedCompletion } from "../agents/isolated-completion.js";
 import { slugifyWorktreeTitle, validateName } from "../agents/worktrees/name.js";
 import { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import {
   maybeGenerateDashboardSessionTitle,
   prepareDashboardSessionTitle,
 } from "./dashboard-session-title.js";
+import {
+  withTitleProvider,
+  provider,
+  model,
+  modelRef,
+} from "./dashboard-session-title.test-support.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 
-const provider = "title-proof";
-const model = "title-model";
-const primaryModel = "primary-title-model";
-const modelRef = `${provider}/${model}`;
-type TitleRequest = {
-  authorization: string | undefined;
-  url: string | undefined;
-  body: Record<string, unknown>;
-};
-
-async function withTitleProvider(
-  raw: string,
-  run: (fixture: {
-    cfg: OpenClawConfig;
-    agentDir: string;
-    storePath: string;
-    requests: TitleRequest[];
-  }) => Promise<void>,
-  params?: Record<string, unknown>,
-  defaultParams?: Record<string, unknown>,
-) {
-  await withOpenClawTestState({ label: "title-transport" }, async (state) => {
-    const requests: TitleRequest[] = [];
-    await withServer(
-      (request, response) => {
-        void readText(request).then((body) => {
-          requests.push({
-            authorization: request.headers.authorization,
-            url: request.url,
-            body: JSON.parse(body),
-          });
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          response.end(
-            `data: ${JSON.stringify({
-              id: "chatcmpl-title-proof",
-              object: "chat.completion.chunk",
-              created: 0,
-              model,
-              choices: [
-                { index: 0, delta: { role: "assistant", content: raw }, finish_reason: "stop" },
-              ],
-              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-            })}\n\ndata: [DONE]\n\n`,
+describe("generated titles over the real OpenAI-compatible transport", () => {
+  it.each(["/topic_proof", "/skill topic-proof"])(
+    "names registered skill tasks sent with %s",
+    async (command) => {
+      await withTitleProvider(
+        "Repair sidebar naming",
+        async ({ cfg, storePath, workspaceDir, requests }) => {
+          const skillDir = path.join(workspaceDir, "skills", "topic-proof");
+          await fs.mkdir(skillDir, { recursive: true });
+          await fs.writeFile(
+            path.join(skillDir, "SKILL.md"),
+            "---\nname: topic-proof\ndescription: Diagnose a task\n---\nHandle the supplied task.\n",
           );
-        });
-      },
-      async (baseUrl) => {
-        const cfg: OpenClawConfig = {
-          plugins: { enabled: false },
-          agents: {
-            defaults: {
-              workspace: state.workspaceDir,
-              skipBootstrap: true,
-              model: { primary: `${provider}/${primaryModel}` },
-              utilityModel: modelRef,
-              ...(params ? { models: { [modelRef]: { params } } } : {}),
-              ...(defaultParams ? { params: defaultParams } : {}),
-            },
-          },
-          models: {
-            mode: "replace",
-            providers: {
-              [provider]: {
-                baseUrl: `${baseUrl}/v1`,
-                apiKey: "test-key",
-                api: "openai-completions",
-                agentRuntime: { id: "openclaw" },
-                request: { allowPrivateNetwork: true },
-                models: [primaryModel, model].map((id): ModelDefinitionConfig => ({
-                  id,
-                  name: id,
-                  api: "openai-completions",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 16_000,
-                  maxTokens: 8_192,
-                })),
-              },
-            },
-          },
+          await expect(
+            prepareDashboardSessionTitle({ cfg, agentId: "main", userMessage: command }),
+          ).resolves.toBeNull();
+          expect(requests).toHaveLength(0);
+          const scope = {
+            agentId: "main",
+            sessionKey: "agent:main:dashboard:skill-topic",
+            storePath,
+          };
+          const sessionId = "skill-topic-session";
+          await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+          await expect(
+            maybeGenerateDashboardSessionTitle({
+              ...scope,
+              cfg,
+              sessionId,
+              userMessage: command + " Fix missing sidebar titles",
+            }),
+          ).resolves.toBe(true);
+          expect(loadSessionEntry(scope)?.displayName).toBe("Repair sidebar naming");
+          expect(requests).toHaveLength(1);
+          const messages = requests[0]!.body.messages as Array<{ role: string; content: string }>;
+          expect(
+            JSON.parse(messages.findLast((message) => message.role === "user")!.content),
+          ).toEqual({ conversationLabelSource: "Fix missing sidebar titles" });
+        },
+      );
+    },
+  );
+
+  it("skips earlier control messages when a later user task supplies the title", async () => {
+    await withTitleProvider(
+      "Plan the release",
+      async ({ cfg, storePath, workspaceDir, requests }) => {
+        const scope = {
+          agentId: "main",
+          sessionKey: "agent:main:dashboard:later-topic",
+          storePath,
         };
-        await run({
-          cfg,
-          agentDir: state.agentDir(),
-          storePath: state.statePath("sessions.json"),
-          requests,
-        });
+        const sessionId = "later-topic-session";
+        await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+        for (const content of ["/status", "Plan the release"]) {
+          await appendTranscriptMessage(
+            { ...scope, sessionId },
+            { cwd: workspaceDir, message: { role: "user", content, timestamp: 1 } },
+          );
+        }
+        await expect(
+          maybeGenerateDashboardSessionTitle({
+            ...scope,
+            cfg,
+            sessionId,
+            userMessage: "Plan the release",
+          }),
+        ).resolves.toBe(true);
+        expect(loadSessionEntry(scope)?.displayName).toBe("Plan the release");
+        expect(requests).toHaveLength(1);
       },
     );
   });
-}
 
-describe("generated titles over the real OpenAI-compatible transport", () => {
+  it("does not infer titles for control-only or unregistered commands", async () => {
+    await withTitleProvider("Must not be used", async ({ cfg, storePath, requests }) => {
+      const scope = { agentId: "main", sessionKey: "agent:main:dashboard:controls", storePath };
+      const sessionId = "control-session";
+      await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+      for (const userMessage of ["/status", "/model choose-a-model", "/unknown task"]) {
+        await expect(
+          maybeGenerateDashboardSessionTitle({ ...scope, cfg, sessionId, userMessage }),
+        ).resolves.toBe(false);
+      }
+      expect(requests).toHaveLength(0);
+      expect(loadSessionEntry(scope)?.displayName).toBeUndefined();
+    });
+  });
+  it("disables configured native Ollama thinking only for the utility request", async () => {
+    await withTitleProvider(
+      "Utility thinking disabled",
+      async ({ cfg, agentDir, requests }) => {
+        const definition = cfg.models!.providers!.ollama!.models[1]!;
+        definition.reasoning = true;
+        definition.params = { think: true, num_ctx: 8192 };
+        await runIsolatedCompletion({
+          config: cfg,
+          agentId: "main",
+          agentDir,
+          provider: "ollama",
+          model: "qwen3.6:35b",
+          thinkLevel: "high",
+          systemPrompt: "Write a title.",
+          prompt: "Debug title generation.",
+          timeoutMs: 5_000,
+        });
+        await expect(
+          prepareDashboardSessionTitle({
+            cfg,
+            agentId: "main",
+            userMessage: "Debug title generation.",
+          }),
+        ).resolves.toBe("Utility thinking disabled");
+        expect(requests.map(({ url, body }) => ({ url, think: body.think }))).toEqual([
+          { url: "/api/chat", think: true },
+          { url: "/api/chat", think: false },
+        ]);
+        expect(requests[1]!.body.options).toMatchObject({ num_predict: 4096, num_ctx: 8192 });
+      },
+      undefined,
+      undefined,
+      "ollama",
+    );
+  });
+
+  it("disables reasoning without expanding the title answer budget", async () => {
+    await withTitleProvider("Utility budget verified", async ({ cfg, requests }) => {
+      for (const definition of cfg.models!.providers![provider]!.models) {
+        definition.reasoning = true;
+        definition.maxTokens = 16_384;
+      }
+      await expect(
+        prepareDashboardSessionTitle({
+          cfg,
+          agentId: "main",
+          userMessage: "Check the utility model's reasoning budget.",
+        }),
+      ).resolves.toBe("Utility budget verified");
+      expect(requests).toHaveLength(1);
+      const body = requests[0]!.body;
+      expect(body.max_tokens ?? body.max_completion_tokens).toBe(4_096);
+      expect(body.tools ?? []).toEqual([]);
+    });
+  });
+
   it.each([
     {
       name: "model aliases overriding global defaults",
       params: {
         chatTemplateKwargs: { enable_thinking: false, configured_only: true },
-        extraBody: { min_p: 0.2, store: false },
+        extraBody: { min_p: 0.2, store: false, enable_thinking: true },
       },
       defaultParams: {
         chat_template_kwargs: { enable_thinking: true, default_only: true },
@@ -129,9 +187,10 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
           chat_template_kwargs: { enable_thinking: true, extra_body_only: true },
           min_p: 0.2,
           store: false,
+          enable_thinking: true,
         },
       },
-      expectedTemplate: { enable_thinking: true, extra_body_only: true },
+      expectedTemplate: { enable_thinking: false, extra_body_only: true },
     },
   ])(
     "preserves $name through registered utility completion transport",
@@ -148,7 +207,7 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
           ).resolves.toBe("Utility payload verified");
           expect(requests).toHaveLength(1);
           const body = requests[0]!.body;
-          expect(body).toMatchObject({ model, stream: true, min_p: 0.2 });
+          expect(body).toMatchObject({ model, stream: true, min_p: 0.2, enable_thinking: false });
           expect(body.chat_template_kwargs).toEqual(expectedTemplate);
           expect(Object.hasOwn(body, "store")).toBe(false);
           expect(body.tools ?? []).toEqual([]);
@@ -203,7 +262,7 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
           })),
         ).toEqual([
           { template: { enable_thinking: false }, minP: 0.3 },
-          { template: { enable_thinking: true }, minP: 0.7 },
+          { template: { enable_thinking: false }, minP: 0.7 },
           { template: { enable_thinking: false }, minP: 0.3 },
         ]);
       },

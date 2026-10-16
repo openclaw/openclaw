@@ -37,19 +37,18 @@ function fixture(source = "export {};\n") {
 }
 
 describe("Control UI Lit ratchet", () => {
-  it.each(["new.ts", "new.tsx", "new.js", "new.cts"])(
-    "rejects a new Lit production file: %s",
-    (file) => {
-      const root = fixture();
-      fs.writeFileSync(path.join(root, "ui/src", file), legacy);
-      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-      vi.spyOn(console, "log").mockImplementation(() => {});
-      expect(main(root, ["--base", "HEAD"])).toBe(1);
-      expect(errors.mock.calls.flat().join("\n")).toContain(`ui/src/${file}`);
-      expect(errors.mock.calls.flat().join("\n")).toContain(".agents/skills/solid/SKILL.md");
-      expect(errors.mock.calls.flat().join("\n")).toContain("defineSolidBridge");
-    },
-  );
+  it("allows the named interop owner but rejects a new sibling Lit implementation", () => {
+    const root = fixture();
+    const content =
+      'import { render } from "lit"; export const mount = (value, target) => render(value, target);';
+    fs.mkdirSync(path.join(root, "ui/src/lit"), { recursive: true });
+    fs.writeFileSync(path.join(root, "ui/src/lit/solid-content.tsx"), content);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    fs.writeFileSync(path.join(root, "ui/src/lit/another-content.tsx"), content);
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
+  });
 
   it("preserves staged and explicit base scope through the full lint entry point", () => {
     const root = fixture();
@@ -149,29 +148,6 @@ describe("Control UI Lit ratchet", () => {
       stateDecorators: 0,
       tasks: 0,
     });
-  });
-
-  it("reports every metric's growth in an existing file without failing", () => {
-    const root = fixture(legacy);
-    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    fs.writeFileSync(path.join(root, "ui/src/view.ts"), `${legacy}\n${legacy}`);
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
-    expect(errors).not.toHaveBeenCalled();
-    const report = logs.mock.calls.flat().join("\n");
-    expect(report).toContain("totals (advisory)");
-    expect(report).toContain("Per-file increases (advisory)");
-    for (const metric of [
-      "litImports",
-      "htmlTemplates",
-      "waTags",
-      "requestUpdate",
-      "stateDecorators",
-      "tasks",
-      "todoSolid2",
-    ]) {
-      expect(report).toContain(`ui/src/view.ts [${metric}]`);
-    }
   });
 
   it.each([

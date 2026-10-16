@@ -290,7 +290,7 @@ describe("worker environment service", () => {
         database: support.testState.stateDb,
       });
       const gate = createWorkerSessionPlacementGate(restartedStore, {
-        rejectExistingWorkerClaims: source === "inherited",
+        recoveryPlacements: source === "inherited" ? await restartedStore.listAsync() : [],
       });
       if (source === "revoked") {
         gate.fenceWorkerTurnForRecovery(claim);

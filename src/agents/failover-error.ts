@@ -5,30 +5,31 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { isChannelRunAuthorizationError } from "../channels/message-access/run-authorization-error.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isSqliteTranscriptMutationConflict } from "../config/sessions/session-mutation-conflict-error.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
-import { collectErrorGraphCandidates, formatErrorMessage, readErrorName } from "../infra/errors.js";
+import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
   extractFailoverSignalDetails,
-  isProviderRequestSizeCeilingError,
   isUnclassifiedNoBodyHttpSignal,
 } from "./failover/classify.js";
 import {
   FailoverError,
   findErrorProperty,
-  getErrorMessage,
   isFailoverError,
   isTimeoutError,
   readDirectErrorCode,
   readDirectErrorMessage,
   type CliTimeoutContext,
 } from "./failover/error.js";
+import { findLocalWorkerTaskTimeout } from "./failover/local-preparation-error.js";
 import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
+import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
 import {
   AgentHarnessSessionSupersededError,
   isAgentHarnessPreflightError,
@@ -92,15 +93,6 @@ function resolveNestedErrors(candidate: Record<string, unknown>): unknown[] {
     // An opaque disposal branch must not hide the other recorded CLI facts.
   }
   return nested;
-}
-
-/** Distinguishes the provider's request ceiling from context pressure and bucket state. */
-export function hasProviderRequestSizeCeiling(err: unknown): boolean {
-  return collectErrorGraphCandidates(err, resolveNestedErrors).some((candidate) =>
-    isFailoverError(candidate)
-      ? candidate.requestSizeCeiling
-      : isProviderRequestSizeCeilingError(formatErrorMessage(candidate)),
-  );
 }
 
 function findCliFailoverError<T extends FailoverError>(
@@ -253,19 +245,6 @@ function readDirectErrorDetails(err: unknown): string[] | undefined {
   );
 }
 
-function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
-  const message = readDirectErrorMessage(err);
-  const code = readDirectErrorCode(err);
-  return {
-    status: normalizeFailoverStatus(readDirectStatusCode(err), code),
-    code,
-    errorType: readDirectErrorType(err),
-    message: message || undefined,
-    provider: readDirectProvider(err),
-    details: readDirectErrorDetails(err),
-  };
-}
-
 function hasSessionTranscriptWriterClaimRebound(
   err: unknown,
   seen: Set<object> = new Set(),
@@ -321,6 +300,9 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
 }
 
 function hasRuntimeCoordinationFailure(err: unknown): boolean {
+  if (isChannelRunAuthorizationError(err)) {
+    return true;
+  }
   return collectErrorGraphCandidates(err, resolveNestedErrors).some(
     (candidate) =>
       RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
@@ -334,33 +316,11 @@ function hasPreparedModelRuntimeOwnerNotPublished(err: unknown): boolean {
   );
 }
 
-/** A local worker-task deadline is runtime infrastructure failure, not a provider timeout. */
-export function hasLocalWorkerTaskTimeout(err: unknown): boolean {
-  let localTimeout = false;
-  for (const candidate of collectErrorGraphCandidates(err, resolveNestedErrors)) {
-    // Failover wrappers may synthesize HTTP-like statuses; original HTTP facts still win.
-    if (isFailoverError(candidate)) {
-      continue;
-    }
-    const record = asOptionalObjectRecord(candidate);
-    if (record?.status !== undefined || record?.statusCode !== undefined) {
-      return false;
-    }
-    if (
-      readErrorName(candidate) === "WorkerTaskError" &&
-      readStringField(record, "code") === "timeout"
-    ) {
-      localTimeout = true;
-    }
-  }
-  return localTimeout;
-}
-
 function hasDirectProviderFailureIdentity(err: unknown): boolean {
   if (isFailoverError(err)) {
     return true;
   }
-  const signal = normalizeDirectErrorSignal(err);
+  const signal = normalizeErrorSignal(err, undefined, "direct");
   return Boolean(signal.status || signal.code || signal.errorType || signal.provider);
 }
 
@@ -369,15 +329,21 @@ export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
   return resolveModelFallbackError(err).kind === "coordination";
 }
 
-function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSignal {
-  const message = getErrorMessage(err);
-  const code = findErrorProperty(err, readDirectErrorCode);
+function normalizeErrorSignal(
+  err: unknown,
+  providerHint?: string,
+  scope: "direct" | "nested" = "nested",
+): FailoverSignal {
+  const read = <T>(reader: (candidate: unknown) => T | undefined) =>
+    scope === "direct" ? reader(err) : findErrorProperty(err, reader);
+  const message = read(readDirectErrorMessage);
+  const code = read(readDirectErrorCode);
   return {
-    status: normalizeFailoverStatus(findErrorProperty(err, readDirectStatusCode), code),
+    status: normalizeFailoverStatus(read(readDirectStatusCode), code),
     code,
-    errorType: findErrorProperty(err, readDirectErrorType),
+    errorType: read(readDirectErrorType),
     message: message || undefined,
-    provider: findErrorProperty(err, readDirectProvider) ?? providerHint,
+    provider: read(readDirectProvider) ?? providerHint,
     details: readDirectErrorDetails(err),
   };
 }
@@ -409,7 +375,7 @@ function decideNestedFormatOverride(
     seen.add(candidate);
   }
 
-  const directSignal = normalizeDirectErrorSignal(candidate);
+  const directSignal = normalizeErrorSignal(candidate, undefined, "direct");
   const nestedCandidates = getNestedErrorCandidates(candidate);
   const nestedStatus = directSignal.status ?? inheritedStatus;
   const hasDirectMessage = Boolean(directSignal.message?.trim());
@@ -513,7 +479,7 @@ export function resolveFailoverClassificationFromError(
 ): FailoverClassification | null {
   // A direct preflight owns the refusal; its cause is diagnostic, not a failed
   // provider attempt that may rotate credentials or replay the turn.
-  if (isAgentHarnessPreflightError(err)) {
+  if (isAgentHarnessPreflightError(err) || findLocalWorkerTaskTimeout(err)) {
     return null;
   }
   // Local coordination codes such as SQLite "overloaded" are not provider signals.
@@ -575,6 +541,7 @@ export function buildProviderReauthCommand(
 export function describeFailoverError(err: unknown): {
   message: string;
   rawError?: string;
+  rateLimitRetriesExhausted?: number;
   reason?: FailoverReason;
   status?: number;
   code?: string;
@@ -585,6 +552,10 @@ export function describeFailoverError(err: unknown): {
   sessionId?: string;
   lane?: string;
 } {
+  const localTimeout = findLocalWorkerTaskTimeout(err);
+  if (localTimeout) {
+    return { message: localTimeout.message };
+  }
   if (isAgentHarnessPreflightError(err)) {
     return { message: err.message };
   }
@@ -592,6 +563,7 @@ export function describeFailoverError(err: unknown): {
     return {
       message: err.message,
       rawError: err.rawError,
+      rateLimitRetriesExhausted: err.rateLimitRetriesExhausted,
       reason: err.reason,
       status: normalizeFailoverStatus(err.status, err.code),
       code: err.code,
@@ -615,6 +587,7 @@ export function describeFailoverError(err: unknown): {
 }
 
 type FailoverErrorContext = {
+  rateLimitRetriesExhausted?: number;
   provider?: string;
   model?: string;
   profileId?: string;
@@ -622,13 +595,6 @@ type FailoverErrorContext = {
   sessionId?: string;
   lane?: string;
   timeout?: FailoverError["timeout"];
-  /**
-   * When false, do not fabricate an HTTP status from the failover reason. Used
-   * for local worker-task deadlines, which are runtime infrastructure failure
-   * and must not surface as a provider HTTP status even though they advance the
-   * configured fallback chain.
-   */
-  synthesizeHttpStatus?: boolean;
 };
 
 type ModelFallbackErrorResolution =
@@ -643,32 +609,43 @@ export function coerceToFailoverError(
   context?: FailoverErrorContext,
 ): FailoverError | null {
   if (isFailoverError(err)) {
+    if (findLocalWorkerTaskTimeout(err)) {
+      return null;
+    }
     const status = normalizeFailoverStatus(err.status, err.code);
     if (
       !Object.is(status, err.status) ||
       (context?.authMode && !err.authMode) ||
-      (context?.timeout && !err.timeout)
+      (context?.timeout && !err.timeout) ||
+      context?.rateLimitRetriesExhausted !== undefined
     ) {
       const message = typeof err.message === "string" ? err.message : String(err);
-      const enriched = new FailoverError(message, {
-        reason: err.reason,
-        provider: err.provider,
-        model: err.model,
-        profileId: err.profileId,
-        authMode: err.authMode ?? context?.authMode,
-        status,
-        code: err.code,
-        rawError: err.rawError,
-        authProfileFailure: err.authProfileFailure,
-        sessionId: err.sessionId,
-        lane: err.lane,
-        cause: err.cause,
-        suspend: err.suspend,
-        cliTimeout: err.cliTimeout,
-        timeout: err.timeout ?? context?.timeout,
-        attempts: err.attempts,
-        soonestCooldownExpiry: err.soonestCooldownExpiry,
-      });
+      const enriched = new FailoverError(
+        renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
+        {
+          reason: err.reason,
+          provider: err.provider,
+          model: err.model,
+          profileId: err.profileId,
+          authMode: err.authMode ?? context?.authMode,
+          status,
+          code: err.code,
+          rawError:
+            err.rawError ??
+            (context?.rateLimitRetriesExhausted !== undefined ? message : undefined),
+          rateLimitRetriesExhausted:
+            context?.rateLimitRetriesExhausted ?? err.rateLimitRetriesExhausted,
+          authProfileFailure: err.authProfileFailure,
+          sessionId: err.sessionId,
+          lane: err.lane,
+          cause: err.cause,
+          suspend: err.suspend,
+          cliTimeout: err.cliTimeout,
+          timeout: err.timeout ?? context?.timeout,
+          attempts: err.attempts,
+          soonestCooldownExpiry: err.soonestCooldownExpiry,
+        },
+      );
       copyErrorDiagnostic(err, enriched);
       return enriched;
     }
@@ -682,30 +659,31 @@ export function coerceToFailoverError(
   const signal = normalizeErrorSignal(err);
   const message = signal.message ?? String(err);
   const code = signal.code;
-  const status =
-    context?.synthesizeHttpStatus === false
-      ? signal.status
-      : (signal.status ?? resolveFailoverStatus(reason, code));
+  const status = signal.status ?? resolveFailoverStatus(reason, code);
 
   // Suspend when hitting rate limits or billing issues in an attributed session
   const shouldSuspend =
     Boolean(context?.sessionId) && (reason === "rate_limit" || reason === "billing");
 
-  return new FailoverError(message, {
-    reason,
-    provider: context?.provider ?? signal.provider,
-    model: context?.model,
-    profileId: context?.profileId,
-    authMode: context?.authMode,
-    sessionId: context?.sessionId,
-    lane: context?.lane,
-    status,
-    code,
-    rawError: message,
-    cause: err instanceof Error ? err : undefined,
-    timeout: context?.timeout,
-    suspend: shouldSuspend,
-  });
+  return new FailoverError(
+    renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
+    {
+      reason,
+      rateLimitRetriesExhausted: context?.rateLimitRetriesExhausted,
+      provider: context?.provider ?? signal.provider,
+      model: context?.model,
+      profileId: context?.profileId,
+      authMode: context?.authMode,
+      sessionId: context?.sessionId,
+      lane: context?.lane,
+      status,
+      code,
+      rawError: message,
+      cause: err instanceof Error ? err : undefined,
+      timeout: context?.timeout,
+      suspend: shouldSuspend,
+    },
+  );
 }
 
 /** Classify one candidate failure once so fallback routing and diagnostics share it. */
@@ -726,14 +704,9 @@ export function resolveModelFallbackError(
   }
   // Gateway admission can fail before any provider turn starts. Preserve that
   // identity through wrappers and aggregates so fallback cannot blame a model.
-  if (hasRuntimeCoordinationFailure(err)) {
+  if (hasRuntimeCoordinationFailure(err) || findLocalWorkerTaskTimeout(err)) {
     return { kind: "coordination", error: err };
   }
-  // A local worker-task deadline is runtime infrastructure failure, not a
-  // provider timeout. Attribution stays local (the reply renders the
-  // "local worker task timed out" copy), but routing deliberately preserves the
-  // configured fallback chain: a later candidate rebuilds its own context, so it
-  // can recover from an intermittent worker deadline.
   const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);
   if (
     staleLifecycleFailure &&
@@ -754,13 +727,7 @@ export function resolveModelFallbackError(
   if (isAgentHarnessPreflightError(err)) {
     return { kind: "coordination", error: err };
   }
-  const failoverError = coerceToFailoverError(err, {
-    ...context,
-    // A local worker-task deadline carries no HTTP fact; do not synthesize a
-    // provider HTTP status from its timeout reason. Routing still advances the
-    // configured chain, but attribution stays local.
-    synthesizeHttpStatus: hasLocalWorkerTaskTimeout(err) ? false : context?.synthesizeHttpStatus,
-  });
+  const failoverError = coerceToFailoverError(err, context);
   if (failoverError) {
     return { kind: "failover", error: failoverError };
   }

@@ -196,7 +196,7 @@ describe("legacy usage-cost cache cleanup", () => {
         .all();
 
       if (rejectFirst) {
-        vi.spyOn(usageCacheSqlite, "deleteSessionCostUsageRollupsExcept").mockRejectedValueOnce(
+        vi.spyOn(usageCacheSqlite, "retireLegacySessionCostUsageCache").mockRejectedValueOnce(
           new Error("pruning rejected"),
         );
       }

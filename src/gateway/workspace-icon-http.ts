@@ -220,7 +220,8 @@ export async function handleWorkspaceIconHttpRequest(
     ) {
       respondWorkspaceIconUnavailable(res);
     } else if (!icon) {
-      res.setHeader("cache-control", "no-store");
+      res.setHeader("cache-control", selected.root ? "private, max-age=60" : "no-store");
+      res.setHeader("vary", "Authorization, Cookie");
       respondNotFound(res);
     } else {
       sendHttpImageResponse({ req, res, image: icon, filename: "workspace-icon" });

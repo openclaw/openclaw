@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Restart-path proof against the real registry sweeper and SQLite session store.
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -37,20 +36,16 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
-import { getOpenIncognitoAgentDatabase } from "../../../state/openclaw-agent-db-lifecycle.js";
-import {
-  resolveIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import { prepareInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
+import { registerRecoveredTerminalTailTest } from "./subagent-orphan-recovery.live-tail.test-support.js";
 import {
   registerAbsentChildRestoreOwnershipTest,
+  registerMissingStorageRecoveryTests,
   registerRawChildRestoreOwnershipTest,
 } from "./subagent-orphan-recovery.raw-owner.test-support.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
@@ -73,7 +68,6 @@ import {
   resetSubagentRegistryForTests,
   testing,
 } from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 vi.mock("../../../gateway/session-utils.fs.js", () => ({
@@ -84,79 +78,10 @@ const TWO_HOURS_MS = 2 * 60 * 60 * 1_000;
 
 registerAbsentChildRestoreOwnershipTest();
 
-it.each(["durable", "incognito"] as const)(
-  "classifies missing %s storage for recovery without creating its database",
-  async (storage) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const databasePath = (
-        storage === "incognito"
-          ? resolveIncognitoOpenClawAgentSqlitePath
-          : resolveOpenClawAgentSqlitePath
-      )({ agentId: "main", env: state.env });
-      const childSessionKey = `agent:main:subagent:${storage === "incognito" ? "incognito-" : ""}missing-store`;
-      const entry = makeRunRecord({
-        runId: "missing-store-run",
-        childSessionKey,
-        execution: { status: "interrupted", startedAt: Date.now() - 1_000 },
-      });
-      const recover = (candidate: SubagentRunRecord) =>
-        recoverInterruptedSubagentRow({
-          entry: candidate,
-          runId: candidate.runId,
-          gatewayRuntime: undefined,
-          isCurrent: () => true,
-          warn: vi.fn(),
-        });
-      expect(existsSync(databasePath)).toBe(false);
-      expect(getOpenIncognitoAgentDatabase("main", databasePath)).toBeUndefined();
-      const running = { ...entry, execution: { ...entry.execution, status: "running" as const } };
-      expect(await recover(running)).toEqual({ status: "ignored" });
-      const result = await recover(entry);
-      expect(result).toMatchObject({ status: "terminal", suppressSessionEffects: true });
-      if (result.status !== "terminal") {
-        throw new Error("Expected missing child storage to permit terminal settlement");
-      }
-      expect(await result.recoveryCurrent?.prepare()).toBe(true);
-      expect(result.recoveryCurrent?.isHostCurrent()).toBe(true);
-      expect(
-        await recover({
-          ...running,
-          execution: {
-            ...running.execution,
-            restartRecovery: {
-              phase: "accepted",
-              sessionId: "lost-session",
-              sessionMarker: "lost-session:1",
-              idempotencyKey: "lost-recovery",
-            },
-          },
-        }),
-      ).toMatchObject({ status: "terminal", suppressSessionEffects: true });
-      expect(existsSync(databasePath)).toBe(false);
-      expect(getOpenIncognitoAgentDatabase("main", databasePath)).toBeUndefined();
-
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey: childSessionKey },
-        {
-          sessionId: "successor-session",
-          lifecycleRevision: "successor-lifecycle",
-          updatedAt: Date.now(),
-        },
-      );
-      expect(result.recoveryCurrent?.isHostCurrent()).toBe(false);
-      expect(await result.recoveryCurrent?.prepare()).toBe(false);
-      expect(await result.sessionEffects?.isCurrent()).toBe(false);
-      const missingRow = await recover({ ...entry, childSessionKey: `${childSessionKey}-other` });
-      expect(missingRow.status).toBe("terminal");
-      if (missingRow.status === "terminal") {
-        expect(missingRow.suppressSessionEffects).not.toBe(true);
-      }
-    });
-  },
-);
+registerMissingStorageRecoveryTests();
 
 describe("subagent orphan recovery — faithful restart path", () => {
-  const fixture = useSubagentRestartRecoveryFixture();
+  const fixture = useSubagentRestartRecoveryFixture({ reuseDatabaseWorkers: true });
   const { activateGatewayRuntime, dispatchAgent, gatewayRuntime } = fixture;
 
   it("recovers a raw child key using its recorded owner without borrowing another agent's session", async () => {
@@ -184,6 +109,10 @@ describe("subagent orphan recovery — faithful restart path", () => {
       runId,
       childSessionKey,
       childAgentId: "research",
+      childSessionIdentity: {
+        sessionId: "research-recovery-session",
+        lifecycleRevision: "research-recovery-revision",
+      },
       execution: { status: "interrupted", startedAt },
     });
     const warn = vi.fn();
@@ -215,16 +144,17 @@ describe("subagent orphan recovery — faithful restart path", () => {
     });
     expect(ownerless).toEqual({ status: "deferred" });
     expect(warn).toHaveBeenCalledWith(
-      "failed to reconcile interrupted subagent execution",
+      "retained subagent record cannot be recovered",
       expect.objectContaining({
         error: expect.objectContaining({
           message:
-            "Session key does not contain an agent id; resolve it with the configured default agent.",
+            "Cannot operate on this subagent because its owning agent is unresolved. No child work was changed. Inspect the retained record and original execution evidence before retrying.",
         }),
       }),
     );
   });
   registerRawChildRestoreOwnershipTest(fixture);
+  registerRecoveredTerminalTailTest(fixture);
 
   it("reconciles retained predecessor sessions during startup without waiting for a sweep", async () => {
     const startedAt = Math.floor(performance.timeOrigin) - 60_000;
@@ -233,6 +163,10 @@ describe("subagent orphan recovery — faithful restart path", () => {
       makeRunRecord({
         runId: `retained-startup-${index}`,
         childSessionKey: `agent:main:subagent:retained-startup-${index}`,
+        childSessionIdentity: {
+          sessionId: `retained-startup-${index}`,
+          lifecycleRevision: `retained-startup-${index}`,
+        },
         createdAt: startedAt,
         execution: { status: "running", startedAt, lifecycleGeneration: generation },
         expectsCompletionMessage: true,
@@ -292,7 +226,12 @@ describe("subagent orphan recovery — faithful restart path", () => {
       });
     } finally {
       await fixture.settle();
-      await lock.release();
+      try {
+        // A Gateway closes agent databases before retiring its shared-state owner.
+        await cleanupSessionStateForTest({ stateDir: fixture.stateDir });
+      } finally {
+        await lock.release();
+      }
     }
   });
 
@@ -365,6 +304,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
           await registerSubagentRun({
             runId,
             childSessionKey,
+            childAgentId: "main",
+            sessionEntry: { sessionId: "live-restart-child-session" },
             requesterSessionKey: "agent:main:main",
             requesterDisplayKey: "main",
             task: "continue after update",
@@ -499,6 +440,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         rotateAgentEventLifecycleGeneration();
         await initSubagentRegistry();
         await activateGatewayRuntime();
+        await fixture.settle();
         await testing.sweepOnceForTests();
         expect(dispatchAgent).not.toHaveBeenCalled();
         expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
@@ -529,14 +471,20 @@ describe("subagent orphan recovery — faithful restart path", () => {
       const runId = "interrupted-commit-race";
       const childSessionKey = "agent:main:subagent:interrupted-commit-race";
       const sessionId = "interrupted-commit-race-session";
+      const lifecycleRevision = "interrupted-commit-race-revision";
       const storePath = await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: "main",
         sessionKey: childSessionKey,
         defaultSessionId: sessionId,
+        lifecycleRevision,
         abortedLastRun: true,
       });
-      const entry = makeRunRecord({ runId, childSessionKey });
+      const entry = makeRunRecord({
+        runId,
+        childSessionKey,
+        childSessionIdentity: { sessionId, lifecycleRevision },
+      });
       await addSubagentRunForTests(entry);
       const entered = createDeferred();
       const release = createDeferred();
@@ -626,6 +574,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       const entry = makeRunRecord({
         runId,
         childSessionKey,
+        childSessionIdentity: { sessionId, lifecycleRevision: "saved-terminal-revision" },
         expectsCompletionMessage: true,
         endedReason: "subagent-error",
         terminalOwner: owner === "unclassified" ? undefined : "interrupted-recovery",
@@ -719,6 +668,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         agentId: "main",
         sessionKey: childSessionKey,
         sessionId: "sess-fresh-aborted",
+        lifecycleRevision: "fresh-aborted-revision",
         updatedAt: now - sessionAgeMs,
         abortedLastRun: true,
         defaultSessionId: "sess-fresh-aborted",
@@ -726,6 +676,10 @@ describe("subagent orphan recovery — faithful restart path", () => {
       const record = makeRunRecord({
         runId,
         childSessionKey,
+        childSessionIdentity: {
+          sessionId: "sess-fresh-aborted",
+          lifecycleRevision: "fresh-aborted-revision",
+        },
         createdAt: now - runAgeMs,
         startedAt: now - runAgeMs,
         runTimeoutSeconds,
@@ -771,11 +725,13 @@ describe("subagent orphan recovery — faithful restart path", () => {
       const runId = "held-hidden-cleanup-source";
       const nextRunId = "held-hidden-cleanup-successor";
       const sessionId = "held-hidden-cleanup-visible";
+      const lifecycleRevision = "held-hidden-cleanup-revision";
       const storePath = await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: "main",
         sessionKey: childSessionKey,
         defaultSessionId: sessionId,
+        lifecycleRevision,
       });
       const visible = { agentId: "main", storePath, sessionKey: childSessionKey, sessionId };
       const retired = await prepareInternalSessionEffectsSession({
@@ -801,6 +757,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         makeRunRecord({
           runId,
           childSessionKey,
+          childSessionIdentity: { sessionId, lifecycleRevision },
           expectsCompletionMessage: false,
           execution: { status: "running", startedAt: Date.now(), transcriptTarget: retired },
         }),
@@ -881,6 +838,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     const record = makeRunRecord({
       runId,
       childSessionKey,
+      childSessionIdentity: { sessionId: "sess-retired-accepted" },
       generation: 1,
       createdAt: now - 60_000,
       startedAt: now - 55_000,
@@ -956,6 +914,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     const staleRecord = makeRunRecord({
       runId: "run-stale-generation",
       childSessionKey,
+      childSessionIdentity: { sessionId: "sess-shared-generation" },
       generation: 1,
       createdAt: now - 3 * 60 * 60 * 1_000,
       startedAt: now - 3 * 60 * 60 * 1_000,
@@ -964,6 +923,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     const freshRecord = makeRunRecord({
       runId: "run-fresh-generation",
       childSessionKey,
+      childSessionIdentity: { sessionId: "sess-shared-generation" },
       generation: 2,
       createdAt: now - 60_000,
       startedAt: now - 55_000,

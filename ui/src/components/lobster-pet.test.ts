@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import { resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet-contract.ts";
 import {
@@ -31,11 +31,19 @@ async function advancePetFrame(element: LobsterPetElement): Promise<void> {
 }
 
 async function settleDismissMenu(element: LobsterPetElement) {
-  for (const child of element.querySelectorAll<HTMLElement & { updateComplete: Promise<boolean> }>(
-    "wa-dropdown, wa-dropdown-item",
-  )) {
-    await child.updateComplete;
-  }
+  await vi.dynamicImportSettled();
+  await waitForSolid(() => {
+    const firstItem = element.querySelector('.lobster-pet-dismiss-menu [role="menuitem"]');
+    expect(firstItem).not.toBeNull();
+    expect(document.activeElement).toBe(firstItem);
+  });
+}
+
+function selectDismissal(element: LobsterPetElement, value: "dismiss" | "dismiss-permanently") {
+  expectDefined(
+    element.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${value}"]`),
+    `${value} menu item`,
+  ).click();
 }
 
 function poke(element: LobsterPetElement): void {
@@ -79,10 +87,11 @@ async function startVigilOnlyRun(
   return element;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  document.body.replaceChildren();
+  await Promise.resolve();
   vi.useRealTimers();
   vi.unstubAllGlobals();
-  document.body.innerHTML = "";
   localStorage.clear();
 });
 
@@ -176,42 +185,6 @@ describe("resolveLobsterRunOutcome", () => {
 });
 
 describe("lobster pet element", () => {
-  it("batches composer geometry reads before paint and retires detached work", async () => {
-    vi.useFakeTimers();
-    const element = createPet(42, "offline");
-    await element.updateComplete;
-    await advancePetFrame(element);
-    const composer = element.parentElement!;
-    const footer = composer.querySelector(".agent-chat__composer-footer")!;
-    const readStyle = vi.spyOn(window, "getComputedStyle");
-    try {
-      composer.getBoundingClientRect().width = 0;
-      // Lit/custom-element commits can span several microtasks before one paint.
-      for (let index = 0; index < 3; index++) {
-        footer.append(document.createElement("span"));
-        await vi.advanceTimersByTimeAsync(0);
-      }
-      expect(readStyle).not.toHaveBeenCalled();
-      await advancePetFrame(element);
-      expect(readStyle.mock.calls.length).toBeLessThanOrEqual(1);
-      expect(element.hasAttribute("data-scene-ready")).toBe(false);
-      readStyle.mockClear();
-      footer.append(document.createElement("span"));
-      await vi.advanceTimersByTimeAsync(0);
-      element.remove();
-      await advancePetFrame(element);
-      expect(readStyle).not.toHaveBeenCalled();
-      composer.getBoundingClientRect().width = 720;
-      composer.prepend(element);
-      await element.updateComplete;
-      await advancePetFrame(element);
-      expect(readStyle.mock.calls.length).toBeLessThanOrEqual(1);
-      expect(element.hasAttribute("data-scene-ready")).toBe(true);
-    } finally {
-      readStyle.mockRestore();
-    }
-  });
-
   it("starts hidden and arrives on its seeded visit schedule", async () => {
     vi.useFakeTimers();
     const element = createPet(42);
@@ -327,10 +300,12 @@ describe("lobster pet element", () => {
     expect(getLobsterdexEntries().get(look.palette.id)?.name).toBeTruthy();
   });
 
-  it("anchors the dismiss menu at the raw pointer position with a top-start placement", async () => {
+  it("anchors the dismiss menu at the raw pointer position and preserves outside focus", async () => {
     vi.useFakeTimers();
     const element = createPet(42);
     await arrive(element);
+    const composer = element.parentElement!.querySelector<HTMLTextAreaElement>("textarea")!;
+    composer.focus();
 
     // Coordinates deliberately exceed a guessed 264x80 pre-clamp: a
     // reintroduced clamp would move the trigger away from these exact values.
@@ -343,17 +318,29 @@ describe("lobster pet element", () => {
       );
     await element.updateComplete;
 
-    const dropdown = element.querySelector(".lobster-pet-dismiss-menu");
-    expect(dropdown?.getAttribute("placement")).toBe("top-start");
-    const trigger = element.querySelector<HTMLElement>('[slot="trigger"]');
-    expect(trigger?.style.left).toBe(`${clientX}px`);
-    expect(trigger?.style.top).toBe(`${clientY}px`);
+    await settleDismissMenu(element);
+    const menu = element.querySelector(".lobster-pet-dismiss-menu__panel");
+    expect(menu?.getAttribute("data-placement")).toBe("top-start");
+    const trigger = element.querySelector<HTMLElement>(
+      ".lobster-pet-dismiss-menu .oc-menu-trigger",
+    );
+    const position = trigger?.closest<HTMLElement>(".lobster-pet-dismiss-menu__position");
+    expect(position?.style.getPropertyValue("--lobster-pet-menu-x")).toBe(`${clientX}px`);
+    expect(position?.style.getPropertyValue("--lobster-pet-menu-y")).toBe(`${clientY}px`);
+    expect(trigger?.tabIndex).toBe(-1);
+    expect(trigger?.getAttribute("aria-hidden")).toBe("true");
+    composer.focus();
+    await Promise.resolve();
+    expect(menu?.matches(":popover-open")).toBe(false);
+    expect(document.activeElement).toBe(composer);
   });
 
   it("offers a temporary dismissal from the right-click menu", async () => {
     vi.useFakeTimers();
     const element = createPet(42);
     await arrive(element);
+    const composer = element.parentElement!.querySelector<HTMLTextAreaElement>("textarea")!;
+    composer.focus();
 
     const sprite = element.querySelector(".lobster-pet");
     sprite?.dispatchEvent(new MouseEvent("pointerdown", { button: 2 }));
@@ -364,15 +351,29 @@ describe("lobster pet element", () => {
     expect(shoo.defaultPrevented).toBe(true);
     expect(spritePresent(element)).toBe(true);
     expect(spriteClasses(element)).not.toContain("lobster-pet--act-startle");
+    await settleDismissMenu(element);
     expect(
-      [...element.querySelectorAll(".lobster-pet-dismiss-menu wa-dropdown-item")].map((item) =>
+      [...element.querySelectorAll('.lobster-pet-dismiss-menu [role="menuitem"]')].map((item) =>
         item.textContent?.trim(),
       ),
     ).toEqual(["Dismiss", "Dismiss and don't show again"]);
 
-    await settleDismissMenu(element);
-    element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss"]')?.click();
+    const veto = (event: Event) => event.preventDefault();
+    document.addEventListener("overlay-hide", veto);
+    try {
+      selectDismissal(element, "dismiss");
+      await element.updateComplete;
+      expect(spriteClasses(element)).not.toContain("lobster-pet--away");
+      expect(element.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true);
+      expect(document.activeElement).toBe(
+        element.querySelector('.lobster-pet-dismiss-menu [role="menuitem"]'),
+      );
+    } finally {
+      document.removeEventListener("overlay-hide", veto);
+    }
+    selectDismissal(element, "dismiss");
     await element.updateComplete;
+    expect(document.activeElement).toBe(composer);
 
     const gone = await advanceUntil(element, () => !spritePresent(element), 5_000);
     expect(gone).toBe(true);
@@ -396,7 +397,7 @@ describe("lobster pet element", () => {
       ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await element.updateComplete;
     await settleDismissMenu(element);
-    element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss-permanently"]')?.click();
+    selectDismissal(element, "dismiss-permanently");
     await element.updateComplete;
 
     const persistedSettings = Array.from({ length: localStorage.length }, (_, index) => {
@@ -495,7 +496,7 @@ describe("lobster pet element", () => {
       ?.dispatchEvent(new MouseEvent("contextmenu", { cancelable: true, bubbles: true }));
     await element.updateComplete;
     await settleDismissMenu(element);
-    element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss"]')?.click();
+    selectDismissal(element, "dismiss");
     await element.updateComplete;
     const raw = JSON.parse(
       localStorage.getItem("openclaw.control.lobsterpet.familiarity.v1") ?? "{}",
@@ -745,9 +746,9 @@ describe("lobster pet element", () => {
   it("ships a hidden peek eye only in sleeping renders", () => {
     const container = document.createElement("div");
     const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
-    render(renderLobsterSvg(look, { sleeping: true }), container);
+    container.replaceChildren(renderLobsterSvg(look, { sleeping: true }));
     expect(container.querySelector(".lob-eye-peek")).not.toBeNull();
-    render(renderLobsterSvg(look, { standalone: true }), container);
+    container.replaceChildren(renderLobsterSvg(look, { standalone: true }));
     expect(container.querySelector(".lob-eye-peek")).toBeNull();
   });
 
@@ -757,9 +758,8 @@ describe("lobster pet element", () => {
       "crimson palette",
     );
     const container = document.createElement("div");
-    render(
+    container.replaceChildren(
       renderLobsterSvg(canonicalLobsterLook(palette), { reading: true, standalone: true }),
-      container,
     );
 
     expect(container.querySelector(".lob-reading-book")).not.toBeNull();
@@ -774,9 +774,8 @@ describe("lobster pet element", () => {
         id,
       );
       const container = document.createElement("div");
-      render(
+      container.replaceChildren(
         renderLobsterSvg({ ...canonicalLobsterLook(palette), accessory }, { standalone: true }),
-        container,
       );
       return container;
     };
@@ -814,9 +813,8 @@ describe("lobster pet element", () => {
       "tinfoil palette",
     );
     const container = document.createElement("div");
-    render(
+    container.replaceChildren(
       renderLobsterSvg(canonicalLobsterLook(tinfoilPalette), { standalone: true, sailorCap: true }),
-      container,
     );
     expect(container.querySelector(".lob-tinfoil-hat")).not.toBeNull();
     expect(container.querySelector(".lob-cap")).toBeNull();

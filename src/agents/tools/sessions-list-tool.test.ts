@@ -1,5 +1,7 @@
 // sessions_list tool tests cover session metadata projection, visibility
 // helpers, and numeric argument validation.
+// Register closed mocks before runtime imports; keep the shared row fixtures real.
+import "./sessions-list.mocks.test-support.js";
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -7,24 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils-row.js";
 import { createSessionsListTool } from "./sessions-list-tool.js";
 
-const mocks = vi.hoisted(() => ({
-  gatewayCall: vi.fn(),
-  getSessionStateVersions: vi.fn(
-    (_refs: Array<{ sessionKey: string; agentId: string }>) =>
-      ({}) as Record<string, Record<string, number>>,
-  ),
-}));
-
-vi.mock("./in-process-gateway.js", () => ({
-  hasGatewayToolRoutingContext: () => false,
-  getInProcessGatewayToolContext: () => undefined,
-  callAgentToolGatewayRequest: (opts: unknown) => mocks.gatewayCall(opts),
-}));
-
-vi.mock("../../sessions/session-state-events.js", () => ({
-  getSessionStateVersions: (refs: Array<{ sessionKey: string; agentId: string }>) =>
-    mocks.getSessionStateVersions(refs),
-}));
+const { mocks } = await import("./sessions-list.mocks.test-support.js");
 
 import { VALID_CONFIG, getSessionsListDetails, sessionRow } from "./sessions-list.test-support.js";
 describe("sessions-list-tool", () => {
@@ -53,7 +38,6 @@ describe("sessions-list-tool", () => {
         store,
         key,
         entry,
-        skipTranscriptUsageFallback: true,
         lightweightListRow: true,
       }),
     );

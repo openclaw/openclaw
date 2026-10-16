@@ -18,17 +18,28 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // The prepublish registry executes this shared build-and-pack lifetime by path.
+  "scripts/lib/plugin-npm-build-and-pack.mts!",
+  // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
+  "scripts/generate-postgres-schema.mts!",
+  // Immutable activation and release deployment launch this packaged entry by path.
+  "gateway-prewarm.mjs!",
   "apps/linux/scripts/test-runtime-boundary.mjs!",
   "apps/linux/scripts/stage-runtime.mjs!",
   "apps/linux/scripts/test-stage-runtime.mjs!",
+  "apps/linux/scripts/test-stage-package.mjs!",
   // The Python onboarding driver installs this synthetic CLI by path.
   "apps/linux/tests/fixtures/onboarding-cli.mjs!",
+  // The Linux onboarding proof builds its card fixture through Vite's --config option.
+  "apps/linux/tests/fixtures/vite.onboarding.config.ts!",
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
   // Linux App CI executes the injected native-auth bridge tests through Node.
   "apps/linux/scripts/test-native-control-auth.mjs!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
+  // db:postgres:gen/check invoke this generator through the source loader.
+  "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
   "scripts/ci-build-manifest.mjs!",
   // CI security-fast runs this from its trusted harness checkout.
@@ -43,13 +54,29 @@ const repositoryScriptEntries = [
   ".github/workflows/plugin-prerelease.yml!",
   // Labeler steps import their shared helper through workspace file URLs.
   ".github/workflows/labeler.yml!",
+  // Prepared publication imports its verifier from the frozen release harness.
+  ".github/workflows/openclaw-release-publish.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
   // setup-pnpm-store-cache invokes this helper from composite-action YAML.
   ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
+  // The cold-load benchmark guide invokes this opt-in CLI by path.
+  "scripts/bench-control-ui-cold-load.ts!",
+  // The channel-turn benchmark guide invokes this opt-in CLI by path.
+  "scripts/bench-channel-turn.mts!",
+  // Maintainers invoke this isolated transcript-rewrite benchmark by path.
+  "scripts/bench-session-manager-rewrite.ts",
+  // The team-shaped fixture README invokes these measurement CLIs by path.
+  "scripts/perf/team-shape-measure.ts",
+  "scripts/perf/transcript-broadcast-measure.ts",
+  "scripts/perf/post-restart-burst-measure.ts",
   "scripts/bundle-a2ui.mts!",
+  // The standalone build guide invokes this builder by path.
+  "scripts/build-bun-standalone.mjs!",
+  // Maintainers invoke the isolated macOS standalone Doctor proof by path.
+  "scripts/verify-standalone-doctor.mjs!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
   "scripts/build-plugin-control-ui.mts!",
@@ -112,6 +139,10 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fixtures/config.mjs!",
   "scripts/e2e/lib/fixtures/plugins.mjs!",
   "scripts/e2e/lib/fixtures/workspace.mjs!",
+  // Muse Docker shells invoke auth directly and select deterministic/live by mode.
+  "scripts/e2e/lib/muse-runtime/auth.mjs!",
+  "scripts/e2e/lib/muse-runtime/deterministic.mjs!",
+  "scripts/e2e/lib/muse-runtime/live.mjs!",
   // test:e2e:node-auto-update runs the installed-package proof against a frozen tarball.
   "scripts/e2e/lib/node-auto-update/scenario.mjs!",
   // Installed-package authority proof runs by path and injects its worker preload via NODE_OPTIONS.
@@ -135,9 +166,6 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/run-with-pty.mjs!",
   "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs!",
   "scripts/e2e/lib/session-cold-storage/client.mjs!",
-  // systemd-sealed-service-definition.sh executes these via Node stdin and a container path.
-  "scripts/e2e/lib/systemd-sealed-service-definition/file-mount.mjs!",
-  "scripts/e2e/lib/systemd-sealed-service-definition/paired-mounts.mjs!",
   // abandoned-update.sh invokes the upgrade ledger assertions through Node.
   "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs!",
   // backup-rollback.sh invokes capture and verification through this CLI.
@@ -184,6 +212,8 @@ const repositoryScriptEntries = [
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
   // Generates the native browser page scripts from their UI source modules.
   "scripts/generate-browser-inspect-script-swift.mts!",
+  // db:postgres:gen and db:postgres:check invoke the canonical schema generator by path.
+  "scripts/generate-postgres-schema.mts!",
   // The diagnostics guide invokes the sustained Gateway heap rig by path.
   "scripts/gateway-heap-rig.mjs!",
   // The diagnostics guide invokes this offline snapshot comparison CLI by path.
@@ -208,6 +238,8 @@ const repositoryScriptEntries = [
   "scripts/mantis/observe-request-web-ui.mts!",
   "scripts/mantis/telegram-proof-bridge.mjs!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
+  // The MCP Events live driver and fixture README launch this developer CLI by path.
+  "scripts/mcp-events-test-server.mjs",
   // Immutable systemd installations invoke the packaged launcher by path.
   "scripts/openclaw-immutable-launcher.mjs!",
   // Existing explicit Linux proof driver imports the inactive capsule adapter.
@@ -227,10 +259,10 @@ const repositoryScriptEntries = [
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
   "scripts/pr-lib/ci-dispatch.mjs!",
-  // merge.sh invokes this native review-authority parser by path.
-  "scripts/pr-lib/clawsweeper-review-gate.mjs!",
   // review.sh invokes the corrected-candidate review validator by path.
   "scripts/pr-lib/correction-review.mjs!",
+  // prepare-core.sh invokes correction continuation and recovery by path.
+  "scripts/pr-lib/correction-continuation.mjs!",
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/materialize-dependencies.mjs!",
   "scripts/pr-lib/merge-body.mjs!",
@@ -309,6 +341,17 @@ function listScriptShimEntries(dir = "scripts"): string[] {
 }
 
 function compileWorkflowConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve(".github/workflows/openclaw-release-publish.yml")) {
+    return [
+      ...source.matchAll(
+        /\bimport\s*\{([^}]+)\}\s*from\s*["']\.\/\.release-harness\/(scripts\/[^"'\r\n]+)["']/gu,
+      ),
+    ]
+      .map(
+        ([, names, specifier]) => `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,
+      )
+      .join("\n");
+  }
   if (path.resolve(filePath) === path.resolve(".github/workflows/labeler.yml")) {
     return [
       ...new Set(
@@ -407,6 +450,9 @@ const rootEntries = [
   "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.js!",
   "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.ts!",
   "{openclaw,docker-entrypoint}.mjs!",
+  // Desktop service integration consumes this API in the staged builder/app cutover (#172569).
+  // Remove this audit root after those in-tree callers land.
+  "cli-invocation.mjs!",
   // update-command-node-runtime-resolution loads this package-root module by absolute URL.
   "node-runtime-recovery.mjs!",
   "src/index.ts!",
@@ -440,6 +486,9 @@ const rootEntries = [
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  // Offline port foundations precede orchestration; remove with their first production callers.
+  "src/infra/database-engine/port.worker.ts!",
+  "src/snapshot/export-envelope.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/config/sessions/disk-budget.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
@@ -638,15 +687,22 @@ function workspacePackage(packageDir: string, extraEntries: readonly string[] = 
   } as const;
 }
 
-function compileNativeProtocolConsumer(source: string, filePath: string): string {
-  if (path.resolve(filePath) !== path.resolve("scripts/prepare-native-protocol.mjs")) {
-    return source;
+function compileDynamicMjsConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve("scripts/ci-build-manifest.mjs")) {
+    // The trusted manifest resolves this planner from the target checkout by file URL.
+    return source.replace(
+      /(const changedNodeTestPlan = await )importTargetPlan\([\s\S]*?\n\);/u,
+      '$1import("./lib/ci-changed-node-test-plan.mts");',
+    );
   }
-  // The temporary esbuild bundle exports this source module's unchanged API.
-  return source.replace(
-    "import(pathToFileURL(bundlePath).href)",
-    'import("../packages/gateway-protocol/scripts/native-codegen.ts")',
-  );
+  if (path.resolve(filePath) === path.resolve("scripts/prepare-native-protocol.mjs")) {
+    // The temporary esbuild bundle exports this source module's unchanged API.
+    return source.replace(
+      "import(pathToFileURL(bundlePath).href)",
+      'import("../packages/gateway-protocol/scripts/native-codegen.ts")',
+    );
+  }
+  return source;
 }
 
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
@@ -718,7 +774,7 @@ const config = {
   compilers: {
     yml: compileWorkflowConsumers,
     sh: compileShellConsumers,
-    mjs: compileNativeProtocolConsumer,
+    mjs: compileDynamicMjsConsumers,
   },
   ignoreFiles: [
     // Production mode excludes dev/maintainer executables. The full-tree
@@ -750,7 +806,15 @@ const config = {
   // Script exports are checked with every script as an entry and entry-export
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
+    // P3-6c.1 stages manifest write/archive and typed replacement outcomes for P3-6c.2.
+    // Remove these production-only exceptions when the offline port caller lands;
+    // the full-tree audit still checks all exports against their boundary tests.
+    "src/infra/database-port-recovery.ts": ["exports"],
+    "src/infra/sqlite-snapshot.ts": ["exports"],
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
+    // PR2a admits physical facts now; PR2b routes state maintenance to these capabilities.
+    // The full-tree test-aware scan still audits their boundary-test consumers.
+    "src/infra/database-engine/physical-facts.ts": ["exports"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
     "src/boards/board-notices.ts": ["exports"],
@@ -763,7 +827,7 @@ const config = {
     "src/agents/harness/registry.ts": ["exports"],
     // Focused outbox tests seed and recover rows through these kernels; production
     // reaches them only through the agent database worker's command dispatcher.
-    "src/agents/harness/context-engine-turn-outbox.ts": ["exports"],
+    "src/agents/harness/context-engine-turn-outbox.kernel.worker.ts": ["exports"],
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
@@ -774,6 +838,26 @@ const config = {
     // production uses them through their owning module/controller.
     "ui/src/pages/chat/chat-state-refresh.{ts,tsx}": ["exports"],
     "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
+    // The Lit/Solid presentation fixture and focused UI tests consume these seams;
+    // the full-tree companion scan continues to audit their actual consumers.
+    "ui/src/components/provider-icon.ts": ["exports"],
+    "ui/src/components/terminal/terminal-panel.ts": ["types"],
+    "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-child-attention.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-ci-automation-control.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-ci-details.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-clawhub-card.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-details.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-question-card{,-view}.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-skill-learned-notice.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-svg-attachment.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-summary-automations.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-tool-output{,-view}.{ts,tsx}": ["exports"],
+    "ui/src/pages/chat/components/session-diff-panel.tsx": ["exports"],
+    "ui/src/pages/model-providers/data.ts": ["exports"],
+    "ui/src/pages/plugins/credential-editor.tsx": ["types"],
+    "ui/src/pages/plugins/skill-preview.tsx": ["exports"],
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
@@ -818,6 +902,9 @@ const config = {
         // Solid plugin builds createRequire the compiler from the plugin author's package.json;
         // the host never resolves or ships it (docs/plugins/feature-plugins.md).
         "@solidjs/compiler",
+        // Canvas bundling resolves these from extensions/canvas/package.json.
+        "@solidjs/web",
+        "solid-js",
         "playwright-core",
         "partial-json",
         // The native Canvas bundle falls back without optional Markdown support.
@@ -831,6 +918,8 @@ const config = {
       ignoreBinaries: [
         "lsattr",
         "mint",
+        // Muse E2E setup installs this CLI outside npm (scripts/e2e/lib/muse-runtime/setup.sh).
+        "muse",
         "ngrok",
         "open",
         "openclaw",
@@ -875,11 +964,7 @@ const config = {
         "src/lib/browser-redact.{ts,tsx}!",
         "vite.config.ts!",
         "vitest*.ts!",
-        // Dormant Solid 2 foundation (#168305 smoke fixture, #168405 state-owner projections):
-        // only their tests import them until Control UI views adopt Solid; drop these entries
-        // with the first production importer.
-        "src/lib/reactive/*.ts!",
-        "!src/lib/reactive/*.test.ts!",
+        // The standalone Solid compiler smoke is not a production import.
         "src/solid-smoke/solid-smoke.tsx!",
         // Solid presentation primitives (#168576) and the chat render lifecycle (#168657) land
         // before their page and chat consumers; drop each entry with its first production importer.
@@ -977,9 +1062,7 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([
       // Package build/copy scripts are invoked from package.json.
-      "scripts/bundle-a2ui.mjs!",
       "scripts/copy-a2ui.mjs!",
-      "scripts/pnpm-runner.mjs!",
       // Rolldown consumes this config and its browser bootstrap entry.
       "src/host/a2ui-app/rolldown.config.mjs!",
       "src/host/a2ui-app/bootstrap.jsx!",

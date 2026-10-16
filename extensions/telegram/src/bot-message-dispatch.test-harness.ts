@@ -6,6 +6,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeAll, beforeEach, describe, expect, vi } from "vitest";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
+import { telegramDirectDeliveryDepsForTest } from "./bot-delivery-deps.test-support.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { withTelegramTestSettledReceipt } from "./bot-message-dispatch-receipt.test-support.js";
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";
@@ -64,7 +65,7 @@ const buildModelsProviderDataHoisted = vi.hoisted(() =>
     modelCatalog: [],
   })),
 );
-const listSkillCommandsForAgentsHoisted = vi.hoisted(() => vi.fn(() => []));
+const prepareSkillCommandsForAgentsHoisted = vi.hoisted(() => vi.fn(async () => []));
 const createChannelMessageReplyPipelineHoisted = vi.hoisted(() =>
   vi.fn(() => ({
     responsePrefix: undefined,
@@ -123,7 +124,7 @@ const readChannelAllowFromStore = readChannelAllowFromStoreHoisted;
 const upsertChannelPairingRequest = upsertChannelPairingRequestHoisted;
 const enqueueSystemEvent = enqueueSystemEventHoisted;
 const buildModelsProviderData = buildModelsProviderDataHoisted;
-const listSkillCommandsForAgents = listSkillCommandsForAgentsHoisted;
+const prepareSkillCommandsForAgents = prepareSkillCommandsForAgentsHoisted;
 const createChannelMessageReplyPipeline = createChannelMessageReplyPipelineHoisted;
 const wasSentByBot = wasSentByBotHoisted;
 export const appendAssistantMirrorMessageByIdentity = appendAssistantMirrorMessageByIdentityHoisted;
@@ -274,9 +275,9 @@ vi.mock("./send.js", async () => ({
   reactMessageTelegram: reactMessageTelegramHoisted,
 }));
 
+// mock-isolation: Keep session database startup outside the command fixture.
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel: generateTopicLabelHoisted,
-  getSessionEntry: getSessionEntryHoisted,
   getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsHoisted,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode: resolveChunkModeHoisted,
@@ -298,10 +299,22 @@ vi.mock("./sticker-cache.js", () => ({
 
 export let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
 
+function unexpectedInboundContextCall(): never {
+  throw new Error("Dispatch fixtures do not construct inbound message context");
+}
+
 export const telegramDepsForTest: TelegramBotDeps = {
+  ...telegramDirectDeliveryDepsForTest,
+  buildChannelInboundEventContext: unexpectedInboundContextCall,
+  readAmbientTranscriptWatermarkAsync: unexpectedInboundContextCall,
+  readSessionUpdatedAtAsync: unexpectedInboundContextCall,
+  recordInboundSession: unexpectedInboundContextCall,
+  resolveAmbientTranscriptWatermarkKey: unexpectedInboundContextCall,
+  resolveInboundLastRouteSessionKey: unexpectedInboundContextCall,
+  resolvePinnedMainDmOwnerFromAllowlist: unexpectedInboundContextCall,
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
-  getSessionEntry: getSessionEntry as TelegramBotDeps["getSessionEntry"],
+  getSessionEntryAsync: async (params) => getSessionEntry(params),
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
@@ -310,8 +323,8 @@ export const telegramDepsForTest: TelegramBotDeps = {
   dispatchReplyWithBufferedBlockDispatcher:
     dispatchReplyWithBufferedBlockDispatcher as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
-  listSkillCommandsForAgents:
-    listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
+  prepareSkillCommandsForAgents:
+    prepareSkillCommandsForAgents as TelegramBotDeps["prepareSkillCommandsForAgents"],
   createChannelMessageReplyPipeline:
     createChannelMessageReplyPipeline as TelegramBotDeps["createChannelMessageReplyPipeline"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
@@ -380,7 +393,7 @@ async function resetTelegramDispatchTestState() {
     created: true,
   });
   enqueueSystemEvent.mockReset().mockResolvedValue(undefined);
-  listSkillCommandsForAgents.mockReset().mockReturnValue([]);
+  prepareSkillCommandsForAgents.mockReset().mockResolvedValue([]);
   createChannelMessageReplyPipeline.mockReturnValue({
     responsePrefix: undefined,
     responsePrefixContextProvider: () => ({ identityName: undefined }),

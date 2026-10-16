@@ -5,10 +5,12 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+} from "./subagent-child-owner-match.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
@@ -19,6 +21,7 @@ import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentRunRuntimeKey,
+  copySubagentRunRuntimeOwner,
   retainSubagentRunRuntimeOwner,
   isQueuedSubagentRunRekey,
   isSameSubagentRunOwner,
@@ -36,6 +39,69 @@ function freezeValue(value: unknown): void {
 }
 
 const immutableSessionListFacts = new WeakMap<SubagentRunRecord, SubagentRunReadRecord>();
+const evictedSubagentRunPayloads = new WeakSet<SubagentRunRecord>();
+
+/** Finished rows retain topology and ownership; selected readers load their durable payload. */
+export function compactSubagentRunForMemory(entry: SubagentRunRecord): SubagentRunRecord {
+  if (
+    evictedSubagentRunPayloads.has(entry) ||
+    entry.execution.status !== "terminal" ||
+    typeof entry.cleanupCompletedAt !== "number" ||
+    entry.requesterTurnRunId ||
+    entry.requesterSettleWake ||
+    entry.pauseReason ||
+    entry.killIntent ||
+    entry.killReconciliation ||
+    entry.collectorLaunchCleanupPending ||
+    entry.delivery?.status === "pending" ||
+    entry.delivery?.status === "in_progress" ||
+    entry.delivery?.status === "suspended"
+  ) {
+    return immutableSubagentRun(entry);
+  }
+  const compact = copySubagentRunRuntimeOwner(entry, {
+    ...entry,
+    // A sliced preview can otherwise retain the entire original V8 string.
+    task: Buffer.from(entry.task.slice(0, 160), "utf16le").toString("utf16le"),
+    ...(entry.completion ? { completion: { ...entry.completion } } : {}),
+  });
+  if (compact.completion) {
+    delete compact.completion.resultText;
+    delete compact.completion.fallbackResultText;
+  }
+  bindGatewayContextResolver(compact, getGatewayContextResolver(entry));
+  evictedSubagentRunPayloads.add(compact);
+  return immutableSubagentRun(compact);
+}
+
+export function isSubagentRunPayloadEvicted(entry: SubagentRunRecord): boolean {
+  return evictedSubagentRunPayloads.has(entry);
+}
+
+/** Hydrate only payload fields: the resident row still owns current lifecycle facts. */
+export function restoreSubagentRunPayload(
+  resident: SubagentRunRecord,
+  full: SubagentRunRecord,
+): SubagentRunRecord {
+  if (!evictedSubagentRunPayloads.has(resident)) {
+    return immutableSubagentRun(resident);
+  }
+  const restored = copySubagentRunRuntimeOwner(resident, {
+    ...resident,
+    task: full.task,
+    ...(resident.completion
+      ? {
+          completion: {
+            ...resident.completion,
+            resultText: full.completion?.resultText,
+            fallbackResultText: full.completion?.fallbackResultText,
+          },
+        }
+      : {}),
+  });
+  bindGatewayContextResolver(restored, getGatewayContextResolver(resident));
+  return immutableSubagentRun(restored);
+}
 
 /** A row replacement owns a new projection; retired immutable rows release theirs through GC. */
 export function immutableSubagentRunSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
@@ -62,6 +128,8 @@ export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(rec
 }
 
 class SubagentRunIndex extends Map<string, Map<string, SubagentRunRecord>> {
+  private readonly latest = new Map<string, SubagentRunRecord>();
+
   constructor(private readonly keyFor: (entry: SubagentRunRecord) => string | undefined) {
     super();
   }
@@ -79,23 +147,57 @@ class SubagentRunIndex extends Map<string, Map<string, SubagentRunRecord>> {
       indexedRuns.delete(runId);
       if (indexedRuns.size === 0) {
         this.delete(key);
+        this.latest.delete(key);
+      } else if (this.latest.get(key) === entry) {
+        for (const remaining of indexedRuns.values()) {
+          this.latest.set(key, remaining);
+        }
       }
-    } else if (indexedRuns) {
-      indexedRuns.set(runId, entry);
     } else {
-      this.set(key, new Map([[runId, entry]]));
+      if (indexedRuns) {
+        indexedRuns.set(runId, entry);
+      } else {
+        this.set(key, new Map([[runId, entry]]));
+      }
+      this.latest.set(key, entry);
     }
+  }
+
+  getLatest(key: string): SubagentRunRecord | undefined {
+    return this.latest.get(key);
+  }
+
+  override clear(): void {
+    super.clear();
+    this.latest.clear();
   }
 }
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
 // must stay O(1) regardless of retained collector records. The map subclass
 // maintains the index whenever the row owner publishes a new immutable value.
-const collectorRunIdByChildSessionKey = new Map<string, string>();
-const runsByChildSessionKey = new SubagentRunIndex((entry) => entry.childSessionKey);
+const collectorsByChildSessionOwner = new SubagentRunIndex((entry) =>
+  entry.collect === true ? childSessionOwnerKey(entry) : undefined,
+);
+const childSessionCandidatesByKey = new SubagentRunIndex((entry) => entry.childSessionKey);
+const runsByChildSessionOwner = new SubagentRunIndex(childSessionOwnerKey);
 const runsByRequesterSessionKey = new SubagentRunIndex((entry) => entry.requesterSessionKey);
 const runsByCollectorGroupKey = new SubagentRunIndex(collectorGroupKey);
-const runIndexes = [runsByChildSessionKey, runsByRequesterSessionKey, runsByCollectorGroupKey];
+const runIndexes = [
+  collectorsByChildSessionOwner,
+  childSessionCandidatesByKey,
+  runsByChildSessionOwner,
+  runsByRequesterSessionKey,
+  runsByCollectorGroupKey,
+];
+
+function childSessionOwnerKey(entry: {
+  childSessionKey: string;
+  childAgentId?: string;
+}): string | undefined {
+  const owner = resolveSubagentChildAgentId(entry);
+  return owner ? JSON.stringify([owner, entry.childSessionKey]) : undefined;
+}
 
 function collectorGroupKey(entry: SubagentRunRecord): string | undefined {
   if (entry.collect !== true || !entry.groupId) {
@@ -525,17 +627,11 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       for (const index of runIndexes) {
         index.update(runId, prev, "remove");
       }
-      if (prev.collect === true && prev.childSessionKey) {
-        collectorRunIdByChildSessionKey.delete(prev.childSessionKey);
-      }
     }
     super.set(runId, entry);
     this.readLookup.set(runId, entry);
     for (const index of runIndexes) {
       index.update(runId, entry, "add");
-    }
-    if (entry.collect === true && entry.childSessionKey) {
-      collectorRunIdByChildSessionKey.set(entry.childSessionKey, runId);
     }
     return this;
   }
@@ -547,13 +643,6 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       for (const index of runIndexes) {
         index.update(runId, prev, "remove");
       }
-    }
-    if (
-      prev?.collect === true &&
-      prev.childSessionKey &&
-      collectorRunIdByChildSessionKey.get(prev.childSessionKey) === runId
-    ) {
-      collectorRunIdByChildSessionKey.delete(prev.childSessionKey);
     }
     return super.delete(runId);
   }
@@ -574,7 +663,6 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     this.retirementScopes.clear();
     super.clear();
     this.readLookup = new SubagentSessionReadLookup();
-    collectorRunIdByChildSessionKey.clear();
     for (const index of runIndexes) {
       index.clear();
     }
@@ -595,7 +683,7 @@ subscribeSubagentRunChanges("projection", ({ runIds: ids }) => {
   }
 });
 
-export function getSubagentSessionReadLookup(runs: Map<string, SubagentRunRecord>) {
+export function getSubagentSessionReadLookup(runs: ReadonlyMap<string, SubagentRunRecord>) {
   return runs instanceof SubagentRunMap ? runs.readLookup : new SubagentSessionReadLookup(runs);
 }
 
@@ -614,16 +702,19 @@ export function getCurrentSubagentRunOwner(
   return undefined;
 }
 
+export function getSubagentChildSessionCandidates(
+  childSessionKey: string,
+): Iterable<SubagentRunRecord> {
+  return childSessionCandidatesByKey.get(childSessionKey)?.values() ?? [];
+}
+
 /** Iterate live generations for one child session without scanning the registry. */
 export function* getSubagentRunsForChildSession(
   childSessionKey: string,
   childAgentId?: string,
 ): Iterable<SubagentRunRecord> {
-  for (const entry of runsByChildSessionKey.get(childSessionKey)?.values() ?? []) {
-    if (matchesSubagentChildSessionOwner(entry, childSessionKey, childAgentId)) {
-      yield entry;
-    }
-  }
+  const key = childSessionOwnerKey({ childSessionKey, childAgentId });
+  yield* (key ? runsByChildSessionOwner.get(key)?.values() : undefined) ?? [];
 }
 
 /** Current requester-owned generations, without restoring or scanning retained rows. */
@@ -655,17 +746,8 @@ export function findSwarmCollectorSession(
   if (!key) {
     return undefined;
   }
-  if (childAgentId !== undefined && !parseAgentSessionKey(key)) {
-    let collector: SubagentRunRecord | undefined;
-    for (const entry of getSubagentRunsForChildSession(key, childAgentId)) {
-      if (entry.collect === true) {
-        collector = entry;
-      }
-    }
-    return collector;
-  }
-  const runId = collectorRunIdByChildSessionKey.get(key);
-  return runId ? subagentRuns.get(runId) : undefined;
+  const ownerKey = childSessionOwnerKey({ childSessionKey: key, childAgentId });
+  return ownerKey ? collectorsByChildSessionOwner.getLatest(ownerKey) : undefined;
 }
 
 /** Resolve the host-registered collector that authorizes a Gateway request. */

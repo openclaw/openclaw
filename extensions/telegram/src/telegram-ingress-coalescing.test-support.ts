@@ -1,11 +1,14 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import { vi } from "vitest";
+import { telegramDirectDeliveryDepsForTest } from "./bot-delivery-deps.test-support.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   holdTelegramMediaTimeouts,
   resolveFlushTimerForDelay,
 } from "./bot-media-timers.test-support.js";
+import * as telegramSessionRuntime from "./bot-message-context.session.runtime.js";
 
 export function createBotApiTransport() {
   let getFileCall = 0;
@@ -30,6 +33,9 @@ export function createBotApiTransport() {
 
 export function createTelegramDeps(stateDir: string, cfg: OpenClawConfig): TelegramBotDeps {
   return {
+    ...telegramDirectDeliveryDepsForTest,
+    ...telegramSessionRuntime,
+    getSessionEntryAsync,
     getRuntimeConfig: () => cfg,
     resolveStorePath: (storePath?: string) => storePath ?? path.join(stateDir, "sessions.json"),
     readChannelAllowFromStore: async () => [],
@@ -46,9 +52,9 @@ export function createTelegramDeps(stateDir: string, cfg: OpenClawConfig): Teleg
       modelNames: new Map<string, string>(),
       modelCatalog: [],
     }),
-    listSkillCommandsForAgents: () => [],
+    prepareSkillCommandsForAgents: async () => [],
     wasSentByBot: () => false,
-  } as TelegramBotDeps;
+  };
 }
 
 /** Holds the production forward quiet window; a frozen clock keeps its 1 s delay. */

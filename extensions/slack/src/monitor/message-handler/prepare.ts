@@ -36,7 +36,7 @@ import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   asOptionalRecord as asRecord,
   normalizeLowercaseStringOrEmpty,
@@ -810,8 +810,7 @@ export async function prepareSlackMessage(params: {
   const textForCommandDetection = stripSlackMentionsForCommandDetection(message.text ?? "");
   const hasControlCommandInMessage = hasControlCommand(textForCommandDetection, cfg);
   const hasAbortRequest = isAbortRequestText(textForCommandDetection);
-  const channelUsersAllowlistConfigured =
-    isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
+  const channelUsersAllowlistConfigured = isRoom && (channelConfig?.users?.length ?? 0) > 0;
   const resolveMessageIngress = async (
     contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
     threadId?: string,
@@ -1200,7 +1199,7 @@ export async function prepareSlackMessage(params: {
   if (messageIngress.ingress.admission !== "dispatch") {
     return drop("final-route-denied");
   }
-  const sessionEntry = getSessionEntry({
+  const sessionEntry = await getSessionEntryAsync({
     storePath,
     sessionKey,
   });
@@ -1209,19 +1208,10 @@ export async function prepareSlackMessage(params: {
   if (message.ts) {
     excludedMessageIds.add(message.ts);
   }
-  const isHistorySessionCurrent = () => {
-    const current = getSessionEntry({ storePath, sessionKey });
-    return (
-      current?.sessionId === sessionEntry?.sessionId &&
-      current?.lifecycleRevision === sessionEntry?.lifecycleRevision &&
-      current?.sessionStartedAt === sessionEntry?.sessionStartedAt &&
-      (current?.updatedAt === 0) === (sessionEntry?.updatedAt === 0)
-    );
-  };
   const assertHistoryCurrent = () => {
     opts.abortSignal?.throwIfAborted();
-    if (opts.isRuntimePolicyCurrent?.() === false || !isHistorySessionCurrent()) {
-      throw new Error("Slack history policy or session changed during recovery");
+    if (opts.isRuntimePolicyCurrent?.() === false) {
+      throw new Error("Slack history policy changed during recovery");
     }
   };
   const dmHistoryLimit = isDirectMessage
@@ -1294,7 +1284,8 @@ export async function prepareSlackMessage(params: {
     abortSignal: opts.abortSignal,
   });
   const { threadLabel, threadStarterMedia } = threadContextData;
-  let { threadStarterBody, threadHistoryBody, shouldSeedInitialThreadContext } = threadContextData;
+  const { threadStarterBody, threadHistoryBody, shouldSeedInitialThreadContext } =
+    threadContextData;
   const threadScopedHistory = isThreadReply && ctx.threadHistoryScope === "thread";
   let roomHistory: HistoryEntry[] = [];
   if (
@@ -1321,26 +1312,13 @@ export async function prepareSlackMessage(params: {
   }
 
   const effectiveMedia = effectiveDirectMedia ?? threadStarterMedia;
-  let inboundMedia = await toInboundMediaFactsWithMetadata(effectiveMedia, {
+  const inboundMedia = await toInboundMediaFactsWithMetadata(effectiveMedia, {
     transcribed: (entry) =>
       effectiveMedia === effectiveDirectMedia && entry === preflightAudioMedia,
   });
   opts.abortSignal?.throwIfAborted();
   if (opts.isRuntimePolicyCurrent?.() === false) {
     return drop("final-route-denied");
-  }
-  if (isRoomish && ctx.historyLimit > 0 && !isHistorySessionCurrent()) {
-    roomHistory = [];
-    threadHistoryBody = undefined;
-    threadStarterBody = undefined;
-    shouldSeedInitialThreadContext = false;
-    if (effectiveMedia === threadStarterMedia) {
-      inboundMedia = [];
-    }
-    ctx.logger.warn(
-      { channelId: message.channel, sessionKey },
-      "Slack automatic history omitted after session changed",
-    );
   }
   combinedBody = buildHistoryContextFromEntries({
     entries: roomHistory,

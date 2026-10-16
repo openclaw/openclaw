@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { expressionBuilder } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -6,7 +7,10 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import type { SessionEntrySnapshotRow } from "./session-entry-storage.types.js";
+import {
+  sessionEntrySnapshotColumnsDefinition as snapshotColumns,
+  type SessionEntryProjection,
+} from "./session-entry-snapshot-values.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionEntrySnapshot = {
@@ -14,16 +18,7 @@ export type SessionEntrySnapshot = {
   valueJson: string;
 };
 
-export type SessionEntrySnapshotField = SessionEntrySnapshot["field"];
-export type SessionEntryProjection = "full" | "list" | readonly SessionEntrySnapshotField[];
-
 export type { SessionEntrySnapshotRow } from "./session-entry-storage.types.js";
-
-const snapshotColumns = [
-  ["sessionDiffBaseline", "session_diff_baseline_json"],
-  ["skillsSnapshot", "skills_snapshot_json"],
-  ["systemPromptReport", "system_prompt_report_json"],
-] as const;
 
 /** One statement owns hot and cold facts; JSON remains opaque to SQLite's depth limit. */
 export function sessionEntrySnapshotColumnsForKeys(
@@ -59,12 +54,17 @@ export function splitSessionEntrySnapshots(
   entryJson: string;
   snapshots: SessionEntrySnapshot[];
   snapshotsChanged: boolean;
+  snapshotsRemoved: boolean;
 } {
   const { sessionDiffBaseline, skillsSnapshot, systemPromptReport, ...hot } = entry;
   const values = { sessionDiffBaseline, skillsSnapshot, systemPromptReport };
   const snapshotsChanged =
     mode === "complete" ||
-    snapshotColumns.some(([field]) => values[field] !== mode.previousEntry?.[field]);
+    snapshotColumns.some(
+      ([field]) =>
+        values[field] !== mode.previousEntry?.[field] &&
+        !isDeepStrictEqual(values[field], mode.previousEntry?.[field]),
+    );
   const snapshots: SessionEntrySnapshot[] = [];
   for (const [field] of snapshotsChanged ? snapshotColumns : []) {
     const valueJson = JSON.stringify(values[field]);
@@ -72,27 +72,15 @@ export function splitSessionEntrySnapshots(
       snapshots.push({ field, valueJson });
     }
   }
-  return { entryJson: JSON.stringify(hot), snapshots, snapshotsChanged };
-}
-
-export function attachSessionEntrySnapshots<T extends object>(
-  entry: T,
-  row: SessionEntrySnapshotRow,
-  projection: SessionEntryProjection = "full",
-): T {
-  for (const [field, alias] of snapshotColumns) {
-    if (projection !== "full" && (projection === "list" || !projection.includes(field))) {
-      // Pending legacy rows may still carry snapshots inline.
-      Reflect.deleteProperty(entry, field);
-      continue;
-    }
-    const valueJson = row[alias];
-    if (valueJson != null) {
-      const value: unknown = JSON.parse(valueJson);
-      Object.assign(entry, { [field]: value });
-    }
-  }
-  return entry;
+  const snapshotsRemoved =
+    mode === "complete" ||
+    (snapshotsChanged &&
+      snapshotColumns.some(
+        ([field]) =>
+          mode.previousEntry?.[field] !== undefined &&
+          !snapshots.some((snapshot) => snapshot.field === field),
+      ));
+  return { entryJson: JSON.stringify(hot), snapshots, snapshotsChanged, snapshotsRemoved };
 }
 
 /** The entry writer owns this synchronous transaction and publishes its committed facts. */
@@ -100,24 +88,27 @@ export function writeSessionEntrySnapshots(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionKey: string,
   snapshots: readonly SessionEntrySnapshot[],
+  { snapshotsRemoved = true }: { snapshotsRemoved?: boolean } = {},
 ): void {
   if (!database.db.isTransaction) {
     throw new Error("Session snapshot writes require an entry transaction");
   }
   const db = getNodeSqliteKysely<DB>(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .deleteFrom("session_entry_snapshots")
-      .where("session_key", "=", sessionKey)
-      .$if(snapshots.length > 0, (query) =>
-        query.where(
-          "field",
-          "not in",
-          snapshots.map((snapshot) => snapshot.field),
+  if (snapshotsRemoved) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("session_entry_snapshots")
+        .where("session_key", "=", sessionKey)
+        .$if(snapshots.length > 0, (query) =>
+          query.where(
+            "field",
+            "not in",
+            snapshots.map((snapshot) => snapshot.field),
+          ),
         ),
-      ),
-  );
+    );
+  }
   if (snapshots.length > 0) {
     executeSqliteQuerySync(
       database.db,

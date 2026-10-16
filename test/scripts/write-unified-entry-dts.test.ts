@@ -32,7 +32,7 @@ describe("write-unified-entry-dts", () => {
         "scripts/lib/plugin-sdk-entrypoints.json",
         "scripts/windows-cmd-helpers.mjs",
         "packages/normalization-core/src/mountinfo-path.ts",
-        "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
+        "src/infra/runtime-process-manifest.ts",
         "src/state/openclaw-state-schema.sql",
         "src/state/openclaw-agent-schema.sql",
         "src/shared/freebsd-process-identity.ts",
@@ -41,7 +41,7 @@ describe("write-unified-entry-dts", () => {
       ]),
     );
     expect(closure).not.toContain("scripts/lib/ci-node-test-plan.mts");
-    expect(closure).not.toContain("src/infra/node_modules/koffi/indirect.cjs");
+    expect(closure).not.toContain("src/infra/node_modules/@openclaw/proc-safe/dist/identity.js");
   });
 
   it("still traverses a compiler source when the generator also imports it", () => {
@@ -59,7 +59,9 @@ describe("write-unified-entry-dts", () => {
           process.cwd(),
           "scripts/write-unified-entry-dts.ts",
         ),
-      ).toThrow(/node_modules[/\\]koffi[/\\]indirect\.cjs/u);
+      ).toThrow(
+        "Unresolved dynamic module edges in src/infra/update-managed-service-handoff-native-loader.ts",
+      );
     } finally {
       read.mockRestore();
     }

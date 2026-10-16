@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/doctor-migration-plan-adapter.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { areBundledPluginsDisabled } from "./bundled-dir.js";
 import { resolveBundledPluginScanDir } from "./bundled-plugin-scan.js";
 import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
@@ -273,7 +274,7 @@ function resolvePluginDoctorContracts(
     return entries;
   }
   for (const { channelId, pluginId } of GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA) {
-    // A deferred owner still shadows the host contract even though its code cannot run.
+    // Deferred owners retain precedence; trusted official ones can use host listener facts.
     const owner = records.find(
       (record) => record.id === pluginId || record.channels.includes(channelId),
     );
@@ -283,12 +284,17 @@ function resolvePluginDoctorContracts(
       owner.trustedOfficialInstall === true
         ? entries.find((entry) => entry.pluginId === pluginId && !entry.historicalWebhookListener)
         : undefined;
+    const deferredOfficialOwner =
+      params.historicalWebhookListeners &&
+      owner?.id === pluginId &&
+      owner.trustedOfficialInstall === true &&
+      isPluginDoctorMigrationDeferred(pluginId);
     if (
       (isPluginDoctorMigrationDeferred(pluginId) && !params.historicalWebhookListeners) ||
       (!params.historicalWebhookListeners &&
         !Object.hasOwn(params.config?.channels ?? {}, channelId) &&
         !Object.hasOwn(params.config?.plugins?.entries ?? {}, pluginId)) ||
-      (owner && !supplement) ||
+      (owner && !supplement && !deferredOfficialOwner) ||
       (params.pluginIds &&
         !params.pluginIds.includes(channelId) &&
         !params.pluginIds.includes(pluginId))
@@ -311,7 +317,7 @@ function resolvePluginDoctorContracts(
     if (supplement && contract.historicalWebhookListener && contract.normalizeCompatibilityConfig) {
       supplement.historicalWebhookListener = contract.historicalWebhookListener;
       supplement.historicalWebhookNormalizer = contract.normalizeCompatibilityConfig;
-    } else if (!owner) {
+    } else if (!owner || deferredOfficialOwner) {
       if (isPluginDoctorMigrationDeferred(pluginId)) {
         const normalize = contract.normalizeHistoricalWebhookConfig;
         if (!contract.historicalWebhookListener || !normalize) {
@@ -320,7 +326,7 @@ function resolvePluginDoctorContracts(
         entries.push({
           pluginId,
           ...contract,
-          origin: "bundled",
+          origin: owner?.origin ?? "bundled",
           rules: [],
           providerRenames: [],
           // Preserve authored endpoints through their owner without other deferred repairs.
@@ -755,15 +761,17 @@ export function applyPluginDoctorCompatibilityMigrations(
 export async function preparePluginDoctorMigrationBackupResources(
   params: PluginDoctorMigrationResourceCollectionParams,
 ) {
-  return await withPluginSourceCaptureStorage(
-    { stateDir: params.stateDir, placement: "temporary" },
-    async () => {
-      const entries = loadPluginDoctorStateMigrationEntries(
-        resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true }),
-      );
-      const { preparePluginDoctorMigrationResources } =
-        await import("./doctor-migration-resources.js");
-      return await preparePluginDoctorMigrationResources(entries, params);
-    },
+  return await withArtifactPreservingStateReads(() =>
+    withPluginSourceCaptureStorage(
+      { stateDir: params.stateDir, placement: "temporary" },
+      async () => {
+        const entries = loadPluginDoctorStateMigrationEntries(
+          resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true }),
+        );
+        const { preparePluginDoctorMigrationResources } =
+          await import("./doctor-migration-resources.js");
+        return await preparePluginDoctorMigrationResources(entries, params);
+      },
+    ),
   );
 }

@@ -1,4 +1,5 @@
 import type { Model } from "../../../llm/types.js";
+import { resolveProviderPolicySurface } from "../../../plugins/provider-public-artifacts.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agent-runtime-id.js";
 import { resolveAuthoredModelContextTokens } from "../../context-resolution.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
@@ -12,7 +13,13 @@ import {
   resolveAgentHarnessPreparedRouteSupport,
 } from "../../harness/support.js";
 import type { AgentHarness } from "../../harness/types.js";
+import {
+  resolveAliasedParamValue,
+  resolveModelExtraParamSources,
+} from "../../model-extra-params.js";
 import { resolveContextConfigProviderForRuntime } from "../../openai-routing.js";
+import { resolveProviderRequestCapabilities } from "../../provider-attribution.js";
+import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
 import type { PreparedAgentRuntimeAuthAttempt } from "../../runtime-plan/prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -39,6 +46,63 @@ export function resolveEmbeddedRunEffectiveModel(
     runtimeId: params.agentHarnessId,
     config: params.runParams.config,
   });
+  const { defaultParams, modelParams, agentModelParams, agentParams } =
+    resolveModelExtraParamSources({
+      config: params.runParams.config,
+      provider: contextConfigProvider,
+      modelId: params.modelId,
+      agentId: params.runParams.agentId,
+    });
+  const sources = [
+    defaultParams,
+    modelParams,
+    agentModelParams,
+    agentParams,
+    Object.fromEntries(
+      Object.entries(params.runParams.streamParams ?? {}).filter(
+        ([, value]) => value !== undefined,
+      ),
+    ),
+    ...(params.runParams.fastMode === undefined ? [] : [{ fastMode: params.runParams.fastMode }]),
+  ];
+  const requestExtraParams: Record<string, unknown> = Object.assign({}, ...sources);
+  // Budget the same winning aliases that request assembly sends.
+  requestExtraParams.serviceTier = resolveAliasedParamValue(sources, [
+    "serviceTier",
+    "service_tier",
+  ]);
+  requestExtraParams.fastMode = resolveAliasedParamValue(sources, ["fastMode", "fast_mode"]);
+  delete requestExtraParams.service_tier;
+  delete requestExtraParams.fast_mode;
+  const requestServiceTiers =
+    params.nativeModelOwned || params.provider !== "openai"
+      ? undefined
+      : resolveProviderPolicySurface(params.provider, {
+          config: params.runParams.config,
+        })?.resolveServiceTiers?.({
+          provider: params.provider,
+          modelId: params.runtimeModel.id,
+          api: params.runtimeModel.api,
+          baseUrl: params.runtimeModel.baseUrl,
+          runtimeId: params.agentHarnessId,
+          params: requestExtraParams,
+          requestCapabilities:
+            getModelProviderRequestRouteFacts(params.runtimeModel)?.capabilities ??
+            resolveProviderRequestCapabilities({
+              provider: params.provider,
+              modelId: params.runtimeModel.id,
+              api: params.runtimeModel.api,
+              baseUrl: params.runtimeModel.baseUrl,
+            }),
+        });
+  const authoredContextTokenCap =
+    params.pinnedHarnessId || params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
+      ? undefined
+      : resolveAuthoredModelContextTokens({
+          cfg: params.runParams.config,
+          provider: contextConfigProvider,
+          model: params.modelId,
+        });
   const resolved = resolveEmbeddedRuntimeModelPolicy({
     cfg: params.runParams.config,
     provider: params.provider,
@@ -46,19 +110,14 @@ export function resolveEmbeddedRunEffectiveModel(
     modelId: params.modelId,
     runtimeModel: params.runtimeModel,
     nativeModelOwned: params.nativeModelOwned,
+    authoredContextTokenCap,
+    requestExtraParams,
+    requestServiceTiers,
     ...(params.runParams.contextWindow ? { contextWindow: params.runParams.contextWindow } : {}),
     ...(params.runParams.contextTokenBudget === undefined
       ? {}
       : { contextTokenBudget: params.runParams.contextTokenBudget }),
   });
-  const authoredContextTokenCap =
-    params.nativeModelOwned || params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
-      ? undefined
-      : resolveAuthoredModelContextTokens({
-          cfg: params.runParams.config,
-          provider: contextConfigProvider,
-          model: params.modelId,
-        });
   return {
     ...resolved,
     ...(authoredContextTokenCap === undefined ? {} : { authoredContextTokenCap }),

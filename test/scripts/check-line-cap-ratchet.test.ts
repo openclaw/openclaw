@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-line-cap-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -146,6 +147,20 @@ describe("line-cap growth ratchet", () => {
     fs.writeFileSync(target, source(3));
     expect(main(root, ["--base", "HEAD"])).toBe(0);
     expect(errors).not.toHaveBeenCalled();
+  });
+
+  it("does not hydrate historical blobs for under-cap repairs in a partial clone", () => {
+    const origin = fixture();
+    git(origin, "config", "uploadpack.allowFilter", "true");
+    fs.writeFileSync(path.join(origin, "src/file.ts"), source(3));
+    git(origin, "commit", "-am", "repair");
+    const root = path.join(tempDirs.make("openclaw-line-cap-partial-"), "clone");
+    git(origin, "clone", "--filter=blob:none", pathToFileURL(origin).href, root);
+    const packs = path.join(root, ".git", "objects", "pack");
+    const before = fs.readdirSync(packs).filter((file) => file.endsWith(".pack"));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(root, ["--base", "HEAD~"])).toBe(0);
+    expect(fs.readdirSync(packs).filter((file) => file.endsWith(".pack"))).toEqual(before);
   });
 
   it("counts oxlint-suppressed debt without changing the source", () => {

@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
-import { render, type ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SolidControllerHost } from "../../../lit/solid-controller-host.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatStateController } from "../chat-state-controller.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -128,7 +129,7 @@ describe("completed-work duration", () => {
       render(renderChatThread(props, transcript), container);
       transcript.hostUpdated();
     };
-    const host: ReactiveControllerHost = {
+    const host: SolidControllerHost = {
       addController: () => undefined,
       removeController: () => undefined,
       requestUpdate: rerender,
@@ -149,9 +150,11 @@ describe("completed-work duration", () => {
       expect(disclosure).not.toBeNull();
       expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
       disclosure?.click();
+      await vi.advanceTimersByTimeAsync(0);
       expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
       expect(container.textContent).toContain("read");
       disclosure?.click();
+      await vi.advanceTimersByTimeAsync(0);
       expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
       expect(container.textContent).not.toContain("read");
       expect(container.textContent).toContain("Inspection complete");
@@ -294,6 +297,7 @@ describe("live progress placement", () => {
       render(renderChatThread(props, transcript), container);
       transcript.hostConnected();
       transcript.hostUpdated();
+      flush();
       const progress = container.querySelector(".chat-working-indicator")!;
       const answer = container.querySelector('[data-entry-id="latest-answer"]')!;
       const activity = container.querySelector('[data-entry-id="latest-tool"]')!;

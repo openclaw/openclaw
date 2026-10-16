@@ -5,7 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import { clearBootRecords, type BootRecord } from "../app/boot-record.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
-import { bootRosterSchema } from "../lib/sessions/session-boot-roster.ts";
+import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import { subscribeSnapshotInvalidation } from "../pages/chat/session-snapshot-invalidation-events.ts";
 import {
@@ -33,12 +33,10 @@ const model: SidebarSnapshotModel = {
   roster: null,
   mode: "roster",
   navigationView: "sessions",
-  navigationScope: "all",
-  scopesEquivalent: false,
   pages: [],
   pageScopeId: null,
   pinnedSessions: [],
-  entries: ["online", "sessions"],
+  entries: ["route:usage"],
   sessions: [],
   sections: [],
   cards: [],
@@ -49,7 +47,8 @@ const model: SidebarSnapshotModel = {
   onlineCounts: [],
   peopleSortMode: "presence",
   peopleStatusFilter: "all",
-  onlineExpanded: true,
+  peoplePresenceFilter: "online",
+  offlineUsers: [],
   ownerId: "profile-a",
   involvingMe: true,
   footer: { id: "profile-a", name: "Juniper" },
@@ -424,7 +423,7 @@ describe("sidebar snapshot lifecycle", () => {
       return written.promise;
     });
     test.publish();
-    void test.settle({ ...model, onlineExpanded: false });
+    void test.settle({ ...model, peoplePresenceFilter: "all" });
     test.controller.synchronize();
     test.controller.capture();
     await issued.promise;

@@ -1,27 +1,26 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionBranches,
-  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
   readSessionBranchSnapshot,
   readSessionBranchSummariesInWorker,
-} from "./session-accessor.sqlite-branches.js";
+} from "./session-accessor.sqlite-branches.worker.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionBranchListResult } from "./session-accessor.types.js";
@@ -35,6 +34,7 @@ afterEach(async () => {
     await cleanupSessionStateForTest({ stateDir });
   }
   tempDirs.cleanup();
+  clearRuntimeConfigSnapshot();
 });
 
 function message(
@@ -200,7 +200,7 @@ const cases: Array<{
         { type: "text", text: "joined" },
       ]),
       message("analysis", "root", "not the headline", { role: "assistant", phase: "commentary" }),
-      message("answer", "analysis", " final\n  answer ", {
+      message("answer", "analysis", "## **final**\n  [answer](https://example.com) ", {
         role: "assistant",
         phase: "final_answer",
       }),
@@ -256,6 +256,7 @@ const cases: Array<{
 ];
 
 async function seedStoredBranchEvents(events: Record<string, unknown>[]) {
+  setRuntimeConfigSnapshot({});
   const agentId = "main";
   const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-branch-summary-") };
   const scope = {
@@ -282,7 +283,7 @@ async function seedStoredBranchEvents(events: Record<string, unknown>[]) {
             events.map((event, index) => ({
               session_id: scope.sessionId,
               seq: index + 2,
-              event_json: JSON.stringify(event),
+              ...prepareTranscriptPayload(database.db, JSON.stringify(event)),
               created_at: 1,
             })),
           ),
@@ -391,8 +392,6 @@ it("reads only the newest usable appended headline while retaining cached histor
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
   const expected = {
     sessionKey: scope.sessionKey,
-    sessionId: scope.sessionId,
-    lifecycleRevision: loadSessionEntry(scope)?.lifecycleRevision,
   };
   const previous = readSessionBranchSnapshot(database, expected);
   expect(previous).toMatchObject({ status: "ok", appendSafe: true });
@@ -459,17 +458,11 @@ it("uses one snapshot for navigation and lazy headline reads", async () => {
     message("tail", "root", "tool payload", { role: "toolResult" }),
   ]);
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
-  const writer = new DatabaseSync(database.path);
-  const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
-  if (typeof databaseIdentity !== "string") {
-    throw new Error("expected a persisted branch fixture");
-  }
+  const writer = sqliteRuntime.openNodeSqliteDatabase(database.path);
+  admitSqliteSchema(writer);
   const request = {
     database: { agentId: scope.agentId, path: database.path },
-    databaseIdentity,
     sessionKey: scope.sessionKey,
-    sessionId: scope.sessionId,
-    lifecycleRevision: loadSessionEntry(scope)?.lifecycleRevision,
   };
   const openSqlite = sqliteRuntime.openNodeSqliteDatabase;
   let changed = false;

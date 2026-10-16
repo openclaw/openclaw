@@ -1,6 +1,10 @@
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +29,7 @@ import type { CodexServerNotification } from "./protocol.js";
 import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
   createCodexTestBindingStore,
+  createCodexTestContextEngineBinding as contextEngineBinding,
   readCodexAppServerBinding,
   resetCodexTestBindingStore,
 } from "./session-binding.test-helpers.js";
@@ -33,20 +38,6 @@ import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-compact-");
 let tempDir: string;
-
-function contextEngineBinding() {
-  return {
-    schemaVersion: 1 as const,
-    engineId: "lossless-claw",
-    policyFingerprint: "policy-1",
-    projection: {
-      schemaVersion: 1 as const,
-      mode: "thread_bootstrap" as const,
-      epoch: "epoch-1",
-      fingerprint: "fingerprint-1",
-    },
-  };
-}
 
 async function createRetainedHarness(onRequest: (request: { id: number; method: string }) => void) {
   const harness = createClientHarness({
@@ -104,10 +95,12 @@ describe("maybeCompactCodexAppServerSession", () => {
   beforeEach(() => {
     resetCodexTestBindingStore();
     tempDir = tempDirs.make();
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(() => {
     resetCodexAppServerClientFactoryForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   it.each(["generation", "deadline", "abort"] as const)(
@@ -207,13 +200,16 @@ describe("maybeCompactCodexAppServerSession", () => {
         await expect(pending).resolves.toMatchObject({
           ok: false,
           compacted: false,
-          reason: expect.stringContaining(
+          reason:
             rejection === "generation"
-              ? "Codex session generation is no longer current"
-              : rejection === "deadline"
-                ? "thread/compact/start timed out"
-                : "thread/compact/start aborted",
-          ),
+              ? expect.stringMatching(
+                  /Codex session (generation is no longer current|execution policy changed)/,
+                )
+              : expect.stringContaining(
+                  rejection === "deadline"
+                    ? "thread/compact/start timed out"
+                    : "thread/compact/start aborted",
+                ),
         });
         expect(closeAndWait).not.toHaveBeenCalled();
         expect(bindingStore.read(current)).toEqual(binding);
@@ -225,6 +221,7 @@ describe("maybeCompactCodexAppServerSession", () => {
           identity: rejection === "generation" ? next : current,
           storePath: scope.storePath,
         });
+        using _ = { [Symbol.dispose]: () => recovered.release() };
         expect(recovered.binding).toEqual(binding);
         if (rejection === "generation") {
           await expect(

@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type {
@@ -11,6 +16,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { onOutboundDeliveryEnqueued } from "../delivery-queue-cache.js";
 import { loadDeliveryQueueEntries } from "../delivery-queue-sqlite.js";
 import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
 import { sqliteWorkerPreloadEnv } from "../sqlite-worker-preload.test-support.js";
@@ -22,8 +28,11 @@ import {
 import { holdEnqueueReply } from "./delivery-queue-enqueue.worker.test-support.js";
 import { DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import { StableDeliveryPreparationLostError } from "./delivery-queue-preparation.js";
+import { drainPendingDeliveriesCore, recoverPendingDeliveries } from "./delivery-queue-recovery.js";
+import * as queueStorage from "./delivery-queue-storage.js";
 import { ackDelivery, enqueueDelivery } from "./delivery-queue-storage.js";
 import {
+  createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
   setQueuedEntryState,
@@ -39,11 +48,13 @@ let deliverStructuredOutboundPayloadsInternal: typeof import("./deliver.js").del
 
 describe("enqueue publication custody through the real sender", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
+  let unsubscribeEnqueued = () => {};
   beforeAll(async () => {
     ({ deliverOutboundPayloads, deliverStructuredOutboundPayloadsInternal } =
       await import("./deliver.js"));
   });
   afterEach(() => {
+    unsubscribeEnqueued();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     resetPluginRuntimeStateForTest();
@@ -111,10 +122,89 @@ describe("enqueue publication custody through the real sender", () => {
     return send;
   }
 
+  for (const mode of ["startup", "recurring"] as const) {
+    it(`keeps ${mode} recovery inspection from preempting a committed live producer`, async ({
+      signal,
+    }) => {
+      const stateDir = fixtures.tmpDir();
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const send = installSender();
+      const reply = holdEnqueueReply();
+      const reloadEntered = createDeferred();
+      const releaseReload = createDeferred();
+      const recoverySend = vi.fn(async () => []);
+      const delivery = deliverOutboundPayloads({
+        ...deliveryParams(stateDir),
+        payloads: [{ text: "synthetic retained text" }],
+      });
+      const outcome = delivery.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      let recovery: Promise<unknown> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            reply.held,
+            delivery,
+            "Delivery settled before committed enqueue reply",
+          ),
+          signal,
+        );
+        const [entry] = await withinTest(queueStorage.loadUnfinishedDeliveries(stateDir), signal);
+        expect(entry).toMatchObject({
+          requiresProducerClaim: true,
+          recoveryState: "producer_claimed",
+          producerClaimId: expect.any(String),
+        });
+        expect(entry!.availableAt).toBeGreaterThan(Date.now());
+
+        // Keep the real authoritative read suspended after it observes the
+        // committed row, while the producer's writer reply is still held.
+        const load = queueStorage.loadUnfinishedDelivery;
+        vi.spyOn(queueStorage, "loadUnfinishedDelivery").mockImplementation(async (...args) => {
+          const current = await load(...args);
+          if (args[0] === entry!.id) {
+            reloadEntered.resolve();
+            await releaseReload.promise;
+          }
+          return current;
+        });
+        const options = { cfg: {}, stateDir, log: createRecoveryLog(), deliver: recoverySend };
+        recovery =
+          mode === "startup"
+            ? recoverPendingDeliveries(options)
+            : drainPendingDeliveriesCore({
+                ...options,
+                drainKey: stateDir,
+                logLabel: "live producer recovery",
+                selectEntry: () => ({ match: true }),
+              });
+        // Recovery may finish without inspecting a row owned by a live producer.
+        await withinTest(Promise.race([reloadEntered.promise, recovery]), signal);
+        reply.release();
+        await withinTest(
+          expect(delivery).resolves.toMatchObject([{ messageId: "synthetic-delivered" }]),
+          signal,
+        );
+        expect(send).toHaveBeenCalledOnce();
+        expect(recoverySend).not.toHaveBeenCalled();
+      } finally {
+        reply.release();
+        reply.restore();
+        releaseReload.resolve();
+        await Promise.allSettled([outcome, ...(recovery ? [recovery] : [])]);
+      }
+      expect(await queueStorage.loadUnfinishedDeliveries(stateDir)).toEqual([]);
+    });
+  }
+
   it("retains prepared media after a committed reply is lost, suppresses live fallback, and recovers exactly once", async () => {
     const { stateDir, mediaUrl } = await source();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const send = installSender();
+    const enqueued = vi.fn();
+    unsubscribeEnqueued = onOutboundDeliveryEnqueued(enqueued);
     const terminals: string[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => {
       if (event.action === "message.outbound.finished") {
@@ -141,6 +231,7 @@ describe("enqueue publication custody through the real sender", () => {
           ]),
         ).toBe("created");
         await reply.lose();
+        expect(enqueued).toHaveBeenCalledExactlyOnceWith(stateDir);
         const settled = await outcome;
         expect("error" in settled && isDeliveryRecoveryOwnedRetry(settled.error)).toBe(true);
         expect(send).not.toHaveBeenCalled();
@@ -177,6 +268,8 @@ describe("enqueue publication custody through the real sender", () => {
     "releases $kind staging after $failure and permits best-effort live sending",
     async ({ failure, kind, attempts }) => {
       const { stateDir, mediaUrl } = await source();
+      const enqueued = vi.fn();
+      unsubscribeEnqueued = onOutboundDeliveryEnqueued(enqueued);
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       if (failure === "native rollback") {
         await fs.mkdir(path.join(stateDir, "delivery-queue-media"), { recursive: true });
@@ -221,6 +314,7 @@ if (!isMainThread) {
         await ackDelivery(warmId, stateDir);
         await fs.writeFile(armPath, "armed");
       }
+      enqueued.mockClear();
       const send = installSender();
       const queued = vi.fn();
       const reply = holdEnqueueReply();
@@ -259,6 +353,7 @@ if (!isMainThread) {
         expect(reply.attempts()).toBe(attempts);
         expect(send).toHaveBeenCalledOnce();
         expect(queued).not.toHaveBeenCalled();
+        expect(enqueued).not.toHaveBeenCalled();
         await expectReleasedMedia(stateDir);
       } finally {
         reply.restore();

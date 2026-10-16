@@ -5,7 +5,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
@@ -39,9 +38,7 @@ function catalogState(namespace: string) {
 function createSnapshotFixture(namespace: string, rows: CodexThread[], homeId = namespace) {
   const native = { rows };
   const openState = () => catalogState(namespace);
-  const readNative = vi.fn(async () =>
-    projectCodexCatalogPage({ data: native.rows }, { sanitize: sanitizeTerminalText }),
-  );
+  const readNative = vi.fn(async () => projectCodexCatalogPage({ data: native.rows }));
   const createIndex = (state = openState()) =>
     new CodexCatalogIndex({ homeId, state, readNative, assertCurrent: () => {} });
   return { native, openState, readNative, createIndex };
@@ -61,10 +58,7 @@ describe("resident Codex catalog SQLite durability", () => {
   it("prunes obsolete cached rows in background before native hydration without deleting fresh replacements", async () => {
     const state = catalogState("resident-obsolete-authority-test");
     const native = idleThread({ id: "fresh", source: "cli", preview: "Current native request" });
-    const projected = await projectCodexCatalogPage(
-      { data: [native] },
-      { sanitize: sanitizeTerminalText },
-    );
+    const projected = await projectCodexCatalogPage({ data: [native] });
     const legacy = structuredClone(projected.rows[0]!);
     Reflect.deleteProperty(legacy, "nativeMetadata");
     await state.register("obsolete-cache-key", { version: 1, kind: "row", row: legacy });
@@ -145,8 +139,7 @@ describe("resident Codex catalog SQLite durability", () => {
       homeId: source.sourceHomeId,
       localSessionsRoot: root,
       state: openState(),
-      readNative: async () =>
-        projectCodexCatalogPage({ data: [current] }, { sanitize: sanitizeTerminalText }),
+      readNative: async () => projectCodexCatalogPage({ data: [current] }),
       assertCurrent: () => {},
     });
     try {
@@ -270,10 +263,7 @@ describe("resident Codex catalog SQLite durability", () => {
       if (paused) {
         await nativeAllowed.promise;
       }
-      return projectCodexCatalogPage(
-        { data: structuredClone(native) },
-        { sanitize: sanitizeTerminalText },
-      );
+      return projectCodexCatalogPage({ data: structuredClone(native) });
     });
     const createIndex = () =>
       new CodexCatalogIndex({
@@ -369,10 +359,7 @@ describe("resident Codex catalog SQLite durability", () => {
       if (offline) {
         await metadata.promise;
       }
-      return projectCodexCatalogPage(
-        { data: [structuredClone(native)] },
-        { sanitize: sanitizeTerminalText },
-      );
+      return projectCodexCatalogPage({ data: [structuredClone(native)] });
     });
     const createIndex = () =>
       new CodexCatalogIndex({
@@ -446,10 +433,7 @@ describe("resident Codex catalog SQLite durability", () => {
     ];
     const openState = () => catalogState("resident-mutations-test");
     const readNative = vi.fn(async () =>
-      projectCodexCatalogPage(
-        { data: structuredClone(native) },
-        { sanitize: sanitizeTerminalText },
-      ),
+      projectCodexCatalogPage({ data: structuredClone(native) }),
     );
     const createIndex = () =>
       new CodexCatalogIndex({
@@ -635,73 +619,65 @@ it("invalidates saved completeness when an admitted deletion fails during shutdo
   }
 });
 
-it.each(["before", "during"])(
-  "persists archives received %s saved snapshot restoration",
-  async (phase) => {
-    const startOptions = localStartOptions(`codex-catalog-archive-${phase}-restore-`);
-    const homeId = await codexCatalogResidentHomeKey({ startOptions });
-    const archived = idleThread({ id: "archived-during-restore", source: "cli" });
-    const current = idleThread({ id: "still-current", source: "cli" });
-    const { native, openState, readNative, createIndex } = createSnapshotFixture(
-      `archive-${phase}-snapshot-restore`,
-      [archived, current],
-      homeId,
-    );
-    const original = createIndex();
-    try {
-      await original.initialize();
-      expect((await original.list({})).sessions).toHaveLength(2);
-    } finally {
-      await original.close();
-    }
-    await closeOpenClawStateDatabaseAsync();
+it("persists archives received before saved snapshot restoration", async () => {
+  const startOptions = localStartOptions("codex-catalog-archive-before-restore-");
+  const homeId = await codexCatalogResidentHomeKey({ startOptions });
+  const archived = idleThread({ id: "archived-during-restore", source: "cli" });
+  const current = idleThread({ id: "still-current", source: "cli" });
+  const { native, openState, readNative, createIndex } = createSnapshotFixture(
+    "archive-before-snapshot-restore",
+    [archived, current],
+    homeId,
+  );
+  const original = createIndex();
+  try {
+    await original.initialize();
+    expect((await original.list({})).sessions).toHaveLength(2);
+  } finally {
+    await original.close();
+  }
+  await closeOpenClawStateDatabaseAsync();
 
-    const captured = createDeferred<void>();
-    const release = createDeferred<void>();
-    const state = openState();
-    const realEntries = state.entries;
-    vi.spyOn(state, "entries").mockImplementation(async () => {
-      const entries = await realEntries();
-      captured.resolve();
-      await release.promise;
-      return entries;
-    });
-    const restoring = createIndex(state);
-    const harness = createClientHarness();
-    let listed: ReturnType<CodexCatalogIndex["list"]> | undefined;
-    try {
-      await observeCodexCatalogClient(harness.client, { startOptions });
-      const archive = () => {
-        native.rows = [current];
-        harness.send({ method: "thread/archived", params: { threadId: archived.id } });
-      };
-      if (phase === "before") {
-        archive();
-      }
-      listed = restoring.list({});
-      void listed.catch(() => undefined);
-      await captured.promise;
-      if (phase === "during") {
-        archive();
-      }
-      release.resolve();
-      expect((await listed).sessions.map((row) => row.threadId)).toEqual([current.id]);
-      await restoring.initialize();
-    } finally {
-      release.resolve();
-      await listed?.catch(() => undefined);
-      await restoring.close();
-      await harness.client.closeAndWait();
-    }
-    await closeOpenClawStateDatabaseAsync();
+  const captured = createDeferred<void>();
+  const release = createDeferred<void>();
+  const state = openState();
+  const realEntries = state.entries;
+  vi.spyOn(state, "entries").mockImplementation(async () => {
+    const entries = await realEntries();
+    captured.resolve();
+    await release.promise;
+    return entries;
+  });
+  const restoring = createIndex(state);
+  const harness = createClientHarness();
+  let listed: ReturnType<CodexCatalogIndex["list"]> | undefined;
+  try {
+    await observeCodexCatalogClient(harness.client, { startOptions });
+    const archive = () => {
+      native.rows = [current];
+      harness.send({ method: "thread/archived", params: { threadId: archived.id } });
+    };
+    archive();
+    listed = restoring.list({});
+    void listed.catch(() => undefined);
+    await captured.promise;
+    release.resolve();
+    expect((await listed).sessions.map((row) => row.threadId)).toEqual([current.id]);
+    await restoring.initialize();
+  } finally {
+    release.resolve();
+    await listed?.catch(() => undefined);
+    await restoring.close();
+    await harness.client.closeAndWait();
+  }
+  await closeOpenClawStateDatabaseAsync();
 
-    readNative.mockClear();
-    const recovered = createIndex();
-    try {
-      expect((await recovered.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
-      expect(readNative).not.toHaveBeenCalled();
-    } finally {
-      await recovered.close();
-    }
-  },
-);
+  readNative.mockClear();
+  const recovered = createIndex();
+  try {
+    expect((await recovered.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
+    expect(readNative).not.toHaveBeenCalled();
+  } finally {
+    await recovered.close();
+  }
+});

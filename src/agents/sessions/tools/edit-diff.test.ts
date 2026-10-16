@@ -217,16 +217,6 @@ describe("fuzzy edit source-span mapping", () => {
     expect(result.content).toBe("const value = 2;  ");
   });
 
-  it("keeps trim-folding behavior inside a complete fuzzy span", () => {
-    const result = prepareChangedEdit(
-      "before\nfirst  \nsecond\nafter  \n",
-      [{ oldText: "first\nsecond", newText: "combined" }],
-      "test.ts",
-    );
-
-    expect(result.content).toBe("before\ncombined\nafter  \n");
-  });
-
   it("preserves CRLF while mapping a fuzzy Unicode span", () => {
     const result = prepareChangedEdit(
       "const value\u00A0= 1;\r\nnext\r\n",
@@ -261,6 +251,26 @@ describe("applyEditsToNormalizedContent fuzzy uniqueness", () => {
 
     expect(() =>
       prepareChangedEdit(content, [{ oldText: "foo();\n", newText: "baz();\n" }], "test.ts"),
+    ).toThrow(/Found 2 occurrences/);
+  });
+
+  it("rejects an oldText whose occurrences overlap", () => {
+    expect(() =>
+      prepareFileEdit(
+        "a();\na();\na();\n",
+        [{ oldText: "a();\na();", newText: "b();" }],
+        "test.ts",
+      ),
+    ).toThrow(/Found 2 occurrences/);
+  });
+
+  it("rejects a fuzzy oldText whose normalized occurrences overlap", () => {
+    expect(() =>
+      prepareFileEdit(
+        "a();\na(); \na();\n",
+        [{ oldText: "a();\na();\n", newText: "b();\n" }],
+        "test.ts",
+      ),
     ).toThrow(/Found 2 occurrences/);
   });
 });

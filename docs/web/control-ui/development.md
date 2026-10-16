@@ -21,6 +21,13 @@ The Gateway serves static files from `dist/control-ui`:
 pnpm ui:build
 ```
 
+Full package builds include matching bundled native plugin assets, including
+Workboard, in the UI distribution. These assets can load from the UI origin when
+the Gateway uses another origin or authenticated HTTP. The running plugin must
+match the packaged version and browser build; custom plugins and source overrides
+retain the Gateway asset route. A standalone UI build without packaged plugin
+artifacts also retains that route.
+
 The build's performance report keeps the initial-entry JavaScript budget separate
 from the complete chat and new-session boot totals. Those route totals include
 the entry assets and the route's measured immediate dynamic imports, counting
@@ -33,7 +40,7 @@ both builds contain route preload templates. Older builds report that comparison
 as unavailable, so use a cold-load network capture to compare their complete boot
 cost.
 
-Route boot JavaScript is limited to 35 requests per route, with three requests of headroom above the measured maximum, to catch facade regressions caused by top-level await disabling chunk optimization.
+Route boot JavaScript is limited to 35 requests per route to catch facade regressions caused by top-level await disabling chunk optimization. `pnpm ui:check-performance` enforces this limit locally and in CI; `pnpm ui:build` reports it without rejecting the build. Worker scripts and other URL assets remain available in the offline cache without being modulepreloaded into the document.
 
 After a Gateway update, already-open tabs reload the current build when they encounter a missing old asset. Reloading is automatic when no unsaved-work guard blocks it; otherwise, save or discard the protected work and use the **Reload** banner. The Gateway and service worker keep only the current build's assets.
 

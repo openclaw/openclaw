@@ -2,8 +2,11 @@ import rawFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import {
+  formatCliImageTurnContext,
+  hashCliImageTurnEntryId,
+} from "../agents/cli-image-turn-correlation.js";
 import { buildCliSessionDriftNote } from "../agents/cli-session.js";
-import { captureTranscriptRedactionSnapshot } from "../agents/transcript-redact-text.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
@@ -11,14 +14,15 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareCliSessionHistoryReader } from "./cli-session-history.js";
+import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-session-history.js";
 import { withClaudeProjectsDir } from "./cli-session-history.test-support.js";
 import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
-import { readChatHistoryMessageId } from "./session-history-tail.js";
+import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
 import { archiveSessionTranscriptPaths } from "./session-transcript-files.fs.js";
 
 it("serves a captured history prefix while both transcripts append and observes the next revision", async () => {
@@ -97,7 +101,6 @@ it("serves a captured history prefix while both transcripts append and observes 
         sessionAgentId: scope.agentId,
         canonicalKey: scope.sessionKey,
         cliHistoryHomeDir: homeDir,
-        cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
         max: 4,
         maxHistoryBytes: 64 * 1024,
         effectiveMaxChars: 4096,
@@ -205,7 +208,6 @@ it("applies native history eligibility to actual empty, message, and marker-only
                 sessionAgentId: scope.agentId,
                 canonicalKey: scope.sessionKey,
                 cliHistoryHomeDir: homeDir,
-                cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
                 max: 10,
                 maxHistoryBytes: 64 * 1024,
                 effectiveMaxChars: 4096,
@@ -284,7 +286,6 @@ it("observes newly available reset archives and refuses changed archive bodies u
         sessionAgentId: scope.agentId,
         canonicalKey: scope.sessionKey,
         cliHistoryHomeDir: homeDir,
-        cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
         max: 10,
         maxHistoryBytes: 64 * 1024,
         effectiveMaxChars: 4096,
@@ -381,7 +382,15 @@ it("observes newly available reset archives and refuses changed archive bodies u
   });
 });
 
-it("matches native rows on their original text and cleans only unmatched imports", async () => {
+it.each([
+  "resume",
+  "legacy hint",
+  "legacy context",
+  "legacy resume",
+  "legacy hint CRLF",
+  "legacy context CRLF",
+])("matches original native text and cleans unmatched imports with %s", async (decoration) => {
+  const kind = decoration.replace(" CRLF", "");
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId: nativeId, filePath }) => {
       const scope = {
@@ -396,7 +405,24 @@ it("matches native rows on their original text and cleans only unmatched imports
         cliSessionBindings: { "claude-cli": { sessionId: nativeId } },
       };
       const note = buildCliSessionDriftNote(["prompt-tools"]);
-      const literal = `${note}\n\nhello`;
+      const hint =
+        'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\n';
+      const context =
+        'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner","display_name":"Owner"}}\n```\n\n';
+      const prefix = (
+        kind === "resume"
+          ? `${note}\n\n`
+          : kind === "legacy hint"
+            ? hint
+            : kind === "legacy context"
+              ? context + hint
+              : `${note}\n\n${context}${hint}`
+      ).replaceAll("\n", decoration.endsWith("CRLF") ? "\r\n" : "\n");
+      const literal = `${prefix}hello`;
+      const plain =
+        kind === "legacy context"
+          ? context.replace("}}", '},"requester_profile_hint":"current"}') + "hello"
+          : "hello";
       const events = "System: [2026-10-04 13:15:44 GMT+8] Model switched.\n\n";
       const local = (id: string, parentId: string | null, content: string, timestamp: number) => ({
         type: "message",
@@ -407,9 +433,9 @@ it("matches native rows on their original text and cleans only unmatched imports
       await replaceSessionEntry(scope, entry);
       await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: scope.sessionId },
-        local("literal", null, literal, 1_000),
-        local("plain", "literal", "hello", 2_000),
-        local("question", "plain", "real question", 3_000),
+        local("plain", null, plain, 1_000),
+        local("literal", "plain", literal, 2_000),
+        local("question", "literal", "real question", 3_000),
       ]);
       await waitForSessionTranscriptProjection(scope);
       const native = (uuid: string, content: string, timestamp: number) =>
@@ -423,9 +449,13 @@ it("matches native rows on their original text and cleans only unmatched imports
         filePath,
         [
           native("native-literal", literal, 1_001),
-          native("native-plain", "hello", 2_001),
-          native("native-question", `${note}\n\n${events}real question`, 3_001),
-          native("native-unmatched", `${note}\n\n${events}only in the native file`, 4_000),
+          native(
+            "native-plain",
+            kind === "legacy context" ? `${prefix}${events}hello` : "hello",
+            2_001,
+          ),
+          native("native-question", `${prefix}${events}real question`, 3_001),
+          native("native-unmatched", `${prefix}${events}only in the native file`, 4_000),
           native(
             "native-exec",
             `${events}${buildExecEventPrompt(["Exec completed (example, code 0) :: done"])}`,
@@ -451,7 +481,6 @@ it("matches native rows on their original text and cleans only unmatched imports
               sessionAgentId: scope.agentId,
               canonicalKey: scope.sessionKey,
               cliHistoryHomeDir: homeDir,
-              cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
               max: 10,
               maxHistoryBytes: 64 * 1024,
               effectiveMaxChars: 4096,
@@ -469,8 +498,8 @@ it("matches native rows on their original text and cleans only unmatched imports
             });
             // Three canonical rows absorb their native copies; the literal note stays literal.
             expect(page.messages).toMatchObject([
-              { content: literal, __openclaw: { id: "literal" } },
-              { content: "hello", __openclaw: { id: "plain" } },
+              { content: plain, __openclaw: { id: "plain", externalId: "native-plain" } },
+              { content: literal, __openclaw: { id: "literal", externalId: "native-literal" } },
               { content: "real question", __openclaw: { id: "question" } },
               {
                 content: "only in the native file",
@@ -487,5 +516,143 @@ it("matches native rows on their original text and cleans only unmatched imports
         owner.close();
       }
     });
+  });
+});
+
+it("pages merged incognito CLI history without allocating SQLite", async () => {
+  await withClaudeProjectsDir(async ({ homeDir, sessionId: nativeId, filePath }) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "cli-memory",
+      sessionKey: "agent:main:incognito:cli-memory",
+      storePath: path.join(homeDir, "sessions.json"),
+    };
+    const media = [{ kind: "image", contentType: "image/png", path: "/media/inbound/test.png" }];
+    const local = [
+      { role: "user", content: "repeat", timestamp: 1000, __openclaw: { id: "first", seq: 1 } },
+      {
+        role: "assistant",
+        content: "locally edited",
+        timestamp: 2000,
+        __openclaw: {
+          id: "edited",
+          seq: 2,
+          importedFrom: "claude-cli",
+          externalId: "known",
+          cliSessionId: nativeId,
+        },
+      },
+      { role: "user", content: "repeat", timestamp: 3000, __openclaw: { id: "second", seq: 3 } },
+      {
+        role: "user",
+        content: "Photo",
+        timestamp: 4000,
+        __openclaw: {
+          id: "photo",
+          seq: 4,
+          media,
+        },
+      },
+    ];
+    const native = (uuid: string, role: string, content: string, timestamp: number) =>
+      JSON.stringify({
+        type: role,
+        uuid,
+        timestamp: new Date(timestamp).toISOString(),
+        message: { role, content },
+      });
+    await fs.writeFile(
+      filePath,
+      [
+        native("native-first", "user", "repeat", 1001),
+        native("known", "assistant", "original answer", 2001),
+        native("native-second", "user", "repeat", 3001),
+        native(
+          "native-photo",
+          "user",
+          `Photo\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId("photo"))}\n\n@/tmp/openclaw/openclaw-cli-images/${"a".repeat(64)}.png`,
+          4001,
+        ),
+        native("native-only", "assistant", "Native only", 5000),
+      ].join("\n"),
+    );
+    const unusedReader = async (): Promise<never> => {
+      throw new Error("Unexpected canonical lookup");
+    };
+    const readers: CliHistoryReaders = {
+      readSessionMessagesPageWithStatsAsync: async (_scope, options) => ({
+        messages: local
+          .filter(
+            (message) => readChatHistoryMessageSeq(message)! < (options.beforeSeq ?? Infinity),
+          )
+          .slice(-options.maxMessages),
+        totalMessages: local.length,
+        transcriptSource: "active",
+        displaySource: "memory",
+        activeLeafEntryId: "photo",
+      }),
+      readRecentSessionMessagesWithStatsAsync: unusedReader,
+      readSessionMessagesAroundIdWithStatsAsync: unusedReader,
+      readSessionMessageByIdAsync: unusedReader,
+    };
+    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation(() => {
+      throw new Error("Incognito history must not allocate SQLite");
+    });
+    let cli: Awaited<ReturnType<typeof prepareCliSessionHistoryReader>> = undefined;
+    try {
+      cli = await prepareCliSessionHistoryReader(
+        {
+          entry: {
+            sessionId: scope.sessionId,
+            updatedAt: 1,
+            incognito: true,
+            cliSessionBindings: { "claude-cli": { sessionId: nativeId } },
+          },
+          provider: "claude-cli",
+          sessionId: scope.sessionId,
+          storePath: scope.storePath,
+          sessionAgentId: scope.agentId,
+          canonicalKey: scope.sessionKey,
+          cliHistoryHomeDir: homeDir,
+          max: 3,
+          maxHistoryBytes: 64 * 1024,
+          effectiveMaxChars: 4096,
+          offset: undefined,
+          messageId: undefined,
+        },
+        readers,
+      );
+      expect(cli).toBeDefined();
+      const latest = await cli!.readers.readSessionMessagesPageWithStatsAsync(scope, {
+        offset: 0,
+        maxMessages: 3,
+      });
+      expect(latest.totalMessages).toBe(5);
+      expect(latest.messages).toMatchObject([
+        { content: "repeat", __openclaw: { id: "second", externalId: "native-second" } },
+        {
+          content: "Photo",
+          __openclaw: {
+            id: "photo",
+            externalId: "native-photo",
+            media,
+          },
+        },
+        { content: "Native only", __openclaw: { id: "native-only" } },
+      ]);
+      const older = await cli!.readers.readSessionMessagesPageWithStatsAsync(scope, {
+        offset: 3,
+        maxMessages: 3,
+      });
+      expect(older.messages).toMatchObject([
+        { content: "repeat", __openclaw: { id: "first", externalId: "native-first" } },
+        { content: "locally edited", __openclaw: { id: "edited", externalId: "known" } },
+      ]);
+      expect([...older.messages, ...latest.messages].map(cli!.sequence)).toEqual([1, 2, 3, 4, 5]);
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      cli?.dispose();
+      open.mockRestore();
+    }
   });
 });

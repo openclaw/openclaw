@@ -127,6 +127,13 @@ struct OpenClawApp: App {
             }
             SidebarCommands()
             CommandMenu("Navigate") {
+                Button(String(localized: "Reload")) {
+                    DashboardManager.shared.reloadDashboard()
+                }
+                .keyboardShortcut("r", modifiers: .command)
+
+                Divider()
+
                 if self.state.nativeExperienceEnabled {
                     Button("Command Palette…") {
                         WebChatManager.shared.showCommandPalette()
@@ -464,6 +471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleFirstRunOnboardingIfNeeded() async {
+        if await OnboardingController.shared.startFirstRunIfFresh() { return }
         let connectionMode = AppStateStore.shared.connectionMode
         let onboardingSeen = AppStateStore.shared.onboardingSeen
         if connectionMode != .unconfigured, onboardingSeen {

@@ -6,8 +6,7 @@ import { readCronJobScratchState, writeCronJobScratch } from "./scratch-store.js
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { run } from "./service/ops-run.js";
 import { createCronServiceState, type CronEvent, type CronServiceState } from "./service/state.js";
-import { runMissedJobs } from "./service/timer.js";
-import { onTimer } from "./service/timer.test-support.js";
+import { onTimer, runMissedJobs } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import type { CronJob } from "./types.js";
@@ -87,13 +86,6 @@ async function executeRemovalPath(
   await runMissedJobs(state);
 }
 
-function clearStateTimer(state: CronServiceState): void {
-  if (state.timer) {
-    state.timer.cancel();
-    state.timer = null;
-  }
-}
-
 beforeEach(resetGatewayWorkAdmission);
 
 afterEach(() => {
@@ -117,37 +109,29 @@ describe("cron one-shot removal", () => {
       }),
     ).toMatchObject({ ok: true, currentRevision: 1 });
 
-    try {
-      await executeRemovalPath(path, state, job.id);
+    await executeRemovalPath(path, state, job.id);
 
-      const relevantEvents = events.filter((event) => event.jobId === job.id);
-      expect(relevantEvents.map((event) => event.action)).toEqual([
-        "started",
-        "finished",
-        "removed",
-      ]);
-      const removed = relevantEvents.at(-1);
-      expect(removed).toMatchObject({
-        action: "removed",
-        jobId: job.id,
-        job: {
-          id: job.id,
-          name: job.name,
-          deleteAfterRun: true,
-          state: {
-            lastRunStatus: "ok",
-            lastStatus: "ok",
-          },
+    const relevantEvents = events.filter((event) => event.jobId === job.id);
+    expect(relevantEvents.map((event) => event.action)).toEqual(["started", "finished", "removed"]);
+    const removed = relevantEvents.at(-1);
+    expect(removed).toMatchObject({
+      action: "removed",
+      jobId: job.id,
+      job: {
+        id: job.id,
+        name: job.name,
+        deleteAfterRun: true,
+        state: {
+          lastRunStatus: "ok",
+          lastStatus: "ok",
         },
-      });
-      expect(durableStateAtRemoval).toHaveLength(1);
-      await expect(Promise.all(durableStateAtRemoval)).resolves.toEqual([
-        { jobs: [], scratch: { currentRevision: 0 } },
-      ]);
-      expect(state.store?.jobs).toEqual([]);
-    } finally {
-      clearStateTimer(state);
-    }
+      },
+    });
+    expect(durableStateAtRemoval).toHaveLength(1);
+    await expect(Promise.all(durableStateAtRemoval)).resolves.toEqual([
+      { jobs: [], scratch: { currentRevision: 0 } },
+    ]);
+    expect(state.store?.jobs).toEqual([]);
   });
 
   it.each(["timer", "startup catch-up"] as const)(
@@ -190,7 +174,6 @@ describe("cron one-shot removal", () => {
         expect(readCronJobScratchState(storePath, job.id)).toEqual(scratchBefore);
       } finally {
         database.exec("DROP TRIGGER IF EXISTS reject_final_cron_job_delete");
-        clearStateTimer(state);
       }
     },
   );

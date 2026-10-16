@@ -30,7 +30,8 @@ async function readCleanupDirectory(candidate: string, label: string, warnings: 
       warnings.push(`refused unsafe ${label}: ${candidate}`);
       return undefined;
     }
-    throw error;
+    warnings.push(`failed to read ${label}: ${candidate}: ${String(error)}`);
+    return undefined;
   }
   if (identity.realPath !== path.resolve(candidate)) {
     warnings.push(`refused escaped ${label}: ${candidate}`);
@@ -132,7 +133,7 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
   );
   // Initial setup can be durable before its config CAS is known. Pending
   // refresh metadata also owns the selected stable profile until recovery.
-  for (const { record } of listGitHubOAuthRecords()) {
+  for (const { record } of await listGitHubOAuthRecords()) {
     if (!record) {
       continue;
     }

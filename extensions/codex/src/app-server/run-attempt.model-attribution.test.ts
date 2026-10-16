@@ -14,7 +14,11 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { ensureAuthProfileStore, resolveAuthProfileOrder } from "openclaw/plugin-sdk/provider-auth";
+import {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  resolveAuthProfileOrder,
+} from "openclaw/plugin-sdk/provider-auth";
 import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "../../index.js";
@@ -24,7 +28,6 @@ import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key
 import { isJsonObject } from "./protocol.js";
 import {
   createTestParams,
-  fastWait,
   getMockRuntimeIdentity,
   setupRunAttemptTestHooks,
   tempDir,
@@ -47,7 +50,7 @@ setupRunAttemptTestHooks();
 describe("registered Codex harness model attribution", () => {
   it("attributes completed models and refreshes their selection on warm reuse", async () => {
     // Protocol events own completion; host load must not spend the attempt watchdog.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const params = createTestParams();
     // Supervision replaces the helper model; this fixture supplies no host tools.
     params.hostCapabilities = Object.freeze({
@@ -195,7 +198,12 @@ describe("registered Codex harness model attribution", () => {
     });
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(transport.client);
     const runtime = createPluginRuntimeMock({
-      modelAuth: { ensureAuthProfileStore, resolveAuthProfileOrder, resolveProviderIdForAuth },
+      modelAuth: {
+        ensureAuthProfileStore,
+        ensureAuthProfileStoreAsync,
+        resolveAuthProfileOrder,
+        resolveProviderIdForAuth,
+      },
       config: { current: () => ({ plugins: { entries: { codex: { config: pluginConfig } } } }) },
       state: stateRuntime.state,
     });
@@ -217,8 +225,12 @@ describe("registered Codex harness model attribution", () => {
     const registered = registration[0];
     const events: Array<Parameters<NonNullable<EmbeddedRunAttemptParamsV2["onAgentEvent"]>>[0]> =
       [];
+    let modelPublished = createDeferred<void>();
     params.onAgentEvent = (event) => {
       events.push(event);
+      if (event.stream === "lifecycle" && event.data.phase === "model") {
+        modelPublished.resolve();
+      }
     };
     const modelEvents = () =>
       events.filter((event) => event.stream === "lifecycle" && event.data.phase === "model");
@@ -234,15 +246,16 @@ describe("registered Codex harness model attribution", () => {
     let next: typeof run | undefined;
     try {
       await Promise.race([
-        turnStarted.promise,
+        modelPublished.promise,
         run.then((result) => {
-          throw new Error("Attempt ended before turn/start", { cause: result });
+          throw new Error("Attempt ended before model attribution", { cause: result });
         }),
       ]);
-      await vi.waitFor(() => expect(modelEvents()).toEqual([readyModelEvent]), fastWait);
+      expect(modelEvents()).toEqual([readyModelEvent]);
       expect(
         events.some((event) => event.stream === "lifecycle" && event.data.phase === "end"),
       ).toBe(false);
+      modelPublished = createDeferred<void>();
       for (const [threadId, turnId, toModel] of [
         ["foreign-thread", "turn-1", "foreign-thread-model"],
         ["native-thread", "foreign-turn", "foreign-turn-model"],
@@ -253,10 +266,13 @@ describe("registered Codex harness model attribution", () => {
           params: { threadId, turnId, fromModel: "ready-native-model", toModel, reason: "other" },
         });
       }
-      await vi.waitFor(
-        () => expect(modelEvents()).toEqual([readyModelEvent, reroutedModelEvent]),
-        fastWait,
-      );
+      await Promise.race([
+        modelPublished.promise,
+        run.then((result) => {
+          throw new Error("Attempt ended before rerouted model attribution", { cause: result });
+        }),
+      ]);
+      expect(modelEvents()).toEqual([readyModelEvent, reroutedModelEvent]);
       expect(events.filter((event) => event.stream === "fallback")).toEqual([
         {
           stream: "fallback",

@@ -10,7 +10,7 @@ import {
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
-import { createPublicationOwner } from "./package-update-publication-owner.js";
+import { runPackageActivationRecovery } from "./package-update-activation.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
@@ -34,24 +34,22 @@ afterEach(async () => {
   }
 });
 
-it.skipIf(process.platform === "win32").each(["preparation", "publication"] as const)(
-  "activates after candidate byte exhaustion at %s while retaining identity, version, and launcher checks",
-  (phase) =>
+it.skipIf(process.platform === "win32")(
+  "activates after candidate byte exhaustion while retaining identity, version, and launcher checks",
+  () =>
     fixtures.lifetime.run(async () => {
       const f = await createPackageSwapFixture(root);
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
       const payload = "a-oversized.bin";
       await fsp.writeFile(path.join(f.params.stage.packageRoot, payload), "");
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
-      const oversized =
-        phase === "preparation" ? f.params.stage.packageRoot : path.join(anchor, "candidate");
       const lstat = fsp.lstat.bind(fsp);
       let oversizedObserved = false;
       vi.spyOn(fsp, "lstat").mockImplementation(async (...args) => {
         const stat = await lstat(...args);
         if (
           !oversizedObserved &&
-          String(args[0]) === path.join(oversized, payload) &&
+          String(args[0]) === path.join(f.params.stage.packageRoot, payload) &&
           args[1]?.bigint &&
           stat.isFile()
         ) {
@@ -77,38 +75,56 @@ it.skipIf(process.platform === "win32").each(["preparation", "publication"] as c
         expect(updateRunStepsFromResultStep(result.step)).toContainEqual(
           expect.objectContaining({ step: "warning:package-swap", status: "completed" }),
         );
-        expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
-        const manifest = path.join(f.packageRoot, "package.json");
-        const originalManifest = fs.readFileSync(manifest);
-        expect(JSON.parse(originalManifest.toString()).version).toBe("2.0.0");
-        const journal = openPackageActivationJournal(anchor);
-        expect(journal.read().phase).toBe("publication-complete");
-
-        // Reopen the real journal as recovery would; no in-process fingerprint survives.
-        const owner = createPublicationOwner(anchor, journal, fence.assertCurrent);
-        const retained = path.join(root, "retained-candidate");
-        fs.renameSync(f.packageRoot, retained);
-        fs.mkdirSync(f.packageRoot);
-        fs.writeFileSync(manifest, originalManifest);
-        await expect(owner.preflight("retire")).rejects.toThrow("recorded generation");
-        fs.unlinkSync(manifest);
-        fs.rmdirSync(f.packageRoot);
-        fs.renameSync(retained, f.packageRoot);
-        fs.writeFileSync(manifest, '{"name":"openclaw","version":"3.0.0"}');
-        await expect(owner.preflight("retire")).rejects.toThrow(
-          "Package publication object changed",
-        );
-        fs.writeFileSync(manifest, originalManifest);
-        // Full fingerprints include manifest metadata, so only identity-only preparation
-        // can reuse the repaired version after this deliberate write.
-        if (phase === "preparation") {
-          fs.writeFileSync(f.launcher, "changed launcher\n");
-          await expect(owner.preflight("retire")).rejects.toThrow("Package launcher changed");
-          fs.writeFileSync(f.launcher, "candidate launcher\n");
-          await expect(owner.preflight("retire")).resolves.toBeUndefined();
-          await transaction!.complete({ activationVerified: true }, fence.assertCurrent);
-          expect(fs.existsSync(anchor)).toBe(false);
-        }
+        expect(transaction).toBeDefined();
       });
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+      const manifest = path.join(f.packageRoot, "package.json");
+      const originalManifest = fs.readFileSync(manifest);
+      expect(JSON.parse(originalManifest.toString()).version).toBe("2.0.0");
+      const record = openPackageActivationJournal(anchor).read();
+      expect(record.phase).toBe("publication-complete");
+      const recover = () =>
+        runPackageActivationRecovery(anchor, "retire", record.descriptor.operationId);
+      const retained = path.join(root, "retained-candidate");
+      fs.renameSync(f.packageRoot, retained);
+      fs.mkdirSync(f.packageRoot);
+      fs.writeFileSync(manifest, originalManifest);
+      await expect(recover()).rejects.toThrow("Package publication object changed");
+      fs.unlinkSync(manifest);
+      fs.rmdirSync(f.packageRoot);
+      fs.renameSync(retained, f.packageRoot);
+      fs.writeFileSync(manifest, '{"name":"openclaw","version":"3.0.0"}');
+      await expect(recover()).rejects.toThrow("Package publication object changed");
+      fs.writeFileSync(manifest, originalManifest);
+      fs.writeFileSync(f.launcher, "changed launcher\n");
+      await expect(recover()).rejects.toThrow("Selected package launcher fingerprint changed");
+      fs.writeFileSync(f.launcher, "candidate launcher\n");
+      await expect(recover()).resolves.toMatchObject({ phase: "complete" });
+      expect(fs.existsSync(anchor)).toBe(false);
+    }),
+);
+
+it.skipIf(process.platform === "win32")(
+  "keeps full fingerprint recovery strict when content verification exceeds its budget",
+  () =>
+    fixtures.lifetime.run(async () => {
+      const f = await fixtures.prepare();
+      const payload = path.join(f.anchor, "candidate", "dist", "index.js");
+      const lstat = fsp.lstat.bind(fsp);
+      let oversizedObserved = false;
+      vi.spyOn(fsp, "lstat").mockImplementation(async (...args) => {
+        const stat = await lstat(...args);
+        if (String(args[0]) === payload && args[1]?.bigint) {
+          stat.size = 8n * 1024n * 1024n * 1024n + 1n;
+          oversizedObserved = true;
+        }
+        return stat;
+      });
+      await expect(runPackageActivationRecovery(f.anchor, "repair", f.operationId)).rejects.toThrow(
+        "Package rollback verification byte limit exceeded",
+      );
+      expect(oversizedObserved).toBe(true);
+      expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
     }),
 );

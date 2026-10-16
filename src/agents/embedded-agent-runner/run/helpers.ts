@@ -1,6 +1,6 @@
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
+import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
 import {
   deriveContextPromptTokens,
@@ -11,6 +11,7 @@ import {
 } from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
 import { toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
+import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 
 export type RuntimeAuthState = {
   generation: number;
@@ -173,17 +174,30 @@ export function resolveFinalAssistantVisibleText(
   if (!lastAssistant) {
     return undefined;
   }
-  const visibleText = extractAssistantVisibleText(lastAssistant).trim();
+  const visibleText = extractAssistantVisibleText(lastAssistant);
   return visibleText || undefined;
+}
+
+/**
+ * Raw text of the model's final message for diagnostic capture. A message that
+ * ended in a tool call is not final: the turn continued past it, so its text is
+ * narration even when a later message never completed.
+ */
+export function resolveFinalMessageRawText(
+  lastAssistant: AssistantMessage | undefined,
+): string | undefined {
+  if (
+    !lastAssistant ||
+    lastAssistant.stopReason === "toolUse" ||
+    lastAssistant.content.some(isRunnerToolCallBlock)
+  ) {
+    return undefined;
+  }
+  return resolveFinalAssistantRawText(lastAssistant);
 }
 
 export function resolveFinalAssistantRawText(
   lastAssistant: AssistantMessage | undefined,
 ): string | undefined {
-  if (!lastAssistant) {
-    return undefined;
-  }
-  const finalAnswerText = extractAssistantTextForPhase(lastAssistant, { phase: "final_answer" });
-  const rawText = (finalAnswerText ?? extractAssistantTextForPhase(lastAssistant) ?? "").trim();
-  return rawText || undefined;
+  return lastAssistant ? resolveRawAssistantAnswerText(lastAssistant) || undefined : undefined;
 }

@@ -121,16 +121,22 @@ export function buildProviderStreamFamilyHooks(
           let nextStreamFn = createOpenAIAttributionHeadersWrapper(ctx.streamFn);
 
           const serviceTier = resolveOpenAIServiceTier(ctx.extraParams);
-          // Payload/transport tier stays authoritative, then an explicit tier, then fast's default.
-          // Skip fast for valid config so its payload hook cannot install priority first.
-          if (!serviceTier && hasFastModeParam(ctx.extraParams)) {
-            nextStreamFn = createOpenAIFastModeWrapper(nextStreamFn, () =>
-              resolveOpenAIFastMode(ctx.extraParams),
-            );
-          }
-
-          if (serviceTier) {
-            nextStreamFn = createOpenAIServiceTierWrapper(nextStreamFn, serviceTier);
+          if (serviceTier || hasFastModeParam(ctx.extraParams)) {
+            const underlying = nextStreamFn;
+            // Snapshot the preference for each request, not each payload callback.
+            // Configured tiers are inherited defaults; explicit Standard clears them.
+            nextStreamFn = (model, context, options) => {
+              const fastMode = resolveOpenAIFastMode(ctx.extraParams);
+              const stream =
+                fastMode === undefined
+                  ? serviceTier
+                    ? createOpenAIServiceTierWrapper(underlying, serviceTier)
+                    : underlying
+                  : fastMode === false && serviceTier
+                    ? createOpenAIServiceTierWrapper(underlying, "default")
+                    : createOpenAIFastModeWrapper(underlying, fastMode);
+              return stream(model, context, options);
+            };
           }
 
           const textVerbosity = resolveOpenAITextVerbosity(ctx.extraParams);

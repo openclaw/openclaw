@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
-import { bootRosterSchema } from "../lib/sessions/session-boot-roster.ts";
+import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
 
 const text = z.string();
 const optionalText = text.optional();
@@ -46,8 +46,6 @@ export const sidebarSnapshotSchema = z.object({
   roster: bootRosterSchema.nullable(),
   mode: z.enum(["chip", "roster"]),
   navigationView: z.enum(["pages", "sessions", "online"]),
-  navigationScope: z.enum(["mine", "all"]),
-  scopesEquivalent: z.boolean(),
   pages: session.array(),
   pageScopeId: z.string().nullable(),
   pinnedSessions: session.array(),
@@ -118,7 +116,11 @@ export const sidebarSnapshotSchema = z.object({
   onlineCounts: z.tuple([text, z.object({ open: z.number(), running: z.number() })]).array(),
   peopleSortMode: z.enum(["presence", "running", "open", "name"]),
   peopleStatusFilter: z.enum(["all", "running"]),
-  onlineExpanded: z.boolean(),
+  peoplePresenceFilter: z.enum(["online", "all"]).default("online"),
+  offlineUsers: user
+    .extend({ watchedSessions: z.array(text).max(0), entries: z.array(z.never()).max(0) })
+    .array()
+    .default([]),
   ownerId: text.nullable(),
   involvingMe: z.boolean(),
   footer: user.nullable(),

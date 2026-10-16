@@ -432,7 +432,7 @@ EOF
 - `/elevated full` is a break-glass shortcut that skips exec approvals only
   when both the requested policy and the host approvals document resolve to
   `security: "full"` and `ask: "off"`. A stricter host file, such as `ask:
-"always"`, still prompts.
+  "always"`, still prompts.
 
 Outside the full-permission Gateway session exception, if the host approvals
 document stays stricter than config, the stricter host policy still wins.
@@ -593,8 +593,10 @@ substantive definition changes, even if a later edit restores the earlier
 definition. Pausing and re-enabling the unchanged automation preserves the
 grant. The grant also stops matching when the command, working directory, or
 environment differs by even one byte, when it is revoked or expired, or when
-the original approval record is gone. The check runs immediately before the
-process spawns, so a revocation or job edit that lands mid-flight still wins.
+the original approval record is gone. Each use checks the current grant and
+approval rows. Once a use commits, it authorizes that one start; a revocation
+or job edit can race that checked launch. Run liveness and host policy are still
+checked immediately before the process spawns.
 Mutable file operands and commands that require explicit review (heredocs,
 strict inline eval, audit suppression) keep prompting per occurrence.
 Non-automation approvals are unchanged.
@@ -612,7 +614,7 @@ change retroactively:
 - A resolving surface may override the default per grant with the
   `grantExpiresInDays` field on `approval.resolve` /
   `exec.approval.resolve`, or `openclaw approvals resolve <id> allow-always
---expires-in-days <n>`. The override wins over the config default.
+  --expires-in-days <n>`. The override wins over the config default.
 - Expired grants fall back to prompting and are pruned opportunistically.
 
 ### Listing and revoking
@@ -623,8 +625,9 @@ Every standing grant is visible and revocable:
   automation, exact command, use count, and state (until revoked, expires in
   N days, expired, revoked) — with a Revoke action per active row.
 - **CLI**: `openclaw approvals grants list` renders the same ledger.
-  `openclaw approvals grants revoke <grant-id>` revokes one grant. Repeating a revocation has no additional effect. It takes effect at the next occurrence's spawn boundary —
-  that occurrence prompts again.
+  `openclaw approvals grants revoke <grant-id>` revokes one grant. Repeating a
+  revocation has no additional effect. It blocks subsequent grant consumption,
+  which prompts again. An already-consumed use may still start.
 - Deleting or substantively editing the automation, or reversing the minting
   approval, also invalidates the grant without touching the grants surface.
   Pausing and re-enabling the unchanged automation does not.

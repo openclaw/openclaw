@@ -224,7 +224,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
         runtimeContextCarrier: true,
       });
     } else {
-      llmMessages.push({ role: "user", content, timestamp });
+      llmMessages.push({ role: "user", content, timestamp, synthetic: true });
     }
   });
   return llmMessages;

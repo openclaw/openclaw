@@ -50,13 +50,11 @@ export type WorkerDispatchPlacementStore = Pick<
   | "completePlacementMoveSourceToLocal"
   | "completeAbandonedPlacementMoveSourceToLocal"
   | "completePlacementMoveToWorker"
-  | "getPlacementMove"
   | "recordPlacementMoveError"
   | "fail"
   | "get"
   | "getAsync"
   | "getWithMoveAsync"
-  | "readCurrentMoveAuthority"
   | "getPlacementMoveAsync"
   | "readProjection"
   | "readRecoveryCandidates"
@@ -65,7 +63,6 @@ export type WorkerDispatchPlacementStore = Pick<
   | "beginWorkspaceReconciliation"
   | "abortWorkspaceReconciliation"
   | "listWorkspaceReconciliationOwners"
-  | "list"
   | "listPendingWorkspaceResultsAsync"
   | "markWorkspaceResultPending"
   | "handoffWorkspaceResultRecovery"
@@ -110,7 +107,8 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "startTunnel"
   | "stopTunnel"
   | "supportsProviderExecutionMode"
->;
+> &
+  Partial<Pick<WorkerEnvironmentService, "runProjectLifecycleCommand">>;
 
 export type WorkerActivationBarrier = (params: {
   sessionId: string;

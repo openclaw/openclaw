@@ -1,7 +1,7 @@
 import type fs from "node:fs";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
-  appendConfigAuditRecordSync,
+  enqueueConfigAuditRecord,
   captureConfigAuditAppender,
   createConfigObserveAuditRecord,
 } from "./io.audit.js";
@@ -205,7 +205,7 @@ export function observeConfigSnapshotSync(
   const backup =
     (baseline?.hash ? baseline : null) ?? readConfigFingerprintForPathSync(deps, backupPath);
   deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
-  appendConfigAuditRecordSync({
+  enqueueConfigAuditRecord({
     env: deps.env,
     homedir: deps.homedir,
     record: createConfigObserveAuditRecord({

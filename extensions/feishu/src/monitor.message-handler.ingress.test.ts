@@ -247,7 +247,7 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     expect(transport.calls.adopted).not.toHaveBeenCalled();
   });
 
-  it("adopts every constituent while dispatching the latest fresh message", async () => {
+  it("adopts every constituent while dispatching the combined messages", async () => {
     const first = createLifecycle();
     const second = createLifecycle();
     const firstClaim = createClaim("first");
@@ -268,15 +268,14 @@ describe("Feishu durable ingress debounce lifecycle", () => {
       await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
     }
     const keys = harness.claim.mock.calls.map(([params]) => params.messageId);
-    harness.hasProcessedMessage.mockImplementation(async (key) => key === keys[1]);
     await harness.flush();
 
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
     expect(harness.handleMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        event: events[0],
-        messageDedupeKey: keys[0],
-        preparedContent: "alpha",
+        event: events[1],
+        messageDedupeKey: keys[1],
+        preparedContent: "alpha\nbeta",
       }),
     );
     for (const claim of [firstClaim, secondClaim]) {

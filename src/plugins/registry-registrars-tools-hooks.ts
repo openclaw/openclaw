@@ -276,13 +276,15 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
-    getPluginInstance(record)?.admitFactory(factory);
+    getPluginInstance(record)?.admitFactory(factory, "tool");
     registry.tools.push({
       ...createRegistration(record, {
         factory,
         ...(versioned ? { contextVersion: 2 as const } : {}),
         names: normalized,
         optional,
+        workspaceAccess:
+          opts?.workspaceAccess ?? (typeof tool !== "function" && !versioned ? "execute" : true),
         origin: record.origin,
       }),
       // Host-owned membership must not re-enter the callable wrapper's graph walk.

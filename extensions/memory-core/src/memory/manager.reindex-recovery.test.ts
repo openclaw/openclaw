@@ -12,15 +12,19 @@ import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engi
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { registerEmbeddingProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
+  openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import "./test-runtime-mocks.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { EmbeddingProvider } from "./embeddings.js";
@@ -44,7 +48,7 @@ type ReindexHarness = {
   syncArchiveFiles: (params: SyncArchiveParams) => Promise<unknown>;
   db: DatabaseSync;
   cache: { enabled: boolean; maxEntries?: number };
-  writeMeta: (meta: MemoryIndexMeta) => void;
+  writeMeta: (meta: MemoryIndexMeta) => Promise<void>;
   providerKey: string | null;
   provider: EmbeddingProvider | null;
   dirty: boolean;
@@ -123,9 +127,12 @@ describe("memory manager reindex recovery", () => {
     await closeAllMemorySearchManagers();
     // The agent close releases its leases through shared state and reopens it, so the
     // shared handle is released second; otherwise Windows fails the removal with EBUSY.
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
+    clearRuntimeConfigSnapshot();
     resetPluginStateStoreForTests();
+    clearRuntimeConfigSnapshot();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -157,6 +164,7 @@ describe("memory manager reindex recovery", () => {
   }
 
   async function openManager(cfg: OpenClawConfig): Promise<MemoryIndexManager> {
+    setRuntimeConfigSnapshot(cfg);
     const { getMemorySearchManager } = await import("./index.js");
     const result = await getMemorySearchManager({
       runInBackgroundContext: runInMemoryTestBackgroundContext,
@@ -301,8 +309,8 @@ describe("memory manager reindex recovery", () => {
       path.join(memoryDir, "large.md"),
       `${"first ".repeat(3500)}\n${"second ".repeat(3500)}`,
     );
-    harness.db
-      .prepare(`INSERT INTO memory_embedding_cache
+    openOpenClawAgentDatabase({ agentId: "main" })
+      .db.prepare(`INSERT INTO memory_embedding_cache
       (provider, model, provider_key, hash, embedding, dims, updated_at)
       VALUES ('unrelated', 'unrelated', 'unrelated', 'keep', ?, 2, 1)`)
       .run(encodeMemoryEmbedding([1, 0]));
@@ -371,12 +379,12 @@ describe("memory manager reindex recovery", () => {
         publishedDb.prepare("SELECT hash, dims FROM memory_embedding_cache ORDER BY hash").all();
       const fullCacheRows = () =>
         publishedDb.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
-      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
-      vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
+      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
+      vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
         async (...args) => {
           const [options, source, workerInput] = args;
           if (
-            source !== publishedDb ||
+            options.path !== publishedDb.location() ||
             workerInput.moduleUrl.href !==
               resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication).href
           ) {
@@ -492,77 +500,59 @@ describe("memory manager reindex recovery", () => {
     },
   );
 
-  it.each(["purge", "revoke"] as const)(
-    "revalidates generated cache writes after published writer admission (%s)",
-    async (scenario) => {
-      const cfg = createCfg({ sources: ["memory"], cacheEnabled: true });
-      const memoryManager = await openManager(cfg);
-      const harness = memoryManager as unknown as ReindexHarness;
-      const publishedDb = harness.db;
-      const queued = createDeferred<void>();
-      let reservation: Awaited<ReturnType<typeof reservePublishedWriter>> | undefined;
-      observePublishedReservations(publishedDb, () => {
-        if (reservation) {
-          queued.resolve();
-        }
-      });
-      await memoryManager.sync({ reason: "cli", force: true });
-      if (!harness.provider) {
-        throw new Error("fixture provider missing");
+  it("refuses generated cache writes after database admission is revoked", async () => {
+    const cfg = createCfg({ sources: ["memory"], cacheEnabled: true });
+    const memoryManager = await openManager(cfg);
+    const harness = memoryManager as unknown as ReindexHarness;
+    const publishedDb = harness.db;
+    const queued = createDeferred<void>();
+    let reservation: Awaited<ReturnType<typeof reservePublishedWriter>> | undefined;
+    observePublishedReservations(publishedDb, () => {
+      if (reservation) {
+        queued.resolve();
       }
-      await fs.writeFile(path.join(memoryDir, "alpha.md"), "New reusable alpha memory.");
-      let reopenedDb: DatabaseSync | undefined;
-      vi.spyOn(harness.provider, "embedBatch").mockImplementationOnce(async (inputs) => {
-        reservation = await reservePublishedWriter(() => {
-          if (scenario === "purge") {
-            seedMemoryForgetTombstones({
-              agentId: "main",
-              sessionIds: ["forgotten-during-embedding"],
-            });
-          } else if (scenario === "revoke") {
-            closeOpenClawAgentDatabasesForTest();
-          }
-        });
-        return inputs.map(() => [0, 1, 0]);
+    });
+    await memoryManager.sync({ reason: "cli", force: true });
+    if (!harness.provider) {
+      throw new Error("fixture provider missing");
+    }
+    await fs.writeFile(path.join(memoryDir, "alpha.md"), "New reusable alpha memory.");
+    vi.spyOn(harness.provider, "embedBatch").mockImplementationOnce(async (inputs) => {
+      reservation = await reservePublishedWriter(() => {
+        closeOpenClawAgentDatabasesForTest();
       });
-      const sync = memoryManager.sync({ reason: "cli", force: true });
-      void sync.catch(() => undefined);
-      try {
-        await Promise.race([queued.promise, sync]);
-        expect(publishedDb.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
-        reservation?.release();
-        if (scenario === "revoke") {
-          // Revocation also fences the transcript lock holding the published writer.
-          await expect(reservation?.done).rejects.toThrow(
-            /^Agent database execution admission is closed$/,
-          );
-        } else {
-          await reservation?.done;
-        }
-        await expect(sync).rejects.toThrow(
-          scenario === "revoke"
-            ? /^Agent database execution admission is closed$/
-            : /Memory index changed/,
-        );
-        if (scenario === "revoke") {
-          // Readmission waits until the revoked write and its native owner settle.
-          await closeOpenClawAgentDatabasesAsync();
-          reopenedDb = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
-        }
-        expect(
-          (reopenedDb ?? publishedDb).prepare("SELECT hash FROM memory_embedding_cache").all(),
-        ).toEqual([]);
-      } finally {
-        reservation?.release();
-        await Promise.allSettled([reservation?.done, sync]);
-      }
-    },
-  );
+      return inputs.map(() => [0, 1, 0]);
+    });
+    const sync = memoryManager.sync({ reason: "cli", force: true });
+    void sync.catch(() => undefined);
+    try {
+      await Promise.race([queued.promise, sync]);
+      expect(publishedDb.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
+      reservation?.release();
+      // Revocation also fences the transcript lock holding the published writer.
+      await expect(reservation?.done).rejects.toThrow(
+        /^Agent database execution admission is closed$/,
+      );
+      await expect(sync).rejects.toThrow(/^Agent database execution admission is closed$/);
+      // Readmission waits until the revoked write and its native owner settle.
+      await closeOpenClawAgentDatabasesAsync();
+      const reopenedDb = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
+      expect(reopenedDb.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
+    } finally {
+      reservation?.release();
+      await Promise.allSettled([reservation?.done, sync]);
+    }
+  });
 
   it("drains accepted sync through provider and writer waits before closing", async () => {
     const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
     await memoryManager.sync({ reason: "baseline", force: true });
     const harness = memoryManager as unknown as ReindexHarness; // SAFETY: this fixture owns the manager and provider.
+    const db = harness.db;
+    const databasePath = db.location();
+    if (!databasePath) {
+      throw new Error("Expected the fixture's file-backed memory index");
+    }
     if (!harness.provider) {
       throw new Error("fixture provider missing");
     }
@@ -593,7 +583,9 @@ describe("memory manager reindex recovery", () => {
       expect(closed).toBe(false);
       reservation.release();
       await Promise.all([sync, close, reservation.done]);
-      expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
+      expect(db.isOpen).toBe(false);
+      using reader = new DatabaseSync(databasePath, { readOnly: true });
+      expect(reader.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
         { text: "Accepted sync survives close." },
       ]);
     } finally {
@@ -687,10 +679,10 @@ describe("memory manager reindex recovery", () => {
 
   it("bounds the shadow cache before any entries reach the primary", async () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
-    const interceptedSources: Array<Parameters<typeof open>[1]> = [];
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
+    const interceptedPaths: Array<string | undefined> = [];
     // Install before manager startup can retain its canonical publication client.
-    vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
+    vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
       async (...args) => {
         const [options, source, worker] = args;
         if (
@@ -706,7 +698,7 @@ describe("memory manager reindex recovery", () => {
           moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
           input: { kind: "cache-capacity", publication: worker.input, maximum: 2 },
         });
-        interceptedSources.push(source);
+        interceptedPaths.push(options.path);
         return client;
       },
     );
@@ -720,10 +712,8 @@ describe("memory manager reindex recovery", () => {
     // primary-file high-water growth followed by post-publication deletion.
     await memoryManager.sync({ reason: "cli", force: true });
 
-    expect(interceptedSources.length).toBeGreaterThan(0);
-    for (const source of interceptedSources) {
-      expect(source === harness.db).toBe(true);
-    }
+    expect(interceptedPaths.length).toBeGreaterThan(0);
+    expect(interceptedPaths.every((filename) => filename === harness.db.location())).toBe(true);
     expect(
       harness.db.prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache").get(),
     ).toEqual({ count: 2 });
@@ -750,8 +740,8 @@ describe("memory manager reindex recovery", () => {
       expect(
         harness.db.prepare("SELECT COUNT(*) AS c FROM memory_embedding_cache WHERE 0").get(),
       ).toEqual({ c: 0 });
-      expect(harness.db.prepare("DELETE FROM memory_embedding_cache WHERE 0").run().changes).toBe(
-        0,
+      expect(() => harness.db.prepare("DELETE FROM memory_embedding_cache WHERE 0").run()).toThrow(
+        /readonly/i,
       );
       expect([reads().length, deletes().length]).toEqual([1, 1]);
       observed.clear();
@@ -793,7 +783,7 @@ describe("memory manager reindex recovery", () => {
     await fs.writeFile(path.join(memoryDir, "alpha.md"), "published alpha");
     await memoryManager.sync({ reason: "cli", force: true });
     const harness = memoryManager as unknown as ReindexHarness;
-    const insert = harness.db.prepare(`
+    const insert = openOpenClawAgentDatabase({ agentId: "main" }).db.prepare(`
       INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
       VALUES ('previous-provider', 'previous-model', 'previous-key', ?, ?, 3, 1)
@@ -882,7 +872,11 @@ describe("memory manager reindex recovery", () => {
     }
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const reset = () =>
-      resetMemoryDatabase({ targetDb: harness.db, dbPath: databasePath, workspaceDir });
+      resetMemoryDatabase({
+        targetDb: openOpenClawAgentDatabase({ agentId: "main" }).db,
+        dbPath: databasePath,
+        workspaceDir,
+      });
     let releaseEmbedding = () => {};
     let markEmbeddingStarted = () => {};
     const embeddingGate = new Promise<void>((resolve) => {
@@ -995,7 +989,7 @@ describe("memory manager reindex recovery", () => {
           Date.now(),
         );
     }
-    harness.writeMeta({
+    await harness.writeMeta({
       model: "fts-only",
       provider: "none",
       providerKey: harness.providerKey ?? undefined,

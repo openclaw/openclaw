@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sha256Base64Url } from "../../infra/crypto-digest.js";
 import {
   consumeDeviceBootstrapTokenWithSetupCompletion,
@@ -14,10 +14,12 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../shared/device-bootstrap-profile.js";
 import {
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
@@ -82,11 +84,13 @@ describe("worker environment node enrollment store", () => {
     for (const manager of managers) {
       manager.stop();
     }
-    await closeOpenClawStateDatabaseAsync();
+    await closeOpenClawStateDatabaseByPathAsync(database.path);
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
   });
+
+  afterAll(closeStateDatabaseForTest);
 
   function createManager(beforePrepare?: () => Promise<void>) {
     const manager = createWorkerNodeEnrollmentManager({

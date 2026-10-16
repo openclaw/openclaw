@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
+import { scopeCommandTranscriptId } from "../../config/sessions/command-transcript.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
@@ -25,6 +26,10 @@ import {
   loadAbortRuntime,
   loadFastApproveRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
+import {
+  mirrorDeliveredReplyToTranscript,
+  sendReplyWithTranscriptMirror,
+} from "./dispatch-from-config.transcript.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { extractShortModelName } from "./response-prefix-template.js";
@@ -91,13 +96,34 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         modelFull: `${selectedModel.provider}/${selectedModel.model}`,
         thinkingLevel: modelSelection.thinkLevel ?? "off",
       };
+      const commandId = scopeCommandTranscriptId(
+        normalizeOptionalString(state.messageIdForHook),
+        state.hookState.inboundClaimContext,
+      );
+      const metadata =
+        sessionKey && commandId
+          ? {
+              sessionKey,
+              agentId: sessionAgentId,
+              expectedSessionId: sessionStoreEntry.entry?.sessionId,
+              commandText: ctx.commandText,
+              commandId,
+              text: fast.payload.text,
+              preferText: true,
+              idempotencyKey: `${fast.logKind}:${commandId}`,
+            }
+          : undefined;
       // Routed delivery owns its destination-scoped prefix. Direct dispatchers already own
       // their prefix, so seed that live context only when no cross-channel route is used.
-      const result = await state.routeReplyToOriginating(fast.payload, { responsePrefixContext });
+      const result = await state.routeReplyToOriginating(fast.payload, {
+        responsePrefixContext,
+        ...(metadata ? { mirror: false } : {}),
+      });
       if (result) {
         queuedFinal = result.ok;
         if (state.isRoutedReplyDelivered(result)) {
           routedFinalCount += 1;
+          await mirrorDeliveredReplyToTranscript({ metadata, cfg });
         }
         if (!result.ok) {
           logVerbose(
@@ -107,7 +133,14 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       } else {
         state.markInboundDedupeReplayUnsafe();
         params.replyOptions?.onModelSelected?.(modelSelection);
-        queuedFinal = dispatcher.sendFinalReply(fast.payload);
+        const sent = sendReplyWithTranscriptMirror({
+          dispatcher,
+          cfg,
+          metadata,
+          payload: fast.payload,
+          send: (payload) => turnLedger.sendQueued("final", payload),
+        });
+        queuedFinal = sent.queued;
       }
     } else if (suppressDelivery) {
       logVerbose(

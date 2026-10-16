@@ -28,9 +28,9 @@ import { AgentSession } from "./agent-session.js";
 import type { ExtensionRunner } from "./extensions/index.js";
 import { convertToLlm } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import type { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
 
@@ -46,6 +46,7 @@ export interface CreateAgentSessionOptions extends Omit<
   model: Model;
   /** Admitted thinking level, clamped to the selected model capabilities. */
   thinkingLevel: ThinkingLevel;
+  thinkingExplicit?: boolean;
 
   /** Runtime-owned allowlist; extensions cannot expand it. */
   tools: string[];
@@ -149,6 +150,44 @@ function getAttributionHeaders(
   return undefined;
 }
 
+// Fork replay retains this transport after disposal; never capture the session's options or scope.
+function createSessionStreamFn(
+  modelRegistry: CreateAgentSessionOptions["modelRegistry"],
+  settingsManager: SettingsManager,
+  thinkingExplicit: boolean | undefined,
+): NonNullable<AgentOptions["streamFn"]> {
+  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
+  const streamFn: NonNullable<AgentOptions["streamFn"]> = async (
+    modelResult,
+    context,
+    optionsLocal,
+  ) => {
+    const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
+    if (!auth.ok) {
+      throw new Error(auth.error);
+    }
+    // Isolated session streams bypass the process-default stream facade.
+    await import("../ai-transport-runtime-host.js");
+    optionsLocal?.signal?.throwIfAborted();
+    const providerRetrySettings = settingsManager.getProviderRetrySettings();
+    const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
+    const providerOptions = {
+      ...optionsLocal,
+      openclawThinkingExplicit: thinkingExplicit,
+      apiKey: auth.apiKey,
+      timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
+      maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+      headers:
+        attributionHeaders || auth.headers || optionsLocal?.headers
+          ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
+          : undefined,
+    };
+    return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, providerOptions);
+  };
+  bindStreamLlmRuntime(streamFn, modelRegistryRuntime.llmRuntime);
+  return streamFn;
+}
+
 export async function createAgentSession(
   options: CreateAgentSessionOptions,
 ): Promise<{ session: AgentSession }> {
@@ -215,8 +254,6 @@ export async function createAgentSession(
       ? await options.withSessionWriteSettlement(run)
       : await run();
 
-  assertInitialSessionCurrent();
-  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
     initialState: {
       systemPrompt: options.systemPrompt,
@@ -225,27 +262,7 @@ export async function createAgentSession(
       tools: [],
     },
     convertToLlm: convertToLlmWithBlockImages,
-    streamFn: async (modelResult, context, optionsLocal) => {
-      const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
-      if (!auth.ok) {
-        throw new Error(auth.error);
-      }
-      // Isolated session streams bypass the process-default stream facade.
-      await import("../ai-transport-runtime-host.js");
-      optionsLocal?.signal?.throwIfAborted();
-      const providerRetrySettings = settingsManager.getProviderRetrySettings();
-      const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-      return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, {
-        ...optionsLocal,
-        apiKey: auth.apiKey,
-        timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
-        maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-        headers:
-          attributionHeaders || auth.headers || optionsLocal?.headers
-            ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
-            : undefined,
-      });
-    },
+    streamFn: createSessionStreamFn(modelRegistry, settingsManager, options.thinkingExplicit),
     onPayload: async (payload) => {
       const runner = extensionRunnerRef.current;
       if (!runner?.hasHandlers("before_provider_request")) {
@@ -286,9 +303,6 @@ export async function createAgentSession(
     maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
   });
   setInternalBeforeToolBatch(agent, options.beforeToolBatch);
-  if (agent.streamFn) {
-    bindStreamLlmRuntime(agent.streamFn, modelRegistryRuntime.llmRuntime);
-  }
 
   let metadataCommit: SessionMetadataCommit | undefined;
   const appendInitialMetadata = (change: SessionMetadataChange, append: () => Promise<string>) =>
@@ -306,7 +320,7 @@ export async function createAgentSession(
     if (hasExistingSession && hasThinkingEntry) {
       return Promise.resolve();
     }
-    return withSessionManagerWrite(sessionManager, async () => {
+    return withSessionManagerAppend(sessionManager, async () => {
       assertInitialSessionCurrent();
       if (!hasExistingSession) {
         await appendInitialMetadata(

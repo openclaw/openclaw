@@ -1,4 +1,3 @@
-import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -7,34 +6,37 @@ const MAX_PENDING_STALLS = 8;
 
 type Stall = { elapsedMs: number; task: string; taskMs: number };
 type TaskObserver = { enter(name: string): () => void; stop(): void };
-type MainThreadTaskState = { context: AsyncLocalStorage<string>; observer?: TaskObserver };
+type MainThreadTaskState = { observer?: TaskObserver };
 
 const taskState = resolveGlobalSingleton<MainThreadTaskState>(
   Symbol.for("openclaw.mainThreadTask"),
-  () => ({ context: new AsyncLocalStorage<string>() }),
+  () => ({}),
 );
 
 /** Name code-owned work only; request text, paths, and identifiers do not belong in labels. */
-export function runWithMainThreadTask<T>(name: string, run: () => T): T {
+export function runWithMainThreadTask<T>(name: string, run: () => Promise<T>): Promise<T>;
+export function runWithMainThreadTask<T>(name: string, run: () => T): T;
+export function runWithMainThreadTask(name: string, run: () => unknown): unknown {
   const observer = taskState.observer;
   if (!observer) {
     return run();
   }
   const exit = observer.enter(name);
   try {
-    return taskState.context.run(name, run);
+    return run();
   } finally {
     exit();
   }
 }
 
-/** Measure callback execution, never the time an async operation spends awaiting I/O. */
+/** Measure explicit synchronous scopes; unscoped stalls rely on best-effort loop sampling. */
 export function createMainThreadStallMonitor(now: () => number = () => performance.now()) {
   taskState.observer?.stop();
   const pending: Stall[] = [];
   let stopped = false;
   let dropped = 0;
-  let depth = 0;
+  let delayMaxMs = 0;
+  let active = false;
   let startedAt = 0;
   let segmentAt = 0;
   let task = "unattributed";
@@ -48,70 +50,66 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
     }
     segmentAt = at;
   };
-  const before = () => {
-    if (depth++ !== 0) {
-      return;
-    }
-    startedAt = segmentAt = now();
-    task = longestTask = taskState.context.getStore() ?? "unattributed";
-    longestMs = 0;
-  };
-  const after = () => {
-    if (depth === 0 || --depth !== 0) {
-      return;
-    }
-    const at = now();
-    segment(at);
-    const elapsedMs = at - startedAt;
-    if (elapsedMs > STALL_MS) {
-      if (pending.length < MAX_PENDING_STALLS) {
-        pending.push({ elapsedMs, task: longestTask, taskMs: longestMs });
-      } else {
-        dropped++;
-      }
-    }
-  };
   const observer: TaskObserver = {
     stop() {
       if (stopped) {
         return;
       }
       stopped = true;
-      hook.disable();
       if (taskState.observer === observer) {
         delete taskState.observer;
       }
       pending.length = 0;
       dropped = 0;
+      delayMaxMs = 0;
     },
     enter(name) {
-      // Activation can occur within an already-running callback, before its hook was enabled.
-      const ownsTurn = depth === 0;
+      const ownsTurn = !active;
       if (ownsTurn) {
-        before();
+        active = true;
+        startedAt = segmentAt = now();
+        task = longestTask = "unattributed";
+        longestMs = 0;
       }
       segment(now());
       const previous = task;
       task = name;
       return () => {
-        segment(now());
+        const at = now();
+        segment(at);
         task = previous;
         if (ownsTurn) {
-          after();
+          active = false;
+          const elapsedMs = at - startedAt;
+          delayMaxMs = Math.max(delayMaxMs, elapsedMs);
+          if (elapsedMs > STALL_MS) {
+            if (pending.length < MAX_PENDING_STALLS) {
+              pending.push({ elapsedMs, task: longestTask, taskMs: longestMs });
+            } else {
+              dropped++;
+            }
+          }
         }
       };
     },
   };
-  // No init/destroy hooks or async-id map: each turn retains only its longest named segment.
-  const hook = createHook({ before, after });
   taskState.observer = observer;
-  hook.enable();
   return {
     drain() {
       const stalls = pending.splice(0);
       const omitted = dropped;
       dropped = 0;
-      return { stalls, dropped: omitted };
+      const maximum = delayMaxMs;
+      delayMaxMs = 0;
+      return { stalls, dropped: omitted, delayMaxMs: maximum };
+    },
+    reset() {
+      pending.length = 0;
+      dropped = 0;
+      delayMaxMs = 0;
+      startedAt = segmentAt = now();
+      longestMs = 0;
+      longestTask = task;
     },
     stop: () => observer.stop(),
   };

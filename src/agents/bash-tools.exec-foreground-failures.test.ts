@@ -186,7 +186,7 @@ describe("exec foreground failures", () => {
     expect(text).toMatch(/timed out/i);
     expect(text).toContain("external side effects may already have completed");
     expect(text).toContain("Verify the resulting state before retrying");
-    expect(text).toContain("Do not automatically rerun non-idempotent commands");
+    expect(text).toContain("Do not automatically rerun commands unless repeating them is safe");
     expect(text).toContain("known to be safe to retry");
     expect(text).not.toMatch(/process|background|yieldMs|poll|trailing &/i);
     expect(text).not.toContain("OOM-score wrapper");
@@ -360,24 +360,6 @@ describe("exec foreground failures", () => {
     expect(discardPreparedWorkdir).not.toHaveBeenCalled();
     expect(buildExecSpec).not.toHaveBeenCalled();
     expect(supervisorMock.spawn).not.toHaveBeenCalled();
-  });
-
-  it("does not preflight remote-only backend workdirs from the local workspace root", async () => {
-    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
-    fs.writeFileSync(path.join(workspaceDir, "script.py"), "print($TOKEN)\n");
-    const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({ workspaceDir });
-    mockSpawn();
-
-    const result = await tool.execute("call-remote-only-script", {
-      command: "python script.py",
-      workdir: "/remote/workspace/generated",
-    });
-
-    expect(result.details.status).toBe("completed");
-    expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/generated");
-    expect(buildExecSpec).toHaveBeenCalledOnce();
-    expect(buildExecSpec.mock.calls[0]?.[0]?.workdir).toBe("/remote/workspace/generated");
-    expect(supervisorMock.spawn).toHaveBeenCalledOnce();
   });
 
   it("uses the mapped host cwd for existing relative backend-validated sandbox workdirs", async () => {

@@ -91,6 +91,7 @@ export function prepareInstalledSkillCatalog(params: {
         promptListed: promptListed.has(skill.name),
         description: [skill.description, skill.locationNote].filter(Boolean).join("\n"),
         location: resolveSkillReadPath(skill),
+        locationNote: skill.locationNote,
         source: {
           filePath: skill.filePath,
           readContent: sandbox?.enabled ? undefined : skill.readContent,

@@ -1,3 +1,4 @@
+import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -8,17 +9,18 @@ import type {
   PreparedModelRuntimeAgentFacts,
   PreparedModelRuntimeCatalogAccessParams,
 } from "./prepared-model-runtime.catalog-contract.js";
-import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import {
   filterNativeModelCatalogScopes,
   selectPreparedModelCatalogInventory,
-} from "./prepared-model-runtime.full-catalog.js";
+} from "./prepared-model-runtime.catalog-publication.js";
+import { preparedModelInventoryKey } from "./prepared-model-runtime.facts.js";
+import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 import type {
   PreparedModelCatalogInventory,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
 
-function preparedProviderCatalogSource(
+export function preparedProviderCatalogSource(
   facts: PreparedModelRuntimeAgentFacts,
   generation: PreparedModelRuntimePluginGeneration,
   provider: string,
@@ -29,6 +31,14 @@ function preparedProviderCatalogSource(
   const providerEntries = <T>(entries: Record<string, T> | undefined) =>
     Object.fromEntries(Object.entries(entries ?? {}).filter(([id]) => normalize(id) === provider));
   return fingerprintPreparedRuntimeFacts({
+    // An upgraded owning plugin may list different models; its rows are not carried across.
+    pluginPackages: generation.pluginMetadataSnapshot.index.plugins
+      .filter(({ pluginId }) => pluginIds.includes(pluginId))
+      .map(({ pluginId, packageVersion, installRecordHash }) => [
+        pluginId,
+        packageVersion,
+        installRecordHash,
+      ]),
     remoteCatalogSource: generation.remoteCatalog?.sourceUrl,
     remoteCatalogRevision: generation.remoteCatalog?.revision,
     models: { ...config.models, providers: providerEntries(config.models?.providers) },
@@ -76,32 +86,34 @@ export function prepareRetainedProviderCatalog(
   params: PreparedModelRuntimeCatalogAccessParams,
   normalizeProvider: (provider: string) => string,
   eligibleProviders: readonly string[],
-  pluginFingerprint: string,
-  nativeSource: string,
 ) {
   const facts = params.agentFacts;
+  const inventoryKey = preparedModelInventoryKey(facts.input);
+  const nativeSource = fingerprintPreparedRuntimeFacts({
+    runtimePluginSelections: facts.input.runtimePluginSelections,
+    config: params.nativeConfigFingerprint,
+    configuredModelRefs: facts.configuredModelRefs,
+  });
+  const pluginFingerprint = resolveInstalledManifestRegistryIndexFingerprint(
+    params.pluginGeneration.pluginMetadataSnapshot.index,
+  );
   const inventory = params.inventoryOwner.catalogInventory;
-  const providerSource = (provider: string) =>
-    preparedProviderCatalogSource(
-      params.agentFacts,
-      params.pluginGeneration,
-      provider,
-      normalizeProvider,
-    );
   // Full acquisition also discovers providers outside eligibleProviders; only a full refresh
   // reacquires them, so every provider whose own identity is unchanged keeps its rows.
   const providerSources = new Map(
     [...new Set([...eligibleProviders, ...(inventory?.providers.keys() ?? [])])].map((provider) => [
       provider,
-      providerSource(provider),
+      preparedProviderCatalogSource(facts, params.pluginGeneration, provider, normalizeProvider),
     ]),
   );
   const previousAuth = inventory && getPreparedModelFullCatalogAuth(inventory.catalog);
-  const retainedProviders = new Set(
+  // A provider whose own config and credentials are unchanged keeps its rows visible; a changed
+  // or removed provider loses them at once. Rows from another plugin generation stay
+  // provisional until this generation rediscovers them.
+  const keptProviders = new Set(
     [...providerSources.keys()].filter(
       (provider) =>
-        inventory?.pluginFingerprint === pluginFingerprint &&
-        inventory.providers.get(provider)?.source === providerSources.get(provider) &&
+        inventory?.providers.get(provider)?.source === providerSources.get(provider) &&
         hasSamePreparedModelCatalogAuth(
           previousAuth,
           facts,
@@ -109,17 +121,27 @@ export function prepareRetainedProviderCatalog(
         ),
     ),
   );
+  const provenProviders =
+    inventory?.pluginFingerprint === pluginFingerprint ? keptProviders : new Set<string>();
   const retainedInventory: PreparedModelCatalogInventory | undefined =
-    inventory && retainedProviders.size
+    inventory && keptProviders.size
       ? {
           ...selectPreparedModelCatalogInventory(inventory, (provider) =>
-            retainedProviders.has(normalizeProvider(provider)),
+            keptProviders.has(normalizeProvider(provider)),
           ),
           nativeSource,
         }
       : undefined;
   if (retainedInventory) {
-    // Native presence markers and empty credentials do not identify an account.
+    retainedInventory.providers = new Map(
+      [...retainedInventory.providers].map(([provider, providerFacts]) => [
+        provider,
+        provenProviders.has(provider) ? providerFacts : { ...providerFacts, provisional: true },
+      ]),
+    );
+    // A harness may list models from any agent or plugin setting, so native rows survive only an
+    // unchanged native source. Native presence markers and empty credentials do not identify
+    // an account.
     const identifiedNativeProviders = new Set(
       inventory?.nativeSource === nativeSource
         ? Object.entries(facts.credentials).flatMap(([provider, credential]) =>
@@ -129,13 +151,13 @@ export function prepareRetainedProviderCatalog(
           )
         : [],
     );
+    const includesNativeProvider = (provider: string) =>
+      identifiedNativeProviders.has(normalizeProvider(provider));
     const retain = (entry: ModelCatalogSnapshot["entries"][number]) =>
-      !entry.nativeRuntime || identifiedNativeProviders.has(normalizeProvider(entry.provider));
+      !entry.nativeRuntime || includesNativeProvider(entry.provider);
     retainedInventory.catalog.entries = retainedInventory.catalog.entries.filter(retain);
     retainedInventory.catalog.routeVariants =
       retainedInventory.catalog.routeVariants.filter(retain);
-    const includesNativeProvider = (provider: string) =>
-      identifiedNativeProviders.has(normalizeProvider(provider));
     retainedInventory.catalog.nativeProviderOutcomes = filterNativeModelCatalogScopes(
       retainedInventory.catalog.nativeProviderOutcomes,
       includesNativeProvider,
@@ -144,24 +166,41 @@ export function prepareRetainedProviderCatalog(
     // account inventory. Reacquire them with this generation before enriching API routes.
     retainedInventory.catalog.nativeHostRows = undefined;
   }
-  // A rebuild cannot always prove the account behind discovery-only credentials, such as a
-  // native CLI sign-in. Those providers are reacquired instead of disappearing until a refresh.
+  // Changed providers and provisional rows are reacquired by this generation.
   const unretainedProviders = [...(inventory?.providers.keys() ?? [])].filter(
-    (provider) => !retainedProviders.has(provider),
+    (provider) => !provenProviders.has(provider),
   );
-  /** Providers a changed-only pass reacquires: changed source or credentials, or dropped rows. */
-  const listChangedProviders = (
-    published: PreparedModelCatalogInventory | undefined,
-    candidates: readonly string[] = [
-      ...Object.keys(facts.credentials),
-      ...unretainedProviders.filter((provider) => !published?.providers.has(provider)),
-    ],
-  ) =>
-    [...new Set(candidates.map(normalizeProvider))].filter(
+  // Only prepared facts escape; callbacks here would retain the previous inventory.
+  return {
+    retainedInventory,
+    providerSources,
+    unretainedProviders,
+    inventoryKey,
+    nativeSource,
+    pluginFingerprint,
+  };
+}
+
+/** Providers whose source or credentials changed, including dropped and provisional rows. */
+export function listChangedPreparedCatalogProviders(
+  facts: PreparedModelRuntimeAgentFacts,
+  normalizeProvider: (provider: string) => string,
+  providerSources: ReadonlyMap<string, string>,
+  unretainedProviders: readonly string[],
+  inventory: PreparedModelCatalogInventory | undefined,
+  candidates: readonly string[] = [
+    ...Object.keys(facts.credentials),
+    ...unretainedProviders.filter(
       (provider) =>
-        published?.providers.get(provider)?.source !== providerSources.get(provider) ||
-        published?.providers.get(provider)?.credentials !==
-          preparedProviderCatalogCredentials(facts, provider, normalizeProvider),
-    );
-  return { providerSource, retainedInventory, listChangedProviders };
+        !inventory?.providers.has(provider) || inventory.providers.get(provider)?.provisional,
+    ),
+  ],
+): string[] {
+  return [...new Set(candidates.map(normalizeProvider))].filter(
+    (provider) =>
+      inventory?.providers.get(provider)?.provisional === true ||
+      inventory?.providers.get(provider)?.source !== providerSources.get(provider) ||
+      inventory?.providers.get(provider)?.credentials !==
+        preparedProviderCatalogCredentials(facts, provider, normalizeProvider),
+  );
 }

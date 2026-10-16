@@ -1,0 +1,23 @@
+{
+  "name": "@openclaw/mcp-relay",
+  "version": "2026.10.4",
+  "private": true,
+  "description": "OpenClaw outbound MCP relay connector",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "controlUi": "./src/control-ui.ts",
+    "assetScripts": {
+      "build": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/mcp-relay",
+      "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/mcp-relay --copy",
+      "buildOutputs": [
+        "dist/openclaw.plugin.json"
+      ]
+    }
+  }
+}

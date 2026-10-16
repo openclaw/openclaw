@@ -1,5 +1,6 @@
 /** Sends committed cron notifications through the live host and records delivery. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { DEFAULT_AGENT_TIMEOUT_MS } from "../../agents/timeout.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { noteCronJobsStoreCommit } from "../store.js";
@@ -17,12 +18,12 @@ import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import type { CronServiceState } from "./state.js";
 import { enqueueCronNotification } from "./wake.js";
 
-export function dispatchCronNotification(
+export async function dispatchCronNotification(
   state: CronServiceState,
   notification: CronNotificationIntent,
-): void {
+): Promise<void> {
   if (notification.kind === "failure-repair") {
-    requestFailureRepair(state, notification);
+    await requestFailureRepair(state, notification);
     return;
   }
   let routing = notification.routing ? { ...notification.routing } : undefined;
@@ -39,38 +40,89 @@ export function dispatchCronNotification(
         );
   }
   if (notification.kind === "auto-disabled") {
-    enqueueCronNotification(state, notification.job, notification.text, notification.kind, routing);
+    await enqueueCronNotification(
+      state,
+      notification.job,
+      notification.text,
+      notification.kind,
+      routing,
+    );
   } else {
-    transportFailureAlert(state, notification, routing);
+    await transportFailureAlert(state, notification, routing);
   }
 }
 
 /**
- * Starts the repair turn in the conversation that owns the job. A lost request needs no
- * fallback here: the incident records it, so the job's next failure sends the normal alert.
+ * Starts the repair turn in the conversation that owns the job. Request failures are logged;
+ * terminal one-shots send their fallback alert, while recurring jobs retain the repair deadline.
  */
-function requestFailureRepair(
+async function requestFailureRepair(
   state: CronServiceState,
   notification: Extract<CronNotificationIntent, { kind: "failure-repair" }>,
-): void {
+): Promise<void> {
   const jobId = notification.job.id;
-  const owner = state.store?.jobs.find((job) => job.id === jobId)?.owner;
+  const job = state.store?.jobs.find((candidate) => candidate.id === jobId);
+  const owner = job?.owner;
   const sessionKey = owner?.sessionKey?.trim();
   const repairId = notification.job.state.lastFailureNotificationId;
+  const repairAtMs = job?.state.failureAlertIncident?.repair?.atMs;
+  const lifecycleGeneration = state.lifecycleGeneration;
+  const recordSettlement = async () => {
+    if (repairAtMs === undefined || !repairId) {
+      return;
+    }
+    const settledAtMs = state.deps.nowMs();
+    await locked(state, async () => {
+      if (state.stopped || state.lifecycleGeneration !== lifecycleGeneration) {
+        return;
+      }
+      const storeKey = cronStoreKey(state.deps.storePath);
+      await runCronRuntimeMutation({
+        context: captureOpenClawStateWorkerContext(),
+        type: "cron.recordFailureRepairSettlement",
+        input: { storeKey, jobId, repairId, repairAtMs, settledAtMs },
+        snapshot: {},
+        assertCurrent() {
+          if (state.stopped || state.lifecycleGeneration !== lifecycleGeneration) {
+            throw new Error("Cron failure-repair owner retired");
+          }
+        },
+        publish(committed) {
+          if (committed.job) {
+            noteCronJobsStoreCommit(storeKey);
+            applyCronRuntimeRowsToState(state, [committed.job], [], { publish: false });
+          }
+        },
+      });
+    });
+  };
+  const failed = async (err: unknown) => {
+    state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed");
+    if (notification.fallback) {
+      await dispatchCronNotification(state, {
+        ...notification.fallback,
+        routing: notification.routing,
+      });
+    }
+  };
   if (!sessionKey || !repairId || !state.deps.runCronFailureRepair) {
+    await failed(new Error("Missing failure repair runner, owner session, or repair ID"));
     return;
   }
   void state.deps
     .runCronFailureRepair({
       jobId,
       repairId,
+      timeoutMs: state.deps.failureRepairTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS,
       agentId: owner?.agentId,
       sessionKey,
       message: notification.text,
     })
-    .catch((err: unknown) => {
-      state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed");
-    });
+    .then(recordSettlement)
+    .catch(failed)
+    .catch((err: unknown) =>
+      state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair fallback failed"),
+    );
 }
 
 type FailureAlertCycle = {
@@ -143,11 +195,11 @@ async function recordFailureAlertOutcome(
   }
 }
 
-function transportFailureAlert(
+async function transportFailureAlert(
   state: CronServiceState,
   params: Extract<CronNotificationIntent, { kind: "failure-alert" }>,
   routing: CronNotificationRouting,
-): void {
+): Promise<void> {
   const jobId = params.job.id;
   const alertAtMs = params.job.state.lastFailureAlertAtMs;
   const lifecycleGeneration = state.lifecycleGeneration;
@@ -157,7 +209,13 @@ function transportFailureAlert(
     // No transport means no send whose outcome could be recorded: the alert
     // goes straight to the in-app fallback queue and the intent stays
     // "unknown", matching the pre-existing contract for transport-less setups.
-    enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert", routing);
+    await enqueueCronNotification(
+      state,
+      params.job,
+      params.payload.text ?? "",
+      "failure-alert",
+      routing,
+    );
     return;
   }
   void state.deps
@@ -179,7 +237,7 @@ function transportFailureAlert(
           outcome,
         );
         if (recordResult !== "stale" && outcome.status === "not-delivered") {
-          enqueueCronNotification(
+          await enqueueCronNotification(
             state,
             params.job,
             params.payload.text ?? "",

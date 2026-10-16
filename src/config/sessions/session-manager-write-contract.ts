@@ -33,7 +33,7 @@ import type {
 import type {
   InitialSessionTranscriptWriter,
   SessionTranscriptWriterFence,
-} from "./transcript-write-context.js";
+} from "./session-transcript-writer.types.js";
 import type { InternalSessionEntry } from "./types.js";
 
 type MetadataTarget = Omit<SessionTranscriptWriteScope, "env"> & SessionTranscriptRuntimeTarget;
@@ -180,6 +180,7 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
           loadedVersion?: SessionTranscriptContextVersion;
           limits?: SessionManagerBoundedContextLimits;
           admission?: UserTurnTranscriptAdmissionReceipt;
+          questionAnswers?: readonly UserTurnTranscriptAdmissionReceipt[];
         };
       };
       output: {

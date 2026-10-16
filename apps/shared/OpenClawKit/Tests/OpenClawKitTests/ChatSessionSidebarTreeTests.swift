@@ -112,6 +112,39 @@ private struct SidebarTreeTransport: OpenClawChatSidebarTransport {
 struct ChatSessionSidebarTreeTests {
     private let parent = #"{"key":"agent:main:parent","sessionId":"parent","agentId":"main"}"#
 
+    @Test(arguments: [
+        ("main", " AGENT:MAIN:MAIN ", true),
+        ("AGENT:MAIN:SIGNAL:GROUP:OpaqueID:TOPIC", "agent:main:signal:group:OpaqueID:topic", true),
+        ("agent:main:signal:group:OpaqueID:topic", "agent:main:signal:group:opaqueid:topic", false),
+        (
+            "AGENT:MAIN:MATRIX:CHANNEL:!Room:example:THREAD:Event",
+            "agent:main:matrix:channel:!Room:example:thread:Event",
+            true),
+        (
+            "agent:main:matrix:channel:!Room:example:thread:Event",
+            "agent:main:matrix:channel:!room:example:thread:Event",
+            false),
+        ("AGENT:MAIN:catalog:Source:Host:Thread", "agent:main:catalog:Source:Host:Thread", true),
+        ("agent:main:catalog:Source:Host:Thread", "agent:main:catalog:source:Host:Thread", false),
+    ])
+    func `tree ancestry normalizes routing words without folding opaque identifiers`(
+        rootKey: String, parentKey: String, linked: Bool)
+    {
+        let root = OpenClawChatSessionEntry(key: rootKey)
+        var child = OpenClawChatSessionEntry(key: "agent:main:chat-child")
+        child.parentSessionKey = parentKey
+        let tree = ChatSessionSidebarModel.sidebarTree(
+            roots: [root],
+            rows: [root, child],
+            home: (keys: [], excluded: false),
+            selectedKey: rootKey,
+            lineageRootKey: nil,
+            membership: [:],
+            options: .init())
+        #expect(tree.count == 1)
+        #expect(tree.first?.children.map(\.id) == (linked ? ["agent:main:chat-child"] : []))
+    }
+
     private func rows(_ json: String) throws -> [OpenClawChatSessionEntry] {
         try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("[\(json)]".utf8))
     }

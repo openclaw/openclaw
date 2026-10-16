@@ -8,6 +8,7 @@ import {
   type CiAutomationTarget,
 } from "../../ui/src/lib/session-pr-automation-spec.js";
 import { resolveAdmittedRunActiveAssertion } from "../agents/admitted-run-context.js";
+import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { cronHandlers } from "../gateway/server-methods/cron.js";
@@ -37,11 +38,13 @@ import {
   resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./isolated-agent/run.test-harness.js";
-import { CronService, type CronEvent } from "./service.js";
-import { createNoopLogger } from "./service.test-harness.js";
+import type { CronEvent } from "./service.js";
+import { createCronServiceWithStateForTest, createNoopLogger } from "./service.test-harness.js";
+import { onTimer } from "./service/timer.test-support.js";
 import { resolveCronSessionTargetSessionKey } from "./session-target.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const { resolveAgentDir } = await import("./isolated-agent/run.runtime.js");
 const session = await vi.importActual<typeof import("./isolated-agent/session.js")>(
   "./isolated-agent/session.js",
 );
@@ -90,11 +93,21 @@ function readRecipeTarget(prompt: string) {
 async function createFixture(option: CiAutomationOption) {
   const config = {
     agents: {
-      defaults: { skipBootstrap: true, workspace: stateDir },
+      defaults: { skipBootstrap: true, workspace: stateDir, model: "openai/gpt-4.1" },
       entries: { main: { workspace: stateDir } },
     },
     plugins: { enabled: false },
   };
+  await persistAuthProfileBatch({
+    stateDir,
+    profiles: [
+      {
+        profileId: "openai:recipe-fixture",
+        credential: { type: "api_key", provider: "openai", key: "synthetic-recipe-inference-key" },
+      },
+    ],
+  });
+  vi.mocked(resolveAgentDir).mockReturnValue(path.join(stateDir, "agents", "main", "agent"));
   setRuntimeConfigSnapshot(config);
   const seed = async (sessionId: string) =>
     await accessor.replaceSessionEntry(
@@ -143,7 +156,7 @@ async function createFixture(option: CiAutomationOption) {
   const clock = createGatewaySchedulerClock(Date.now());
   let finished = createDeferredCore<CronEvent>();
   const work = new AsyncWorkScope();
-  const execution = new CronService({
+  const { cron: execution, state: executionState } = createCronServiceWithStateForTest({
     scheduler: createTestGatewayScheduler(clock.clock),
     nowMs: clock.clock.now,
     storePath: path.join(stateDir, "cron", "jobs.json"),
@@ -178,6 +191,9 @@ async function createFixture(option: CiAutomationOption) {
   const tick = async () => {
     finished = createDeferredCore<CronEvent>();
     await clock.advanceBy(300_000);
+    void work
+      .track(() => onTimer(executionState))
+      .catch((error: unknown) => finished.reject(error));
     return await finished.promise;
   };
   const stop = async () => {

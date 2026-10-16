@@ -1,7 +1,7 @@
 /**
  * Ordered before_tool_call policy chain.
  *
- * Ordering is behavior: loop admission, owner probes, voice confirmation,
+ * Ordering is behavior: loop admission, owner probes,
  * trusted policies, approvals, normal hooks, and final owner approval must
  * remain in this sequence.
  */
@@ -22,14 +22,6 @@ import type {
   PluginHookToolInputKind,
   PluginHookToolKind,
 } from "../plugins/types.js";
-import {
-  checkClientVoiceToolConfirmationPolicy,
-  consumeClientVoiceToolConfirmationPolicy,
-} from "../talk/client-voice-confirmation.js";
-import {
-  isClientVoiceSessionConfirmable,
-  resolveClientVoiceRunBinding,
-} from "../talk/client-voice-session.js";
 import { isPlainObject } from "../utils.js";
 import {
   mergeParamsWithApprovalOverrides,
@@ -49,7 +41,6 @@ import type {
 } from "./agent-tools.before-tool-call.types.js";
 import {
   getCodeModeExecBeforeHookMetadataForToolKind,
-  isCodeModeExecToolKind,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
 import { admitSingleToolCallLoop } from "./tool-loop-admission.js";
@@ -80,30 +71,6 @@ export function hasBeforeToolCallPolicy(): boolean {
   return state.hasBeforeToolCallHook || state.trustedToolPolicies.length > 0;
 }
 
-/** Consume voice approval only after tool-owned finalization produces execution params. */
-export function consumeFinalClientVoiceToolConfirmation(args: {
-  toolName: string;
-  toolKind?: PluginHookToolKind;
-  toolCallId?: string;
-  params: unknown;
-  ctx?: HookContext;
-}) {
-  // Nested catalog calls are gated individually; the script wrapper is not itself an action.
-  if (isCodeModeExecToolKind(args.toolKind)) {
-    return { allowed: true as const };
-  }
-  const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
-  return consumeClientVoiceToolConfirmationPolicy({
-    agentId: voiceRun?.agentId,
-    voiceSessionId: voiceRun?.voiceSessionId,
-    runId: args.ctx?.runId,
-    toolCallId: args.toolCallId,
-    toolName: normalizeToolPolicyName(args.toolName || "tool"),
-    toolParams: args.params,
-    ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
-  });
-}
-
 export async function runBeforeToolCallHook(args: {
   toolName: string;
   params: unknown;
@@ -125,6 +92,10 @@ export async function runBeforeToolCallHook(args: {
   };
   let releaseArgumentChurnPolicyWait: (() => void) | undefined;
 
+  if (args.ctx?.awaitSessionDiffBaseline) {
+    await args.ctx.awaitSessionDiffBaseline();
+    args.signal?.throwIfAborted();
+  }
   try {
     if (args.ctx?.sessionKey) {
       if (args.ctx.loopDetection?.enabled === true) {
@@ -176,28 +147,6 @@ export async function runBeforeToolCallHook(args: {
     const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
     const shouldRunTrustedPolicies = hasTrustedToolPolicies(policyRegistry);
     const normalizedParams = isPlainObject(params) ? params : {};
-    const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
-    // Nested catalog calls are gated individually; the script wrapper is not itself an action.
-    const voiceConfirmation = isCodeModeExecToolKind(args.toolKind)
-      ? { allowed: true as const }
-      : checkClientVoiceToolConfirmationPolicy({
-          agentId: voiceRun?.agentId,
-          voiceSessionId: voiceRun?.voiceSessionId,
-          runId: args.ctx?.runId,
-          toolCallId: args.toolCallId,
-          toolName,
-          toolParams: normalizedParams,
-          ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
-        });
-    if (!voiceConfirmation.allowed) {
-      return {
-        blocked: true,
-        kind: "veto",
-        deniedReason: "client-voice-confirmation",
-        reason: voiceConfirmation.reason,
-        params,
-      };
-    }
     if (!shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
       return withLoopWarning({ blocked: false, params });
     }

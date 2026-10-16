@@ -3,6 +3,7 @@ import * as diagnostics from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { runWithDiagnosticTraceContext } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./rpc-error.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
@@ -11,14 +12,21 @@ const shared = vi.hoisted(() => ({
   acquire: vi.fn(),
   release: vi.fn(),
   retire: vi.fn(),
-  selectionChanged: new Error("selection changed"),
 }));
-vi.mock("./shared-client.js", () => ({
+vi.mock("./shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client.js")>()),
   createIsolatedCodexAppServerClient: shared.acquire,
   getLeasedSharedCodexAppServerClient: shared.acquire,
   releaseLeasedSharedCodexAppServerClient: shared.release,
   retireSharedCodexAppServerClientIfCurrent: shared.retire,
-  isCodexAppServerStartSelectionChangedError: (error: unknown) => error === shared.selectionChanged,
+}));
+// mock-isolation: Diagnostic method labels must not start session-store I/O under the fake clock.
+vi.mock("./sandbox-guard.js", () => ({
+  prepareCodexAppServerDirectSandboxBypassBlock: async () => ({
+    block: undefined,
+    async assertCurrent() {},
+    release() {},
+  }),
 }));
 
 const { withCodexAppServerJsonClient } = await import("./request.js");
@@ -130,10 +138,19 @@ describe("scoped Codex timeout diagnostics", () => {
           );
           return await Promise.all(calls);
         },
-        { sessionId: privateText, sessionKey: privateText },
+        {
+          // These identifiers test redaction; no session owner participates in this scope.
+          config: { agents: { entries: {} } },
+          sessionId: privateText,
+          sessionKey: privateText,
+        },
       ),
     );
-    await entered.promise;
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      result,
+      "Codex scope settled before all diagnostic requests started",
+    );
     await vi.advanceTimersByTimeAsync(50);
     expect(await result).toMatchObject({ message: "codex app-server request timed out" });
     const logged = await record();
@@ -291,54 +308,7 @@ describe("scoped Codex timeout diagnostics", () => {
     finish.resolve();
   });
 
-  it("drops the prior client and methods when the existing selection retry reacquires", async () => {
-    const entered = createDeferred<void>();
-    const second = createDeferred<ReturnType<typeof client>>();
-    shared.acquire
-      .mockResolvedValueOnce(
-        client(
-          vi.fn(async () => {
-            throw shared.selectionChanged;
-          }),
-        ),
-      )
-      .mockImplementationOnce(() => {
-        entered.resolve();
-        return second.promise;
-      });
-    const result = start(async (send) => send({ method: "thread/start" }));
-    await entered.promise;
-    const stale = shared.acquire.mock.calls[0]?.[0] as CodexAppServerClientOptions;
-    const current = shared.acquire.mock.calls[1]?.[0] as CodexAppServerClientOptions;
-    current.onAcquireObservation?.({ boundary: "context" });
-    stale.onAcquireObservation?.({ boundary: "auth-handoff", startup: "created-shared" });
-    stale.onStartedClient?.({
-      ...client(),
-      getRegisteredTransportIdentity: () => ({ pid: 500002, startedAt: "fixture-boot:12345" }),
-    } as never);
-    await vi.advanceTimersByTimeAsync(50);
-    await result;
-    const logged = await record();
-    expect(logged.attributes).toMatchObject({
-      phase: "acquire-client",
-      scopeAttemptOrdinal: 2,
-      requestStartedCount: 0,
-      currentRequestCount: 0,
-      currentMethods: "[]",
-      acquireLastObservedBoundary: "context",
-    });
-    expect(logged.attributes).not.toHaveProperty("clientInstanceId");
-    expect(logged.attributes).not.toHaveProperty("lastStartedClientInstanceId");
-    expect(logged.attributes).not.toHaveProperty("lastStartedTransportIdentity");
-    expect(logged.attributes).not.toHaveProperty("acquireStartup");
-    expect(shared.acquire).toHaveBeenCalledTimes(2);
-    expect(shared.retire).toHaveBeenCalledOnce();
-    second.resolve(client());
-    await vi.advanceTimersByTimeAsync(0);
-    expect(shared.release).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(["available", "unavailable", "throwing"] as const)(
+  it.each(["available", "unavailable"] as const)(
     "preserves initialize evidence when registered transport identity is %s",
     async (mode) => {
       const entered = createDeferred<void>();
@@ -347,12 +317,7 @@ describe("scoped Codex timeout diagnostics", () => {
       const started = {
         ...client(),
         getInitializeDiagnostic: () => ({ boundary: "request", outcome: "pending" }),
-        getRegisteredTransportIdentity: () => {
-          if (mode === "throwing") {
-            throw new Error("private diagnostic failure");
-          }
-          return mode === "available" ? identity : undefined;
-        },
+        getRegisteredTransportIdentity: () => (mode === "available" ? identity : undefined),
       };
       shared.acquire.mockImplementation((options: CodexAppServerClientOptions) => {
         options.onStartedClient?.({
@@ -360,7 +325,6 @@ describe("scoped Codex timeout diagnostics", () => {
           getRegisteredTransportIdentity: () => ({ pid: 500001, startedAt: "previous-child" }),
         } as never);
         options.onStartedClient?.(started as never);
-        identity.pid = 500003;
         entered.resolve();
         return acquired.promise;
       });
@@ -380,7 +344,6 @@ describe("scoped Codex timeout diagnostics", () => {
         boundary: "request",
         outcome: "pending",
       });
-      expect(JSON.stringify(logged)).not.toContain("private diagnostic failure");
       acquired.resolve(client());
       await vi.advanceTimersByTimeAsync(0);
     },

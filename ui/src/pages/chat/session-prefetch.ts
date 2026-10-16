@@ -1,11 +1,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
+import type { SolidController, SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
@@ -24,10 +24,9 @@ import {
 import { resolveChatSnapshotKey, resolveChatSnapshotSessionKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
-// Coalesce row sweeps for 75 ms while leaving time to warm history before a click.
+// Coalesce navigation intent while leaving time to warm history before a click.
 const SESSION_PREFETCH_INTENT_DELAY_MS = 75;
 const SESSION_PREFETCH_COOLDOWN_MS = 30_000;
-const SESSION_PREFETCH_LOCK_NAME = "openclaw-chat-prefetch";
 
 type ChatSnapshotKeyHost = Parameters<typeof resolveChatSnapshotKey>[0];
 
@@ -61,13 +60,10 @@ type SessionPrefetchSnapshot = {
 };
 
 type SessionPrefetchCandidate = {
-  activityAt: number;
   sessionKey: string;
   snapshotKey: string;
   canonicalSessionKey: string;
   sessionId: GatewaySessionRow["sessionId"];
-  activeLeafEntryId: GatewaySessionRow["activeLeafEntryId"];
-  updatedAt: GatewaySessionRow["updatedAt"];
 };
 
 function mayPrefetchHistory(
@@ -166,17 +162,7 @@ class SessionPrefetcher {
     }
     this.running = true;
     try {
-      const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
-      if (locks) {
-        await locks.request(SESSION_PREFETCH_LOCK_NAME, { ifAvailable: true }, async (lock) => {
-          // ifAvailable must skip instead of queueing so one visible tab owns the cycle.
-          if (lock) {
-            await this.prefetchIntendedSession();
-          }
-        });
-      } else {
-        await this.prefetchIntendedSession();
-      }
+      await this.prefetchIntendedSession();
     } catch (error) {
       console.debug("[chat-session-prefetch] cycle failed", error);
     } finally {
@@ -359,7 +345,6 @@ class SessionPrefetcher {
       return null;
     }
     return {
-      activityAt,
       sessionKey: row.key,
       canonicalSessionKey: resolveChatSnapshotSessionKey(snapshot.snapshotHost, {
         sessionKey: row.key,
@@ -367,8 +352,6 @@ class SessionPrefetcher {
       }),
       snapshotKey,
       sessionId: row.sessionId,
-      activeLeafEntryId: row.activeLeafEntryId,
-      updatedAt: row.updatedAt,
     };
   }
 
@@ -389,31 +372,13 @@ class SessionPrefetcher {
     if (!candidate) {
       return true;
     }
-    // Unrelated roster refreshes cannot retire this read, but every row sharing
-    // its snapshot key must agree: an unchanged alias cannot hide newer history.
-    let found = false;
-    for (const row of current.rows ?? []) {
-      if (
-        resolveChatSnapshotKey(current.snapshotHost, {
-          sessionKey: row.key,
-          agentId: row.agentId,
-        }) !== candidate.snapshotKey
-      ) {
-        continue;
-      }
-      const activityAt = sessionActivityAt(row);
-      if (
-        row.sessionId !== candidate.sessionId ||
-        row.activeLeafEntryId !== candidate.activeLeafEntryId ||
-        (row.updatedAt ?? 0) > (candidate.updatedAt ?? 0) ||
-        activityAt > candidate.activityAt ||
-        isSessionRunActive(row)
-      ) {
-        return false;
-      }
-      found ||= row.updatedAt === candidate.updatedAt && activityAt === candidate.activityAt;
-    }
-    return found;
+    // Warm history is best effort; opening the pane revalidates its cursor.
+    // Cache invalidation and the final open-pane check still own publication.
+    return (
+      current.rows?.some(
+        (row) => row.key === candidate.sessionKey && row.sessionId === candidate.sessionId,
+      ) === true
+    );
   }
 
   private isOpen(snapshotKey: string): boolean {
@@ -435,9 +400,9 @@ class SessionPrefetcher {
   }
 }
 
-type SessionPrefetchHost = ReactiveControllerHost & HTMLElement;
+type SessionPrefetchHost = SolidControllerHost & HTMLElement;
 
-export class SessionPrefetchController implements ReactiveController {
+export class SessionPrefetchController implements SolidController {
   private readonly prefetcher: SessionPrefetcher;
   private context: SessionPrefetchContext | undefined;
   private subscriptions: Array<() => void> = [];
@@ -457,26 +422,40 @@ export class SessionPrefetchController implements ReactiveController {
   hostConnected(): void {
     // Home is a sibling of the page. Observe every pane on this socket through
     // its shell, including lifecycle edges that cannot bubble after removal.
-    this.paneRoot = this.host.closest("openclaw-app-shell") ?? this.host;
-    this.paneRoot.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
-    this.paneRoot.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
-    this.paneRoot.addEventListener("pointerover", this.handleNavigationIntent);
-    this.paneRoot.addEventListener("focusin", this.handleNavigationIntent);
+    this.bindPaneRoot(this.host.closest("openclaw-app-shell") ?? this.host);
     this.prefetcher.connect();
     this.sync();
   }
 
   hostUpdated(): void {
+    // Solid constructs the page before attachment; its commit supplies the shell.
+    const paneRoot = this.host.closest("openclaw-app-shell") ?? this.host;
+    if (paneRoot !== this.paneRoot) {
+      this.bindPaneRoot(paneRoot);
+    }
     this.sync();
   }
 
   hostDisconnected(): void {
+    this.unbindPaneRoot();
+    this.clearSubscriptions();
+    this.prefetcher.disconnect();
+  }
+
+  private bindPaneRoot(root: Element): void {
+    this.unbindPaneRoot();
+    this.paneRoot = root;
+    this.paneRoot.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
+    this.paneRoot.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
+    this.paneRoot.addEventListener("pointerover", this.handleNavigationIntent);
+    this.paneRoot.addEventListener("focusin", this.handleNavigationIntent);
+  }
+
+  private unbindPaneRoot(): void {
     this.paneRoot.removeEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
     this.paneRoot.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
     this.paneRoot.removeEventListener("pointerover", this.handleNavigationIntent);
     this.paneRoot.removeEventListener("focusin", this.handleNavigationIntent);
-    this.clearSubscriptions();
-    this.prefetcher.disconnect();
   }
 
   private readonly handleNavigationIntent = (event: Event) => {

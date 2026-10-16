@@ -112,6 +112,7 @@ shell-completion metadata.
   an explicit id first, then `agents.defaults.systemAgent.agentId`, then the sole configured agent.
 - Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
+- Model runs load the catalog for case correction only when an explicit model override contains uppercase characters. Runs using the configured default or a lowercase model ref skip that catalog lookup.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
 - `model run --gateway` exercises Gateway routing, saved auth, provider selection, and the embedded runtime, but stays a raw model check: no prior session transcript, bootstrap/AGENTS context, tools, or bundled MCP servers.
 - `model run --gateway --model <provider/model>` requires a trusted-operator gateway credential, because it asks the Gateway to run a one-off provider/model override.
@@ -135,9 +136,9 @@ Use full `<provider/model>` refs with `--local` to smoke-test one provider witho
 
 ```bash
 openclaw infer model run --local --model anthropic/claude-sonnet-4-6 --prompt "Reply with exactly: pong" --json
-openclaw infer model run --local --model cerebras/zai-glm-4.7 --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model cerebras/gpt-oss-120b --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model google/gemini-2.5-flash --prompt "Reply with exactly: pong" --json
-openclaw infer model run --local --model groq/llama-3.1-8b-instant --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model groq/openai/gpt-oss-120b --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model llmman/qwen3.8 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model llmman/gemma4:e4b --prompt "Describe this image." --file ./photo.jpg --json
 openclaw infer model run --local --model mistral/mistral-medium-3-5 --prompt "Reply with exactly: pong" --json
@@ -261,6 +262,7 @@ openclaw infer video describe --file ./clip.mp4 --model openai/gpt-5.4-mini --js
 Notes:
 
 - `video generate` accepts `--size`, `--aspect-ratio`, `--resolution`, `--duration`, `--audio`, `--watermark`, and `--timeout-ms`, forwarded to the video-generation runtime.
+- `--duration` is a number of seconds that must round to 1–9007199254740991 seconds. Zero, negative, nonnumeric, and smaller values that round to zero fail before provider dispatch. Valid fractions such as `2.5` retain normal provider-supported rounding; omitting the flag keeps the provider default.
 - Provider-hosted video downloads reject empty, text, and JSON responses instead of reporting an unusable file as successful output.
 - With `--output`, URL-backed video streams to a sibling temporary file and replaces the destination only after the complete non-empty download succeeds; a failed stream leaves an existing destination unchanged.
 - `--model` must be `<provider/model>` for `video describe`.

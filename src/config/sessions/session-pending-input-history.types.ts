@@ -1,4 +1,4 @@
-import type { SessionPendingInputRow } from "./session-accessor.sqlite-pending-inputs.js";
+import type { SessionPendingInputRow } from "./session-pending-input.types.js";
 
 export type PendingInputHistoryQuery = {
   sessionKey: string;
@@ -6,6 +6,7 @@ export type PendingInputHistoryQuery = {
   limit?: number;
   before?: number;
   id?: string;
+  includeTotal?: false;
 };
 export type PendingInputHistorySnapshot = {
   rows: SessionPendingInputRow[];

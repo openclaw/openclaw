@@ -8,6 +8,7 @@ import type {
   SessionsListParams,
   SessionsPatchManyParams,
   SessionsPatchManyResult,
+  SessionsRecoverParams,
   SessionsRecoverResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SchemaContract } from "../../../../packages/gateway-protocol/src/schema-contract.js";
@@ -122,7 +123,6 @@ export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;
 
 type SessionRowReadOutcome =
   | { status: "current"; row: GatewaySessionRow | null }
-  | { status: "invalidated" }
   | { status: "retired" };
 
 export type SessionRowObservation = {
@@ -268,7 +268,6 @@ export type SessionCapability = {
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions & {
-      sourceCanonicalListRevision?: number;
       sourceListScope?: SessionListScope;
     },
   ) => boolean | "defaults-only";
@@ -293,6 +292,8 @@ export type SessionCapability = {
   ) => GatewaySessionRow;
   /** Projects held field observations without changing the input rows' keys or membership. */
   projectRows: (rows: readonly GatewaySessionRow[]) => GatewaySessionRow[];
+  /** Roster activity lasts until the shared run owner settles, including final output delivery. */
+  isRunVisuallyActive: (row: GatewaySessionRow) => boolean;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
   /** Schedules background list refreshes without replacing queued foreground queries. */
@@ -308,7 +309,7 @@ export type SessionCapability = {
     options?: { reconciliation?: SessionCreateReconciliation },
   ) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
-  recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;
+  recover: (params: SessionsRecoverParams) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
   patchMany: (
     targets: SessionsPatchManyParams["targets"],
@@ -392,8 +393,6 @@ export type SessionCapability = {
   ) => Promise<SessionsBranchesSwitchResult>;
   /** Loads one connection-owned group catalog; null means the attempt retired or failed. */
   groupsLoad: () => Promise<readonly SessionGroupSettings[] | null>;
-  /** Generation of the catalog/defaults snapshot used by group-target routes. */
-  groupsGeneration: () => number;
   /** Whether group defaults are current enough for a group-target route. */
   groupsStatus: () => SessionGroupDefaultsStatus;
   /** Invalidates the connection-owned group catalog before an explicit route retry. */

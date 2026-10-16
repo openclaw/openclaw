@@ -37,11 +37,6 @@ export const OLLAMA_CLOUD_DEFAULT_MODELS = [
     capabilities: ["completion", "thinking", "tools", "vision"],
   },
   {
-    id: "glm-5.1",
-    contextWindow: 202_752,
-    capabilities: ["completion", "thinking", "tools"],
-  },
-  {
     id: OLLAMA_GLM52_CLOUD_MODEL_ID,
     contextWindow: 1_000_000,
     capabilities: ["completion", "thinking", "tools"],

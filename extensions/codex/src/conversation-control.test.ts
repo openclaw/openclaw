@@ -1,18 +1,16 @@
 import path from "node:path";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
+import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
+  deleteSessionEntry,
   getSessionEntry,
   resolveStorePath,
   upsertSessionEntry,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { captureOpenClawAgentDatabaseExecution } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   observeHostDataSql,
-  openIncognitoTestActor,
   useSessionStoreTempDirs,
-  withIncognitoSessionActor,
-  withIncognitoSessionBinding,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -80,7 +78,8 @@ const sharedClientMocks = vi.hoisted(() => ({
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
 }));
 
-vi.mock("./app-server/shared-client.js", () => ({
+vi.mock("./app-server/shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./app-server/shared-client.js")>()),
   ...sharedClientMocks,
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient:
@@ -88,7 +87,7 @@ vi.mock("./app-server/shared-client.js", () => ({
   releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
     lease.client = undefined;
   }),
-  withLeasedCodexAppServerClientStartSelectionRetry: async (params: {
+  withCodexAppServerClientRequestScope: async (params: {
     lease: { client?: unknown };
     options?: { timeoutMs?: number };
     run: (
@@ -115,61 +114,37 @@ describe("codex conversation controls", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["native", "bound"] as const)(
-    "reads %s private permission policy through its selected owner",
-    async (mode) => {
-      const env = { OPENCLAW_STATE_DIR: tempDir };
-      const session = {
-        agentId: "main",
-        sessionId: "private-policy",
-        sessionKey: "agent:main:dashboard:incognito-policy",
-      };
-      const storePath = resolveStorePath(undefined, { agentId: session.agentId });
-      const authority = { assertCurrent() {} };
-      const actor = mode === "bound" ? await openIncognitoTestActor(env, authority) : undefined;
-      const entry: SessionEntry = {
-        sessionId: session.sessionId,
-        updatedAt: 1,
-        incognito: true,
-        permissionMode: "full",
-      };
+  it("reads private permission policy from memory and rejects a deleted session", async () => {
+    const session = {
+      agentId: "main",
+      sessionId: "private-policy",
+      sessionKey: "agent:main:dashboard:incognito-policy",
+    };
+    const storePath = resolveStorePath(undefined, { agentId: session.agentId });
+    const entry: SessionEntry = {
+      sessionId: session.sessionId,
+      updatedAt: 1,
+      incognito: true,
+      permissionMode: "full",
+    };
+    await upsertSessionEntry({ ...session, storePath, entry });
+    try {
+      const sql = observeHostDataSql();
       try {
-        if (actor) {
-          await actor.sessions.create(authority, { sessionKey: session.sessionKey, entry });
-        } else {
-          await upsertSessionEntry({ ...session, storePath, entry });
-        }
-        const read = async () => {
-          const sql = observeHostDataSql();
-          try {
-            await expect(
-              setCodexConversationPermissionsImpl({ session, storePath, assertCurrent() {} }),
-            ).resolves.toBe("Codex permissions: full access.");
-            if (actor) {
-              expect(sql.queries).toEqual([]);
-            }
-          } finally {
-            sql.restore();
-          }
-        };
-        if (actor) {
-          await withIncognitoSessionActor(actor, read);
-        } else {
-          await read();
-          expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
-        }
-      } finally {
-        await actor?.close();
-      }
-      if (actor) {
         await expect(
-          withIncognitoSessionBinding({ actor }, () =>
-            setCodexConversationPermissionsImpl({ session, storePath, assertCurrent() {} }),
-          ),
-        ).rejects.toMatchObject({ code: "INCOGNITO_SESSION_ENDED" });
+          setCodexConversationPermissionsImpl({ session, storePath, assertCurrent() {} }),
+        ).resolves.toBe("Codex permissions: full access.");
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
       }
-    },
-  );
+    } finally {
+      await deleteSessionEntry({ ...session, storePath });
+    }
+    await expect(
+      setCodexConversationPermissionsImpl({ session, storePath, assertCurrent() {} }),
+    ).rejects.toThrow("Codex session changed while reading the permission mode");
+  });
 
   it("persists fast mode on the binding and permissions on the session", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
@@ -523,11 +498,30 @@ describe("codex conversation controls", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("clears incompatible direct-session auth when the selected provider changes", async () => {
+  it.each([
+    {
+      name: "clears incompatible direct-session auth when the selected provider changes",
+      recordedProvider: undefined,
+      expectedProfile: undefined,
+    },
+    {
+      name: "preserves compatible recorded direct-session auth over the profile ID prefix",
+      recordedProvider: "openai",
+      expectedProfile: "lmstudio:work",
+    },
+  ])("$name", async ({ recordedProvider, expectedProfile }) => {
     const sessionKey = "agent:main:model-provider-switch";
     const sessionId = "session-provider-switch";
     const identity = { kind: "session" as const, agentId: "main", sessionId, sessionKey };
     const storePath = resolveStorePath(undefined, { agentId: "main" });
+    const agentDir = path.join(tempDir, "agent");
+    if (recordedProvider) {
+      await upsertAuthProfileAsync({
+        agentDir,
+        profileId: "lmstudio:work",
+        credential: { type: "api_key", provider: recordedProvider, key: "test-key" },
+      });
+    }
     await upsertSessionEntry({
       agentId: "main",
       storePath,
@@ -555,6 +549,7 @@ describe("codex conversation controls", () => {
         bindingStore: testCodexAppServerBindingStore,
         binding: testCodexAppServerBindingStore.read(identity),
         model: "openai/gpt-5.5",
+        agentDir,
         storePath,
         assertCurrent: () => {},
       }),
@@ -570,6 +565,6 @@ describe("codex conversation controls", () => {
       modelOverride: "gpt-5.5",
       liveModelSwitchPending: true,
     });
-    expect(getSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
+    expect(getSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBe(expectedProfile);
   });
 });

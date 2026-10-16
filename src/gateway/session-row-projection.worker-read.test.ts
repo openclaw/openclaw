@@ -633,13 +633,11 @@ it.each([
   "collector publication",
   "membership revocation",
   "runtime stored facts",
-  "invalidated presentation facts",
   "captured sibling row",
 ] as const)("consumes current list facts across an awaited worker reply: %s", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
-    const changesOwner =
-      change === "runtime stored facts" || change === "invalidated presentation facts";
+    const changesOwner = change === "runtime stored facts";
     const changesSibling = change === "captured sibling row";
     const requiresFreshRead = change === "membership revocation" || changesOwner;
     const scope = { agentId: "main", sessionKey: "agent:main:worker-fact-freshness" };
@@ -778,12 +776,7 @@ it.each([
               publication.facts?.kind === "owner"
             ) {
               publicationObserved = true;
-              if (change === "runtime stored facts") {
-                publication.scope = "runtime";
-              } else {
-                emit({ all: true, scope: "profiles", factsInvalidated: true }, database);
-                return;
-              }
+              publication.scope = "runtime";
             }
             emit(publication, database);
           });
@@ -811,9 +804,15 @@ it.each([
         }
         const result = await reading;
         if (changesSibling) {
+          const sibling = { agentId: unrelated.agentId, key: unrelated.sessionKey };
+          expect(projection.capture(sibling)?.storedEntry?.label).toBe("Current sibling");
+          // Off-page metadata stays current; display facts are prepared when that row is read.
           expect(
-            projection.snapshot({ agentId: unrelated.agentId, key: unrelated.sessionKey }).row
-              ?.label,
+            await withReadySessionRows(
+              projection,
+              () => [sibling],
+              () => projection.snapshot(sibling).row?.label,
+            ),
           ).toBe("Current sibling");
         }
         expect(result.sessions).toEqual([

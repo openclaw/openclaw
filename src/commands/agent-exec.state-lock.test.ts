@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -15,6 +14,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import * as embeddedStateLock from "../infra/embedded-state-lock.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -83,6 +83,13 @@ describe("agent exec retained-state ownership", () => {
           ),
         );
         expect(result.exitCode).toBe(1);
+        expect(result.envelope).toMatchObject({
+          ok: false,
+          status: "error",
+          final: "done",
+          payloads: [{ text: "done" }],
+          error: { kind: "cleanup" },
+        });
         expect(cleanupScope.outcome).toBe("uncertain");
         expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
         if (fixture) {
@@ -180,7 +187,7 @@ it("closes temporary databases before removal and preserves independent handles"
   let runStateDir: string | undefined;
   let agentPath: string | undefined;
   let statePath: string | undefined;
-  const handles: DatabaseSync[] = [];
+  const handles: EngineConnection[] = [];
   const remove = fs.rm.bind(fs);
   const removed = vi.spyOn(fs, "rm").mockImplementation(async (pathname, options) => {
     if (pathname === runStateDir) {

@@ -153,41 +153,66 @@ describe("session-delivery queue recovery", () => {
     });
   });
 
-  it("retries dead-letter cleanup without replaying an ambiguous agent turn", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-dead-letter-cleanup:agent-loop",
-        },
-        queueContext,
-      );
-      const deliver = vi.fn(async () => {
-        throw new SessionDeliveryDeadLetteredError("ambiguous side effects");
-      });
-      let failCleanup = true;
-      const onSettled = vi.fn(async () => {
-        if (failCleanup) {
-          failCleanup = false;
-          throw new Error("cleanup interrupted");
-        }
-      });
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  it.each(["recovery", "exact"] as const)(
+    "retries dead-letter cleanup through %s without replaying an ambiguous agent turn",
+    async (mode) => {
+      await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
+        const id = await enqueueSessionDelivery(
+          {
+            kind: "agentTurn",
+            sessionKey: "agent:main:main",
+            message: "generated image ready",
+            messageId: "image:task-dead-letter-cleanup:agent-loop",
+          },
+          queueContext,
+        );
+        const deliver = vi.fn(async () => {
+          throw new SessionDeliveryDeadLetteredError("ambiguous side effects");
+        });
+        let failCleanup = true;
+        const onSettled = vi.fn(async () => {
+          if (failCleanup) {
+            failCleanup = false;
+            throw new Error("cleanup interrupted");
+          }
+        });
+        const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
-      await recoverPendingSessionDeliveries({ deliver, onSettled, queueContext, log });
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
-        expect.objectContaining({ id, settlementOutcome: "moved-to-failed" }),
-      ]);
+        const options = { deliver, onSettled, queueContext, log };
+        const drain = () =>
+          mode === "recovery"
+            ? recoverPendingSessionDeliveries(options)
+            : drainPendingSessionDelivery({ ...options, id, logLabel: "Session delivery" });
 
-      await recoverPendingSessionDeliveries({ deliver, onSettled, queueContext, log });
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(onSettled).toHaveBeenCalledTimes(2);
-      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
-    });
-  });
+        expect(await drain()).toEqual(
+          expect.objectContaining(mode === "recovery" ? { failed: 0 } : { id }),
+        );
+        expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+          `Session delivery: dead-letter decision for entry ${id}: ambiguous side effects`,
+        );
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
+          expect.objectContaining({ id, settlementOutcome: "moved-to-failed" }),
+        ]);
+
+        expect(await drain()).toEqual(
+          mode === "recovery" ? expect.objectContaining({ failed: 1 }) : null,
+        );
+        expect(log.warn).toHaveBeenNthCalledWith(
+          2,
+          `Session delivery: entry ${id} was dead-lettered and moved to failed`,
+        );
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(onSettled).toHaveBeenCalledTimes(2);
+        expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
+        expect(await drain()).toEqual(
+          mode === "recovery" ? expect.objectContaining({ failed: 0 }) : null,
+        );
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(log.warn).toHaveBeenCalledTimes(2);
+      });
+    },
+  );
 
   it("cleans an acknowledged tombstone without replaying delivery", async () => {
     await withSessionDeliveryQueue(async (tempDir, queueContext) => {
@@ -413,7 +438,7 @@ describe("session-delivery queue recovery", () => {
 
   it("keeps failed entries queued with retry metadata for later recovery", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      await enqueueSessionDelivery(
+      const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
           sessionKey: "agent:main:main",
@@ -424,6 +449,7 @@ describe("session-delivery queue recovery", () => {
       );
 
       const onSettled = vi.fn(async () => undefined);
+      const log = createInfoWarnErrorLogger();
       const summary = await recoverPendingSessionDeliveries({
         deliver: vi.fn(async (entry) => {
           await markSessionDeliveryAttemptStarted(entry, queueContext);
@@ -431,7 +457,7 @@ describe("session-delivery queue recovery", () => {
         }),
         onSettled,
         queueContext,
-        log: createInfoWarnErrorLogger(),
+        log,
       });
 
       const [failedEntry] = await loadPendingSessionDeliveries(queueContext);
@@ -439,6 +465,9 @@ describe("session-delivery queue recovery", () => {
       expect(failedEntry?.retryCount).toBe(1);
       expect(failedEntry?.lastError).toBe("transient failure");
       expect(failedEntry?.deliveryStartedAt).toEqual(expect.any(Number));
+      expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+        `Session delivery retry failed for entry ${id}: transient failure`,
+      );
     });
   });
 
@@ -557,38 +586,85 @@ describe("session-delivery queue recovery", () => {
     });
   });
 
-  it("does not report an explicitly dead-lettered delivery as recovered", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-dead-lettered:agent-loop",
-        },
-        queueContext,
-      );
+  it.each(["recovery", "exact"] as const)(
+    "reports the redacted terminal reason and queue ID through %s without queue content",
+    async (mode) => {
+      await withSessionDeliveryQueue(async (stateDir, queueContext) => {
+        const token = "sk-abcdefghijklmnopqrstuv";
+        const id = await enqueueSessionDelivery(
+          {
+            kind: "agentTurn",
+            sessionKey: "agent:main:private-session",
+            message: "private queued message",
+            messageId: "image:task-dead-lettered:agent-loop",
+            route: { channel: "test", to: "private-recipient", chatType: "direct" },
+          },
+          queueContext,
+        );
+        const [entry] = await loadPendingSessionDeliveries(queueContext);
+        if (!entry) {
+          throw new Error("Expected queued session delivery");
+        }
+        seedDeliveryQueueEntry({
+          queueName: "session",
+          entry: { ...entry, lastError: "previous retry failure" },
+          stateDir,
+        });
 
-      const onSettled = vi.fn(async () => undefined);
-      const summary = await recoverPendingSessionDeliveries({
-        deliver: vi.fn(async () => {
-          throw new SessionDeliveryDeadLetteredError("ambiguous side effects");
-        }),
-        onSettled,
-        queueContext,
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        const onSettled = vi.fn(async () => undefined);
+        const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+        const options = {
+          deliver: vi.fn(async () => {
+            throw new SessionDeliveryDeadLetteredError(
+              `ambiguous side effects; Authorization: Bearer ${token}`,
+            );
+          }),
+          onSettled,
+          queueContext,
+          log,
+        };
+
+        if (mode === "recovery") {
+          const summary = await recoverPendingSessionDeliveries(options);
+          expect(summary.recovered).toBe(0);
+          expect(summary.failed).toBe(1);
+        } else {
+          expect(
+            await drainPendingSessionDelivery({ ...options, id, logLabel: "Session delivery" }),
+          ).toBeNull();
+        }
+        expect(log.warn).toHaveBeenNthCalledWith(
+          1,
+          expect.stringContaining(
+            `Session delivery: dead-letter decision for entry ${id}: ambiguous side effects`,
+          ),
+        );
+        expect(log.warn).toHaveBeenNthCalledWith(
+          2,
+          `Session delivery: entry ${id} was dead-lettered and moved to failed`,
+        );
+        const warnings = log.warn.mock.calls.flat().join("\n");
+        for (const privateValue of [
+          token,
+          "agent:main:private-session",
+          "private queued message",
+          "private-recipient",
+          "previous retry failure",
+        ]) {
+          expect(warnings).not.toContain(privateValue);
+        }
+        expect(onSettled).toHaveBeenCalledWith(
+          expect.objectContaining({ id }),
+          "moved-to-failed",
+          queueContext,
+        );
+        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+        expect((await recoverPendingSessionDeliveries(options)).failed).toBe(0);
+        expect(options.deliver).toHaveBeenCalledTimes(1);
+        expect(log.warn).toHaveBeenCalledTimes(2);
       });
-
-      expect(summary.recovered).toBe(0);
-      expect(summary.failed).toBe(0);
-      expect(onSettled).toHaveBeenCalledWith(
-        expect.objectContaining({ id }),
-        "moved-to-failed",
-        queueContext,
-      );
-      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
-    });
-  });
+    },
+  );
 
   it("uses the entry retry budget when draining entries", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {

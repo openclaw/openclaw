@@ -233,9 +233,6 @@ function hasStalePersistedPluginMetadataFiles(index: InstalledPluginIndex): bool
     if (!fs.existsSync(packageJsonPath)) {
       return plugin.enabled;
     }
-    if (!isRealPathInside(plugin.rootDir, packageJsonPath, realpathCache)) {
-      return true;
-    }
     return !fileContentMatches(
       packageJsonPath,
       plugin.packageJson.hash,

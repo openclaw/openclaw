@@ -13,6 +13,7 @@ import {
   CONTROL_UI_BUILD_PREFIX,
   controlUiBuildSiblingPid,
 } from "./lib/output-root-guard.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 import { resolveNodePackageBin } from "./run-node-package-bin.mts";
 
@@ -381,7 +382,10 @@ function normalizeUiBuildPermissions(directory: string): void {
   }
 }
 
-function buildAndPublishUi(toolCall: UiSpawnCall, env: NodeJS.ProcessEnv): UiSpawnResult {
+async function buildAndPublishUi(
+  toolCall: UiSpawnCall,
+  env: NodeJS.ProcessEnv,
+): Promise<UiSpawnResult> {
   const dist = path.join(repoRoot, "dist");
   const output = path.join(dist, "control-ui");
   fs.mkdirSync(dist, { recursive: true });
@@ -414,8 +418,122 @@ function buildAndPublishUi(toolCall: UiSpawnCall, env: NodeJS.ProcessEnv): UiSpa
       }),
       script,
     ];
+    const cache =
+      env.OPENCLAW_BUILD_CACHE !== "0" &&
+      env.BUILD_ALL_CACHE_ROOT?.trim() &&
+      toolCall.args.length === 2 &&
+      toolCall.args[1] === "build"
+        ? await import("./lib/build-artifact-cache.mts")
+        : undefined;
+    const sourcePluginInventory =
+      cache && env.OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS === "1"
+        ? (await import("./lib/bundled-plugin-build-entries.mjs"))
+            .collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env })
+            .map(({ id, isolated, packageJson }) => {
+              const openclaw =
+                isRecord(packageJson) && isRecord(packageJson.openclaw)
+                  ? packageJson.openclaw
+                  : undefined;
+              return [id, isolated, openclaw?.controlUi];
+            })
+        : undefined;
+    const step = {
+      label: "ui:build",
+      cache: {
+        inputs: [
+          { path: "ui", excludeDirectories: ["node_modules"] },
+          { path: "packages", excludeDirectories: ["node_modules", "dist", ".artifacts"] },
+          ...fs
+            .readdirSync(path.join(repoRoot, "scripts/lib"))
+            .filter((file) => file.startsWith("control-ui-i18n"))
+            .map((file) => `scripts/lib/${file}`),
+          "scripts/ui.js",
+          "scripts/ui.mts",
+          "scripts/pnpm-runner.mts",
+          "scripts/run-node-package-bin.mts",
+          "scripts/lib/build-artifact-cache.mts",
+          "scripts/lib/output-root-guard.mjs",
+          "scripts/lib/build-identity.mts",
+          "package.json",
+          "pnpm-lock.yaml",
+          "tsconfig.json",
+          "docs/assets/openclaw-hero-dark.png",
+          // Package metadata discovers new generations; all copied files (including
+          // deferred chunks absent from Vite's module graph) invalidate reuse.
+          ...(() => {
+            const root = path.join(repoRoot, "dist/extensions");
+            if (!fs.existsSync(root)) {
+              return [];
+            }
+            return fs
+              .readdirSync(root, { withFileTypes: true })
+              .filter((entry) => entry.isDirectory())
+              .flatMap((entry) => {
+                const relative = `dist/extensions/${entry.name}`;
+                return [
+                  `${relative}/package.json`,
+                  `${relative}/openclaw.plugin.json`,
+                  `${relative}/dist/control-ui`,
+                ];
+              });
+          })(),
+        ],
+        outputs: ["."],
+        requiredOutputs: ["index.html", "sw.js", ".build-inputs.json"],
+        restore: "always" as const,
+      },
+    };
+    const staticInputs = cache?.listCacheFiles(repoRoot, step.cache.inputs, fs) ?? [];
+    const inputSignature = (inputs: string[]) =>
+      cache!.hashInputFiles(
+        repoRoot,
+        [
+          ...new Set([...staticInputs, ...inputs.map((file) => path.join(repoRoot, file))]),
+        ].toSorted(),
+        fs,
+        [
+          "NODE_ENV",
+          "OPENCLAW_CONTROL_UI_BASE_PATH",
+          "OPENCLAW_CONTROL_UI_RELEASE_BUILD",
+          "OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS",
+        ],
+        env,
+        JSON.stringify({
+          args: toolCall.args.slice(1),
+          platform: process.platform,
+          arch: process.arch,
+          sourcePluginInventory,
+        }),
+      );
+    const cacheState = cache?.resolveBuildStepCacheState(step, {
+      rootDir: repoRoot,
+      artifactRoot: output,
+      env,
+      inputSignature,
+    });
+    const reuseOutput =
+      cacheState?.fresh &&
+      cache?.restoreBuildStepCacheOutputs(cacheState, {
+        rootDir: repoRoot,
+        artifactRoot: staging,
+      });
+    if (reuseOutput) {
+      const { runnerImport } = await import("vite");
+      const {
+        module: { refreshControlUiBuildOutput, resolveControlUiBuildInfo },
+      } = await runnerImport<typeof import("../ui/vite.config.ts")>(
+        path.join(uiDir, "vite.config.ts"),
+        { configFile: false },
+      );
+      await refreshControlUiBuildOutput(staging, resolveControlUiBuildInfo({ env }));
+      console.log("Control UI build: reused content cache; refreshed release identity");
+    }
     const calls: [UiSpawnCall, string][] = [
-      [{ ...toolCall, args: [...toolCall.args, "--outDir", staging] }, "Control UI build"],
+      ...(!reuseOutput
+        ? ([
+            [{ ...toolCall, args: [...toolCall.args, "--outDir", staging] }, "Control UI build"],
+          ] satisfies [UiSpawnCall, string][])
+        : []),
       validator("check-control-ui-precompressed-assets.mts", staging),
       validator("check-control-ui-performance.mts", "--report-only", "--dist", staging),
     ];
@@ -424,6 +542,20 @@ function buildAndPublishUi(toolCall: UiSpawnCall, env: NodeJS.ProcessEnv): UiSpa
       if (result.signal || result.status !== 0) {
         return result;
       }
+    }
+    if (cache && cacheState) {
+      const consumedInputs: string[] = JSON.parse(
+        fs.readFileSync(path.join(staging, ".build-inputs.json"), "utf8"),
+      );
+      cache.finalizeBuildStepCache(
+        step,
+        {
+          ...cacheState,
+          consumedInputs,
+          signature: inputSignature(consumedInputs),
+        },
+        { rootDir: repoRoot, artifactRoot: staging, env },
+      );
     }
     normalizeUiBuildPermissions(staging);
     const hadOutput = fs.existsSync(output);
@@ -475,7 +607,7 @@ function resolveScriptAction(action: string): [tool: "vite" | "vitest", ...args:
   return null;
 }
 
-export function runUiCli(argv: string[] = process.argv.slice(2)): void {
+export async function runUiCli(argv: string[] = process.argv.slice(2)): Promise<void> {
   const [action, ...rest] = argv;
   if (!action) {
     usage();
@@ -516,7 +648,7 @@ export function runUiCli(argv: string[] = process.argv.slice(2)): void {
     exitForSpawnResult(
       rest.some((arg) => arg === "--help" || arg === "-h")
         ? runSpawnCallSync(toolCall, "Control UI build")
-        : buildAndPublishUi(toolCall, env),
+        : await buildAndPublishUi(toolCall, env),
     );
     return;
   }
@@ -552,5 +684,5 @@ export function isDirectScriptExecution(
 const isDirectExecution = isDirectScriptExecution();
 
 if (isDirectExecution) {
-  runUiCli();
+  await runUiCli();
 }

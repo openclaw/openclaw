@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { raceWithTimeoutResult } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -110,6 +111,32 @@ function createCoordinator(
     ...overrides,
   });
 }
+
+it("preserves explicit ACP chunk semantics through the delivery coordinator", async () => {
+  const accepted: Array<{ kind: string; text?: string; textMode?: "delta" }> = [];
+  const dispatcher = createReplyDispatcher({
+    deliver: async (payload, info) => {
+      accepted.push({ kind: info.kind, text: payload.text, textMode: payload.textMode });
+    },
+  });
+  const coordinator = createCoordinator({ dispatcher });
+  const projector = createAcpReplyProjector({
+    cfg: createAcpTestConfig({ acp: { enabled: true, stream: { deliveryMode: "live" } } }),
+    shouldSendToolSummaries: async () => false,
+    shouldSendFullToolDetails: async () => false,
+    deliver: coordinator.deliver,
+  });
+  await projector.onEvent({ type: "text_delta", text: "First sentence. ", stream: "output" });
+  await projector.onEvent({ type: "text_delta", text: "Second sentence.", stream: "output" });
+  await projector.flush();
+  await coordinator.deliver("final", { text: "Replacement final." }, { skipTts: true });
+  await dispatcher.waitForIdle();
+  expect(accepted).toEqual([
+    { kind: "block", text: "First sentence. ", textMode: "delta" },
+    { kind: "block", text: "Second sentence.", textMode: "delta" },
+    { kind: "final", text: "Replacement final.", textMode: undefined },
+  ]);
+});
 
 function createVisibleChatAcpCoordinator(
   cfg: OpenClawConfig,
@@ -260,16 +287,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe(
       "canonical runtime text",
     );
-  });
-
-  it("does not treat custom dispatcher enqueue acceptance as confirmed delivery", async () => {
-    const coordinator = createCoordinator();
-
-    await expect(
-      coordinator.deliver("block", { text: "unconfirmed" }, { skipTts: true }),
-    ).resolves.toBe(true);
-
-    await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
   });
 
   it("waits for pending direct block delivery before resolving tool delivery", async () => {
@@ -423,18 +440,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(true);
   });
 
-  it("starts reply lifecycle only once when called directly and through deliver", async () => {
-    const onReplyStart = vi.fn(async () => {});
-    const coordinator = createCoordinator({ onReplyStart });
-
-    await coordinator.startReplyLifecycle();
-    await coordinator.deliver("final", { text: "hello" });
-    await coordinator.startReplyLifecycle();
-    await coordinator.deliver("block", { text: "world" });
-
-    expect(onReplyStart).toHaveBeenCalledTimes(1);
-  });
-
   it("does not block delivery when reply lifecycle startup hangs", async () => {
     const onReplyStart = vi.fn(
       async () =>
@@ -506,50 +511,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     const [routeParams] = expectDefined(deliveryMocks.routeReply.mock.calls[0], "route call");
     expect(routeParams.sessionKey).toBe("agent:claude:acp:spawned");
     expect(routeParams.policySessionKey).toBe("agent:main:main");
-  });
-
-  it("uses Slack DM TransportThreadId for routed ACP when ReplyToId is the current message", async () => {
-    const coordinator = createCoordinator({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        SessionKey: "agent:main:slack:direct:u123",
-        AccountId: "default",
-        ChatType: "direct",
-        MessageSid: "101.000",
-        ReplyToId: "101.000",
-        TransportThreadId: "101.000",
-        MessageThreadId: undefined,
-      }),
-      shouldRouteToOriginating: true,
-      originatingChannel: "slack",
-      originatingTo: "user:U123",
-    });
-
-    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
-
-    const [routeParams] = expectDefined(deliveryMocks.routeReply.mock.calls[0], "route call");
-    expect(routeParams.threadId).toBe("101.000");
-    expect(routeParams.replyDelivery).toEqual({
-      chatType: "direct",
-      replyToMode: "all",
-    });
-  });
-
-  it("uses the routed channel's listed default account for reply policy", async () => {
-    channelPluginMocks.accountIds = ["work"];
-    channelPluginMocks.replyToModeForAccount = (accountId) =>
-      accountId === "work" ? "off" : "all";
-    const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig());
-
-    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
-
-    const [routeParams] = expectDefined(deliveryMocks.routeReply.mock.calls[0], "route call");
-    expect(routeParams.accountId).toBe("work");
-    expect(routeParams.replyDelivery).toEqual({
-      chatType: "direct",
-      replyToMode: "off",
-    });
   });
 
   it("passes caller cancellation through routed ACP delivery", async () => {

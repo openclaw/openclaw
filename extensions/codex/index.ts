@@ -16,7 +16,6 @@ import {
 } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import codexProviderDiscovery from "./provider-discovery.js";
-import { registerCodexAccountUsage } from "./src/account-usage.js";
 import { createCodexAuthProfileSelection } from "./src/app-server/auth-profile-selection.js";
 import { createCodexAppServerConfig } from "./src/app-server/config-options.js";
 import { readCodexPluginConfig } from "./src/app-server/config-parsing.js";
@@ -84,7 +83,14 @@ export default definePluginEntry({
     noopPrefixes: ["plugins.entries.codex.config.codexPlugins"],
   },
   register(api) {
-    registerCodexAccountUsage(api);
+    api.registerGatewayMethod(
+      "codex.accountUsage",
+      async (options) => {
+        const { handleCodexAccountUsage } = await import("./src/account-usage-runtime.js");
+        await handleCodexAccountUsage(options);
+      },
+      { scope: "operator.admin" },
+    );
     api.registerService(codexNativeProfileRecoveryService);
     // Bundled modules may execute from a shared dist chunk, so import.meta.url
     // cannot identify the owning plugin package or its pinned dependencies.
@@ -119,7 +125,8 @@ export default definePluginEntry({
       return enabled ? livePluginConfig : undefined;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
-    const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;
+    const registrationConfig = readCodexPluginConfig(api.pluginConfig);
+    const appServerConfig = registrationConfig.appServer;
     api.registerService(
       createCodexDesktopGenerationService({
         onGenerationChange: retireSharedCodexAppServerClientsBeforeDesktopGeneration,
@@ -151,7 +158,7 @@ export default definePluginEntry({
     // The base registration runtime deliberately rejects state access. Open the
     // store only when a proxied runtime performs the first binding operation.
     const lazyBindingStateStore: Parameters<typeof createLazyCodexAppServerBindingStore>[0] = {
-      // Final effect guards still see raw SDK revocations until the next SDK major.
+      // Final effect guards retain raw SDK revocations through 2026-12-31.
       lookup: (key) => openBindingStateStore().lookup(key),
       asyncReads: {
         lookup: (key) => openBindingMutationStore().lookup(key),
@@ -199,8 +206,7 @@ export default definePluginEntry({
           overflowPolicy: "reject-new",
         }),
     });
-    const sessionCatalogEnabled =
-      readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
+    const sessionCatalogEnabled = registrationConfig.sessionCatalog?.enabled !== false;
     api.registerService({
       id: "codex-session-catalog",
       start: () => (sessionCatalogEnabled ? sessionCatalogControlFactory.start() : undefined),
@@ -225,10 +231,11 @@ export default definePluginEntry({
     for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
       api.registerNodeInvokePolicy(policy);
     }
-    if (readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true) {
-      const { resolveCodexAppServerAuthProfileIdForAgent } = createCodexAuthProfileSelection(
-        api.runtime.modelAuth,
-      );
+    if (registrationConfig.supervision?.enabled === true) {
+      const {
+        resolveCodexAppServerAuthProfileIdForAgent,
+        resolveCodexAppServerAuthProfileIdAtEffect,
+      } = createCodexAuthProfileSelection(api.runtime.modelAuth);
       api.registerTool(
         {
           contextVersion: 2,
@@ -245,6 +252,7 @@ export default definePluginEntry({
               getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
               getRuntimeConfig: resolveToolRuntimeConfig,
               resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
+              resolveAuthProfileIdAtEffect: resolveCodexAppServerAuthProfileIdAtEffect,
               resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
               senderIsOwner: context.senderIsOwner,
               assertInvocationCurrent: context.assertInvocationCurrent,

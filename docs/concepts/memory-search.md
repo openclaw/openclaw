@@ -11,6 +11,13 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
+The result-count argument is `maxResults` (an integer of at least 1). The tool
+also accepts `max_results` and `limit` as aliases. If several are supplied,
+`maxResults` takes precedence over `max_results`, which takes precedence over
+`limit`, regardless of argument order. Only the selected value is validated;
+an invalid higher-priority value is rejected rather than falling back to a valid
+alias. The advertised tool schema continues to use `maxResults`.
+
 When indexing Markdown, the builtin engine attaches a heading-only chunk to the
 following content chunk. This keeps short headings from taking search result slots
 on their own while preserving section context and source line references. A final
@@ -56,6 +63,11 @@ Choose llama.cpp once in interactive setup. OpenClaw installs a verified
 `llama-server`, downloads the embedding GGUF, and writes its managed service
 configuration.
 
+Managed `local` and Ollama embeddings index one file at a time when batch
+indexing is disabled. This bounds background embedding requests during a full
+rebuild; large indexes can take longer on hosts that previously ran several
+local jobs in parallel.
+
 EmbeddingGemma uses its trained task prefixes automatically for queries and
 indexed documents, including through Ollama, LM Studio, and OpenAI-compatible
 providers. After upgrading, an existing unprefixed EmbeddingGemma index rebuilds
@@ -84,6 +96,8 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 | OpenAI            | `openai`            | Depends       | API key or eligible Codex OAuth   |
 | OpenAI-compatible | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint |
 | Voyage            | `voyage`            | Yes           | Default model `voyage-4-large`    |
+
+To move off Ollama, [llmman](/providers/llmman#advanced-configuration) serves the same `/api/embed`, so `provider: "ollama"` only needs a new `remote.baseUrl`.
 
 ## How search works
 
@@ -119,7 +133,7 @@ If only one path is available, the other runs alone. Keyword boosts stay bounded
 without clipping distinct lexical scores to the same maximum, so relevance
 continues to influence ranking when dated notes decay.
 
-The builtin engine then applies deterministic ranking:
+The builtin engine then applies fixed ranking rules:
 
 ```text
 hybrid relevance × recency decay × importance multiplier
@@ -152,7 +166,9 @@ Hybrid ranking also scores retrieved keyword candidates from their stored
 embeddings when they fall outside the top vector candidates. This keeps a
 strong keyword answer eligible when many similar notes fill the vector window.
 
-## Deterministic trigger recall
+<a id="deterministic-trigger-recall" />
+
+## Rule-based trigger recall
 
 On eligible interactive turns, the builtin engine also compares the inbound
 message with short trigger phrases stored on indexed entries. Strong matches
@@ -195,7 +211,7 @@ vectors. Verify the provider's model, then rebuild with
 
 ## Improving search quality
 
-Two deterministic ranking passes are enabled by default for hybrid search.
+Two rule-based ranking passes are enabled by default for hybrid search.
 
 ### Recency decay
 

@@ -2,6 +2,7 @@ import { stripMemoryAnnotationCarriers } from "../../packages/memory-host-sdk/sr
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   isAutomaticMemoryEntryEligible,
+  readMemorySearchManagerStatus,
   type MemoryProviderStatus,
   type MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
@@ -302,7 +303,7 @@ export async function adaptLegacyMemoryProvider(
       };
     },
     async health() {
-      const status = manager.status();
+      const status = await readMemorySearchManagerStatus(manager);
       return {
         status: status.lastSyncError ? "degraded" : "ready",
         message: status.lastSyncError,

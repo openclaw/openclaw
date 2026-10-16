@@ -16,6 +16,7 @@ import {
 } from "../infra/deferred-plugin-session-sources.js";
 import * as sessionVerification from "../infra/deferred-plugin-session-verification.js";
 import * as migrationArtifacts from "../infra/session-sqlite-migration-artifact.js";
+import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { readOnlySqliteValidationSnapshot } from "../infra/session-sqlite-migration-readers.js";
 import { migrateLegacyAcpSessionMetadata } from "../infra/state-migrations.session-store.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
@@ -27,6 +28,80 @@ import {
   seedStaleDeferredPluginSessionImport,
 } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+
+it.each([2, 32])(
+  "bounds manifest reads for a stale receipt with %i archived transcripts",
+  async (count) => {
+    await withOpenClawTestState({ label: "stale-receipt-manifest-reads" }, async (state) => {
+      const { cfg, storePath } = await seedDeferredPluginSessionSource(state);
+      const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
+      for (let index = 2; index < count; index++) {
+        const sessionId = `legacy-volume-${index}`;
+        entries[`agent:main:volume-${index}`] = {
+          sessionId,
+          sessionFile: `${sessionId}.jsonl`,
+          updatedAt: 20,
+        };
+        fs.writeFileSync(
+          path.join(path.dirname(storePath), `${sessionId}.jsonl`),
+          `${JSON.stringify({ type: "session", version: 3, id: sessionId })}\n`,
+        );
+      }
+      fs.writeFileSync(storePath, JSON.stringify(entries));
+      const options = { cfg, env: state.env, allAgents: true };
+      expect(
+        (await runDoctorSessionSqlite({ ...options, mode: "import" })).totals.importedEntries,
+      ).toBe(count);
+      await recordDeferredPluginMigrations({
+        env: state.env,
+        pending: [],
+        resolvedPluginIds: ["fixture-plugin"],
+      });
+      const archived = await runDoctorSessionSqlite({ ...options, mode: "import" });
+      expect(archived.totals.archivedTranscriptFiles).toBe(count);
+      expect(fs.existsSync(storePath)).toBe(false);
+      const manifest = migrationRun.readSessionSqliteMigrationManifest(
+        archived.migrationRun!.manifestPath,
+      )!;
+      const indexMove = manifest.targets
+        .flatMap((target) => target.plannedMoves)
+        .find((move) => move.sourcePath === storePath)!;
+      // Interrupted archival can leave the index present while its transcripts are already archived.
+      fs.renameSync(indexMove.archivePath, storePath);
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          db.prepare(
+            "UPDATE migration_sources SET removed_source = 0, report_json = json_set(report_json, '$.databaseIdentity', '123:456') WHERE migration_kind = 'deferred-plugin-session-import'",
+          ).run();
+        },
+        { env: state.env },
+      );
+      const manifests = migrationRun.listSessionSqliteMigrationManifestPaths(state.env);
+      expect(manifests.length).toBeGreaterThan(0);
+      const reads = vi.spyOn(fs, "readFileSync");
+      try {
+        for (let pass = 0; pass < 2; pass++) {
+          reads.mockClear();
+          const report = await runDoctorSessionSqlite({ ...options, mode: "validate" });
+          const issues = report.targets.flatMap((target) => target.issues);
+          expect(issues).toContainEqual(
+            expect.objectContaining({ code: "retained_plugin_receipt_superseded" }),
+          );
+          expect(issues).not.toContainEqual(
+            expect.objectContaining({ code: "historical_transcript_deferred" }),
+          );
+          expect(report.totals.importedEntries).toBe(0);
+          for (const manifestPath of manifests) {
+            // History discovery and stale-source verification each own one synchronous phase.
+            expect(reads.mock.calls.filter(([file]) => file === manifestPath)).toHaveLength(2);
+          }
+        }
+      } finally {
+        reads.mockRestore();
+      }
+    });
+  },
+);
 
 it.each([
   { available: true, pending: true },

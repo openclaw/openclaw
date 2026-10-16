@@ -5,10 +5,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveRealpathOrAbsolute } from "./boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { runBestEffortCleanup } from "./non-fatal-cleanup.js";
+import { isPathInside } from "./path-guards.js";
 
 const log = createSubsystemLogger("infra:temp-artifacts");
 const retainedRuntimes = resolveGlobalSingleton(
@@ -30,6 +31,30 @@ export function reportRetainedUpdateRuntime(directory: string, reason: string): 
     // The caller still records the warning.
   }
   return message;
+}
+
+/** Placement and discovery share the climb outside the enclosing module owner. */
+export function resolveRetainedUpdateRuntimeParents(
+  packageRoot: string,
+  mutationRoots: readonly string[] = [],
+): string[] {
+  const parts = packageRoot.split(path.sep);
+  const modules = parts.indexOf("node_modules");
+  const boundaries = [
+    parts.slice(0, modules >= 0 ? modules + 1 : parts.length).join(path.sep),
+    ...mutationRoots,
+  ];
+  let parent = path.dirname(packageRoot);
+  const parents = [parent];
+  while (boundaries.some((root) => isPathInside(root, parent))) {
+    const ancestor = path.dirname(parent);
+    if (ancestor === parent) {
+      break;
+    }
+    parent = ancestor;
+    parents.push(parent);
+  }
+  return parents;
 }
 
 async function isRetainedRuntimeMarker(marker: string): Promise<boolean> {
@@ -91,13 +116,15 @@ export async function maintainRetainedUpdateRuntimes(params: {
   assertResourcesSettled?: () => void;
 }): Promise<string[]> {
   const messages: string[] = [];
-  const packages = params.packageRoots.map(resolveRealpathOrAbsolute);
+  // Native spelling matches the projection, registration, and marker realpaths
+  // even when callers pass a Windows 8.3 or differently cased spelling.
+  const packages = params.packageRoots.map(resolveIdentityPathViaExistingAncestorSync);
   const roots = new Set(
     [
       os.tmpdir(),
       ...(params.temporaryDirectories ?? []),
-      ...packages.map((root) => path.dirname(root)),
-    ].map(resolveRealpathOrAbsolute),
+      ...packages.flatMap((root) => resolveRetainedUpdateRuntimeParents(root)),
+    ].map(resolveIdentityPathViaExistingAncestorSync),
   );
   for (const parent of roots) {
     try {

@@ -6,9 +6,11 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { RunningChrome } from "./chrome.js";
 import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
+import { withChromeProfileLifecycleLock } from "./chrome.profile-lifecycle-lock.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
@@ -159,17 +161,10 @@ function combineSignals(lifecycleSignal: AbortSignal, callerSignal?: AbortSignal
 
 /** Observe shared lifecycle work without transferring cancellation ownership. */
 export function waitForProfileOperation<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return promise;
-  }
-  signal.throwIfAborted();
-  let onAbort!: () => void;
-  const waiting = new Promise<T>((resolve, reject) => {
-    onAbort = () => reject(toLifecycleError(signal.reason, "Browser operation aborted."));
-    signal.addEventListener("abort", onAbort, { once: true });
-    void promise.then(resolve, reject);
-  });
-  return waiting.finally(() => signal.removeEventListener("abort", onAbort));
+  signal?.throwIfAborted();
+  return racePromiseWithAbortSignal(promise, signal, (aborted) =>
+    toLifecycleError(aborted.reason, "Browser operation aborted."),
+  );
 }
 
 function createLease(actor: ProfileLifecycleActor): () => void {
@@ -491,17 +486,25 @@ export function beginProfileTransition(
         capturePlaywrightRetirement(actor, ownerProfile.cdpUrl);
       }
       captureRelay();
-      const result = await cleanupProfileResources({
-        state: params.state,
-        runtime: params.runtime,
-        eagerMcpClose,
-        hadPendingWork: hadPendingWork || Boolean(eagerPlaywrightRetirement?.retired),
-        managedChrome,
-      });
-      cleanupCompleted = true;
-      await params.afterCleanup?.();
-      actor.blockedReason = null;
-      return result;
+      const cleanup = async () => {
+        const result = await cleanupProfileResources({
+          state: params.state,
+          runtime: params.runtime,
+          eagerMcpClose,
+          hadPendingWork: hadPendingWork || Boolean(eagerPlaywrightRetirement?.retired),
+          managedChrome,
+        });
+        cleanupCompleted = true;
+        await params.afterCleanup?.();
+        actor.blockedReason = null;
+        return result;
+      };
+      // Drain actor starts and leases before taking the cross-runtime lock:
+      // pending work can itself need it. Once cleanup enters, hold the lock
+      // through resource drains and afterCleanup, including nested stopOwned.
+      return managedChrome
+        ? await withChromeProfileLifecycleLock(ownerProfile.name, cleanup)
+        : await cleanup();
     })
     .catch((err: unknown) => {
       if (cleanupCompleted) {

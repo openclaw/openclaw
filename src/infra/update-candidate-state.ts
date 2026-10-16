@@ -4,8 +4,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveDaemonRuntimePinStorePath } from "../daemon/runtime-pin-store.js";
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
-import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -71,6 +71,7 @@ const UpdateStateSchemaVersionsSchema = z.array(
     path: z.string(),
     userVersion: z.number().nullable(),
     contentVersion: z.number().optional(),
+    retainedAgentPaths: z.array(z.string()).optional(),
   }),
 );
 export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsSchema>[number];
@@ -82,55 +83,15 @@ export const UpdateCandidateStateSnapshotSchema = z.object({
 type StateInput = {
   stateDir: string;
   config: OpenClawConfigWithLegacyRoster;
+  includeLocalStoreVersions?: boolean;
   env?: NodeJS.ProcessEnv;
+  includeRetainedAgentPaths?: true;
   sourceBundledPlugins?: UpdateCandidateBundledSource;
 };
 type CandidateStateDatabase = Pick<
   DB,
   "agent_databases" | "agent_database_leases" | "state_leases"
 >;
-
-/** Older inspection workers report only the published version; agent stores never defer it. */
-export function resolveUpdateStateContentVersion(entry: UpdateStateSchemaVersion): number | null {
-  return entry.contentVersion ?? entry.userVersion;
-}
-
-export function updateStateSchemaVersionsMatch(
-  before: readonly UpdateStateSchemaVersion[],
-  after: readonly UpdateStateSchemaVersion[],
-  params: { sharedPath: string; candidateSchemaVersions?: OpenClawSchemaVersions },
-): boolean {
-  const versions = new Map(
-    after.map((entry) => [entry.path, resolveUpdateStateContentVersion(entry)]),
-  );
-  const candidate = params.candidateSchemaVersions;
-  if (!candidate) {
-    return (
-      before.length === after.length &&
-      before.every((entry) => versions.get(entry.path) === resolveUpdateStateContentVersion(entry))
-    );
-  }
-  const baseline = new Map(
-    before.map((entry) => [entry.path, resolveUpdateStateContentVersion(entry)]),
-  );
-  return (
-    before.every(
-      (entry) =>
-        resolveUpdateStateContentVersion(entry) === null ||
-        versions.get(entry.path) === resolveUpdateStateContentVersion(entry),
-    ) &&
-    after.every((entry) => {
-      const version = resolveUpdateStateContentVersion(entry);
-      if (version === null || baseline.get(entry.path) === version) {
-        return true;
-      }
-      // Verification can create a store for the first time. All collected paths
-      // except the shared database are configured or registered agent stores.
-      const supported = entry.path === params.sharedPath ? candidate.state : candidate.agent;
-      return baseline.get(entry.path) == null && version === supported;
-    })
-  );
-}
 
 const UpdateCandidateStateInventorySchema = z
   .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
@@ -181,7 +142,7 @@ function collectRegisteredPaths(
       typeof agentId === "string" && agentId.length > 0 ? { role: "agent", agentId } : undefined,
       stored,
     );
-    return { stored, source };
+    return { stored, source, agentId };
   });
 }
 
@@ -224,6 +185,8 @@ export async function collectStateDatabasePaths(
     queueStateDatabaseSpelling(files, stateRoot, file, owner);
   };
   queue(shared, { role: "global" });
+  // Published owners describe shared/agent schemas; local stores retain exact opaque contents.
+  queue(resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: stateRoot }));
   const directories =
     options.includeUnconfiguredAgents !== false
       ? (await listDefaultAgentDatabasePaths(input.stateDir)).map((entry) => entry.agentId)
@@ -257,10 +220,11 @@ export async function collectStateDatabasePaths(
   );
 }
 
-/** Released updaters compare exact response paths, so every raw alias is published. */
+/** Publish exact aliases; released shared/agent callers opt out of local schema versions. */
 function publishStateDatabaseVersions(
   files: Map<string, StateDatabaseDiscovery>,
   inspected: Map<string, Omit<UpdateStateSchemaVersion, "path">>,
+  input: StateInput,
 ): UpdateStateSchemaVersion[] {
   const versions: UpdateStateSchemaVersion[] = [];
   for (const [identity, discovery] of files) {
@@ -272,7 +236,12 @@ function publishStateDatabaseVersions(
       versions.push({ path: spelling, ...result });
     }
   }
-  return versions;
+  return input.includeLocalStoreVersions === false
+    ? versions.filter(
+        ({ path: file }) =>
+          file !== resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: input.stateDir }),
+      )
+    : versions;
 }
 
 /** Read registrations and plugin ownership from one private shared copy before budgeting. */
@@ -341,17 +310,24 @@ export async function readUpdateCandidateStateInventoryInProcess(
   return measure();
 }
 
-function readSharedDatabaseVersion(
+async function readSharedDatabaseVersion(
   location: string,
   shared: string,
   files: Map<string, StateDatabaseDiscovery>,
-): Omit<UpdateStateSchemaVersion, "path"> {
+  input: StateInput,
+): Promise<Omit<UpdateStateSchemaVersion, "path">> {
   const db = openNodeSqliteDatabase(location, { readOnly: true });
   try {
-    collectRegisteredPaths(db, shared, files);
+    const registered = collectRegisteredPaths(db, shared, files);
+    let held: string[] = [];
+    if (input.includeRetainedAgentPaths) {
+      const { readUpdateHeldAgentPaths } = await import("./update-candidate-state.retained.js");
+      held = readUpdateHeldAgentPaths(db, shared, files.values(), registered, input);
+    }
     return {
       userVersion: readSqliteUserVersion(db),
       contentVersion: readStateSchemaContentVersion(db),
+      ...(held.length ? { retainedAgentPaths: held } : {}),
     };
   } finally {
     db.close();
@@ -374,9 +350,9 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
   }
   const sharedVersion = await withStateDatabaseSnapshot(
     shared,
-    (location) => ({
+    async (location) => ({
       path: shared,
-      ...readSharedDatabaseVersion(location, shared, files),
+      ...(await readSharedDatabaseVersion(location, shared, files, input)),
     }),
     input.stagingRoot,
     input.onProgress,
@@ -404,15 +380,17 @@ export async function readUpdateStateSchemaVersionsInProcess(
   for (const [identity, discovery] of files) {
     const file = discovery.spellings[0];
     if (identity === sharedIdentity && input.inspectionPlan) {
-      const { userVersion, contentVersion } = input.inspectionPlan.sharedVersion;
-      inspected.set(identity, {
-        userVersion,
-        ...(contentVersion === undefined ? {} : { contentVersion }),
-      });
+      const { path: _path, ...version } = input.inspectionPlan.sharedVersion;
+      inspected.set(identity, version);
       continue;
     }
     input.onProgress?.({
-      phase: file === shared ? "shared database inspection" : "agent schema inspection",
+      phase:
+        file === shared
+          ? "shared database inspection"
+          : file === resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: input.stateDir })
+            ? "daemon schema inspection"
+            : "agent schema inspection",
       path: file,
     });
     // Missing stores stay explicit so creation is checked and loss blocks rollback.
@@ -435,14 +413,14 @@ export async function readUpdateStateSchemaVersionsInProcess(
       identity,
       await withStateDatabaseSnapshot(
         file,
-        (location) => readSharedDatabaseVersion(location, shared, files),
+        (location) => readSharedDatabaseVersion(location, shared, files, input),
         input.stagingRoot,
         input.onProgress,
         input.preserveSourceArtifacts,
       ),
     );
   }
-  return publishStateDatabaseVersions(files, inspected);
+  return publishStateDatabaseVersions(files, inspected, input);
 }
 
 /** Released candidates can snapshot shared state even when they cannot expose discovery. */
@@ -478,7 +456,7 @@ async function discoverLegacyUpdateStateSchemaInspection(
     }
     const sharedVersion = {
       path: shared,
-      ...readSharedDatabaseVersion(snapshot.location, shared, files),
+      ...(await readSharedDatabaseVersion(snapshot.location, shared, files, params.input)),
     };
     return { files: [...files], sharedVersion };
   });
@@ -493,6 +471,7 @@ export async function readUpdateDatabaseGenerationsIsolated(
     timeoutMs?: number;
     signal?: AbortSignal;
     acquisition?: UpdateRecoveryCaptureAcquisition;
+    retryAdvice?: boolean;
   } = {},
 ): Promise<UpdateDatabaseGenerations> {
   const scope = getOpenClawDatabaseMaintenanceScope();
@@ -513,6 +492,8 @@ export async function readUpdateDatabaseGenerationsIsolated(
       await runUpdateStateInspectionWorker({
         ...worker,
         root,
+        retryAdvice: options.retryAdvice,
+        sources: paths,
         ...(maintenanceOwner ? { ioBudget: "deadline" as const } : {}),
         input: {
           mode: "database-generations",
@@ -730,7 +711,7 @@ export async function snapshotUpdateCandidateState(
   }
   input.onProgress?.({ phase: "execution approvals snapshot", path: sourceRoot });
   await execApprovals.copySources();
-  const versions = publishStateDatabaseVersions(files, inspected);
+  const versions = publishStateDatabaseVersions(files, inspected, input);
   const pluginCodeLinks: UpdateCandidatePluginCodeLink[] = [];
   input.onProgress?.({ phase: "plugin snapshot", path: sourceRoot });
   const pluginPaths = await copyUpdateCandidatePlugins(plugins, {

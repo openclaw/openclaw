@@ -396,7 +396,7 @@ installing the latest version.
 
     `tools.sessions.visibility` is Gateway-wide and cannot be set per agent. Session tools default to `all` with agent-to-agent messaging on. With `tree`, callers can access their current session and sessions they spawn; the main session can still access every session belonging to its agent. Incognito restrictions and the sandbox spawned-session clamp still apply. See [`tools.sessions`](/gateway/config-tools#tools-sessions) and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
 
-    `sessions_history` in this profile still returns a bounded, sanitized recall view rather than a raw transcript dump. Assistant recall strips thinking tags, `<relevant-memories>` wrappers, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), downgraded tool-call wrappers, leaked ASCII/full-width model control tokens, and malformed MiniMax tool-call XML before redaction/truncation.
+    `sessions_history` in this profile still returns a bounded, sanitized recall view rather than a raw transcript dump. Assistant recall strips thinking tags, `<relevant-memories>` wrappers, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), downgraded tool-call wrappers, leaked ASCII/full-width model control tokens, and malformed MiniMax tool-call XML before truncation.
 
   </Tab>
 </Tabs>

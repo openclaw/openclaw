@@ -1,32 +1,63 @@
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  matchesAgentDatabaseReadCandidatePath,
+  type AgentDatabaseReadCandidate,
+} from "../../infra/agent-database-readers.js";
+import { readSqliteDatabaseScopedWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
-import type { AuthProfileRowRead } from "./types.js";
+import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "./mutation-lineage.js";
+import { buildPersistedAuthProfileSecretsStore } from "./persisted.js";
+import { buildPersistedAuthProfileState } from "./state.js";
+import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
 
 type RowsReader = {
+  identity?: string;
   read: () => Promise<AuthProfileRowRead>;
   assertCurrent: () => void;
 };
 
-export class AuthProfileRuntimeReadStaleError extends Error {
-  constructor(readonly waitForSettlement?: (signal?: AbortSignal) => Promise<void>) {
-    super("Auth profile store changed during its runtime read; retry resolution");
-    this.name = "AuthProfileRuntimeReadStaleError";
-  }
-}
-
-/** A derived rows cache; the runtime snapshot owner supplies publication generations. */
-export function createRuntimeAuthProfileRowsCache(
-  revisionAtPath: (path: string) => {
-    rows: string;
-    selection: string;
-    ownerLineage?: readonly string[];
-  },
-) {
-  const entries = new Map<
-    string,
-    { writeToken: string; revision: string; rows: AuthProfileRowRead }
-  >();
+/** Persisted rows follow their source owner, independently of resolved snapshot publication. */
+export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string) => string) {
+  type Entry = {
+    identity: string | undefined;
+    writeToken: string | undefined;
+    revision: string;
+    rows?: AuthProfileRowRead;
+  };
+  const entries = new Map<string, Entry>();
+  const hasCurrentSource = (databasePath: string, entry: Entry) =>
+    revisionAtPath(databasePath) === entry.revision &&
+    // First session creation admits a previously absent source without changing auth facts.
+    (entry.writeToken === undefined ||
+      readSqliteDatabaseScopedWriteTokenForPath(databasePath, "auth-profiles") ===
+        entry.writeToken);
   return {
+    hasSource(databasePath: string): boolean {
+      const entry = entries.get(databasePath);
+      return Boolean(entry && hasCurrentSource(databasePath, entry));
+    },
+    recordSource(databasePath: string, identity: string, store: AuthProfileStore | null) {
+      const source = store && structuredClone(store);
+      entries.set(databasePath, {
+        identity,
+        writeToken: readSqliteDatabaseScopedWriteTokenForPath(databasePath, "auth-profiles"),
+        revision: revisionAtPath(databasePath),
+        // Only canonical persisted values enter this cache, before runtime secret overlays.
+        rows: source
+          ? freezeJsonSnapshot({
+              store: { status: "readable", raw: buildPersistedAuthProfileSecretsStore(source) },
+              state: { status: "readable", raw: buildPersistedAuthProfileState(source) },
+              cacheable: true,
+            } satisfies AuthProfileRowRead)
+          : undefined,
+      });
+    },
+    invalidateRows(databasePath?: string) {
+      for (const [pathname, entry] of entries) {
+        if (databasePath === undefined || pathname === databasePath) {
+          entry.rows = undefined;
+        }
+      }
+    },
     clear(databasePath?: string) {
       if (databasePath === undefined) {
         entries.clear();
@@ -34,59 +65,78 @@ export function createRuntimeAuthProfileRowsCache(
         entries.delete(databasePath);
       }
     },
-    prepare(
-      databasePath: string,
-      reader: RowsReader,
-      captureSettlement?: (
-        databasePaths: readonly string[],
-        rows: AuthProfileRowRead | undefined,
-      ) => ((signal?: AbortSignal) => Promise<void>) | undefined,
-    ): RowsReader {
-      const revision = revisionAtPath(databasePath);
-      const ownerLineage = [databasePath, ...(revision.ownerLineage ?? [])];
-      let capturedRows: AuthProfileRowRead | undefined;
-      const assertCurrent = () => {
-        reader.assertCurrent();
-        // Bookkeeping evicts reusable rows without revoking an admitted snapshot read.
-        if (revisionAtPath(databasePath).selection !== revision.selection) {
-          throw new AuthProfileRuntimeReadStaleError(
-            captureSettlement?.(ownerLineage, capturedRows),
-          );
+    retire(candidates: readonly AgentDatabaseReadCandidate[], retainedPaths?: ReadonlySet<string>) {
+      for (const databasePath of entries.keys()) {
+        if (
+          !retainedPaths?.has(databasePath) &&
+          candidates.some((candidate) =>
+            matchesAgentDatabaseReadCandidatePath(candidate, databasePath),
+          )
+        ) {
+          entries.delete(databasePath);
         }
-      };
+      }
+    },
+    publishSnapshots(databasePaths: ReadonlySet<string>) {
+      for (const databasePath of entries.keys()) {
+        if (!databasePaths.has(databasePath)) {
+          entries.delete(databasePath);
+        }
+      }
+    },
+    rebase(databasePath: string) {
+      const entry = entries.get(databasePath);
+      if (
+        entry &&
+        (entry.writeToken === undefined ||
+          readSqliteDatabaseScopedWriteTokenForPath(databasePath, "auth-profiles") ===
+            entry.writeToken)
+      ) {
+        entry.revision = revisionAtPath(databasePath);
+      }
+    },
+    prepare(databasePath: string, reader: RowsReader): RowsReader {
       return {
-        assertCurrent,
+        assertCurrent: reader.assertCurrent,
         async read() {
-          assertCurrent();
+          reader.assertCurrent();
+          const revision = revisionAtPath(databasePath);
           const entry = entries.get(databasePath);
-          const writeToken = readSqliteDatabaseWriteTokenForPath(databasePath);
+          // Session-only writes leave auth rows intact; auth and unscoped writes still fence reuse.
+          const writeToken = readSqliteDatabaseScopedWriteTokenForPath(
+            databasePath,
+            "auth-profiles",
+          );
           if (
             writeToken !== undefined &&
-            entry?.revision === revision.rows &&
-            entry.writeToken === writeToken
+            entry?.identity === reader.identity &&
+            entry?.revision === revision &&
+            entry.writeToken === writeToken &&
+            entry.rows
           ) {
-            capturedRows = entry.rows;
             return entry.rows;
           }
-          entries.delete(databasePath);
-          // Only completed, certified reads can serve another caller's later snapshot.
+          if (entry) {
+            entry.rows = undefined;
+          }
+          // Source provenance can precede admission; reusable rows require a stable receipt.
           const rows = await reader.read();
-          capturedRows = rows;
-          assertCurrent();
+          reader.assertCurrent();
           if (
-            rows.cacheable &&
             rows.store.status !== "unreadable" &&
             rows.state.status !== "unreadable" &&
-            revisionAtPath(databasePath).rows === revision.rows &&
-            writeToken !== undefined &&
-            readSqliteDatabaseWriteTokenForPath(databasePath) === writeToken
+            revisionAtPath(databasePath) === revision &&
+            (writeToken === undefined ||
+              readSqliteDatabaseScopedWriteTokenForPath(databasePath, "auth-profiles") ===
+                writeToken)
           ) {
             freezeJsonSnapshot(rows);
-            entries.set(databasePath, { writeToken, revision: revision.rows, rows });
-            // Bound retained credential owners; eviction never changes read authority.
-            while (entries.size > 64) {
-              entries.delete(entries.keys().next().value!);
-            }
+            entries.set(databasePath, {
+              identity: reader.identity,
+              writeToken,
+              revision,
+              ...(writeToken !== undefined ? { rows } : {}),
+            });
           }
           return rows;
         },
@@ -94,3 +144,7 @@ export function createRuntimeAuthProfileRowsCache(
     },
   };
 }
+
+export const runtimeAuthProfileRowsCache = createRuntimeAuthProfileRowsCache((databasePath) =>
+  String(getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath)),
+);

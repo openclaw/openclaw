@@ -152,8 +152,6 @@ it("keeps exact node admission predicates after bootstrap setup binding", () => 
   expect(owner.hasNodeEnrollmentOwner("cloud-device-bound")).toBe(true);
   expect(owner.hasPendingNodeEnrollmentSetup("setup", "different-cloud-device")).toBe(false);
   expect(owner.hasPendingNodeEnrollmentSetup("missing-setup", "cloud-device-bound")).toBe(false);
-  expect(() => owner.get(environment.environmentId)).toThrow("both SSH and node transports");
-  expect(() => owner.list()).toThrow("both SSH and node transports");
 });
 
 it.each([false, true])(

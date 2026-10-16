@@ -1,10 +1,13 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
@@ -17,6 +20,19 @@ const suite = createControlUiE2eSuite({
 
 const pastedText = `Quarterly launch plan\n\n  Preserve indentation 🦞\n${"x".repeat(1100)}`;
 const pastedTextLabel = "Quarterly launch plan Preserve…";
+type GeometryNode = { tag: string; classes: string[]; connected: boolean };
+type GeometryWindow = Window & {
+  pastedGeometryFailure?: {
+    missing: string[];
+    theme: string;
+    width: number;
+    connected: { card: boolean; host: boolean };
+    host: { pending: boolean | null; updated: boolean | null };
+    actionSpan: { children: number | null; empty: boolean | null };
+    ancestors: GeometryNode[];
+    structure: Array<GeometryNode & { children: string[] }>;
+  };
+};
 const contextOptions = {
   locale: "en-US",
   reducedMotion: "reduce" as const,
@@ -67,34 +83,100 @@ suite.define(() => {
             document.documentElement.dataset.themeMode = mode;
           }, theme);
           expect(
-            await pastedCard.evaluate((card) => {
-              const other = document.querySelector(
-                ".chat-attachments-preview .chat-attachment-thumb--file:not(openclaw-chat-pasted-text *)",
-              )!;
-              const name = card.querySelector(".chat-attachment-file__name")!;
-              const action = card.querySelector(".chat-attachment-text-action")!;
-              const rect = card.getBoundingClientRect();
-              const actionRect = action.getBoundingClientRect();
-              const style = getComputedStyle(card);
-              const otherStyle = getComputedStyle(other);
-              return {
-                sameSize:
-                  rect.width === other.getBoundingClientRect().width &&
-                  rect.height === other.getBoundingClientRect().height,
-                sameBorder:
-                  style.border === otherStyle.border &&
-                  style.borderRadius === otherStyle.borderRadius,
-                secondRow: actionRect.top >= name.getBoundingClientRect().bottom,
-                inside:
-                  actionRect.left >= rect.left &&
-                  actionRect.right <= rect.right &&
-                  actionRect.bottom < rect.bottom,
-                readable: action.clientWidth >= action.scrollWidth,
-                nestedControls: card.querySelectorAll(
-                  "button button, button a, [role=button] button",
-                ).length,
-              };
-            }),
+            await pastedCard
+              .evaluate((card) => {
+                const other = document.querySelector(
+                  ".chat-attachments-preview .chat-attachment-thumb--file:not(openclaw-chat-pasted-text *)",
+                )!;
+                const name = card.querySelector(".chat-attachment-file__name")!;
+                const action = card.querySelector(".chat-attachment-text-action")!;
+                if (!other || !name || !action) {
+                  try {
+                    const describe = (element: Element): GeometryNode => ({
+                      tag: element.localName,
+                      classes: [...element.classList],
+                      connected: element.isConnected,
+                    });
+                    const host = card.closest("openclaw-chat-pasted-text");
+                    const span = name?.parentElement?.querySelector("span[style*=contents]");
+                    const ancestors: GeometryNode[] = [];
+                    let parent = card.parentElement;
+                    while (parent && ancestors.length < 3) {
+                      ancestors.push(describe(parent));
+                      parent = parent.parentElement;
+                    }
+                    // Snapshot the null moment; cleanup only reads these synthetic structural facts.
+                    (window as GeometryWindow).pastedGeometryFailure = {
+                      missing: Object.entries({ ordinary: other, name, action })
+                        .filter(([, element]) => !element)
+                        .map(([label]) => label),
+                      theme:
+                        document.documentElement.dataset.themeMode === "dark" ? "dark" : "light",
+                      width: window.innerWidth,
+                      connected: { card: card.isConnected, host: host?.isConnected ?? false },
+                      host: {
+                        pending: host ? Reflect.get(host, "isUpdatePending") === true : null,
+                        updated: host ? Reflect.get(host, "hasUpdated") === true : null,
+                      },
+                      actionSpan: {
+                        children: span?.childNodes.length ?? null,
+                        empty: span ? !span.hasChildNodes() : null,
+                      },
+                      ancestors,
+                      structure: [card, ...card.querySelectorAll("*")].slice(0, 16).map((element) =>
+                        Object.assign(describe(element), {
+                          children: [...element.childNodes]
+                            .slice(0, 12)
+                            .map((child) => child.nodeName.toLowerCase()),
+                        }),
+                      ),
+                    };
+                  } catch {
+                    // Preserve the original null access if capture fails.
+                  }
+                }
+                const rect = card.getBoundingClientRect();
+                const actionRect = action.getBoundingClientRect();
+                const style = getComputedStyle(card);
+                const otherStyle = getComputedStyle(other);
+                return {
+                  sameSize:
+                    rect.width === other.getBoundingClientRect().width &&
+                    rect.height === other.getBoundingClientRect().height,
+                  sameBorder:
+                    style.border === otherStyle.border &&
+                    style.borderRadius === otherStyle.borderRadius,
+                  secondRow: actionRect.top >= name.getBoundingClientRect().bottom,
+                  inside:
+                    actionRect.left >= rect.left &&
+                    actionRect.right <= rect.right &&
+                    actionRect.bottom < rect.bottom,
+                  readable: action.clientWidth >= action.scrollWidth,
+                  nestedControls: card.querySelectorAll(
+                    "button button, button a, [role=button] button",
+                  ).length,
+                };
+              })
+              .catch(async (error: unknown) => {
+                try {
+                  const snapshot = await withTimeout(
+                    page.evaluate(() => (window as GeometryWindow).pastedGeometryFailure),
+                    5_000,
+                    "pasted text geometry diagnostics",
+                  );
+                  if (snapshot) {
+                    const artifactParent = process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR;
+                    const directory = createControlUiE2eArtifactDir("failure", artifactParent);
+                    await writeFile(
+                      join(directory, "failure.public.json"),
+                      JSON.stringify({ schemaVersion: 1, pastedTextGeometry: snapshot }),
+                    );
+                  }
+                } catch {
+                  // Preserve the original geometry failure.
+                }
+                throw error;
+              }),
           ).toEqual({
             sameSize: true,
             sameBorder: true,

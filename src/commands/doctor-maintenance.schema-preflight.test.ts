@@ -145,7 +145,7 @@ it("refuses a newer shared SQLite database before repairing an old registry", as
 it("lets the schema repair owner replace a missing shared-state index", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const initial = openOpenClawStateDatabase({ env: state.env });
-    initial.db.exec("DROP INDEX idx_task_runs_status");
+    initial.db.exec("DROP INDEX idx_task_runs_runtime_run");
     closeOpenClawStateDatabaseForTest();
     mocks.runContributions.mockImplementation(async (ctx) => {
       const result = repairOpenClawStateDatabaseSchema({ env: state.env });
@@ -164,8 +164,14 @@ it("lets the schema repair owner replace a missing shared-state index", async ()
       expect(runtime.exit, output).not.toHaveBeenCalled();
       expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
       expect(
-        repaired.prepare("SELECT name FROM pragma_index_info('idx_task_runs_status')").all(),
-      ).toEqual([{ name: "status" }]);
+        repaired.prepare("SELECT name FROM pragma_index_info('idx_task_runs_runtime_run')").all(),
+      ).toEqual([
+        { name: "runtime" },
+        { name: "run_id" },
+        { name: "source_id" },
+        { name: "created_at" },
+        { name: "task_id" },
+      ]);
     } finally {
       repaired.close();
     }

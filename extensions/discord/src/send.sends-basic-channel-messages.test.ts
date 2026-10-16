@@ -436,7 +436,7 @@ describe("sendMessageDiscord", () => {
       id: "msg1",
       channel_id: "789",
     });
-    await sendMessageDiscord("channel:789", "ping @Alice", {
+    await sendMessageDiscord("channel:789", "ping @Alice.", {
       rest,
       token: "t",
       cfg: {
@@ -455,7 +455,7 @@ describe("sendMessageDiscord", () => {
       } as never,
     });
     expectRestRoute(postMock, 0, Routes.channelMessages("789"));
-    expect(requireRestBody(postMock).content).toBe("ping <@222333444555666777>");
+    expect(requireRestBody(postMock).content).toBe("ping <@222333444555666777>.");
     expect(requireRestBody(postMock).flags).toBe(MessageFlags.SuppressEmbeds);
   });
 
@@ -881,36 +881,115 @@ describe("Discord channel permissions", () => {
   });
 });
 
-describe("edit/delete message helpers", () => {
-  it("edits message content", async () => {
-    const { rest, patchMock } = makeDiscordRest();
-    patchMock.mockResolvedValue({ id: "m1" });
-    await editMessageDiscord(
-      "chan1",
-      "1",
-      { content: "hello" },
-      { rest, token: "t", cfg: DISCORD_TEST_CFG },
-    );
-    expectRestRoute(patchMock, 0, Routes.channelMessage("chan1", "1"));
-    expect(requireRestBody(patchMock).content).toBe("hello");
+describe("message mutation retries", () => {
+  const retry = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
+  const unknownMessage = Object.assign(new Error("Unknown Message"), {
+    status: 404,
+    discordCode: 10008,
+  });
+  const lostResponse = Object.assign(new Error("response lost"), { name: "AbortError" });
+  const notConnected = Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" });
+  const mutations = [
+    {
+      name: "edit",
+      mock: "patchMock",
+      route: Routes.channelMessage("chan1", "1"),
+      run: (opts: ReturnType<typeof discordClientOpts>) =>
+        editMessageDiscord("chan1", "1", { content: "hello" }, opts),
+    },
+    {
+      name: "delete",
+      mock: "deleteMock",
+      route: Routes.channelMessage("chan1", "1"),
+      run: deleteMessageDiscord.bind(null, "chan1", "1"),
+    },
+    {
+      name: "pin",
+      mock: "putMock",
+      route: Routes.channelPin("chan1", "1"),
+      run: pinMessageDiscord.bind(null, "chan1", "1"),
+    },
+    {
+      name: "unpin",
+      mock: "deleteMock",
+      route: Routes.channelPin("chan1", "1"),
+      run: unpinMessageDiscord.bind(null, "chan1", "1"),
+    },
+  ] as const;
+
+  it.each(mutations)("retries a transient $name failure", async ({ mock, route, run }) => {
+    const mocks = makeDiscordRest();
+    mocks[mock]
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValueOnce({ id: "m1" });
+
+    await run({ ...discordClientOpts(mocks.rest), retry });
+    expect(mocks[mock]).toHaveBeenCalledTimes(2);
+    expectRestRoute(mocks[mock], 0, route);
+    expectRestRoute(mocks[mock], 1, route);
+    if (mock === "patchMock") {
+      expect(requireRestBody(mocks[mock], 1).content).toBe("hello");
+    }
   });
 
-  it("deletes message", async () => {
+  it.each(mutations)("stops the $name retry when the caller aborts during backoff", async (m) => {
+    vi.useFakeTimers();
+    try {
+      const mocks = makeDiscordRest();
+      mocks[m.mock].mockRejectedValue(Object.assign(new Error("bad gateway"), { status: 502 }));
+      const controller = new AbortController();
+      const reason = new Error("caller aborted");
+      const settled = expect(
+        m.run({
+          ...discordClientOpts(mocks.rest),
+          retry: { attempts: 3, minDelayMs: 1_000, maxDelayMs: 1_000, jitter: 0 },
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(reason);
+
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort(reason);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await settled;
+      expect(mocks[m.mock]).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads Unknown Message from a real Discord error response", async () => {
+    let calls = 0;
+    const loopback = await createDiscordLoopbackRest({
+      status: () => (++calls === 1 ? 502 : 404),
+      respond: () =>
+        calls === 1 ? { message: "Bad Gateway" } : { message: "Unknown Message", code: 10008 },
+    });
+    try {
+      await expect(
+        deleteMessageDiscord("chan1", "1", { ...discordClientOpts(loopback.rest), retry }),
+      ).resolves.toEqual({ ok: true });
+      expect(loopback.requests.map((request) => request.method)).toEqual(["DELETE", "DELETE"]);
+    } finally {
+      await loopback.close();
+    }
+  });
+
+  it.each([
+    ["on the first attempt", [unknownMessage]],
+    ["after a failure that never reached Discord", [notConnected, unknownMessage]],
+    [
+      "for another 404 after a lost response",
+      [lostResponse, Object.assign(new Error("Unknown Channel"), { status: 404 })],
+    ],
+  ])("still fails a delete with %s", async (_label, failures) => {
     const { rest, deleteMock } = makeDiscordRest();
-    deleteMock.mockResolvedValue({});
-    await deleteMessageDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
-    expect(deleteMock).toHaveBeenCalledWith(Routes.channelMessage("chan1", "1"));
-  });
-});
+    for (const failure of failures) {
+      deleteMock.mockRejectedValueOnce(failure);
+    }
 
-describe("pin helpers", () => {
-  it("pins and unpins messages", async () => {
-    const { rest, putMock, deleteMock } = makeDiscordRest();
-    putMock.mockResolvedValue({});
-    deleteMock.mockResolvedValue({});
-    await pinMessageDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
-    await unpinMessageDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
-    expect(putMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "1"));
-    expect(deleteMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "1"));
+    await expect(
+      deleteMessageDiscord("chan1", "1", { ...discordClientOpts(rest), retry }),
+    ).rejects.toBe(failures.at(-1));
   });
 });

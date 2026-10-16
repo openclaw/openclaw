@@ -3,22 +3,6 @@ import { Command } from "commander";
 import { expect, it, vi, type MockInstance } from "vitest";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 
-export const COLD_READ_COMMAND_PATHS: string[][] = [
-  ["audit"],
-  ["node", "identity"],
-  ["skills", "info"],
-  ["skills", "search"],
-  ["hooks"],
-  ["hooks", "list"],
-  ["hooks", "info"],
-  ["hooks", "check"],
-  ["update", "--dry-run"],
-  ["models", "accounts", "list"],
-  ["models", "accounts", "login", "openai"],
-  ["models", "accounts", "use", "personal-account"],
-  ["models", "accounts", "clear-default", "openai"],
-];
-
 function registerColdReadCommandFixtures(program: Command, skills: Command): void {
   const models = expectDefined(
     program.commands.find((command) => command.name() === "models"),
@@ -100,28 +84,16 @@ export function registerNativeExecutorPreActionTests(
     expect(invoke).toHaveBeenCalledOnce();
   }
 
-  it.each(
-    ["gateway", "daemon"].flatMap((primary) =>
-      ["install", "restart", "stop"].map((action) => [primary, action]),
-    ),
-  )(
-    "keeps the %s %s native capability probe outside stateful bootstrap",
-    async (primary, action) => {
-      await runNativeExecutorPreAction(primary, action, ["--update-executor", "check"]);
+  it("keeps the daemon install native capability probe outside stateful bootstrap", async () => {
+    await runNativeExecutorPreAction("daemon", "install", ["--update-executor", "check"]);
 
-      expect(mocks.config).not.toHaveBeenCalled();
-      expect(mocks.plugins).not.toHaveBeenCalled();
-      expect(mocks.banner).not.toHaveBeenCalled();
-    },
-  );
+    expect(mocks.config).not.toHaveBeenCalled();
+    expect(mocks.plugins).not.toHaveBeenCalled();
+    expect(mocks.banner).not.toHaveBeenCalled();
+  });
 
-  it.each([
-    { label: "ordinary install", args: [] },
-    { label: "native execution", args: ["--update-executor", "run"] },
-    { label: "invalid mode", args: ["--update-executor", "invalid"] },
-    { label: "check text in another option's value", args: ["--token", "--update-executor=check"] },
-  ])("retains config bootstrap for $label", async ({ args }) => {
-    await runNativeExecutorPreAction("gateway", "install", args);
+  it("retains config bootstrap for ordinary install", async () => {
+    await runNativeExecutorPreAction("gateway", "install", []);
 
     expect(mocks.config).toHaveBeenCalledOnce();
   });

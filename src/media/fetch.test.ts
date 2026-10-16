@@ -475,6 +475,22 @@ describe("readRemoteMediaBuffer", () => {
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(csv);
   });
 
+  it("retains the HTTP charset when staging remote text", async () => {
+    const bytes = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2, 0x20, 0x88]);
+    const saved = await saveRemoteMedia({
+      url: "https://example.com/download",
+      fetchImpl: makeResponseFetch([bytes], {
+        "content-disposition": 'attachment; filename="notes.txt"',
+        "content-type": 'application/x-openclaw-charset-proof; charset="cp1251"',
+      }),
+      lookupFn: makeLookupFn(),
+      maxBytes: 64,
+    });
+
+    expect(saved.contentType).toBe("application/x-openclaw-charset-proof;charset=cp1251");
+    await expect(fs.readFile(saved.path)).resolves.toStrictEqual(bytes);
+  });
+
   it("keeps the parent abort active while saving the response body", async () => {
     const parent = new AbortController();
     let bodyStarted!: () => void;

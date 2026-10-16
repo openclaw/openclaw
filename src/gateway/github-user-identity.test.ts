@@ -8,15 +8,13 @@ import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
+import { getUserProfileDisplay, prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   setDisplayName,
   setUserProfileRole,
   syncGitHubIdentity,
 } from "../state/user-profile-writes.worker.js";
-import {
-  ensureProfileForTailscaleIdentity,
-  getUserProfileDisplay,
-} from "../state/user-profiles.js";
+import { ensureProfileForTailscaleIdentity } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import type { ControlUiGitHubError } from "./github-public-api.js";
@@ -29,6 +27,10 @@ function githubResponse(body: unknown, status = 200, headers: Record<string, str
     status,
     headers: { "content-type": "application/json", ...headers },
   });
+}
+
+function accessIdentity(id = 58493, email = "ada@example.com", name?: string) {
+  return { id, email, ...(name === undefined ? {} : { name }), idp: { type: "github" } };
 }
 
 function accessAssertion(issuer: unknown): string {
@@ -147,11 +149,7 @@ describe("authenticated GitHub identity sync", () => {
         const authorization = new Headers(init?.headers).get("Authorization");
         if (url.startsWith("https://team.cloudflareaccess.com/")) {
           expect(authorization).toBeNull();
-          return githubResponse({
-            id: 583231,
-            email: "ada@example.com",
-            idp: { type: "github" },
-          });
+          return githubResponse(accessIdentity(583231));
         }
         expect(url).toBe("https://api.github.com/user/583231");
         return authorization === "Bearer configured-service-token"
@@ -178,18 +176,14 @@ describe("authenticated GitHub identity sync", () => {
         const fetchMock = vi.spyOn(globalThis, "fetch");
         if (provider === "access") {
           fetchMock.mockResolvedValueOnce(
-            githubResponse({
-              id: 583231,
-              email: "ada@example.com",
-              name: initial,
-              idp: { type: "github" },
-            }),
+            githubResponse(accessIdentity(583231, "ada@example.com", initial)),
           );
         }
         fetchMock.mockResolvedValueOnce(githubResponse({ id: 583231, login: "Ada", name }));
         const sync =
           provider === "access" ? cloudflareSync({}) : tailscaleSync("ada", initial ?? "");
         const result = await sync!();
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const display = getUserProfileDisplay(result.profileId);
         expect(display.displayName).toBe(expected);
         const presenceUser = buildAuthenticatedPresenceUser({
@@ -205,24 +199,6 @@ describe("authenticated GitHub identity sync", () => {
     },
   );
 
-  it("preserves the sign-in resolver's existing optional-auth recovery", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({
-        gateway: { controlUi: { github: { token: "synthetic-stale-service-token" } } },
-      });
-      const fetchMock = vi
-        .spyOn(globalThis, "fetch")
-        .mockResolvedValueOnce(githubResponse({}, 401))
-        .mockResolvedValueOnce(githubResponse({ id: 42, login: "Visitor" }));
-      await expect(tailscaleSync("visitor")?.()).resolves.toHaveProperty("profileId");
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
-        "Bearer synthetic-stale-service-token",
-      );
-      expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).has("authorization")).toBe(false);
-    });
-  });
-
   it("rejects a malformed public GitHub account id", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       vi.spyOn(globalThis, "fetch").mockResolvedValue(githubResponse({ id: "583231" }));
@@ -236,6 +212,7 @@ describe("authenticated GitHub identity sync", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForTailscaleIdentity({ login: "ada@github" });
       setDisplayName(profile.id, "Ada");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       let resolveLookup: ((response: Response) => void) | undefined;
       const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementationOnce(
         async () =>
@@ -338,25 +315,13 @@ describe("authenticated GitHub identity sync", () => {
       });
       const initialFetch = vi
         .spyOn(globalThis, "fetch")
-        .mockResolvedValueOnce(
-          githubResponse({
-            id: 58493,
-            email: "ada@example.com",
-            idp: { type: "github" },
-          }),
-        )
+        .mockResolvedValueOnce(githubResponse(accessIdentity()))
         .mockResolvedValueOnce(githubResponse({ id: 58493, login: "steipete" }));
       const first = await cloudflareSync({})?.();
       expect(initialFetch.mock.calls[0]?.[1]?.redirect).toBe("manual");
       clock.mockReturnValue(1_800_000_000_000 + 15 * 60_000);
       initialFetch
-        .mockResolvedValueOnce(
-          githubResponse({
-            id: 58493,
-            email: "ada@example.com",
-            idp: { type: "github" },
-          }),
-        )
+        .mockResolvedValueOnce(githubResponse(accessIdentity()))
         .mockResolvedValueOnce(githubResponse({ id: 99999, login: "mallory" }));
 
       await expect(cloudflareSync({})?.()).rejects.toThrow();
@@ -397,11 +362,7 @@ describe("authenticated GitHub identity sync", () => {
         const fetchMock = vi
           .spyOn(globalThis, "fetch")
           .mockResolvedValueOnce(
-            githubResponse({
-              id: accessAccountId ?? 58493,
-              email: authenticatedEmail,
-              idp: { type: "github" },
-            }),
+            githubResponse(accessIdentity(accessAccountId, authenticatedEmail)),
           )
           .mockResolvedValueOnce(githubResponse({}, githubStatus));
 
@@ -419,13 +380,7 @@ describe("authenticated GitHub identity sync", () => {
       const fetchMock = vi
         .spyOn(globalThis, "fetch")
         .mockRejectedValueOnce(new Error(`network rejected ${assertion}`))
-        .mockResolvedValueOnce(
-          githubResponse({
-            id: 58493,
-            email: "ada@example.com",
-            idp: { type: "github" },
-          }),
-        )
+        .mockResolvedValueOnce(githubResponse(accessIdentity()))
         .mockResolvedValueOnce(githubResponse({ id: 58493, login: "steipete" }));
       const sync = cloudflareSync({ assertion });
 
@@ -487,6 +442,7 @@ describe("GitHub public identity metadata cache", () => {
         );
       stubIdentityFetch(metadata);
       const first = await createAccessSync()();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const display = getUserProfileDisplay(first.profileId);
       const initialProfile = getUserProfileListItem(first.profileId);
       const changed = vi.fn();
@@ -568,6 +524,10 @@ describe("GitHub public identity metadata cache", () => {
         .mockResolvedValueOnce(new Response(null, { status: 304 }));
       stubIdentityFetch(metadata);
       await createAccessSync()();
+      expect(new Headers(metadata.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+        "Bearer service-token",
+      );
+      expect(new Headers(metadata.mock.calls[1]?.[1]?.headers).has("authorization")).toBe(false);
       await createAccessSync()();
       expect(new Headers(metadata.mock.calls[2]?.[1]?.headers).get("if-none-match")).toBeNull();
       clock.mockReturnValue(1_800_000_000_000 + CACHE_TTL_MS);

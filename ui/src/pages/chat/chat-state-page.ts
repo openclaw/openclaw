@@ -21,8 +21,11 @@ import {
   canonicalUiSessionKeyForPersistence,
   isUiSelectedGlobalSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
 import { requestChatAbort } from "./chat-abort-request.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
+import { createChatErrorState } from "./chat-error-state.ts";
 import {
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
   CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
@@ -39,6 +42,7 @@ import {
   retryQueuedChatMessage,
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
+import { requestChatSend, resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
@@ -98,12 +102,8 @@ function cancelPendingQueuedChatInput(state: ChatPageHost, id: string): boolean 
   if (!client || !state.connected) {
     return true;
   }
-  const epoch = state.connectionEpoch;
-  const current = () =>
-    getChatPendingInputs(state) === view &&
-    state.client === client &&
-    state.connected &&
-    state.connectionEpoch === epoch;
+  const connectionIsCurrent = captureChatConnectionOwner(state);
+  const current = () => getChatPendingInputs(state) === view && connectionIsCurrent();
   void requestChatAbort(client, {
     sessionKey: view.sessionKey,
     agentId: view.agentId,
@@ -209,7 +209,7 @@ export function createPageState(
       })
       ? appConfig.assistantIdentity
       : null;
-  const state = {
+  const state = Object.assign(createChatErrorState(), {
     uploadConfig: context.config,
     captureComposerRecoveryReload: () => {
       const options = createGatewayControlUiReloadOptions(context.gateway);
@@ -266,8 +266,6 @@ export function createPageState(
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunStartup: null,
-    lastError: null,
-    chatError: null,
     chatRunError: null,
     agentsError: null,
     chatStreamSegments: [],
@@ -358,7 +356,7 @@ export function createPageState(
       ),
     sessionWorkspaceState: undefined,
     querySelector: page.querySelector.bind(page),
-  } as unknown as ChatPageHost;
+  }) as unknown as ChatPageHost;
 
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
@@ -376,10 +374,28 @@ export function createPageState(
       chatShowToolCalls: next.chatShowToolCalls,
       chatPersistCommentary: next.chatPersistCommentary,
       chatSendShortcut: next.chatSendShortcut,
+      chatBubbleSessionKeys: next.chatBubbleSessionKeys,
+      chatBubbleDisabledSessionKeys: next.chatBubbleDisabledSessionKeys,
     });
     renderLifecycle.invalidate();
   };
-  attachChatRealtimeActions(state, () => !chatProviderReviewRow(state)?.providerReview);
+  attachChatRealtimeActions(
+    state,
+    () => !chatProviderReviewRow(state)?.providerReview,
+    (message, runId) =>
+      requestChatSend(state, {
+        message,
+        runId,
+        expectedLeafEntryId: resolveDisplayedLeafEntryId(state),
+      }),
+    async () => {
+      await context.runtimeConfig.ensureLoaded();
+      return resolveSpeechTextLimit(
+        context.runtimeConfig.state.configSnapshot?.runtimeConfig ??
+          context.runtimeConfig.state.configSnapshot?.config,
+      );
+    },
+  );
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
   state.handleSendChat = (messageOverride, options, submissionAction) => {
     const message = messageOverride ?? state.chatMessage;

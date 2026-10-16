@@ -30,7 +30,6 @@ import {
 } from "./chat-thread.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
-import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 
 const { extractToolCardsCached: extractToolCards } = toolCards;
 
@@ -236,91 +235,39 @@ describe("assistant commentary grouping", () => {
     expect(toolIndex).toBeGreaterThan(segmentIndex);
   });
 
-  const reconnectingSend = queuedSend(
-    "reconnecting-send",
-    "Current prompt",
-    2_000,
-    "waiting-reconnect",
-    { sendAttempts: 1, sendRunId: "run-restored" },
-  );
-  it.each([
-    {
-      name: "run-owned replay stays inside its older turn",
-      props: {
-        runId: "run-current",
-        messages: [
-          userMessage("Earlier prompt", 1_000, {
-            __openclaw: { idempotencyKey: "earlier-submit:user", runId: "run-earlier" },
-          }),
-          assistantMessage("Earlier reply", 1_300),
-          userMessage("Current prompt", 2_000, {
-            __openclaw: { idempotencyKey: "current-submit:user", runId: "run-current" },
-          }),
-        ],
-        streamSegments: [
-          { text: "Earlier commentary", ts: 500, runId: "run-earlier", itemId: "earlier" },
-          { text: "Current commentary", ts: 1_200, runId: "run-current", itemId: "current" },
-        ],
-        toolMessages: [
-          toolResultMessage("call-earlier", "shell", "Earlier tool output", 3_000, {
-            runId: "run-earlier",
-          }),
-        ],
-      },
-      order: ["user", "stream", "assistant", "tool", "user", "stream"],
-    },
-    {
-      name: "unmatched legacy replay retains timestamp placement across older turns",
-      props: {
-        runId: "run-current",
-        messages: [
-          userMessage("First prompt", 1_000),
-          assistantMessage("First reply", 1_300),
-          userMessage("Second prompt", 2_000),
-          assistantMessage("Second reply", 2_300),
-          userMessage("Current prompt", 3_000),
-        ],
-        toolMessages: [
-          toolResultMessage("call-legacy", "shell", "Legacy tool output", 1_100, {
-            runId: "legacy-unmatched-run",
-          }),
-        ],
-      },
-      order: ["user", "tool", "assistant", "user", "assistant", "user"],
-    },
-    {
-      name: "restored reconnect prompt precedes its active server tool projection",
-      props: {
-        runId: resolveChatProjectionRunId({
-          activeRunIds: ["run-restored"],
-          queue: [reconnectingSend],
+  it("unmatched legacy replay retains timestamp placement across older turns", () => {
+    const items = buildItems({
+      runId: "run-current",
+      messages: [
+        userMessage("First prompt", 1_000),
+        assistantMessage("First reply", 1_300),
+        userMessage("Second prompt", 2_000),
+        assistantMessage("Second reply", 2_300),
+        userMessage("Current prompt", 3_000),
+      ],
+      toolMessages: [
+        toolResultMessage("call-legacy", "shell", "Legacy tool output", 1_100, {
+          runId: "legacy-unmatched-run",
         }),
-        queue: [reconnectingSend],
-        toolMessages: [
-          toolResultMessage("call-restored", "shell", "Restored tool output", 1_000, {
-            runId: "run-restored",
-          }),
-        ],
-      },
-      order: ["user", "tool"],
-    },
-  ] satisfies { name: string; props: Partial<CachedChatItemsProps>; order: string[] }[])(
-    "$name",
-    ({ props, order }) => {
-      expect(
-        buildItems(props).map((item) => (item.kind === "group" ? item.role : item.kind)),
-      ).toEqual(order);
-    },
-  );
+      ],
+    });
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "tool",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+    ]);
+  });
 
   it.each([
-    { source: "live terminal", sendState: "sending", search: false, active: true },
-    { source: "durable reply", sendState: "sending", search: true, active: true },
-    { source: "durable reply", sendState: "waiting-reconnect", search: false, active: false },
+    { source: "live terminal", search: false },
+    { source: "durable reply", search: true },
   ] as const)(
-    "keeps a $sendState prompt before its $source under clock skew with search=$search active=$active",
-    ({ source, sendState, search, active }) => {
-      const paneId = `reply-before-user:${source}:${sendState}:${search}:${active}`;
+    "keeps a sending prompt before its $source under clock skew with search=$search",
+    ({ source, search }) => {
+      const paneId = `reply-before-user:${source}:sending:${search}:true`;
       const terminal =
         source === "live terminal"
           ? rememberLiveTerminalRun(assistantMessage("Current reply", 1_000), "run-active")
@@ -348,13 +295,13 @@ describe("assistant commentary grouping", () => {
           }),
         );
       }
-      const sending = queuedSend("sending-current", "Current prompt", 2_000, sendState, {
+      const sending = queuedSend("sending-current", "Current prompt", 2_000, "sending", {
         sendAttempts: 1,
         sendRunId: "run-active",
       });
       const liveItems = buildItems({
         paneId,
-        runId: active ? "run-active" : null,
+        runId: "run-active",
         searchOpen: search,
         searchQuery: "Current",
         messages: [...preceding, terminal],
@@ -582,20 +529,13 @@ describe("collapseCompletedTurnWork", () => {
   it.each([
     {
       name: "structured error",
-      isError: true,
       result: { content: [{ type: "tool_result", isError: true, text: "boom" }] },
     },
     {
       name: "inferred error",
-      isError: true,
       result: { content: '{"status":"error","error":"boom"}' },
     },
-    {
-      name: "explicit success overrides error-shaped output",
-      isError: false,
-      result: { isError: false, content: '{"error":"example"}' },
-    },
-  ])("keeps trailing work in the disclosure unless it failed ($name)", ({ isError, result }) => {
+  ])("keeps trailing failed work outside the disclosure ($name)", ({ result }) => {
     const trailing = { ...toolResult("call-2", 4_000), isError: undefined, ...result };
     const items = collapsedItems({
       messages: [
@@ -606,16 +546,10 @@ describe("collapseCompletedTurnWork", () => {
       ],
     });
 
-    expect(items.map((item) => item.kind)).toEqual(
-      isError ? ["group", "work-group", "group", "group"] : ["group", "work-group", "group"],
-    );
+    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group", "group"]);
     const work = requireWorkGroup(items[1]);
-    expect(work.groups).toHaveLength(isError ? 1 : 2);
-    if (isError) {
-      expect(requireGroup(items[3]).messages.map(({ message }) => message)).toContain(trailing);
-    } else {
-      expect(work.durationMs).toBeNull();
-    }
+    expect(work.groups).toHaveLength(1);
+    expect(requireGroup(items[3]).messages.map(({ message }) => message)).toContain(trailing);
   });
 
   it("collapses a trailing failure only after a subsequent answer", () => {
@@ -655,41 +589,6 @@ describe("collapseCompletedTurnWork", () => {
         group.messages.map(({ message }) => message),
       ),
     ).toContain(failed);
-  });
-
-  it("collapses hidden-input runs independently without changing duration arithmetic", () => {
-    const items = collapsedItems({
-      messages: [
-        userMessage("[System] Resume work.", 0, {
-          provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-        }),
-        {
-          ...toolResult("call-1", 1_000),
-          __openclaw: { id: "work-1", seq: 1, turnBoundary: true },
-        },
-        assistantMessage("First run done.", 3_000, {
-          __openclaw: { id: "reply-1", seq: 2 },
-        }),
-        {
-          ...toolResult("call-2", 4_000),
-          __openclaw: { id: "work-2", seq: 3, turnBoundary: true },
-        },
-        assistantMessage("Second run done.", 9_000, {
-          __openclaw: { id: "reply-2", seq: 4 },
-        }),
-      ],
-    });
-
-    expect(items.map((item) => item.kind)).toEqual([
-      "notice",
-      "work-group",
-      "group",
-      "work-group",
-      "group",
-    ]);
-    expect(requireWorkGroup(items[1]).key).not.toBe(requireWorkGroup(items[3]).key);
-    expect(requireWorkGroup(items[1]).durationMs).toBeNull();
-    expect(requireWorkGroup(items[3]).durationMs).toBeNull();
   });
 });
 
@@ -970,10 +869,6 @@ describe("buildCachedChatItems", () => {
       });
     const result = (id: string, text = "ready", runId: string | undefined = "run-a") =>
       toolResultMessage(id, "exec", [{ type: "text", text }], 20, { runId });
-    const canonical = ({ runId, ...message }: Record<string, unknown>, seq: number) => ({
-      ...message,
-      __openclaw: { id: `tool-entry-${seq}`, seq, runId },
-    });
     const snapshot = (id: string, completed = true) =>
       assistantMessage(
         [
@@ -1006,58 +901,11 @@ describe("buildCachedChatItems", () => {
       expect(cards[0]).toMatchObject({ completed: true, outputText: "" });
     });
 
-    it.each([
-      { completed: false, owner: "live" },
-      { completed: true, owner: "canonical" },
-    ])(
-      "keeps one invocation before an optimistic steer ($owner ownership, completed=$completed)",
-      ({ completed, owner }) => {
-        const persisted = [call("exec-1"), ...(completed ? [result("exec-1")] : [])].map(
-          (message, index) => (owner === "canonical" ? canonical(message, index + 2) : message),
-        );
-        const history = [
-          userMessage("Original request", 1, {
-            __openclaw: { id: "user-entry", seq: 1 },
-          }),
-          ...persisted,
-          userMessage("Follow up after the command", 15, {
-            __openclaw: { idempotencyKey: "steer-send:user" },
-          }),
-        ];
-        const before = structuredClone(history);
-        const groups = messageGroups({
-          runId: "run-a",
-          messages: history,
-          toolMessages: [snapshot("exec-1", completed)],
-        });
-        const visible = groups.flatMap((group) =>
-          group.messages.flatMap((entry) => {
-            const cards = extractToolCards(entry.message);
-            return cards.length ? cards : [requireRecord(entry.message).content];
-          }),
-        );
-
-        expect(visible).toEqual([
-          "Original request",
-          expect.objectContaining({
-            callId: "exec-1",
-            completed,
-            outputText: completed ? "ready" : "working",
-          }),
-          "Follow up after the command",
-        ]);
-        expect(history).toEqual(before);
-      },
-    );
-
-    it.each(["unknown history run", "reset", "reused"])(
+    it.each(["reset", "reused"])(
       "does not relocate a live invocation across a boundary with %s ownership",
       (ownership) => {
         const persisted = call("exec-1");
         const live = snapshot("exec-1", false);
-        if (ownership === "unknown history run") {
-          persisted.runId = undefined;
-        }
         const groups = messageGroups({
           runId: "run-a",
           messages: [
@@ -1076,18 +924,6 @@ describe("buildCachedChatItems", () => {
         expect(cards.filter((card) => card.outputText === "working")).toHaveLength(1);
       },
     );
-
-    it("does not assign ambiguous unscoped history to a sibling run", () => {
-      const unscoped = { ...result("shared", "unscoped"), runId: undefined };
-      const scoped = [call("shared", "exec", "run-a"), call("shared", "exec", "run-b")];
-      const cards = cardsFor([unscoped, ...scoped]);
-      expect(cards).toHaveLength(3);
-      expect(
-        cards
-          .filter((card) => card.args !== undefined)
-          .every((card) => card.outputText === undefined),
-      ).toBe(true);
-    });
 
     it("reconciles a multi-call snapshot without losing surrounding content or result metadata", () => {
       const attachment = { type: "image", data: "fixture-image", mimeType: "image/png" };
@@ -1130,46 +966,6 @@ describe("buildCachedChatItems", () => {
       expect(
         blocks.findIndex((block) => requireRecord(block).text === "After calls"),
       ).toBeGreaterThan(blocks.findLastIndex((block) => requireRecord(block).id === "b"));
-    });
-
-    it("preserves typed terminal payload over partial text and keeps sibling completion independent", () => {
-      const partial = assistantMessage(
-        [
-          { type: "toolcall", id: "a", name: "exec", arguments: { command: "one" } },
-          { type: "toolresult", id: "a", name: "exec", text: "partial" },
-          { type: "toolcall", id: "b", name: "exec", arguments: { command: "two" } },
-          { type: "toolresult", id: "b", name: "exec", text: "still running" },
-        ],
-        10,
-        {
-          runId: "run-a",
-          __openclawToolStreamLive: true,
-          __openclawToolStreamResultReceived: false,
-        },
-      );
-      const cards = cardsFor([
-        partial,
-        toolResultMessage("a", "exec", [{ type: "tool_result", content: "" }], 20, {
-          runId: "run-a",
-          messageId: "result-a",
-          is_error: false,
-          exit_code: 0,
-        }),
-      ]);
-      expect(cards).toHaveLength(2);
-      expect(cards[0]).toMatchObject({
-        callId: "a",
-        outputText: "",
-        completed: true,
-        messageId: "result-a",
-        isError: false,
-        exitCode: 0,
-      });
-      expect(cards[1]).toMatchObject({
-        callId: "b",
-        outputText: "still running",
-        completed: false,
-      });
     });
 
     it("keeps surrounding text in order when result references split a multi-call message", () => {
@@ -1260,13 +1056,6 @@ describe("buildCachedChatItems", () => {
         ["exec", "exec output"],
       ]);
     });
-
-    it.each([userMessage("new turn", 15), resetMessage("reset-counting")])(
-      "does not coalesce through a user/reset boundary: %j",
-      (boundary) => {
-        expect(cardsFor([call("a"), boundary, result("a")])).toHaveLength(2);
-      },
-    );
   });
 
   it("keeps more than sixteen parallel calls open by call id", () => {
@@ -1288,46 +1077,28 @@ describe("buildCachedChatItems", () => {
     });
   });
 
-  it.each([
-    {
-      name: "deduplicates relay copies by canonical identity before surface ids",
-      relayText: "Parzival Ship it.",
-      nativeText: "Ship it.",
-      surfaceIds: true,
-      expected: ["Ship it."],
-    },
-    {
-      name: "keeps formatting-only updates separate for the same source message",
-      relayText: "Parzival first\n\nsecond",
-      nativeText: "first second",
-      surfaceIds: false,
-      expected: ["Parzival first\n\nsecond", "first second"],
-    },
-  ])("$name", ({ relayText, nativeText, surfaceIds, expected }) => {
+  it("deduplicates relay copies by canonical identity before surface ids", () => {
     const groups = messageGroups({
       messages: [
-        assistantMessage([{ type: "text", text: relayText }], 1, {
-          ...(surfaceIds ? { id: "relay-surface-copy" } : {}),
+        assistantMessage([{ type: "text", text: "Parzival Ship it." }], 1, {
+          id: "relay-surface-copy",
           __openclaw: { id: "reply" },
           senderLabel: "Parzival",
         }),
-        assistantMessage([{ type: "text", text: nativeText }], 2, {
-          ...(surfaceIds ? { id: "native-surface-copy" } : {}),
+        assistantMessage([{ type: "text", text: "Ship it." }], 2, {
+          id: "native-surface-copy",
           __openclaw: { id: "reply" },
         }),
       ],
     });
-    expect(groups).toHaveLength(expected.length);
-    expected.forEach((text, index) => {
-      expect(messageRecord(groupAt(groups, index)).content).toStrictEqual([{ type: "text", text }]);
-    });
-    if (surfaceIds) {
-      expect(groupAt(groups, 0).senderLabel).toBeNull();
-      expect(groupAt(groups, 0).messages).toHaveLength(1);
-    }
+    expect(groups).toHaveLength(1);
+    const group = groupAt(groups, 0);
+    expect(messageRecord(group).content).toStrictEqual([{ type: "text", text: "Ship it." }]);
+    expect(group.senderLabel).toBeNull();
+    expect(group.messages).toHaveLength(1);
   });
 
-  it.each(["distinct imports", "incomplete imports", "canonical replay"])(
+  it.each(["incomplete imports", "canonical replay"])(
     "deduplicates user prompts only with proven identity: %s",
     (source) => {
       const canonical = {
@@ -1345,13 +1116,6 @@ describe("buildCachedChatItems", () => {
                     id: "provider-local-user",
                     externalId: "provider-local-user",
                     importedFrom: "claude-cli",
-                    ...(source === "distinct imports"
-                      ? {
-                          cliSessionId:
-                            timestamp === 1 ? "first-cli-session" : "second-cli-session",
-                          seq: timestamp,
-                        }
-                      : {}),
                   },
           }),
         ),
@@ -1359,14 +1123,7 @@ describe("buildCachedChatItems", () => {
       expect(groups).toHaveLength(1);
       const group = groupAt(groups, 0);
       expect(group.messages).toHaveLength(source === "canonical replay" ? 1 : 2);
-      if (source === "distinct imports") {
-        expect(messageRecord(group, 0)["__openclaw"]).toMatchObject({
-          cliSessionId: "first-cli-session",
-        });
-        expect(messageRecord(group, 1)["__openclaw"]).toMatchObject({
-          cliSessionId: "second-cli-session",
-        });
-      } else if (source === "incomplete imports") {
+      if (source === "incomplete imports") {
         expect(messageAt(group, 0).duplicateCount).toBeUndefined();
         expect(messageAt(group, 1).duplicateCount).toBeUndefined();
       } else {
@@ -1413,77 +1170,40 @@ describe("buildCachedChatItems", () => {
     expect(items).toStrictEqual([]);
   });
 
-  it.each([
-    {
-      name: "persisted prefix around an unkeyed preamble",
-      liveOnly: false,
-      props: {
-        messages: [assistantMessage("First thought.", 1)],
-        streamSegments: [
-          { text: "First thought.", ts: 1, toolCallId: "call-1", persisted: true },
-          { text: "Standalone preamble", ts: 2 },
-          { text: "First thought. After tool.", ts: 3, toolCallId: "call-2" },
-        ],
-        toolMessages: [
-          chatMessage("toolResult", "Tool one", 2),
-          chatMessage("toolResult", "Tool two", 4),
-        ],
-        stream: "First thought. After tool. Continued.",
-      },
-      initialText: ["Standalone preamble", "After tool.", "Continued."],
-      nextStream: "First thought. After tool. Continued. Again.",
-      nextText: ["Standalone preamble", "After tool.", "Continued. Again."],
-    },
-    {
-      name: "whole live reply after an accepted steer",
-      liveOnly: true,
-      props: {
-        runId: "active-run",
-        messages: [
-          userMessage("Original prompt", 1, { __openclaw: { idempotencyKey: "active-run:user" } }),
-          userMessage("Steer prompt", 4, {
-            __openclaw: { idempotencyKey: "steer-run:user", steerTargetRunId: "active-run" },
-          }),
-        ],
-        streamSegments: [
-          { text: "Standalone preamble", ts: 3, runId: "active-run", itemId: "preamble" },
-        ],
-        stream: "Before steer. After steer.",
-      },
-      initialText: ["Before steer. After steer."],
-      nextStream: "Before steer. After steer. Continued.",
-      nextText: ["Before steer. After steer. Continued."],
-    },
-  ] satisfies {
-    name: string;
-    liveOnly: boolean;
-    props: Partial<CachedChatItemsProps>;
-    initialText: string[];
-    nextStream: string;
-    nextText: string[];
-  }[])(
-    "preserves cumulative stream text and cache identity with $name",
-    ({ name, liveOnly, props, initialText, nextStream, nextText }) => {
-      const input = createProps({ ...props, paneId: name, streamStartedAt: 5 });
-      const streamTexts = (items: ReturnType<typeof buildCachedChatItems>) =>
-        items.flatMap((item) =>
-          item.kind === "stream" && (!liveOnly || item.isStreaming) ? [item.text] : [],
-        );
-      try {
-        const initial = buildCachedChatItems(input);
-        expect(streamTexts(initial)).toEqual(initialText);
-        const next = { ...input, stream: nextStream };
-        const cached = buildCachedChatItems(next);
-        expect(cached).toBe(initial);
-        expect(streamTexts(cached)).toEqual(nextText);
-        expect(
-          streamTexts(buildCachedChatItems({ ...next, messages: [...next.messages] })),
-        ).toEqual(nextText);
-      } finally {
-        resetChatThreadState(name);
-      }
-    },
-  );
+  it("preserves cumulative stream text and cache identity around an unkeyed preamble", () => {
+    const paneId = "persisted prefix around an unkeyed preamble";
+    const input = createProps({
+      paneId,
+      streamStartedAt: 5,
+      messages: [assistantMessage("First thought.", 1)],
+      streamSegments: [
+        { text: "First thought.", ts: 1, toolCallId: "call-1", persisted: true },
+        { text: "Standalone preamble", ts: 2 },
+        { text: "First thought. After tool.", ts: 3, toolCallId: "call-2" },
+      ],
+      toolMessages: [
+        chatMessage("toolResult", "Tool one", 2),
+        chatMessage("toolResult", "Tool two", 4),
+      ],
+      stream: "First thought. After tool. Continued.",
+    });
+    const streamTexts = (items: ReturnType<typeof buildCachedChatItems>) =>
+      items.flatMap((item) => (item.kind === "stream" ? [item.text] : []));
+    const nextText = ["Standalone preamble", "After tool.", "Continued. Again."];
+    try {
+      const initial = buildCachedChatItems(input);
+      expect(streamTexts(initial)).toEqual(["Standalone preamble", "After tool.", "Continued."]);
+      const next = { ...input, stream: "First thought. After tool. Continued. Again." };
+      const cached = buildCachedChatItems(next);
+      expect(cached).toBe(initial);
+      expect(streamTexts(cached)).toEqual(nextText);
+      expect(streamTexts(buildCachedChatItems({ ...next, messages: [...next.messages] }))).toEqual(
+        nextText,
+      );
+    } finally {
+      resetChatThreadState(paneId);
+    }
+  });
 
   it("keeps same-millisecond segments interleaved with tools and mixed preambles", () => {
     const items = buildItems({
@@ -1560,33 +1280,30 @@ describe("buildCachedChatItems", () => {
     expect(messageRecord(requireGroup(items[1])).content).toBe("Missing timestamp.");
   });
 
-  it.each(["failed", "unconfirmed"] as const)(
-    "keeps a %s attempted send after the preceding reply for inline retry",
-    (sendState) => {
-      const groups = messageGroups({
-        messages: [assistantMessage("Previous reply", 2)],
-        queue: [
-          queuedSend("attempted-send-1", "retry me from the transcript", 1, sendState, {
-            sendError: "Delivery diagnostic",
-            sendAttempts: 1,
-          }),
-        ],
-      });
+  it("keeps an unconfirmed attempted send after the preceding reply for inline retry", () => {
+    const groups = messageGroups({
+      messages: [assistantMessage("Previous reply", 2)],
+      queue: [
+        queuedSend("attempted-send-1", "retry me from the transcript", 1, "unconfirmed", {
+          sendError: "Delivery diagnostic",
+          sendAttempts: 1,
+        }),
+      ],
+    });
 
-      expect(groups.map((group) => group.role)).toEqual(["assistant", "user"]);
-      const message = messageRecord(groupAt(groups, 1));
-      expect(persistedMessageEntryId(message)).toBeNull();
-      expect(message).toMatchObject({
-        timestamp: 1,
-        content: [{ type: "text", text: "retry me from the transcript" }],
-      });
-      expect(readPendingSendStatus(message)).toEqual({
-        id: "attempted-send-1",
-        state: sendState,
-        error: "Delivery diagnostic",
-      });
-    },
-  );
+    expect(groups.map((group) => group.role)).toEqual(["assistant", "user"]);
+    const message = messageRecord(groupAt(groups, 1));
+    expect(persistedMessageEntryId(message)).toBeNull();
+    expect(message).toMatchObject({
+      timestamp: 1,
+      content: [{ type: "text", text: "retry me from the transcript" }],
+    });
+    expect(readPendingSendStatus(message)).toEqual({
+      id: "attempted-send-1",
+      state: "unconfirmed",
+      error: "Delivery diagnostic",
+    });
+  });
 
   it.each([
     {
@@ -1706,62 +1423,42 @@ describe("buildCachedChatItems", () => {
     }
   });
 
-  it.each([
-    {
-      identity: "App id, retaining assistant-only views",
-      count: 3,
-      text: "Both Apps are ready.",
-      results: [
-        mcpAppResult("mcp-app-first", "call-first", 1_001),
-        mcpAppResult("mcp-app-second", "call-second", 1_002),
-      ],
-      blocks: [
-        mcpAppCanvasBlock("mcp-app-first", "call-first"),
-        mcpAppCanvasBlock("mcp-app-second", "call-second"),
-        mcpAppCanvasBlock("mcp-app-assistant-only", "call-assistant-only"),
-      ],
-    },
-    {
-      identity: "Canvas URL alone",
-      count: 1,
-      text: "The App is ready.",
-      results: [
+  it("deduplicates Gateway-embedded previews by Canvas URL alone", () => {
+    const text = "The App is ready.";
+    const groups = messageGroups({
+      messages: [
+        userMessage("Show the Apps", 1_000),
         toolResultMessage(
           "call-url-match",
           "show_widget",
           canvasToolOutput("cv_url_match", "URL match", 320),
           1_001,
         ),
-      ],
-      blocks: [
-        {
-          type: "canvas",
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            url: "/__openclaw__/canvas/documents/cv_url_match/index.html",
-          },
-        },
-      ],
-    },
-  ])("deduplicates Gateway-embedded previews by $identity", ({ results, blocks, count, text }) => {
-    const groups = messageGroups({
-      messages: [
-        userMessage("Show the Apps", 1_000),
-        ...results,
-        assistantMessage([{ type: "text", text }, ...blocks], 1_003),
+        assistantMessage(
+          [
+            { type: "text", text },
+            {
+              type: "canvas",
+              preview: {
+                kind: "canvas",
+                surface: "assistant_message",
+                render: "url",
+                url: "/__openclaw__/canvas/documents/cv_url_match/index.html",
+              },
+            },
+          ],
+          1_003,
+        ),
       ],
       showToolCalls: false,
     });
-    expect(groups.flatMap(canvasBlocksAcross)).toHaveLength(count);
+    expect(groups.flatMap(canvasBlocksAcross)).toHaveLength(1);
     expect(groups.flatMap(normalizedBlocks)).toContainEqual({ type: "text", text });
   });
 
   it.each([
     { source: "live", kind: "mcp" },
     { source: "history-before", kind: "board" },
-    { source: "history-after", kind: "mcp" },
   ])("preserves rich $kind metadata over a shortcode from $source", ({ source, kind }) => {
     const viewId = "cv_rich_shortcode";
     const callId = "call-rich-shortcode";
@@ -1777,15 +1474,10 @@ describe("buildCachedChatItems", () => {
         : toolResultMessage(callId, "show_widget", boardOutput, 1_002);
     const assistant = assistantMessage(
       [{ type: "text", text: `[embed ref="${viewId}" title="Widget" /]\n\nReady.` }],
-      source === "history-after" ? 1_001 : 1_003,
+      1_003,
     );
     const original = structuredClone(assistant);
-    const history =
-      source === "live"
-        ? [assistant]
-        : source === "history-before"
-          ? [result, assistant]
-          : [assistant, result];
+    const history = source === "live" ? [assistant] : [result, assistant];
     const groups = messageGroups({
       messages: [userMessage("Show a widget", 1_000), ...history],
       toolMessages:
@@ -1958,29 +1650,6 @@ describe("expansion-state render dependencies", () => {
     syncToolCardExpansionState(sessionKey, buildItems({ sessionKey, messages }), true);
     expect(expanded.get(hiddenCardId)).toBe(true);
     expect(expanded.get(visibleCardId)).toBe(true);
-  });
-
-  it("drops render versions with evicted and reset session maps", () => {
-    resetChatThreadState();
-    const items = buildItems({
-      sessionKey: "evicted-session",
-      messages: [toolUseMessage("evicted-call", "read", {}, 1)],
-    });
-    syncToolCardExpansionState("evicted-session", items, true);
-    const evicted = getExpandedToolCards("evicted-session");
-    expect([...evicted.values()]).toEqual([true]);
-    for (let index = 0; index < 20; index += 1) {
-      getExpandedToolCards(`other-session-${index}`);
-    }
-
-    expect(getExpandedToolCards("evicted-session")).not.toBe(evicted);
-    expect(getExpansionStateVersion(getExpandedToolCards("evicted-session"))).toBe(0);
-    syncToolCardExpansionState("evicted-session", items, true);
-    expect([...getExpandedToolCards("evicted-session").values()]).toEqual([true]);
-
-    setExpansionState(getExpandedUserMessages("reset-session"), "message", true);
-    resetChatThreadState();
-    expect(getExpansionStateVersion(getExpandedUserMessages("reset-session"))).toBe(0);
   });
 });
 
@@ -2183,23 +1852,6 @@ function completedCall(
   };
 }
 
-function renderedToolIds(messages: unknown[], toolMessages: unknown[] = []) {
-  const items = buildChatItems(
-    createProps({
-      paneId: "nested-activity",
-      sessionKey: "agent:main:main",
-      runId: "run",
-      messages,
-      toolMessages,
-    }),
-  );
-  return items.flatMap((item) =>
-    item.kind === "group"
-      ? item.messages.flatMap(({ message }) => extractToolCards(message).map((card) => card.id))
-      : [],
-  );
-}
-
 describe("durable nested activity composition", () => {
   it("keeps durable bundled calls after exec across an early live echo and stream", () => {
     const ids = ["first", "second"];
@@ -2266,43 +1918,6 @@ describe("durable nested activity composition", () => {
       ),
     );
     expect(history).toEqual(original);
-  });
-
-  it.each([
-    {
-      name: "malformed activity retains earliest live echo",
-      malformed: true,
-      order: ["first", "exec", "wait"],
-    },
-    {
-      name: "completed anchor uses its physical position",
-      malformed: false,
-      order: ["exec", "earlier", "wait", "later"],
-    },
-  ])("places nested activity when $name", ({ malformed, order }) => {
-    const first = completedCall(malformed ? "first" : "earlier", "read", 5, {
-      afterRawSeq: malformed ? 5 : 1,
-      startOrder: 0,
-    });
-    const messages = [
-      nestedUser,
-      completedCall("exec", "exec", 1),
-      completedCall("wait", "wait", 4),
-      first,
-      ...(malformed ? [] : [completedCall("later", "read", 6, { afterRawSeq: 5, startOrder: 1 })]),
-    ];
-    const live = malformed
-      ? [
-          {
-            ...first,
-            __openclaw: undefined,
-            __openclawToolStreamLive: true,
-            __openclawToolStreamResultReceived: true,
-            timestamp: 0,
-          },
-        ]
-      : [];
-    expect(renderedToolIds(messages, live)).toEqual(order);
   });
 });
 

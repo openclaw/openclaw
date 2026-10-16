@@ -9,6 +9,7 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 import { chooseSidebarOwner, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -84,14 +85,11 @@ suite.define(() => {
         await expectBrowser(page.locator(".agent-chat__composer-combobox textarea")).toBeVisible();
         const sidebar = page.locator("openclaw-app-sidebar");
         const sessionList = sidebar.locator(".sidebar-session-content");
-        // Mine belongs to Viewer, not to the people whose cards we inspect.
+        // My sessions belongs to Viewer, not to the people whose cards we inspect.
         await expectBrowser(
           sessionList.locator('[data-session-key="' + personal + '"]'),
         ).toHaveCount(0);
-        await sidebar
-          .locator(".sidebar-navigation-scope")
-          .getByRole("button", { name: "All", exact: true })
-          .click();
+        await selectAllSidebarSessions(page);
         await expectBrowser(
           sessionList.locator('[data-session-key="' + personal + '"]'),
         ).toBeVisible();
@@ -118,15 +116,12 @@ suite.define(() => {
         await expectBrowser(card.getByRole("link", { name: /Release checklist/ })).toBeVisible();
         await card.getByRole("link", { name: /Release checklist/ }).click();
         await expect.poll(() => new URL(page.url()).pathname).toContain("release-checklist");
-        expect(
-          await sidebar.evaluate(
-            (element: HTMLElement & { sessionInvolvingMeFilterActive: boolean }) =>
-              element.sessionInvolvingMeFilterActive,
-          ),
-        ).toBe(true);
         // Online is a separate view. Returning to Sessions must restore the
         // involvement filter, rather than proving absence in an unmounted list.
         await sidebar.locator('[data-navigation-view="sessions"]').click();
+        await expectBrowser(sidebar.locator("#sidebar-session-owner-title")).toHaveText(
+          "Involving me",
+        );
         await expectBrowser(
           sessionList.locator('[data-session-key="' + selected + '"]'),
         ).toBeVisible();

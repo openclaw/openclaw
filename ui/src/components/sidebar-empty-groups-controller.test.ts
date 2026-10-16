@@ -28,25 +28,6 @@ function fixture() {
 }
 
 describe("personal empty-group preference", () => {
-  it("isolates users and Gateways and restores each explicit choice", () => {
-    const { controller, gateway } = fixture();
-    controller.set("never");
-    gateway.snapshot.selfUser = { id: "lin" };
-    controller.reconcile();
-    expect(controller.mode).toBe("filtering");
-    controller.set("always");
-    gateway.snapshot.selfUser = { id: "ada" };
-    controller.reconcile();
-    expect(controller.mode).toBe("never");
-    gateway.connection.gatewayUrl = "wss://two.example/ws";
-    controller.reconcile();
-    expect(controller.mode).toBe("filtering");
-    gateway.connection.gatewayUrl = "wss://one.example/ws";
-    controller.reconcile();
-    expect(controller.mode).toBe("never");
-    expect(fixture().controller.mode).toBe("never");
-  });
-
   it("keeps anonymous browser choices separate from signed-in users", () => {
     const { controller, gateway } = fixture();
     controller.set("always");

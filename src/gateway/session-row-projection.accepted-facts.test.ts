@@ -6,15 +6,14 @@ import { queryObjects } from "node:v8";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
-import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
   getSubagentSessionListReadSnapshotIdentity,
-  withSubagentRunReadSnapshot,
+  prepareSubagentSessionListReadCache,
 } from "../agents/subagents/registry/subagent-registry-state.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -30,6 +29,7 @@ import * as history from "../config/sessions/session-transcript-worker-runtime.j
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -49,10 +49,10 @@ import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.j
 import { defaultPersistDigest } from "./session-observer-model.js";
 import * as projectionWork from "./session-projection-work.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import * as databaseFactsRead from "./session-row-database-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
-import * as databaseFactsRead from "./session-row-projection-read.js";
 import { ready } from "./session-row-projection-record.js";
 import { withAcceptedSuffix } from "./session-row-projection.accepted-facts.test-support.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -63,6 +63,13 @@ afterEach(() => vi.restoreAllMocks());
 
 it("keeps Board and shared facts while transcript receipts advance summary freshness", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: { utilityModel: "unit-test/small" },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:acp:row-receipts",
@@ -102,12 +109,7 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
     });
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({
-      cfg: {
-        agents: {
-          entries: { main: {} },
-          defaults: { utilityModel: "unit-test/small" },
-        },
-      },
+      cfg,
       modelCatalog: [],
     });
     const query = { agentId: scope.agentId, key: scope.sessionKey };
@@ -161,6 +163,10 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
         label: "Published label",
         activitySummary: { text: "First input", state: "current" },
       });
+      emitSessionTranscriptUpdate({ target: scope });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("current");
+      expect(rowReads).toEqual([]);
       await persistSessionTranscriptTurn(scope, {
         messages: [{ message: { role: "assistant", content: "Second message" } }],
         touchSessionEntry: false,
@@ -170,6 +176,15 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
       expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
         hasBoard: true,
         acpMeta: acp,
+        activitySummaryWatermark: readSessionTranscriptWatermark(scope),
+      });
+      await persistSessionTranscriptTurn(scope, {
+        messages: [{ message: { role: "assistant", content: "Combined entry and transcript" } }],
+      });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
+      expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
+        hasBoard: true,
         activitySummaryWatermark: readSessionTranscriptWatermark(scope),
       });
       expect(rowReads).toEqual([]);
@@ -183,7 +198,7 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
   });
 });
 
-it("rematerializes activity state from accepted facts without reading the databases again", async () => {
+it("refreshes activity state without rematerializing accepted rows or reading databases", async () => {
   await withAcceptedSuffix(async ({ projection, suffix, query, entry, reads, resume }) => {
     const revision = suffix.databaseFactsRevision;
     const owner = Symbol("activity-state");
@@ -201,12 +216,14 @@ it("rematerializes activity state from accepted facts without reading the databa
       setSessionActivitySummaryState(target, owner, value);
       await resume();
       expect(projection.snapshot(query).row?.activitySummary?.state).toBe("updating");
+      const materializations = projection.materializedCount;
       setSessionActivitySummaryState(target, owner, { ...value, state: "unavailable" });
       await projection.ensureMaterialized();
       expect(projection.snapshot(query).row?.activitySummary?.state).toBe("unavailable");
       setSessionActivitySummaryState(target, owner);
       await projection.ensureMaterialized();
       expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
+      expect(projection.materializedCount).toBe(materializations);
       expect(reads).toHaveLength(1);
       expect(sharedReads).not.toHaveBeenCalled();
       expect(projection.capture(query)?.databaseFactsRevision).toBe(revision);
@@ -345,7 +362,7 @@ it.each([
           metadataReads.mock.calls.filter(
             ([, command]) => command.type === "sessionRows.sharedFacts",
           ),
-        ).toHaveLength(!retainsFacts || change === "worker legacy reset" ? 1 : 0);
+        ).toHaveLength(0);
         expect(row?.runtimeSelectionLocked).toBe(expected !== null);
         if (expected) {
           expect(row?.agentRuntime).toMatchObject({
@@ -496,15 +513,6 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
           };
           replaceSessionEntrySync(suffixScope, entries[1]);
         }
-        const previous = createSubagentRunRecord({
-          runId: "accepted-archive-previous-run",
-          childSessionKey: "agent:main:unrelated-child",
-          requesterSessionKey: "agent:main:unrelated-parent",
-          generation: 1,
-          completion: { required: false },
-          delivery: { status: "not_required" },
-        });
-        saveSubagentRegistryToSqlite(new Map([[previous.runId, previous]]));
         const releaseForeground = retainSessionListForegroundWork();
         const releaseBulk = createDeferredCore();
         const registryPending = createDeferredCore();
@@ -543,22 +551,11 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
               return result;
             },
           );
-          const replacement = { ...previous, runId: "accepted-archive-current-run", generation: 2 };
-          saveSubagentRegistryToSqlite(new Map([[replacement.runId, replacement]]));
-          recovery = withSubagentRunReadSnapshot(
-            new Map(),
-            (snapshot) => ({
-              runIds: [...snapshot.values()]
-                .filter((run) => run.childSessionKey === previous.childSessionKey)
-                .map((run) => run.runId),
-              sessionKeys: [],
-            }),
-            (selection) => selection.runIds,
-            { sessionKeys: [previous.childSessionKey], descendants: true },
-          );
+          clearSubagentRunsReadCacheForTest();
+          recovery = prepareSubagentSessionListReadCache();
           await registryPending.promise;
           expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();
-          // Recovery defers these real archive publications into the ordinary dirty queue.
+          // Cold preparation defers these archive publications into the ordinary dirty queue.
           for (const [index, query] of queries.slice(0, 2).entries()) {
             replaceSessionEntrySync(
               { agentId: query.agentId, sessionKey: query.key },
@@ -567,7 +564,14 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
           }
           expect(projection.dirtyRowCount).toBe(2);
           releaseRegistry.resolve();
-          expect(await recovery).toEqual([replacement.runId]);
+          await recovery;
+          await projection.prepareSelection({ metadataOnly: true });
+          expect(
+            projection
+              .selectEntries({}, true)
+              .filter((row) => queries.slice(0, 2).some((query) => query.key === row.key))
+              .map((row) => row.entry.updatedAt),
+          ).toEqual([2, 2]);
           const reads: SessionRowDatabaseFacts[][] = [];
           const readDatabases = history.withSessionHistoryWorkerDatabases;
           vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
@@ -986,6 +990,8 @@ it.each(["delete", "dispose", "store replacement"] as const)(
       { replacement: change === "store replacement" },
     );
     if (change === "dispose") {
+      // Restoring spies does not clear their recorded fixture arguments or results.
+      vi.clearAllMocks();
       await nextTurn();
       queryObjects(WeakRef);
       expect(control?.deref()).toBeUndefined();

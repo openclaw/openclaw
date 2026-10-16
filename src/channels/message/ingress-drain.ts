@@ -225,7 +225,11 @@ export function createChannelIngressDrain<
             markLeaseReclaimed(state);
           }
         })
-        .catch(() => undefined);
+        .catch((err: unknown) => {
+          log(
+            `ingress drain: claim refresh failed for event ${state.claim.id}; holding claim: ${formatError(err)}`,
+          );
+        });
     }, intervalMs);
     state.claimRefreshTimer.unref?.();
   };
@@ -485,6 +489,20 @@ export function createChannelIngressDrain<
           : runOutsideGatewayRootWorkAdmission(() =>
               options.dispatchClaimedEvent(claim, lifecycle),
             ));
+        if (result?.kind === "transferred") {
+          // The downstream owner atomically tombstoned this exact claim. Do not
+          // complete it again or turn a shutdown race into a replayable failure.
+          clearStallTimer(state);
+          await state.settleOnce(async () => {});
+          return;
+        }
+        if (result?.kind === "pending") {
+          clearStallTimer(state);
+          await state.settleOnce(async () => {
+            await releaseClaim(claim, { recordAttempt: false });
+          });
+          return;
+        }
         // dispose() leaves claims for recovery. Session abort mid-flight
         // (skipped/void) also leaves the claim; a terminal completed/failed
         // result still settles even if abort raced the return.

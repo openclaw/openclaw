@@ -45,13 +45,13 @@ function summarizeChildren(
         : attention,
     );
     unreadChildCount += Number(child.unread) + (descendants?.unreadChildCount ?? 0);
-    runningChildCount += (child.hasActiveRun ? 1 : 0) + (descendants?.runningChildCount ?? 0);
+    const visuallyActive = child.isRunVisuallyActive ?? child.hasActiveRun;
+    runningChildCount += (visuallyActive ? 1 : 0) + (descendants?.runningChildCount ?? 0);
     failedChildCount +=
       Number(child.status === "failed" || child.status === "timeout") +
       (descendants?.failedChildCount ?? 0);
     queuedChildCount +=
-      Number(child.hasActiveRun && child.status === "queued") +
-      (descendants?.queuedChildCount ?? 0);
+      Number(visuallyActive && child.status === "queued") + (descendants?.queuedChildCount ?? 0);
     workspaceConflictCount += onlySubagents
       ? (child.ownWorkspaceConflictCount ?? 0) + (descendants?.workspaceConflictCount ?? 0)
       : (child.workspaceConflictCount ?? 0);

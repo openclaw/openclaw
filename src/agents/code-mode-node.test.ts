@@ -1,5 +1,8 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { BroadcastChannel, getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -54,7 +57,239 @@ function execute(source: string, overrides: Partial<CodeModeExecutorStartInput> 
   );
 }
 
+async function runNodeProbe(body: string): Promise<unknown> {
+  const probe = `
+      import { nodeCodeModeExecutor } from ${JSON.stringify(new URL("./code-mode-node.ts", import.meta.url).href)};
+      import { registerSealedRuntimeProcessEntrypoint } from ${JSON.stringify(new URL("../infra/runtime-process-url.ts", import.meta.url).href)};
+      import { LegacyPluginSdkResourceHost } from ${JSON.stringify(new URL("../plugins/legacy-sdk-resource-host.ts", import.meta.url).href)};
+      import { createTestGatewayScheduler } from ${JSON.stringify(new URL("../test-utils/gateway-scheduler-clock.ts", import.meta.url).href)};
+      registerSealedRuntimeProcessEntrypoint("codeModeNode", new URL(${JSON.stringify(runtimeProcess.resolveRuntimeProcessEntrypointUrl("codeModeNode").href)}));
+      const host = new LegacyPluginSdkResourceHost();
+      const scheduler = createTestGatewayScheduler();
+      host.bindScheduler(scheduler);
+      try {
+        const config = ${JSON.stringify(config)};
+        ${body}
+      } finally {
+        await host.close();
+        await scheduler.stop();
+      }
+    `;
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    [
+      "--import",
+      fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+      "--input-type=module",
+      "-e",
+      probe,
+    ],
+    { env: { ...process.env, NODE_OPTIONS: "" }, timeout: 25_000 },
+  );
+  return JSON.parse(stdout);
+}
+
 describe("Node Code Mode executor", () => {
+  it.each([
+    { source: "await yield_control()", phase: "host", code: "internal_error", calls: 1 },
+    {
+      source: 'throw new Error("invalid code mode continuation timeout")',
+      phase: "guest",
+      code: "internal_error",
+      calls: 0,
+    },
+    {
+      source: "await new Promise(() => {})",
+      phase: "input",
+      code: "invalid_input",
+      calls: 0,
+    },
+  ])(
+    "preserves $phase failure provenance without replay",
+    async ({ source, phase, code, calls }) => {
+      const onFailure = vi.fn();
+      const onBoundary = vi.fn(async () => ({
+        kind: "continue" as const,
+        timeoutMs: Number.NaN,
+        pendingRequests: [],
+        settledRequests: [],
+      }));
+      const result = await host.run(() =>
+        nodeCodeModeExecutor.execute(
+          { kind: "exec", source, config, catalog: [], namespaces: [] },
+          { timeoutMs: 7_000, inlineHost: { onBoundary, onFailure } },
+        ),
+      );
+      expect(result).toMatchObject({ status: "failed", code, failurePhase: phase });
+      expect(onFailure).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        phase,
+        expect.stringMatching(/^code-mode-node:/),
+      );
+      expect(onBoundary).toHaveBeenCalledTimes(calls);
+    },
+  );
+
+  it("reuses healthy workers after rejected cells without retaining guest state", async () => {
+    const starts = () =>
+      sampleTrackedWorkerMemory().workerLifecycle.find(
+        ({ script }) => script === "code-mode-node.worker.js",
+      )?.started ?? 0;
+    const before = starts();
+    for (const source of [
+      "return (",
+      'require("node:fs")',
+      'globalThis.failedCell = true; throw new Error("guest failure");',
+      'globalThis.failedCell = true; Promise.reject(new Error("unhandled failure")); return 1;',
+    ]) {
+      expect(await execute(source)).toMatchObject({ status: "failed" });
+      expect(await execute("return typeof failedCell;")).toMatchObject({
+        status: "completed",
+        value: { kind: "complete", json: '"undefined"' },
+      });
+    }
+    const waiting = await execute("globalThis.failedCell = true; await yield_control();");
+    if (waiting.status !== "waiting") {
+      throw new Error("Expected a live continuation");
+    }
+    continuations.add(waiting.continuation);
+    expect(
+      await waiting.continuation.resume(
+        {
+          kind: "resume",
+          config,
+          settledRequests: waiting.pendingRequests.map(({ id }) => ({
+            id,
+            ok: false,
+            json: '"bridge failure"',
+          })),
+        },
+        { timeoutMs: 7_000 },
+      ),
+    ).toMatchObject({ status: "failed" });
+    expect(await execute("return typeof failedCell;")).toMatchObject({
+      status: "completed",
+      value: { kind: "complete", json: '"undefined"' },
+    });
+    expect(starts() - before).toBe(1);
+  });
+
+  it("reports heap exhaustion, recovers, and bounds captured output below the heap limit", async () => {
+    // Vitest runs inside a Worker whose inherited heap flags can override resourceLimits.
+    // A standalone process exercises native OOM without changing the test runner's V8 flags.
+    const observed = await runNodeProbe(`
+      let boundaries = 0;
+      let failure;
+        const result = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config, catalog: [], namespaces: [],
+          source: 'await yield_control(); text("before allocation"); const data = []; for (let i = 0; i < 2_000_000; i++) data.push({ i, value: String(i) }); return data.length;',
+        }, { timeoutMs: 7000, inlineHost: {
+          onBoundary: async (boundary, context) => {
+            boundaries++;
+            return { kind: "continue", timeoutMs: Math.min(1000, context.maxTimeoutMs), pendingRequests: [],
+              settledRequests: boundary.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })) };
+          },
+          onFailure: (error, phase, workerId) => {
+            failure = { code: error.cause?.code, phase, workerId };
+          },
+        } }));
+        const recovered = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config, catalog: [], namespaces: [], source: "return 42",
+        }, { timeoutMs: 7000 }));
+        const boundedOutput = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config, catalog: [], namespaces: [],
+          source: 'for (let i = 0; i < 20000; i++) json({ i, value: "x".repeat(4096) }); return 42;',
+        }, { timeoutMs: 7000 }));
+        console.log(JSON.stringify({ result, recovered, boundedOutput, boundaries, failure }));
+    `);
+    expect(observed).toMatchObject({
+      boundaries: 1,
+      result: {
+        status: "failed",
+        code: "runtime_unavailable",
+        error: expect.stringContaining("exhausted its 64 MiB JavaScript heap"),
+        output: {
+          count: 1,
+          source: { kind: "complete", json: '[{"type":"text","text":"before allocation"}]' },
+        },
+      },
+      failure: {
+        code: "ERR_WORKER_OUT_OF_MEMORY",
+        phase: "host",
+        workerId: expect.stringMatching(/^code-mode-node:/),
+      },
+      recovered: { status: "completed", value: { json: "42" } },
+      boundedOutput: {
+        status: "completed",
+        value: { json: "42" },
+        output: { count: 20000, source: { kind: "prefix" } },
+      },
+    });
+    expect(observed).toMatchObject({
+      result: { error: expect.stringContaining("Inspect any completed actions before retrying") },
+    });
+  });
+  // Bun lacks V8's GCProfiler and --expose_gc; native OOM is covered above.
+  it.skipIf(Boolean(process.versions.bun))(
+    "stops sustained near-limit major collections even with zero reported duration and recovers",
+    async () => {
+      // Keep retained allocations live and measure occupancy after native collections.
+      const pressureSource = `
+      const data = globalThis.retained = [];
+      collectGarbage();
+      while (heapStatistics().used_heap_size < heapStatistics().heap_size_limit * 0.86) {
+        for (let i = 0; i < 4; i++) data.push(new Array(131072).fill(1));
+        collectGarbage();
+        await yield_control();
+      }
+      for (;;) {
+        collectGarbage();
+        await yield_control();
+      }
+    `;
+      const observed = await runNodeProbe(`
+        registerSealedRuntimeProcessEntrypoint("codeModeNode", new URL(${JSON.stringify(new URL("./code-mode-node.watchdog.test-support.ts", import.meta.url).href)}));
+        const pressureConfig = { ...config, timeoutMs: 10000, memoryLimitBytes: 128 * 1024 * 1024 };
+        const lowPressure = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config: pressureConfig, catalog: [], namespaces: [],
+          source: 'const until = Date.now() + 1100; while (Date.now() < until) { collectGarbage(); await yield_control(); } return 1;',
+        }, { timeoutMs: 7000, inlineHost: {
+          onBoundary: async (boundary, context) => ({
+            kind: "continue", timeoutMs: Math.min(1000, context.maxTimeoutMs), pendingRequests: [],
+            settledRequests: boundary.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })),
+          }),
+        } }));
+        const pressureStarted = performance.now();
+        const pressure = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config: pressureConfig, catalog: [], namespaces: [],
+          source: ${JSON.stringify(pressureSource)},
+        }, { timeoutMs: 10000, inlineHost: {
+          onBoundary: async (boundary, context) => ({
+            kind: "continue", timeoutMs: Math.min(1000, context.maxTimeoutMs), pendingRequests: [],
+            settledRequests: boundary.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })),
+          }),
+        } }));
+        const pressureMs = performance.now() - pressureStarted;
+        const afterPressure = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config, catalog: [], namespaces: [], source: "return 7",
+        }, { timeoutMs: 7000 }));
+        console.log(JSON.stringify({ pressure, pressureEndedQuickly: pressureMs < 5000, afterPressure, lowPressure }));
+      `);
+      expect(observed).toMatchObject({
+        lowPressure: { status: "completed", value: { json: "1" } },
+        pressureEndedQuickly: true,
+        pressure: {
+          status: "failed",
+          code: "runtime_unavailable",
+          error: expect.stringContaining(
+            "sustained garbage collection near its JavaScript heap limit",
+          ),
+        },
+        afterPressure: { status: "completed", value: { json: "7" } },
+      });
+    },
+  );
+
   it.each(["alternating limits", "concurrent continuations"] as const)(
     "keeps workers warm across %s",
     async (scenario) => {
@@ -307,11 +542,13 @@ describe("Node Code Mode executor", () => {
       };
       const reply = (id: string) => ({ id, ok: true, json: "null" });
       const delivered: unknown[] = [];
+      const onFailure = vi.fn();
       let result = await nodeCodeModeExecutor.execute(input, {
         timeoutMs: 7_000,
         ...(mode === "inline"
           ? {
               inlineHost: {
+                onFailure,
                 onBoundary: async (boundary, context) => {
                   delivered.push(boundary.output);
                   return {
@@ -349,11 +586,19 @@ describe("Node Code Mode executor", () => {
       expect(result).toMatchObject({
         status: "failed",
         code: "timeout",
+        failurePhase: "guest",
         output: {
           count: 0,
           source: { kind: "complete", json: "[]" },
         },
       });
+      if (mode === "inline") {
+        expect(onFailure).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ code: "timeout" }),
+          "guest",
+          expect.stringMatching(/^code-mode-node:/),
+        );
+      }
     },
   );
 
