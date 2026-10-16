@@ -20,6 +20,7 @@ import {
   beginSqliteDatabaseAdmissionOperation,
   discardSqliteDatabaseTransactionAdmissions,
   getSqliteDatabaseAdmission,
+  getOrLoadSqliteDatabaseAdmissionForPath,
   hasPendingSqliteDatabaseSchemaMutation,
   invalidateLocalSqliteSchemaAdmissions,
   publishSqliteDatabaseAdmission,
@@ -143,6 +144,33 @@ it("reuses physical catalog facts after unsealed close and invalidates them on D
     retireSqliteDatabaseAdmissionForPath(location);
   }
 });
+
+it.each([undefined, "process"] as const)(
+  "preserves path-load lifetime when the loader closes its handle (%s)",
+  (lifetime) => {
+    const location = path.join(tempDirs.make("sqlite-admission-loader-close-"), "proof.sqlite");
+    const database = createDatabase(location);
+    const loadedKey = { ...key, name: "test.loader-close", lifetime };
+    try {
+      expect(
+        getOrLoadSqliteDatabaseAdmissionForPath(location, loadedKey, () => {
+          database.close();
+          return "loaded";
+        }),
+      ).toBe("loaded");
+
+      database.open();
+      expect(getSqliteDatabaseAdmission(database, loadedKey)).toBe(
+        lifetime === "process" ? "loaded" : undefined,
+      );
+    } finally {
+      if (database.isOpen) {
+        database.close();
+      }
+      retireSqliteDatabaseAdmissionForPath(location);
+    }
+  },
+);
 
 it("revokes retained validation when corruption is reported after native close", () => {
   const location = path.join(tempDirs.make("sqlite-admission-closed-corruption-"), "proof.sqlite");

@@ -75,6 +75,10 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
   }),
 }));
 
+/** Independent readers have no writer-fact relay; retain facts only with their native readers. */
+export const useConnectionScopedSqliteDatabaseAdmissionFacts = (): void =>
+  state.registry.useConnectionScopedFacts();
+
 export function readSqliteDatabaseCleanClose(location: string): boolean {
   const currentIdentity = prepareSqliteDatabaseAdmission(location);
   return withPathAdmission(
@@ -128,7 +132,7 @@ const reader = createSqliteDatabaseAdmissionReader({
   },
   release: releaseReference,
 });
-const { activePathAdmission, withPathAdmission } = reader;
+const { withPathAdmission } = reader;
 export const {
   getSqliteDatabaseAdmission,
   getOrLoadSqliteDatabaseAdmissionForPath,
@@ -139,7 +143,7 @@ export const {
 
 const scopedWrites = createSqliteDatabaseWriteReceipts({
   admission,
-  pathAdmission: activePathAdmission,
+  pathAdmission,
   writeListeners: state.writeListeners,
   readRevision: readSqliteDatabaseWriteRevision,
   writer: (database) => state.dataWriters.get(database),

@@ -34,6 +34,12 @@ format checks; remove them when touched. Identify replacement files by volume,
 inode, and birthtime with `fstat`, not SQL. Migration/repair owners publish new
 facts after their DDL; Doctor and explicit verification retain full checks.
 
+Independent read-only subprocesses do not share the Gateway's writer invalidations.
+Their local admission facts retire at final native close, even while the pooled
+process remains alive. Canonical auth reads can reuse the owner's compact schema
+projection. Paced page-cache readers keep their facts while their native handle
+remains open across steps.
+
 Each owned database can have a regular file named `<database>.seal` beside it,
 for example `openclaw.sqlite.seal`. The database admission owner writes this file
 after the final accepted writer settles, a `TRUNCATE` checkpoint completes, and

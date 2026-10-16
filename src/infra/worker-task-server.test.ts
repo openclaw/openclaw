@@ -86,7 +86,7 @@ it.each([false, true])(
     const closeAdmission = vi.spyOn(admissionPort, "close");
     const exchanges = acknowledgeAdmissionExchanges(admissionPort);
     const { serveOwnedWorkerTasks } = await import("./worker-task-server.js");
-    const { readSqliteDatabaseIntegrityVerification } =
+    const { hasSqliteDatabaseSchemaAdmissionForPath } =
       await import("./sqlite-database-admission.js");
     const { getSqliteDatabaseAdmissionUpstream } =
       await import("./sqlite-worker-database-admission-relay.js");
@@ -98,7 +98,7 @@ it.each([false, true])(
       } finally {
         entered.resolve();
         await cleanup.promise;
-        readSqliteDatabaseIntegrityVerification(":memory:");
+        hasSqliteDatabaseSchemaAdmissionForPath(":memory:");
       }
     });
     const receipt = { postMessage: vi.fn(), close: vi.fn() };
@@ -250,7 +250,7 @@ it("retains admission context for asynchronous resource cleanup and successor ta
   const closeAdmission = vi.spyOn(admissionPort, "close");
   const exchanges = acknowledgeAdmissionExchanges(admissionPort);
   const { serveOwnedWorkerTasks } = await import("./worker-task-server.js");
-  const { readSqliteDatabaseIntegrityVerification } =
+  const { hasSqliteDatabaseSchemaAdmissionForPath } =
     await import("./sqlite-database-admission.js");
   const { registerAgentDatabaseReaderCloser, isDeletedAgentDatabasePath } =
     await import("./agent-database-readers.js");
@@ -259,13 +259,13 @@ it("retains admission context for asynchronous resource cleanup and successor ta
   const unregister = registerAgentDatabaseReaderCloser(async () => {
     cleanupEntered.resolve();
     await finishCleanup.promise;
-    readSqliteDatabaseIntegrityVerification(":memory:");
+    hasSqliteDatabaseSchemaAdmissionForPath(":memory:");
   });
   const closeResource = vi.fn(() => {
-    readSqliteDatabaseIntegrityVerification(":memory:");
+    hasSqliteDatabaseSchemaAdmissionForPath(":memory:");
   });
   const handler = vi.fn(() => {
-    readSqliteDatabaseIntegrityVerification(":memory:");
+    hasSqliteDatabaseSchemaAdmissionForPath(":memory:");
     return "done";
   });
   const receipt = {
@@ -328,10 +328,10 @@ it("expires a task's admission budget without poisoning its successor or resourc
   const { port1: admissionPort, port2: admissionPeer } = new MessageChannel();
   const exchanges = acknowledgeAdmissionExchanges(admissionPort);
   const { serveOwnedWorkerTasks } = await import("./worker-task-server.js");
-  const { readSqliteDatabaseIntegrityVerification } =
+  const { hasSqliteDatabaseSchemaAdmissionForPath } =
     await import("./sqlite-database-admission.js");
   const inspect = () => {
-    readSqliteDatabaseIntegrityVerification(":memory:");
+    hasSqliteDatabaseSchemaAdmissionForPath(":memory:");
   };
   const receiptClosed = createDeferred();
   const receipt = { postMessage: vi.fn(), close: () => receiptClosed.resolve() };

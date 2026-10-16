@@ -126,7 +126,10 @@ export function publishSqliteDatabaseFact(
   revision: number,
   publication: string,
 ): boolean {
-  if (revision !== readSqliteDatabaseFactRevision(record, key.schemaDependent)) {
+  if (
+    isSqliteDatabaseAdmissionRetired(record) ||
+    revision !== readSqliteDatabaseFactRevision(record, key.schemaDependent)
+  ) {
     return false;
   }
   if (key.writer === "host") {
@@ -268,6 +271,11 @@ export class SqliteDatabaseAdmissionRegistry {
     { descriptor: number; facts: Map<string, AdmissionFact> }
   >();
   private revision = 0;
+  private retainProcessFacts = true;
+
+  useConnectionScopedFacts(): void {
+    this.retainProcessFacts = false;
+  }
 
   changeReferences(record: Admission, change: 1 | -1): boolean {
     let references = record.references.get(threadId);
@@ -297,7 +305,11 @@ export class SqliteDatabaseAdmissionRegistry {
       return;
     }
     for (const [name, fact] of record.facts) {
-      if (fact.lifetime !== "process" || !isSqliteDatabaseAdmissionFactCurrent(record, fact)) {
+      if (
+        !this.retainProcessFacts ||
+        fact.lifetime !== "process" ||
+        !isSqliteDatabaseAdmissionFactCurrent(record, fact)
+      ) {
         record.facts.delete(name);
       }
     }
@@ -305,7 +317,7 @@ export class SqliteDatabaseAdmissionRegistry {
     if (custody) {
       custody.facts = record.facts;
     }
-    // Row facts, pathname bindings and receipts retire; physical facts stay with descriptor custody.
+    // Row facts and receipts retire; shared-owner physical facts can stay with descriptor custody.
     Atomics.compareExchange(
       new Int32Array(record.generation),
       SqliteDatabaseGenerationSlot.retired,

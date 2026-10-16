@@ -43,16 +43,6 @@ export function createSqliteDatabaseAdmissionReader(owner: {
 }) {
   const { state, admission, pathAdmission, exchange, retain, release, publishFact } = owner;
 
-  function activePathAdmission(location: string): Admission | undefined {
-    const record = state.registry.forLocation(location);
-    return record &&
-      [...record.references.values()].some(
-        (references) => Atomics.load(new Int32Array(references), 0) > 0,
-      )
-      ? record
-      : undefined;
-  }
-
   function withPathAdmission<T>(
     location: string,
     operation: (record: Admission | undefined) => T,
@@ -133,8 +123,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     key: SqliteDatabaseAdmissionKey<T>,
     load: () => T | undefined,
   ): T | undefined {
-    // Path reads borrow the generation even on a hit; a loader may close its sole native reader.
-    return withPathAdmission(location, (record) => {
+    const read = (record: Admission | undefined): T | undefined => {
       if (!record) {
         return load();
       }
@@ -149,18 +138,22 @@ export function createSqliteDatabaseAdmissionReader(owner: {
         publishFact(record, key, value, generation);
       }
       return value;
-    });
+    };
+    // Physical-fact loaders can close their sole reader; receipt lookups do not end native custody.
+    return key.lifetime === "process"
+      ? withPathAdmission(location, read)
+      : read(pathAdmission(location));
   }
 
   function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boolean {
-    return hasSqliteDatabaseSchemaAdmission(activePathAdmission(location));
+    return hasSqliteDatabaseSchemaAdmission(pathAdmission(location));
   }
 
   /** Admission owns the descriptor's immutable identity; callers do not re-stat its pathname. */
   function getSqliteDatabaseAdmissionIdentityForPath(
     location: string,
   ): DatabaseFileIdentity | undefined {
-    return activePathAdmission(location)?.physicalIdentity;
+    return state.registry.forLocation(location)?.physicalIdentity;
   }
 
   /** Consume the already captured physical identity without another filesystem lookup. */
@@ -171,7 +164,6 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   }
 
   return {
-    activePathAdmission,
     withPathAdmission,
     getSqliteDatabaseAdmission,
     getOrLoadSqliteDatabaseAdmissionForPath,

@@ -105,10 +105,13 @@ runtime generation, environment, working directory, and spawn-broker owner.
 Compatible requests serialize on their slot and pass their database identity,
 command, and artifact-preserving scope on every request. Closing a caller scope
 cancels and joins its reads; it does not close an idle pooled process. Each read
-releases its native readers before its reply. Idle processes retire after one
-minute, and failed or cancelled processes retire before another request reuses
-that slot. Runtimes without qualified native SQLite close still require process
-retirement before releasing snapshot custody.
+releases its native readers before its reply. These independent processes do not
+receive the Gateway's shared-memory writer invalidations, so their local admission
+facts retire with the final native reader. Canonical auth reads can use the compact
+owner-supplied schema projection; other reads perform native admission. Idle
+processes retire after one minute, and failed or cancelled processes retire before
+another request reuses that slot. Runtimes without qualified native SQLite close
+still require process retirement before releasing snapshot custody.
 Unconfirmed native cleanup quarantines its slot without releasing that custody.
 Reads use remaining healthy capacity; four quarantined slots reject visibly
 instead of launching another process or waiting indefinitely.
