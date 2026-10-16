@@ -62,20 +62,20 @@ describe("codex conversation turn collector", () => {
   it.each([
     {
       scenario: "empty terminal summary",
-      metadata: { phase: "final_answer" },
+      phase: "final_answer",
       items: [],
       replyText: "second answer",
     },
     {
       scenario: "terminal override",
-      metadata: {},
+      phase: null,
       items: [{ type: "agentMessage", id: "answer", text: "terminal answer" }],
       replyText: "terminal answer",
     },
-  ])("uses the last final answer with $scenario", async ({ metadata, items, replyText }) => {
+  ])("uses the last final answer with $scenario", async ({ phase, items, replyText }) => {
     const collector = createCollector();
-    collector.item("answer", "first answer", metadata);
-    collector.item("later", "second answer", metadata);
+    collector.item("answer", "first answer", phase ? { phase } : {});
+    collector.item("later", "second answer", phase ? { phase } : {});
     collector.end({ items });
     await expect(collector.wait({ timeoutMs: 100 })).resolves.toEqual({ replyText });
   });
