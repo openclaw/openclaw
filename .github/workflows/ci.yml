@@ -2182,7 +2182,33 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_control_ui_performance == 'true'
-    runs-on: &shared_small_linux_runner ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || (((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
+    runs-on: &shared_small_linux_runner >-
+      ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
+      'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
+      startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
+      '')), toJSON(((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 &&
+      needs.preflight.outputs.qualification_runner_backend || 'github') ||
+      vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'),
+      (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 &&
+      needs.preflight.outputs.qualification_runner_backend || 'github') ||
+      vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch'
+      && ((needs.preflight.outputs.node_runner_backend != 'runson' &&
+      needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name !=
+      github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository ==
+      'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')))) ||
+      (((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 &&
+      needs.preflight.outputs.qualification_runner_backend || 'github') ||
+      vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'),
+      (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 &&
+      needs.preflight.outputs.qualification_runner_backend || 'github') ||
+      vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch'
+      && ((needs.preflight.outputs.node_runner_backend != 'runson' &&
+      needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name !=
+      github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository ==
+      'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 15
     env:
       CHECKOUT_BASE_SHA: &ci_diff_base ${{ needs.preflight.outputs.diff_base_revision }}
@@ -4130,7 +4156,12 @@ jobs:
     name: check-lint-extensions-${{ matrix.stripe }}
     needs: [preflight, check-plan, check-extension-package-boundary]
     if: ${{ !cancelled() && (needs.preflight.outputs.shared_sdk_declarations != 'true' || needs.check-extension-package-boundary.outputs.artifact_id != '') && (needs.preflight.outputs.run_check_plan != 'true' || needs.check-plan.outputs.check_matrix != '') && (needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.run_lint_extensions || needs.preflight.outputs.run_lint_extensions) == 'true' && needs.preflight.outputs.runner_profile == 'hybrid' && needs.preflight.outputs.frozen_target != 'true' && (!inputs.release_gate || needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true')) }}
-    runs-on: &hosted_linux_runner ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &ubuntu_linux_runner >-
+      ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
+      'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
+      startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
+      '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -4442,7 +4473,7 @@ jobs:
     name: PostgreSQL conformance
     needs: [preflight]
     if: needs.preflight.outputs.run_postgres_conformance == 'true'
-    runs-on: *hosted_linux_runner
+    runs-on: *ubuntu_linux_runner
     timeout-minutes: 30
     steps:
       - *linux_node_checkout_step
@@ -4450,11 +4481,13 @@ jobs:
       - name: Start PostgreSQL service
         run: |
           docker run --detach --name openclaw-postgres --publish 127.0.0.1:5432:5432 \
-            --shm-size=1g --user postgres postgres:17.11@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3 bash -ec \
+            --shm-size=1g --user postgres pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d bash -ec \
             'initdb -A trust -U postgres -D /tmp/openclaw-pg >/dev/null;
              echo "host all all all trust" >> /tmp/openclaw-pg/pg_hba.conf;
              exec postgres -D /tmp/openclaw-pg -h 0.0.0.0'
           timeout 60s docker exec openclaw-postgres bash -c 'until pg_isready -U postgres; do sleep 1; done'
+          docker exec openclaw-postgres psql -U postgres -v ON_ERROR_STOP=1 -c \
+            'CREATE EXTENSION unaccent WITH SCHEMA public; CREATE EXTENSION pg_trgm WITH SCHEMA public; CREATE EXTENSION vector WITH SCHEMA public;'
       - name: Run PostgreSQL conformance
         run: node scripts/test-database-conformance.mjs --engine postgres --connection postgresql://postgres@127.0.0.1:5432/postgres
       - name: Stop PostgreSQL service
@@ -4467,7 +4500,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
     # Never lend the repository token to the ClawHub mirror.
-    runs-on: *hosted_linux_runner
+    runs-on: *ubuntu_linux_runner
     timeout-minutes: 20
     steps:
       - *linux_node_checkout_step
@@ -4730,7 +4763,12 @@ jobs:
       max-parallel: 2
       matrix:
         phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests","packages"]' || '["tests","packages"]') }}
-    runs-on: &hosted_xcode_runner ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('xcode-27'))) || ('xcode-27') }}
+    runs-on: &hosted_xcode_runner >-
+      ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
+      'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
+      startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
+      '')), toJSON('xcode-27'))) || ('xcode-27') }}
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && 75 || 30 }}
     env:
       HISTORICAL_TARGET: *historical_target
@@ -5865,7 +5903,7 @@ jobs:
     name: "ios-screenshot-evidence"
     needs: [preflight, ios-screenshot-shard]
     if: *ios_screenshot_capture_gate
-    runs-on: *hosted_linux_runner
+    runs-on: *ubuntu_linux_runner
     timeout-minutes: 10
     steps:
       - *linux_node_checkout_step
@@ -6177,7 +6215,7 @@ jobs:
     name: "android-screenshots"
     needs: [preflight]
     if: ${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_android_screenshots == 'true') }}
-    runs-on: *hosted_linux_runner
+    runs-on: *ubuntu_linux_runner
     timeout-minutes: 90
     steps:
       - *android_checkout_step
@@ -6239,7 +6277,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_android_access_native == 'true'
-    runs-on: *hosted_linux_runner
+    runs-on: *ubuntu_linux_runner
     timeout-minutes: 30
     strategy:
       fail-fast: false

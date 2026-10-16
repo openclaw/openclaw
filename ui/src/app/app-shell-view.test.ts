@@ -5,11 +5,14 @@ import { render } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
+import { GatewayBrowserClient } from "../api/gateway.ts";
+import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import "../plugins/control-ui-view.solid.tsx";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
 import { ShellOwner } from "./app-host.tsx";
 import { connectLegacyApplicationContext } from "./app-root-lit.ts";
@@ -26,6 +29,7 @@ async function mountShell() {
   document.body.append(owner.element);
   const view = render(() => renderApplicationShell(owner), {
     container: owner.element,
+    wrapper: createSolidApplicationContextProvider(runtime.context).wrapper,
   });
   onTestFinished(() => {
     view.unmount();
@@ -142,6 +146,113 @@ it("keeps one sidebar and outlet while navigation moves between desktop and draw
   expect(view.container.querySelector("openclaw-router-outlet")).toBe(outlet);
 });
 
+it("keeps the mobile New Session action live across selection and access changes", async () => {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({ matches: true })),
+  );
+  const { owner, runtime, view } = await mountShell();
+  owner.routeState = { routeId: "sessions" };
+  const context = runtime.context;
+  vi.spyOn(context.theme, "settings", "get").mockReturnValue({
+    ...context.theme.settings,
+    sidebarAgentsMode: "chip",
+  });
+  const connected = {
+    ...context.gateway.snapshot,
+    phase: "connected" as const,
+    client: new GatewayBrowserClient({ url: "ws://gateway.example.test" }),
+    hello: {
+      type: "hello-ok" as const,
+      protocol: 3,
+      auth: { role: "operator", scopes: ["operator.sessions.write"] },
+      features: { methods: ["sessions.create"] },
+    },
+  };
+  const snapshot = vi.spyOn(context.gateway, "snapshot", "get").mockReturnValue(connected);
+  const selection = vi.spyOn(context.agentSelection, "state", "get");
+  selection.mockReturnValue({ ...context.agentSelection.state, selectedId: "writer" });
+  const navigate = vi.spyOn(context, "navigate").mockImplementation(() => undefined);
+  owner.invalidate();
+  flush();
+  const topbar = view.container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
+  await topbar.updateComplete;
+  const action = view.container.querySelector<HTMLAnchorElement>(".header-new-session")!;
+  expect(action.getAttribute("href")).toBe("/new?agent=writer");
+  action.focus();
+
+  selection.mockReturnValue({ ...context.agentSelection.state, selectedId: "reviewer" });
+  owner.invalidate();
+  flush();
+  await topbar.updateComplete;
+  expect(view.container.querySelector(".header-new-session")).toBe(action);
+  expect(document.activeElement).toBe(action);
+  expect(action.getAttribute("href")).toBe("/new?agent=reviewer");
+  action.click();
+  expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", { search: "?agent=reviewer" });
+  navigate.mockClear();
+
+  // The synchronous permission owner wins even before the next render commits.
+  snapshot.mockReturnValue({ ...connected, phase: "stopped" });
+  action.click();
+  expect(navigate).not.toHaveBeenCalled();
+  owner.invalidate();
+  flush();
+  await topbar.updateComplete;
+  expect(action.hasAttribute("href")).toBe(false);
+  expect(action.getAttribute("aria-disabled")).toBe("true");
+
+  snapshot.mockReturnValue(connected);
+  owner.invalidate();
+  flush();
+  await topbar.updateComplete;
+  expect(view.container.querySelector(".header-new-session")).toBe(action);
+  expect(action.getAttribute("href")).toBe("/new?agent=reviewer");
+  expect(action.hasAttribute("aria-disabled")).toBe(false);
+});
+
+it("keeps the focused gateway retry button across shell and error updates", async () => {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({ matches: true })),
+  );
+  const { owner, runtime, view } = await mountShell();
+  const disconnected = {
+    ...runtime.context.gateway.snapshot,
+    phase: "offline" as const,
+    offlineStable: true,
+    lastError: "Gateway unavailable",
+  };
+  const snapshot = vi.spyOn(runtime.context.gateway, "snapshot", "get");
+  snapshot.mockReturnValue(disconnected);
+  owner.invalidate();
+  flush();
+
+  const retry = view.getByRole("button", { name: "Disconnected — Retry now" });
+  retry.focus();
+  expect(document.activeElement).toBe(retry);
+
+  snapshot.mockReturnValue({ ...disconnected, lastError: "Connection refused" });
+  owner.navResizing = true;
+  owner.invalidate();
+  flush();
+
+  expect(view.getByRole("button", { name: "Disconnected — Retry now" })).toBe(retry);
+  expect(document.activeElement).toBe(retry);
+  const tooltip = view.container.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>(
+    ".shell-connection-status openclaw-tooltip",
+  );
+  expect(tooltip?.content).toBe("Connection refused");
+
+  snapshot.mockReturnValue({ ...disconnected, phase: "connecting" });
+  owner.invalidate();
+  flush();
+  expect(view.container.querySelector(".shell-connection-status")?.textContent).toContain(
+    "Connecting…",
+  );
+  expect(view.queryByRole("button", { name: "Disconnected — Retry now" })).toBeNull();
+});
+
 it("restores the delegated shell after a pending update and can select another workspace", async () => {
   const { runtime, owner, view } = await mountShell();
   const shell = view.container.querySelector(".shell");
@@ -173,10 +284,12 @@ it("restores the delegated shell after a pending update and can select another w
   };
   const selected = vi.spyOn(runtime.context.plugins, "selectedReplacement");
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.routeState = { routeId: "plugins" };
   owner.invalidate();
   flush();
   selected.mockImplementation((surface) => (surface === "workspace" ? replacement : undefined));
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -199,6 +312,7 @@ it("restores the delegated shell after a pending update and can select another w
   // A pending plugin update cannot remove the shell restored directly on Dashboard.
   plugin!.props = { sessionKey: "agent:main:updated", routeId: "dashboard" };
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -210,6 +324,7 @@ it("restores the delegated shell after a pending update and can select another w
   expect(shell?.isConnected).toBe(true);
 
   selected.mockImplementation((surface) => (surface === "workspace" ? replacement : undefined));
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   plugin =
@@ -235,6 +350,7 @@ it("restores the delegated shell after a pending update and can select another w
   expect(shell?.isConnected).toBe(true);
 
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   owner.routeState = { routeId: "dashboard" };
@@ -262,6 +378,7 @@ it("restores the delegated shell after a pending update and can select another w
   owner.invalidate();
   flush();
   selected.mockImplementation((surface) => (surface === "workspace" ? customWorkspace : undefined));
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -287,6 +404,7 @@ it("restores the delegated shell after a pending update and can select another w
   expect(view.container.querySelector("openclaw-app-sidebar")).toBe(sidebar);
 
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   owner.routeState = { routeId: "dashboard" };

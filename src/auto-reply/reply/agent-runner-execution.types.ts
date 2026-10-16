@@ -90,7 +90,7 @@ export type SettledAgentTurn = SettledAgentTurnBase &
       }
     | {
         status: "failed";
-        terminalFailurePayload: ReplyPayload;
+        terminalFailurePayload?: ReplyPayload;
         postCompactionModelFailure?: true;
       }
   );

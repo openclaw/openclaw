@@ -44,7 +44,7 @@ describe("buildCliRespawnPlan", () => {
         buildPlan({ argv, env: { NODE_OPTIONS: nodeOptions }, platform: "darwin" }),
       );
 
-      expect(respawnPlan.argv).toEqual(argv.slice(1));
+      expect(respawnPlan.argv).toEqual(argv.slice(2));
       expect(respawnPlan.env.NODE_OPTIONS).toBe(
         nodeOptions ? `${nodeOptions} ${EXPERIMENTAL_WARNING_FLAG}` : EXPERIMENTAL_WARNING_FLAG,
       );

@@ -385,6 +385,7 @@ describe("subagent announce timeout config", () => {
     await runAnnounceFlowForTest("run-timeout-mixed-no-reply", {
       outcome: { status: "timeout" },
       roundOneReply: undefined,
+      terminalReply: { disposition: "empty" },
     });
 
     const directAgentCall = findGatewayCall(
@@ -404,6 +405,7 @@ describe("subagent announce timeout config", () => {
     await runAnnounceFlowForTest("run-timeout-no-reply-overrides-latest-text", {
       outcome: { status: "timeout" },
       roundOneReply: undefined,
+      terminalReply: { disposition: "empty" },
     });
 
     const directAgentCall = findFinalDirectAgentCall();

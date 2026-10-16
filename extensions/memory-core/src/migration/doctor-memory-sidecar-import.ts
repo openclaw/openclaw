@@ -12,6 +12,7 @@ import {
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import { admitMemoryVectorIndex } from "../memory/manager-search-knn.js";
 
 export type LegacyMemorySidecarSource = {
   agentId: string;
@@ -234,12 +235,8 @@ function ensureCanonicalVectorTableForLegacyRows(db: DatabaseSync): void {
   if (canonicalTableExists) {
     return;
   }
-  db.exec(
-    `CREATE VIRTUAL TABLE IF NOT EXISTS main.${MEMORY_INDEX_VECTOR_TABLE} USING vec0(\n` +
-      `  id TEXT PRIMARY KEY,\n` +
-      `  embedding FLOAT[${dimensions}]\n` +
-      `)`,
-  );
+  const vectorIndex = admitMemoryVectorIndex(db, `main.${MEMORY_INDEX_VECTOR_TABLE}`);
+  vectorIndex.capability.create(vectorIndex.index, dimensions, true);
 }
 
 function copyLegacyMemoryVectorRows(db: DatabaseSync): void {

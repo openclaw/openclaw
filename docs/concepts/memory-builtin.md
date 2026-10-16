@@ -200,6 +200,8 @@ Graceful shutdown does not flush queued indexing. On the next startup, increment
 catch-up resumes from each source's indexed sequence, including rewrites and
 compaction. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
+An index built before any content exists remains valid as content arrives;
+restarting does not require a full rebuild just because the index started empty.
 Growing session transcripts retain unchanged indexed chunks and embed only new
 or changed chunks, even when the embedding cache is disabled. An explicit full
 rebuild still replaces the complete index.

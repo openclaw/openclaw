@@ -88,12 +88,17 @@ async function setupObservedProgressTransport() {
   };
 }
 
-function progressContext(
-  statusReactionController = createStatusReactionController(),
-  messageId = 456,
-) {
+let inboundSequence = 0;
+
+function progressContext(statusReactionController = createStatusReactionController()) {
+  const messageId = 456 + inboundSequence++;
   return createContext({
-    ctxPayload: { ...createDirectSessionPayload(), MessageSid: String(messageId) },
+    ctxPayload: {
+      ...createDirectSessionPayload(),
+      Provider: "telegram",
+      Surface: "telegram",
+      MessageSid: String(messageId),
+    },
     threadSpec: { id: undefined, scope: "none" },
     replyThreadId: undefined,
     msg: {
@@ -186,6 +191,8 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
         suppressFailureFallback: true,
       });
       await vi.advanceTimersByTimeAsync(5_000);
+      expect(replyResolver).toHaveBeenCalledOnce();
+      await expect(replyResolver.mock.results[0]?.value).resolves.toEqual({ text: finalText });
 
       expect([...messages.values()]).toEqual([
         ...(partial ? [prefix] : []),
@@ -196,7 +203,6 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
             : "I couldn't deliver my reply. Please ask again.",
       ]);
       expect(sendMessage.mock.calls.some(([, text]) => text === finalText)).toBe(false);
-      expect(replyResolver).toHaveBeenCalledOnce();
       expect(failedStatus.setError).toHaveBeenCalledOnce();
       expect(failedStatus.setDone).not.toHaveBeenCalled();
       if (failure !== "definite no-send") {
@@ -234,7 +240,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       );
       await dispatchWithContext({
         bot,
-        context: progressContext(nextStatus, 457),
+        context: progressContext(nextStatus),
         streamMode: mode,
         telegramCfg,
       });

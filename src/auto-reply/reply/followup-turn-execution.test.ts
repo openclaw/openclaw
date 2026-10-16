@@ -96,6 +96,20 @@ async function runFastAutoProgressCase(params: {
 }
 
 describe("executeFollowupTurn", () => {
+  it("retains the queued turn's restart restrictions over later runner defaults", async () => {
+    const turn = createTurn();
+    turn.queued.forceRestartSafeTools = true;
+    turn.queued.forceCodeModeTools = true;
+    await executeTestTurn({
+      turn,
+      defaults: { opts: { forceRestartSafeTools: false, forceCodeModeTools: false } },
+    });
+    expect(state.execute.mock.calls[0]?.[0]?.opts).toMatchObject({
+      forceRestartSafeTools: true,
+      forceCodeModeTools: true,
+    });
+  });
+
   it("refreshes the eligible queued turn from its current personal profile", async () => {
     const turn = createTurn({
       session: {
@@ -258,7 +272,7 @@ describe("executeFollowupTurn", () => {
     expect(result.commentaryPayloadsEnabled).toBe(false);
   });
 
-  it.each(["required"] as const)(
+  it.each(["optional", "required", "result-required"] as const)(
     "uses queued %s requiredness for previews but preserves media",
     async (expectation) => {
       const turn = createTurn();
@@ -284,7 +298,7 @@ describe("executeFollowupTurn", () => {
         onToolResult: onDurableToolResult,
       });
       await result.progress.drain();
-      expect(onItemEvent).toHaveBeenCalledTimes(expectation === "required" ? 1 : 0);
+      expect(onItemEvent).toHaveBeenCalledTimes(expectation !== "optional" ? 1 : 0);
       expect(onDurableToolResult).toHaveBeenCalledExactlyOnceWith(media);
     },
   );
@@ -677,6 +691,8 @@ describe("executeFollowupTurn lifecycle", () => {
   });
 
   it.each([
+    { expectation: "required", progress: "none", accepted: false, visible: false },
+    { expectation: "result-required", progress: "none", accepted: false, visible: false },
     { expectation: "optional", progress: "item", accepted: false, visible: false },
     { expectation: "optional", progress: "compaction", accepted: undefined, visible: true },
   ] as const)(
@@ -729,9 +745,10 @@ describe("executeFollowupTurn lifecycle", () => {
       expect(observedVisibility).toBe(visible);
       expect(result.execution.outcome).toMatchObject({
         kind: "rejected",
-        payload: visible
-          ? { isError: true, text: expect.not.stringContaining("NO_REPLY") }
-          : { text: "NO_REPLY" },
+        payload:
+          visible || expectation !== "optional"
+            ? { isError: true, text: expect.not.stringContaining("NO_REPLY") }
+            : { text: "" },
       });
       expect(fail).toHaveBeenCalledWith("run_failed", failure);
       expect(resolveReplyOperationAgentTurn(receipt)).toBe("failed");

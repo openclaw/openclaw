@@ -16,7 +16,7 @@ const SYMLINK_REJECTED_MESSAGE =
 
 type FsSafeReadErrorCode = "INVALID_PATH" | "NOT_FOUND" | "SYMLINK_REDIRECT";
 
-export function classifyFsSafeReadError(err: unknown): FsSafeReadErrorCode | undefined {
+function classifyFsSafeReadError(err: unknown): FsSafeReadErrorCode | undefined {
   if (!(err instanceof FsSafeError)) {
     return undefined;
   }

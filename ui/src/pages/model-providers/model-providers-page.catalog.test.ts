@@ -5,6 +5,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { ModelAuthStatusResult, ModelCatalogResult } from "../../api/types.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
+import { openPicker } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
@@ -216,14 +217,13 @@ describe("Models page catalog publication", () => {
         expected,
       );
       expect(utilityTrigger.getAttribute("aria-label")).toContain(expected);
+      const requestsBeforeOpen = request.mock.calls.length;
+      await openModelPicker(page, "utility");
+      await drainPageUpdates(page);
       expect(
         utility.querySelector('[role="option"][data-value="__openclaw_automatic_utility__"]')
           ?.textContent,
       ).toContain(expected);
-
-      const requestsBeforeOpen = request.mock.calls.length;
-      await openModelPicker(page, "utility");
-      await drainPageUpdates(page);
       expect(request).toHaveBeenCalledTimes(requestsBeforeOpen);
       page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
       await waitForSolid(() =>
@@ -287,6 +287,7 @@ describe("Models page catalog publication", () => {
     await drainPageUpdates(page);
     expect(discover).not.toHaveBeenCalled();
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(2);
+    await openModelPicker(page);
     expect(page.querySelector('[role="option"][data-value="openai/writer"]')).not.toBeNull();
   });
 
@@ -338,6 +339,7 @@ describe("Models page catalog publication", () => {
     expect(page.querySelector(".model-providers__provider-list .provider-usage-error")).toBeNull();
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
     expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
+    await openModelPicker(page);
     expect(
       page.querySelector('[role="option"][data-value="openai/prepared-primary"]'),
     ).not.toBeNull();
@@ -400,24 +402,30 @@ describe("Models page catalog publication", () => {
       await waitForSolid(() => expect(displayedCatalog(page)?.models).toEqual(published.models));
       await drainPageUpdates(page);
       expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
+      const selected: (string | null | undefined)[] = [];
       for (const picker of chatModelPickers(page)) {
+        await openPicker(picker);
         expect(
           picker.querySelector('[role="option"][data-value="openai/discovered"]'),
         ).not.toBeNull();
         expect(
           picker.querySelector('[role="option"][data-value="typesafe/jev-latest"]'),
         ).toBeNull();
+        selected.push(
+          picker.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+        );
       }
       const decision = modelPicker(page, "decision");
+      await openPicker(decision);
       expect(
         decision.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
       ).toBe("typesafe/jev-latest");
       expect(decision.querySelector('[role="option"][data-value="openai/discovered"]')).toBeNull();
-      expect(
-        chatModelPickers(page).map((picker) =>
-          picker.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-        ),
-      ).toEqual(["openai/prepared-primary", "openai/prepared-utility", "openai/prepared-fallback"]);
+      expect(selected).toEqual([
+        "openai/prepared-primary",
+        "openai/prepared-utility",
+        "openai/prepared-fallback",
+      ]);
       const laterPublication: ModelCatalogResult = {
         ...published,
         models: [
@@ -475,11 +483,19 @@ describe("Models page catalog publication", () => {
     );
     await openModelPicker(page);
     expect(displayedCatalog(page)?.models).toEqual([]);
-    expect(
-      chatModelPickers(page).map((picker) =>
+    const selected: (string | null | undefined)[] = [];
+    for (const picker of chatModelPickers(page)) {
+      await openPicker(picker);
+      selected.push(
         picker.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-      ),
-    ).toEqual(["openai/prepared-primary", "openai/prepared-utility", "openai/prepared-fallback"]);
+      );
+    }
+    expect(selected).toEqual([
+      "openai/prepared-primary",
+      "openai/prepared-utility",
+      "openai/prepared-fallback",
+    ]);
+    await openModelPicker(page, "decision");
     expect(
       modelPicker(page, "decision")
         .querySelector('[role="option"][data-value="typesafe/jev-latest"]')
@@ -608,7 +624,9 @@ describe("Models page catalog publication", () => {
     await drainPageUpdates(first);
     await drainPageUpdates(second);
     expect(displayedCatalog(first)?.models).toEqual(preparedCatalog.models);
+    await openModelPicker(second);
     expect(second.querySelector('[role="option"][data-value="openai/shared"]')).not.toBeNull();
+    await openModelPicker(first);
     expect(first.querySelector('[role="option"][data-value="openai/shared"]')).toBeNull();
     expect(first.querySelector(".model-providers__catalog-progress")).toBeNull();
     expect(second.querySelector(".model-providers__catalog-progress")).toBeNull();

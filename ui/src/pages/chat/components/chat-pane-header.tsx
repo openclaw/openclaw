@@ -14,7 +14,7 @@ import {
   personActivityLink,
   type PersonActivityRouting,
 } from "../../../components/person-activity-link.ts";
-import { renderSessionColorDot } from "../../../components/session-color.ts";
+import { SessionColorDot } from "../../../components/session-color.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
@@ -27,7 +27,7 @@ import {
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
-import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending, resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -161,12 +161,7 @@ function IdentityCrumbs(props: ChatPaneHeaderProps) {
 function SessionTitle(props: ChatPaneHeaderProps) {
   return (
     <>
-      <LitContent
-        value={
-          (i18nRevision(),
-          renderSessionColorDot(props.catalog ? props.catalogColor : props.session?.color))
-        }
-      />
+      <SessionColorDot value={props.catalog ? props.catalogColor : props.session?.color} />
       <span class="chat-pane__session-title-text">
         <Show
           when={

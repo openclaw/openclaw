@@ -133,7 +133,8 @@ it("records the planner's first account for ambiguous jobs, keeps direct keys un
       });
       await updateAuthProfileStoreWithLock({
         updater(store) {
-          store.usageStats = { "openai:b": { cooldownUntil: Date.now() + 60_000 } };
+          // The usual first account is rate-limited while Doctor runs; that must not move the job.
+          store.usageStats = { "openai:a": { cooldownUntil: Date.now() + 60_000 } };
           return true;
         },
       });

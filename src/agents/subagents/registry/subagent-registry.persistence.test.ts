@@ -293,7 +293,12 @@ describe("subagent registry persistence", () => {
       swarmWaitOwnerSessionKeys: ["agent:worker:subagent:owner", "agent:main:main"],
       groupId: "swarm:agent:main:main:parent-run",
       outputSchema: { type: "object", required: ["answer"] },
-      completion: { required: false, resultText: "raw answer", capturedAt: 2 },
+      completion: {
+        required: false,
+        terminalReply: { disposition: "visible", text: "raw answer" },
+        resultText: "raw answer",
+        capturedAt: 2,
+      },
       collectorCompletion: {
         status: "done",
         structured: { answer: 42 },

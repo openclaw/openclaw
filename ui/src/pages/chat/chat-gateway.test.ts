@@ -592,12 +592,20 @@ describe("handleChatGatewayEvent", () => {
 
   it.each([
     {
-      name: "retires saved text when a replacement tail is a silent token",
+      name: "retracts the stream when a replacement snapshot is empty",
+      previous: "Draft",
+      delta: "",
+      snapshot: "",
+      replace: true,
+      expected: "",
+    },
+    {
+      name: "preserves a prepared literal marker in a replacement tail",
       previous: "The token is ",
       delta: "",
       snapshot: "NO_REPLY",
       replace: true,
-      expected: "",
+      expected: "NO_REPLY",
     },
   ])("$name", ({ previous, delta, snapshot, replace, expected }) => {
     const state = createState({
@@ -1252,13 +1260,18 @@ describe("authoritative terminal history identity", () => {
 });
 
 describe("loadChatHistory filtering", () => {
-  it("filters silent and synthetic history rows while preserving user content and media", async () => {
+  it("trusts prepared history text while filtering synthetic rows and heartbeat acknowledgments", async () => {
     const repair =
       "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
     const visible = [
       textMessage("user", "NO_REPLY"),
       textMessage("user", repair),
       textMessage("assistant", "no_reply"),
+      textMessage("assistant", "NO_REPLY"),
+      { role: "assistant", text: "  NO_REPLY  " },
+      textMessage("assistant", "NO_REPLY."),
+      textMessage("assistant", '{"action":"NO_REPLY"}'),
+      textMessage("assistant", "I will not reply: NO_REPLY"),
       textMessage("assistant", "ANNOUNCE_SKIP"),
       textMessage("assistant", "REPLY_SKIP"),
       textMessage("assistant", "Real answer"),
@@ -1272,8 +1285,6 @@ describe("loadChatHistory filtering", () => {
       },
     ];
     const hidden = [
-      textMessage("assistant", "NO_REPLY"),
-      { role: "assistant", text: "  NO_REPLY  " },
       textMessage("assistant", "HEARTBEAT_OK"),
       textMessage(
         "user",

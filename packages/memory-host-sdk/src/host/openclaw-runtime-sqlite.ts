@@ -27,3 +27,4 @@ export {
   sqlPublicationAnchor,
   type PostgresSqlConnection,
 } from "../../../../src/infra/sql-connection.js";
+export * from "../../../../src/infra/database-engine/sqlite-search-schema.js";

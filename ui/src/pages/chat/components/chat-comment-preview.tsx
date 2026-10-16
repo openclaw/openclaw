@@ -5,7 +5,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { AttachmentPreviewChip } from "./chat-attachment-preview-chip.tsx";
 import type { CommentPreview } from "./chat-comment-preview.ts";
 
@@ -14,7 +14,7 @@ registerEnglishCatalog(registerChatMessageMetadataEnglish);
 function scrollRef() {
   let element: HTMLElement | undefined;
   let observation: ReturnType<typeof observeScrollState> | undefined;
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   const connect = (active: boolean) => {
     observation?.disconnect();
     observation = undefined;

@@ -51,6 +51,12 @@ then confirm the active memory plugin supports public artifacts.
 - `bridge`: reads public memory artifacts and event logs from the active memory plugin through public plugin SDK interfaces. Use this to compile the memory plugin's exported artifacts without reaching into private plugin internals.
 - `unsafe-local`: explicit same-machine escape hatch for local private paths. Intentionally experimental and non-portable; use only when you understand the trust boundary and specifically need local filesystem access bridge mode cannot provide.
 
+Bridge and unsafe-local source files must contain valid UTF-8. If a changed
+source contains malformed bytes, its import fails without replacing its existing
+wiki page or updating its synchronization metadata. Restore the source as valid
+UTF-8, then retry `openclaw wiki bridge import` or
+`openclaw wiki unsafe-local import`.
+
 Vault mode and vault scope are separate choices:
 
 - `vaultMode` chooses where wiki inputs come from.

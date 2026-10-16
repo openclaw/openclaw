@@ -26,11 +26,3 @@ export function AgentMemoryPanel(props: AgentMemoryPanelProps) {
     </openclaw-agent-memory-panel>
   );
 }
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-agent-memory-panel": HTMLAttributes<HTMLElement>;
-    }
-  }
-}

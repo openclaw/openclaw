@@ -1,6 +1,6 @@
 import { createEffect, onCleanup, useContext, type Accessor } from "solid-js";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import { SolidContentPresentation } from "../lit/solid-content.tsx";
+import { ContentPresentation } from "../lib/solid/presentation.ts";
 import {
   subscribeTranscriptScroll,
   type TranscriptScrollObservation,
@@ -507,7 +507,7 @@ class ProgressDisclosureController {
 
 /** The Solid owner retains the disclosure controller across progress snapshots. */
 export function useComposerProgressDisclosure(input: Accessor<DisclosureInput>) {
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   let element: HTMLDetailsElement;
   let controller: ProgressDisclosureController | undefined;
   createEffect(

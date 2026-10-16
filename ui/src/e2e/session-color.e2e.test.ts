@@ -328,7 +328,9 @@ suite.define(() => {
       // Only the roster response carries this label; wait for that render so a
       // transient event-only clear cannot hide a stale color restored by refresh.
       await row.getByText("Design review refreshed", { exact: true }).waitFor();
-      expect(await row.getAttribute("style")).toBeNull();
+      expect(
+        await row.evaluate((element) => element.style.getPropertyValue("--session-color")),
+      ).toBe("");
       await expect.poll(() => dot.count()).toBe(0);
       await expect
         .poll(() => row.getAttribute("class"))

@@ -405,14 +405,62 @@ function requiresIndividualCollectDrain(item: FollowupRun): boolean {
   );
 }
 
+type AggregateCancellation = {
+  signal?: AbortSignal;
+  admit: () => void;
+  dispose: () => void;
+};
+
+function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCancellation {
+  const ownerSignal = resolveAggregateOwner(items)?.abortSignal;
+  const signals = new Set(items.flatMap((item) => item.abortSignal ?? []));
+  if (signals.size === 0 || (signals.size === 1 && ownerSignal)) {
+    return {
+      signal: ownerSignal,
+      admit: () => undefined,
+      dispose: () => undefined,
+    };
+  }
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  for (const signal of signals) {
+    if (signal.aborted) {
+      abort();
+    } else {
+      signal.addEventListener("abort", abort, { once: true });
+    }
+  }
+  const disposeSignal = (signal: AbortSignal) => {
+    signal.removeEventListener("abort", abort);
+    signals.delete(signal);
+  };
+  return {
+    signal: controller.signal,
+    admit: () => {
+      // Before admission every source remains independently cancellable. Once
+      // atomic, only the latest source owns aggregate client cancellation.
+      // Original operator-grant revocation stays bound separately to the run.
+      for (const signal of signals) {
+        if (signal !== ownerSignal) {
+          disposeSignal(signal);
+        }
+      }
+    },
+    dispose: () => {
+      for (const signal of signals) {
+        disposeSignal(signal);
+      }
+    },
+  };
+}
+
 function createAggregateDelivery(
   items: readonly FollowupRun[],
   consume: () => void,
   complete: () => void,
 ) {
   assertSingleAdmissionOwner(items);
-  const owner = resolveAggregateOwner(items);
-  const signals = items.flatMap((item) => item.abortSignal ?? []);
+  const cancellation = createAggregateCancellation(items);
   let admitted = false;
   const needsAdmission =
     items.length > 1 || items.some((item) => hasExclusiveTurnAdmission(item.turnAdoptionLifecycle));
@@ -434,6 +482,8 @@ function createAggregateDelivery(
           // Durable aggregate acceptance consumes every source even if one ingress ack fails.
           consume();
           await Promise.all(items.map((item) => admitFollowupRunLifecycle(item)));
+          cancellation.admit();
+          const owner = resolveAggregateOwner(items);
           for (const item of items) {
             if (item !== owner) {
               retireFollowupRunCancellation(item);
@@ -448,12 +498,12 @@ function createAggregateDelivery(
       }
     : undefined;
   return {
-    // Cancellation stays connected for the entire batch; no per-source ownership handoff.
-    abortSignal: signals.length > 0 ? AbortSignal.any(signals) : undefined,
+    abortSignal: cancellation.signal,
     turnAdoptionLifecycle: lifecycle,
     get admitted() {
       return admitted;
     },
+    dispose: cancellation.dispose,
   };
 }
 
@@ -551,6 +601,7 @@ async function runQueueSummaryDelivery(
     }
     return true;
   } finally {
+    aggregate.dispose();
     for (const source of delivery.sources) {
       queue.inFlight.delete(source);
       queue.activeSummarySources.delete(source);
@@ -719,6 +770,8 @@ async function runSyntheticOverflowSummary(params: {
     personalBootstrapEligible: runtimeMetadata.personalBootstrapEligible,
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,
+    forceRestartSafeTools: runtimeMetadata.forceRestartSafeTools,
+    forceCodeModeTools: runtimeMetadata.forceCodeModeTools,
     queuedFollowupReplyDisposition: runtimeMetadata.queuedFollowupReplyDisposition,
     runObservers: runtimeMetadata.runObservers,
     deliveryCorrelations: runtimeMetadata.deliveryCorrelations,
@@ -970,6 +1023,7 @@ export function scheduleFollowupDrain(
             for (const item of activeGroupItems) {
               queue.inFlight.delete(item);
             }
+            aggregate.dispose();
           }
           if (!aggregate.admitted) {
             const canceledSources = activeGroupItems.filter(isFollowupRunAborted);

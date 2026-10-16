@@ -6,8 +6,8 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { currentThemeBranding } from "../../app/theme-branding.ts";
-import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
-import { renderSessionBackground } from "../../components/session-background-view.ts";
+import { SessionBackgroundView } from "../../components/session-background-view.tsx";
+import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -39,6 +39,7 @@ import { hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
 import { renderSessionWorkspaceRail } from "./components/chat-session-workspace.ts";
+import type { RegionProps } from "./components/chat-sidebar-region-types.ts";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
@@ -67,10 +68,9 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
-  private readonly conversationTabMemo = new ChatPaneHeaderMemo<{
-    label: string;
-    icon: ReturnType<typeof renderAgentIdentityAvatar>;
-  }>();
+  private readonly conversationTabMemo = new ChatPaneHeaderMemo<
+    NonNullable<RegionProps["conversationTab"]>
+  >();
   private readonly toolIcons = new ChatToolIconController(
     this,
     () => this.context,
@@ -387,7 +387,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       ],
       () => ({
         label: chatProps.assistantName,
-        icon: renderAgentIdentityAvatar(avatar),
+        icon: solidContent(AgentIdentityAvatar, { agent: avatar, class: "" }),
       }),
     );
     const content = renderSidebarRegion({
@@ -405,13 +405,14 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       header,
       primary: solidContent(PanePrimary, { chat: paneChatProps, application: this.context }),
-      background: renderSessionBackground(
-        this.context,
-        "session",
-        this.presented &&
+      background: solidContent(SessionBackgroundView, {
+        context: this.context,
+        surface: "session",
+        presented:
+          this.presented &&
           this.visuallyPresented &&
           isSidebarSlotVisible(sidebarLayout, "conversation"),
-      ),
+      }),
       requestUpdate: state.requestUpdate!,
     });
     const overlays = solidContent(PresentedPaneContent, {

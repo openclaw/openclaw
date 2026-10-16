@@ -18,7 +18,8 @@ export const RUNTIME_MODEL_VISIBILITY_NORMALIZATION = {
   allowPluginNormalization: true,
 } as const;
 
-function resolveAdditionalConfiguredModelRefs(params: {
+/** Every model ref the configured view admits from agent settings. */
+export function resolveAdditionalConfiguredModelRefs(params: {
   cfg: OpenClawConfig;
   agentId?: string;
 }): string[] {

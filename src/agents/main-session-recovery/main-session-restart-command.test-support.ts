@@ -373,7 +373,7 @@ export function registerAcceptedRecoveryStopCase(params: {
         expect(dispatchAgent).toHaveBeenCalledTimes(3);
         expect(sendRecoveryNotice).toHaveBeenCalledWith(
           expect.objectContaining({
-            text: expect.stringContaining("Resume in new session"),
+            text: expect.stringContaining("use Resume to continue in this session"),
           }),
         );
         expect(readEntry()).toMatchObject({

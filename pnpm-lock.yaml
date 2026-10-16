@@ -679,6 +679,16 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/agent-guidance:
+    dependencies:
+      '@openclaw/fs-safe':
+        specifier: 0.26.5
+        version: 0.26.5
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/agentsapi:
     dependencies:
       openai:
@@ -1627,6 +1637,9 @@ importers:
       json5:
         specifier: 2.2.3
         version: 2.2.3
+      kysely:
+        specifier: 0.29.6
+        version: 0.29.6
       p-limit:
         specifier: 7.3.3
         version: 7.3.3
@@ -1835,6 +1848,9 @@ importers:
 
   extensions/nextcloud-talk:
     dependencies:
+      saxes:
+        specifier: 6.0.0
+        version: 6.0.0
       zod:
         specifier: 4.6.5
         version: 4.6.5

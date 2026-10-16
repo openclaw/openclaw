@@ -88,7 +88,9 @@ export function createGatewayChatUserTurnController(params: {
       : [];
   const baseInput: UserTurnInput = {
     ...params.transcript,
-    ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
+    ...(request.goalOperation?.action === "resume" || request.restartResume
+      ? { display: false }
+      : {}),
     text: request.rawMessage,
     ...(request.workContext ? { workContext: request.workContext } : {}),
     ...(request.mentions ? { mentions: request.mentions } : {}),
@@ -297,7 +299,8 @@ export function createGatewayChatUserTurnController(params: {
     replyContextFieldsPromise,
     getSessionInitializationOptions: () => ({
       requestedSessionId: session.requestedSessionId,
-      resumeRequestedSession: request.reconnectResumeRequested,
+      resumeRequestedSession: request.reconnectResumeRequested || Boolean(request.restartResume),
+      ...(request.restartResume ? { pinExpectedExistingSession: true } : {}),
       ...(admission.restartSafeAdmission
         ? {
             expectedExistingSessionId: admission.admittedSessionId,

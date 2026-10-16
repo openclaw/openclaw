@@ -348,7 +348,13 @@ describe("createCopilotAgentHarness", () => {
         attempt: asFinalizationAttempt(params),
         settledAttempt: settledResult,
       }),
-    ).resolves.toEqual({ assistant: finalAssistant });
+    ).resolves.toEqual({
+      assistant: finalAssistant,
+      preparedTerminalReply: {
+        text: "final answer",
+        terminalReply: { disposition: "visible", text: "final answer" },
+      },
+    });
 
     expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(2);
     expect(mocks.runCopilotAttempt.mock.calls[1]?.[0]).toMatchObject({

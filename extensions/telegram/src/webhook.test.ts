@@ -857,6 +857,11 @@ describe("startTelegramWebhook", () => {
     async (operation) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", webhookStateDir);
       const abort = new AbortController();
+      const registered = createDeferred<void>();
+      setWebhookSpy.mockImplementationOnce(async () => {
+        registered.resolve();
+        return true;
+      });
       const operationStarted = createDeferred<void>();
       const releaseOperation = createDeferred<void>();
       const recorded = new Set<string>();
@@ -931,7 +936,13 @@ describe("startTelegramWebhook", () => {
         stopped = true;
       });
       try {
-        await waitForWebhookState(() => expect(setWebhookSpy).toHaveBeenCalledOnce());
+        await Promise.race([
+          registered.promise,
+          provider.then(() => {
+            throw new Error("Telegram provider stopped before webhook registration");
+          }),
+        ]);
+        expect(setWebhookSpy).toHaveBeenCalledOnce();
         const url = requireMockCall(setWebhookSpy, 0, "setWebhook")[0];
         if (typeof url !== "string") {
           throw new Error("Expected the isolated Gateway webhook URL");

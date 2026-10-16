@@ -1,4 +1,3 @@
-import { nothing } from "lit";
 import { createComponent, createSignal, flush } from "solid-js";
 import { expect, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
@@ -73,7 +72,7 @@ export function mountChatPaneHeader(
     canReveal: true,
     copiedAction: null,
     renameDisabledReason: undefined,
-    sessionMenuAction: nothing,
+    sessionMenuAction: null,
     onBeginRename: vi.fn(),
     onRenameInput: vi.fn(),
     onCommitRename: vi.fn(),

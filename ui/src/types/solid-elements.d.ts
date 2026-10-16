@@ -39,6 +39,7 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-agent-memory-panel": HTMLAttributes<HTMLElement>;
       "openclaw-chat-ci-details": HTMLAttributes<HTMLElement> & ElementProperties<ChatCiProperties>;
       "openclaw-chat-ci-automation": HTMLAttributes<HTMLElement> &
         ElementProperties<ChatCiProperties & { sessionId: string }>;
