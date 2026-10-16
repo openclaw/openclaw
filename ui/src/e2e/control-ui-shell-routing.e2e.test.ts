@@ -1,7 +1,8 @@
+import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
@@ -14,20 +15,15 @@ const forwardedHeaderBlocklist = new Set([
   "content-length",
   "transfer-encoding",
 ]);
-const publicAssetPaths = new Set([
-  "/apple-touch-icon.png",
-  "/favicon-32.png",
-  "/favicon.svg",
-  "/manifest.webmanifest",
-]);
+const expectedAssets = [
+  { file: "favicon.svg", mime: "image/svg+xml", rel: "icon", type: "image/svg+xml" },
+  { file: "favicon-32.png", mime: "image/png", rel: "icon", type: "image/png" },
+  { file: "apple-touch-icon.png", mime: "image/png", rel: "apple-touch-icon" },
+  { file: "manifest.webmanifest", mime: "application/manifest+json", rel: "manifest" },
+];
+const publicAssetPaths = new Set(expectedAssets.map(({ file }) => `/${file}`));
 
-type BasePathProxy = {
-  baseUrl: string;
-  close: () => Promise<void>;
-  requests: string[];
-};
-
-let proxy: BasePathProxy;
+let proxy: Awaited<ReturnType<typeof startBasePathProxy>>;
 const suite = createControlUiE2eSuite({
   name: "Control UI shell routing E2E",
   startServerBeforeBrowser: true,
@@ -47,21 +43,7 @@ const suite = createControlUiE2eSuite({
   },
 });
 
-async function listenOnLoopback(httpServer: Server): Promise<AddressInfo> {
-  return new Promise((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(0, "127.0.0.1", () => {
-      const address = httpServer.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("Control UI base-path proxy did not expose a loopback port"));
-        return;
-      }
-      resolve(address);
-    });
-  });
-}
-
-async function startBasePathProxy(upstreamBaseUrl: string): Promise<BasePathProxy> {
+async function startBasePathProxy(upstreamBaseUrl: string) {
   const requests: string[] = [];
   const proxyServer = createServer((request, response) => {
     void (async () => {
@@ -111,13 +93,15 @@ async function startBasePathProxy(upstreamBaseUrl: string): Promise<BasePathProx
     });
   });
 
-  const address = await listenOnLoopback(proxyServer);
+  proxyServer.listen(0, "127.0.0.1");
+  await once(proxyServer, "listening");
+  const address = proxyServer.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Control UI base-path proxy did not expose a loopback port");
+  }
   return {
     baseUrl: `http://127.0.0.1:${address.port}/`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        proxyServer.close((error) => (error ? reject(error) : resolve()));
-      }),
+    close: promisify(proxyServer.close.bind(proxyServer)),
     requests,
   };
 }
@@ -161,14 +145,13 @@ suite.define(() => {
 
         // The proxy rejects root asset fallbacks. Assert the rewritten DOM and
         // request paths so only main.ts can make these links load under the base path.
-        const assetResults = await page.evaluate(async () => {
-          const links = Array.from(
-            document.querySelectorAll<HTMLLinkElement>(
-              'link[rel="icon"], link[rel="apple-touch-icon"], link[rel="manifest"]',
-            ),
-          );
-          return Promise.all(
-            links.map(async (link) => {
+        const assetResults = await page.evaluate(async () =>
+          Promise.all(
+            [
+              ...document.querySelectorAll<HTMLLinkElement>(
+                'link[rel="icon"], link[rel="apple-touch-icon"], link[rel="manifest"]',
+              ),
+            ].map(async (link) => {
               const assetResponse = await fetch(link.href, { credentials: "include" });
               return {
                 contentType: assetResponse.headers.get("content-type") ?? "",
@@ -178,14 +161,8 @@ suite.define(() => {
                 type: link.type,
               };
             }),
-          );
-        });
-        const expectedAssets = [
-          { file: "favicon.svg", mime: "image/svg+xml", rel: "icon", type: "image/svg+xml" },
-          { file: "favicon-32.png", mime: "image/png", rel: "icon", type: "image/png" },
-          { file: "apple-touch-icon.png", mime: "image/png", rel: "apple-touch-icon" },
-          { file: "manifest.webmanifest", mime: "application/manifest+json", rel: "manifest" },
-        ];
+          ),
+        );
         expect(assetResults).toEqual(
           expect.arrayContaining(
             expectedAssets.map(({ file, mime, ...link }) =>

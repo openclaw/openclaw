@@ -1,6 +1,5 @@
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { BrowserContextOptions, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import {
@@ -9,7 +8,10 @@ import {
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Cron loading mocked Gateway E2E",
@@ -29,31 +31,49 @@ const emptyList = {
   nextOffset: null,
 };
 
-const contextOptions: BrowserContextOptions = {
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { width: 1280, height: 900 },
-};
+const contextOptions = createControlUiE2eContextOptions();
 const emptyRuns = { entries: [], total: 0, offset: 0, limit: 50, hasMore: false };
 
-function installCronGateway(page: Page, options: Parameters<typeof installMockGateway>[1] = {}) {
+function installCronGateway(
+  page: Page,
+  responses: Record<string, unknown> = {},
+  heldMethods?: string[],
+) {
   return installMockGateway(page, {
-    ...options,
+    ...(heldMethods ? { heldMethods } : {}),
     methodResponses: {
       "cron.list": emptyList,
       "cron.runs": emptyRuns,
       "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
-      ...options.methodResponses,
+      ...responses,
     },
   });
 }
 
-function screenshot(page: Page, name: string) {
-  return page.screenshot({ path: path.join(suite.artifactDir, name + ".png") });
+function runsPage(
+  entries: unknown[],
+  total = entries.length,
+  offset = 0,
+  nextOffset: number | null = null,
+) {
+  return { entries, total, offset, hasMore: nextOffset !== null, nextOffset };
 }
 
-function runsPage(entries: unknown[], total: number, offset: number, nextOffset: number | null) {
-  return { entries, total, offset, hasMore: nextOffset !== null, nextOffset };
+function run(ts: number, jobId: string, summary: string) {
+  return { ts, jobId, action: "finished", status: "ok", summary };
+}
+
+function setVisibility(page: Page, state: "hidden" | "visible") {
+  return page.evaluate((visibility) => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibility,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    if (visibility === "visible") {
+      globalThis.dispatchEvent(new Event("focus"));
+    }
+  }, state);
 }
 
 async function emitBurst(gateway: Awaited<ReturnType<typeof installCronGateway>>) {
@@ -106,12 +126,10 @@ suite.define(() => {
           snapshotRevision: "garden-inventory",
         });
       const gateway = await installCronGateway(page, {
-        methodResponses: {
-          "cron.list": list([a, b]),
-          "cron.get": exactJobs(a),
-          "cron.status": { enabled: true, jobs: 2, nextWakeAtMs: null },
-          "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
-        },
+        "cron.list": list([a, b]),
+        "cron.get": exactJobs(a),
+        "cron.status": { enabled: true, jobs: 2, nextWakeAtMs: null },
+        "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
       });
       const bUrl = `${suite.server.baseUrl}cron?job=${b.id}`;
       const aUrl = `${suite.server.baseUrl}cron?job=${a.id}`;
@@ -157,7 +175,6 @@ suite.define(() => {
           await expect.poll(() => name.inputValue()).toBe(b.name);
         }
         expect(await observe()).toMatchObject({ samePage: true, busy: "true" });
-        await screenshot(page, "save-pending");
         await gateway.setMethodResponse("cron.list", list([saved, b]));
         await gateway.setMethodResponse("cron.get", exactJobs(saved));
         if (outcome === "saved") {
@@ -171,7 +188,6 @@ suite.define(() => {
         }
         await expect.poll(() => editor.getAttribute("aria-busy")).toBe("false");
         const settled = await observe();
-        await screenshot(page, "save-settled");
         expect(settled).toMatchObject({
           url: goBack ? bUrl : aUrl,
           name: goBack ? b.name : saved.name,
@@ -197,22 +213,16 @@ suite.define(() => {
 
   it("keeps filtered history on page zero while replacement results are pending", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
-      const run = (ts: number, summary: string) => ({
-        ts,
-        jobId: "museum-inventory",
+      const museumRun = (ts: number, summary: string) => ({
+        ...run(ts, "museum-inventory", summary),
         jobName: "Museum inventory",
-        action: "finished",
-        status: "ok",
-        summary,
       });
-      const oldRun = run(1, "Previous unfiltered inventory");
-      const firstRun = run(2, "Lunar inventory first page");
-      const secondRun = run(3, "Lunar inventory second page");
+      const oldRun = museumRun(1, "Previous unfiltered inventory");
+      const firstRun = museumRun(2, "Lunar inventory first page");
+      const secondRun = museumRun(3, "Lunar inventory second page");
       const firstPage = runsPage([firstRun], 2, 0, 1);
       const gateway = await installCronGateway(page, {
-        methodResponses: {
-          "cron.runs": runsPage([oldRun], 51, 0, 50),
-        },
+        "cron.runs": runsPage([oldRun], 51, 0, 50),
       });
       await page.goto(`${suite.server.baseUrl}cron`);
       await page.getByRole("tab", { name: "Run history", exact: true }).click();
@@ -231,7 +241,6 @@ suite.define(() => {
         await loadMore.click();
       }
       await gateway.resolveDeferred("cron.runs", firstPage);
-      await screenshot(page, "filtered-history");
       const filteredRequests = await gateway.getRequests("cron.runs", { query: "Lunar" });
       expect(filteredRequests.map(({ params }) => isRecord(params) && params.offset)).toEqual([0]);
       await page.getByText(firstRun.summary, { exact: true }).waitFor();
@@ -249,66 +258,40 @@ suite.define(() => {
   });
 
   it("bounds a held cron event burst and displays the completed run", async () => {
-    await suite.withPage(
-      {
-        ...contextOptions,
-        recordVideo: { dir: suite.artifactDir, size: { height: 900, width: 1_280 } },
-      },
-      async ({ page }) => {
-        const summary = "Synthetic automation completed successfully";
-        const runs = {
-          ...runsPage(
-            [
-              {
-                ts: Date.parse("2026-08-01T12:00:00Z"),
-                jobId: "synthetic-job",
-                action: "finished",
-                status: "ok",
-                summary,
-              },
-            ],
-            1,
-            0,
-            null,
-          ),
-          limit: 50,
-        };
-        const gateway = await installCronGateway(page, {
-          heldMethods: ["cron.status", "cron.runs"],
-          methodResponses: {
-            "cron.runs": runs,
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}cron`);
-        await page.getByText("No automations yet").waitFor({ state: "visible" });
-        await gateway.waitForRequest("cron.runs");
-        await page.getByRole("tab", { name: "Run history", exact: true }).click();
-        await screenshot(page, "before-events");
-        const countRequests = async () => ({
-          status: (await gateway.getRequests("cron.status")).length,
-          runs: (await gateway.getRequests("cron.runs")).length,
-        });
-        const before = await countRequests();
-        await emitBurst(gateway);
-        const held = await countRequests();
-        await screenshot(page, "held-event-burst");
-        expect(held).toEqual(before);
-        await gateway.resolveDeferred("cron.status");
-        await gateway.resolveDeferred("cron.runs");
-        await page.getByText(summary).waitFor({ state: "visible" });
-        await expect
-          .poll(async () => (await gateway.getRequests("cron.runs")).length)
-          .toBe(before.runs + 1);
-        await screenshot(page, "completed-run");
-      },
-    );
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const summary = "Synthetic automation completed successfully";
+      const runs = {
+        ...runsPage([run(Date.parse("2026-08-01T12:00:00Z"), "synthetic-job", summary)]),
+        limit: 50,
+      };
+      const gateway = await installCronGateway(page, { "cron.runs": runs }, [
+        "cron.status",
+        "cron.runs",
+      ]);
+      await page.goto(`${suite.server.baseUrl}cron`);
+      await page.getByText("No automations yet").waitFor({ state: "visible" });
+      await gateway.waitForRequest("cron.runs");
+      await page.getByRole("tab", { name: "Run history", exact: true }).click();
+      const countRequests = async () => ({
+        status: (await gateway.getRequests("cron.status")).length,
+        runs: (await gateway.getRequests("cron.runs")).length,
+      });
+      const before = await countRequests();
+      await emitBurst(gateway);
+      const held = await countRequests();
+      expect(held).toEqual(before);
+      await gateway.resolveDeferred("cron.status");
+      await gateway.resolveDeferred("cron.runs");
+      await page.getByText(summary).waitFor({ state: "visible" });
+      await expect
+        .poll(async () => (await gateway.getRequests("cron.runs")).length)
+        .toBe(before.runs + 1);
+    });
   });
 
   it("pauses queued automation reads while hidden and catches up once on show", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installCronGateway(page, {
-        heldMethods: ["cron.list", "cron.runs"],
-      });
+      const gateway = await installCronGateway(page, {}, ["cron.list", "cron.runs"]);
       await page.goto(`${suite.server.baseUrl}cron`);
       await page.locator('[data-test-id="cron-jobs-loading"]').waitFor({ state: "visible" });
       await gateway.waitForRequest("cron.runs");
@@ -318,14 +301,7 @@ suite.define(() => {
       });
       const before = await counts();
       await emitBurst(gateway);
-      // Exercise the document visibility contract deterministically in Chromium.
-      await page.evaluate(() => {
-        Object.defineProperty(document, "visibilityState", {
-          configurable: true,
-          get: () => "hidden",
-        });
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
+      await setVisibility(page, "hidden");
       await gateway.resolveDeferred("cron.list");
       await gateway.resolveDeferred("cron.runs");
       await page.getByText("No automations yet").waitFor({ state: "visible" });
@@ -336,26 +312,15 @@ suite.define(() => {
           }),
       );
       expect(await counts()).toEqual(before);
-      await screenshot(page, "hidden-refresh-paused");
-      await page.evaluate(() => {
-        Object.defineProperty(document, "visibilityState", {
-          configurable: true,
-          get: () => "visible",
-        });
-        document.dispatchEvent(new Event("visibilitychange"));
-        globalThis.dispatchEvent(new Event("focus"));
-      });
+      await setVisibility(page, "visible");
       await expect.poll(counts).toEqual({ table: before.table + 1, runs: before.runs + 1 });
       await page.getByText("No automations yet").waitFor({ state: "visible" });
-      await screenshot(page, "visible-refresh-complete");
     });
   });
 
   it("shows pending before empty and keeps empty visible after a run-history failure", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
-      const gateway = await installCronGateway(page, {
-        heldMethods: ["cron.list"],
-      });
+      const gateway = await installCronGateway(page, {}, ["cron.list"]);
 
       const response = await page.goto(`${suite.server.baseUrl}cron`);
       expect(response?.status()).toBe(200);

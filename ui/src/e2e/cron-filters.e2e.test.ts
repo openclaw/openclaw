@@ -26,14 +26,20 @@ const contextOptions: BrowserContextOptions = {
   viewport: { height: 900, width: 1_280 },
 };
 
-function installCronGateway(page: Page, options: Parameters<typeof installMockGateway>[1] = {}) {
+type GatewayScenario = NonNullable<Parameters<typeof installMockGateway>[1]>;
+
+function installCronGateway(
+  page: Page,
+  responses: GatewayScenario["methodResponses"] = {},
+  options: Omit<GatewayScenario, "methodResponses"> = {},
+) {
   return installMockGateway(page, {
     ...options,
     methodResponses: {
       "cron.list": cronListResponse([]),
       "cron.runs": cronRunsResponse([]),
       "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
-      ...options.methodResponses,
+      ...responses,
     },
   });
 }
@@ -59,34 +65,33 @@ function cronJob(
   };
 }
 
+const pageDefaults = { offset: 0, limit: 50, hasMore: false, nextOffset: null };
+
 function cronListResponse(jobs: CronJob[], total = jobs.length) {
-  return {
-    jobs,
-    snapshotRevision: "cron-filters-fixture",
-    total,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
-  };
+  return { jobs, snapshotRevision: "cron-filters-fixture", total, ...pageDefaults };
 }
 
 function cronRunsResponse(entries: unknown[], total = entries.length) {
-  return {
-    entries,
-    total,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
-  };
+  return { entries, total, ...pageDefaults };
+}
+
+function agentPayload(message: string): CronJob["payload"] {
+  return { kind: "agentTurn", message, timeoutSeconds: 0 };
+}
+
+function run(ts: number, jobId: string, summary: string) {
+  return { ts, jobId, status: "ok", summary };
+}
+
+async function pressKeys(page: Page, ...keys: string[]) {
+  for (const key of keys) {
+    await page.keyboard.press(key);
+  }
 }
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
-function requestParams(request: MockGatewayRequest): Record<string, unknown> {
-  return requireRecord(request.params);
-}
+const requestParams = (request: MockGatewayRequest) => requireRecord(request.params);
 
 async function waitForCronListRequest(
   gateway: MockGatewayControls,
@@ -174,32 +179,29 @@ suite.define(() => {
       { kind: "every", everyMs: 60_000 },
       { lastRunStatus: "ok", lastRunAtMs: Date.parse("2026-05-29T08:10:00.000Z") },
     );
-    const cronUnknown = cronJob(
-      "nightly-cron-unknown",
-      "Nightly cron pending",
-      { kind: "cron", expr: "0 1 * * *", tz: "UTC" },
-      {},
-    );
+    const cronUnknown = cronJob("nightly-cron-unknown", "Nightly cron pending", {
+      kind: "cron",
+      expr: "0 1 * * *",
+      tz: "UTC",
+    });
 
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installCronGateway(page, {
-        methodResponses: {
-          "cron.list": cronListResponseFixture([
-            {
-              match: { scheduleKind: "cron", lastRunStatus: "unknown" },
-              response: cronListResponse([cronUnknown]),
-            },
-            {
-              match: {},
-              response: cronListResponse([everyOk, cronUnknown], 2),
-            },
-          ]),
-          "cron.status": {
-            enabled: true,
-            jobs: 2,
-            nextWakeAtMs: Date.parse("2026-05-29T09:00:00.000Z"),
-            storePath: "/tmp/openclaw-e2e/cron/jobs.json",
+        "cron.list": cronListResponseFixture([
+          {
+            match: { scheduleKind: "cron", lastRunStatus: "unknown" },
+            response: cronListResponse([cronUnknown]),
           },
+          {
+            match: {},
+            response: cronListResponse([everyOk, cronUnknown], 2),
+          },
+        ]),
+        "cron.status": {
+          enabled: true,
+          jobs: 2,
+          nextWakeAtMs: Date.parse("2026-05-29T09:00:00.000Z"),
+          storePath: "/tmp/openclaw-e2e/cron/jobs.json",
         },
       });
 
@@ -243,22 +245,20 @@ suite.define(() => {
       description: "Explain the nightly digest without granting write access",
     };
     await suite.withPage(contextOptions, async ({ page }) => {
-      const gateway = await installCronGateway(page, {
-        operatorScopes: ["operator.read"],
-        methodResponses: {
+      const gateway = await installCronGateway(
+        page,
+        {
           "cron.list": cronListResponseFixture(cronListResponse([readOnlyJob])),
           "cron.runs": cronRunsResponse([
             {
-              ts: 1,
-              jobId: readOnlyJob.id,
+              ...run(1, readOnlyJob.id, "Read-only history remains available"),
               jobName: readOnlyJob.name,
-              status: "ok",
-              summary: "Read-only history remains available",
             },
           ]),
           "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
         },
-      });
+        { operatorScopes: ["operator.read"] },
+      );
 
       await page.goto(`${suite.server.baseUrl}cron`);
       await jobTitle(page, readOnlyJob.name).waitFor({ timeout: 10_000 });
@@ -299,17 +299,15 @@ suite.define(() => {
   it("announces selected history filters and sends their Gateway request values", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
       const gateway = await installCronGateway(page, {
-        methodResponses: {
-          "cron.runs": cronRunsResponse([
-            {
-              ts: 1,
-              jobId: "filtered-job",
-              status: "error",
-              deliveryStatus: "delivered",
-              summary: "Delivered failure",
-            },
-          ]),
-        },
+        "cron.runs": cronRunsResponse([
+          {
+            ts: 1,
+            jobId: "filtered-job",
+            status: "error",
+            deliveryStatus: "delivered",
+            summary: "Delivered failure",
+          },
+        ]),
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
@@ -393,29 +391,22 @@ suite.define(() => {
       await statusTrigger.focus();
       await page.keyboard.press("Enter");
       await expect.poll(() => statusFilter.locator(".oc-menu-item:focus").count()).toBe(1);
-      await page.keyboard.press("ArrowDown");
-      await page.keyboard.press("Enter");
+      await pressKeys(page, "ArrowDown", "Enter");
       await button(page, "Status Fehler").waitFor();
-      await page.keyboard.press("Home");
-      await page.keyboard.press("Enter");
+      await pressKeys(page, "Home", "Enter");
       await button(page, "Status OK, Fehler").waitFor();
       expect(await statusTrigger.textContent()).toContain("OK, Fehler");
-      await page.keyboard.press("ArrowDown");
-      await page.keyboard.press("ArrowDown");
-      await page.keyboard.press("Enter");
+      await pressKeys(page, "ArrowDown", "ArrowDown", "Enter");
       await button(page, "Status OK +2 (OK, Fehler und Übersprungen)").waitFor();
       expect(await statusTrigger.textContent()).toContain("OK +2");
 
       await dismissDropdownToNextTrigger(page, statusTrigger, deliveryTrigger);
       await page.keyboard.press("Enter");
       await expect.poll(() => deliveryFilter.locator(".oc-menu-item:focus").count()).toBe(1);
-      await page.keyboard.press("Enter");
-      await page.keyboard.press("ArrowDown");
-      await page.keyboard.press("Enter");
+      await pressKeys(page, "Enter", "ArrowDown", "Enter");
       await button(page, "Zustellung Zugestellt, Nicht zugestellt").waitFor();
       expect(await deliveryTrigger.textContent()).toContain("Zugestellt, Nicht zugestellt");
-      await page.keyboard.press("ArrowDown");
-      await page.keyboard.press("Enter");
+      await pressKeys(page, "ArrowDown", "Enter");
       await button(
         page,
         "Zustellung Zugestellt +2 (Zugestellt, Nicht zugestellt und Unbekannt)",
@@ -435,11 +426,7 @@ suite.define(() => {
   it("keeps the newest visible overview when an older history search resolves last", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
       const gateway = await installCronGateway(page, {
-        methodResponses: {
-          "cron.runs": cronRunsResponse([
-            { ts: 1, jobId: "initial-job", status: "ok", summary: "Initial history" },
-          ]),
-        },
+        "cron.runs": cronRunsResponse([run(1, "initial-job", "Initial history")]),
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
@@ -453,18 +440,14 @@ suite.define(() => {
 
       await gateway.setMethodResponse(
         "cron.runs",
-        cronRunsResponse([
-          { ts: 3, jobId: "fresh-job", status: "ok", summary: "Newest matching history" },
-        ]),
+        cronRunsResponse([run(3, "fresh-job", "Newest matching history")]),
       );
       await search.fill("fresh");
       await expectRunCount(page, "Newest matching history", 1);
 
       await gateway.resolveDeferred(
         "cron.runs",
-        cronRunsResponse([
-          { ts: 2, jobId: "stale-job", status: "ok", summary: "Stale matching history" },
-        ]),
+        cronRunsResponse([run(2, "stale-job", "Stale matching history")]),
       );
 
       await expectRunCount(page, "Newest matching history", 1);
@@ -479,31 +462,20 @@ suite.define(() => {
     });
     await suite.withPage(contextOptions, async ({ page }) => {
       const gateway = await installCronGateway(page, {
-        methodResponses: {
-          "cron.list": cronListResponseFixture(cronListResponse([selectedJob])),
-          "cron.runs": {
-            cases: [
-              {
-                match: { scope: "job", id: selectedJob.id },
-                response: cronRunsResponse([
-                  {
-                    ts: 2,
-                    jobId: selectedJob.id,
-                    status: "ok",
-                    summary: "Selected task history",
-                  },
-                ]),
-              },
-              {
-                match: { scope: "all" },
-                response: cronRunsResponse([
-                  { ts: 1, jobId: "overview-job", status: "ok", summary: "Overview history" },
-                ]),
-              },
-            ],
-          },
-          "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+        "cron.list": cronListResponseFixture(cronListResponse([selectedJob])),
+        "cron.runs": {
+          cases: [
+            {
+              match: { scope: "job", id: selectedJob.id },
+              response: cronRunsResponse([run(2, selectedJob.id, "Selected task history")]),
+            },
+            {
+              match: { scope: "all" },
+              response: cronRunsResponse([run(1, "overview-job", "Overview history")]),
+            },
+          ],
         },
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
@@ -522,9 +494,7 @@ suite.define(() => {
 
       await gateway.resolveDeferred(
         "cron.runs",
-        cronRunsResponse([
-          { ts: 3, jobId: "overview-job", status: "ok", summary: "Late overview history" },
-        ]),
+        cronRunsResponse([run(3, "overview-job", "Late overview history")]),
       );
 
       await expectRunCount(page, "Selected task history", 1);
@@ -549,20 +519,14 @@ suite.define(() => {
       }),
       sessionTarget: "isolated",
       wakeMode: "now",
-      payload: {
-        kind: "agentTurn",
-        message: "Continue until the existing task finishes",
-        timeoutSeconds: 0,
-      },
+      payload: agentPayload("Continue until the existing task finishes"),
     } satisfies CronJob;
     await suite.withPage(contextOptions, async ({ page }) => {
       const gateway = await installCronGateway(page, {
-        methodResponses: {
-          "cron.add": { id: "created-no-timeout" },
-          "cron.update": { id: existingJob.id },
-          "cron.list": cronListResponseFixture(cronListResponse([existingJob])),
-          "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
-        },
+        "cron.add": { id: "created-no-timeout" },
+        "cron.update": { id: existingJob.id },
+        "cron.list": cronListResponseFixture(cronListResponse([existingJob])),
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
@@ -578,11 +542,7 @@ suite.define(() => {
       const addRequest = await gateway.waitForRequest("cron.add");
       expect(requestParams(addRequest)).toMatchObject({
         name: "Created no-timeout task",
-        payload: {
-          kind: "agentTurn",
-          message: "Continue until the new task finishes",
-          timeoutSeconds: 0,
-        },
+        payload: agentPayload("Continue until the new task finishes"),
       });
 
       await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
@@ -597,11 +557,7 @@ suite.define(() => {
         id: existingJob.id,
         expectedConfigRevision: existingJob.configRevision,
         patch: {
-          payload: {
-            kind: "agentTurn",
-            message: "Continue until the edited task finishes",
-            timeoutSeconds: 0,
-          },
+          payload: agentPayload("Continue until the edited task finishes"),
         },
       });
     });
@@ -610,9 +566,7 @@ suite.define(() => {
   it("supports skip navigation and keyboard tab activation", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
       await installCronGateway(page, {
-        methodResponses: {
-          "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
-        },
+        "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
@@ -630,9 +584,7 @@ suite.define(() => {
       const tasksTab = page.getByRole("tab", { name: "All", exact: true });
       const activityTab = page.getByRole("tab", { name: "Run history", exact: true });
       await tasksTab.focus();
-      await page.keyboard.press("ArrowRight");
-      await page.keyboard.press("ArrowRight");
-      await page.keyboard.press("ArrowRight");
+      await pressKeys(page, "ArrowRight", "ArrowRight", "ArrowRight");
       await expect
         .poll(() => activityTab.evaluate((element) => element === document.activeElement))
         .toBe(true);

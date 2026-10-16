@@ -64,7 +64,7 @@ function durationResponses(jobs: CronJob[]) {
   };
 }
 
-async function captureDurationProof(page: Page, name: string, observed: unknown, content: Locator) {
+async function captureDurationProof(page: Page, name: string, content: Locator) {
   if (!captureDurationProofEnabled) {
     return;
   }
@@ -73,41 +73,22 @@ async function captureDurationProof(page: Page, name: string, observed: unknown,
     path.join(suite.artifactDir, `${name}.png`),
     await takeControlUiViewportScreenshot(page, page.locator(".cron-page"), [content]),
   );
-  await fs.writeFile(
-    path.join(suite.artifactDir, `${name}.json`),
-    `${JSON.stringify(observed, null, 2)}\n`,
-  );
 }
 
 suite.define(() => {
   it("shows saved descriptions in list rows and task details for every payload kind", async () => {
+    const describedJob = (id: string, payload: CronJob["payload"]) => ({
+      ...cronJob(id, `${id} task`),
+      description: `  ${id} description  `,
+      payload,
+    });
     const jobs = [
-      {
-        ...cronJob("described-event", "System reminder"),
-        description: "  Explain the system reminder without opening advanced settings  ",
-        payload: { kind: "systemEvent", text: "Run the system reminder" },
-      },
-      {
-        ...cronJob("described-agent", "Agent digest"),
-        description: "Summarize the overnight activity",
-        payload: { kind: "agentTurn", message: "List overnight deployment activity" },
-      },
-      {
-        ...cronJob("described-command", "Command check"),
-        description: "Run the infrastructure health check",
-        payload: { kind: "command", argv: ["echo", "healthy"] },
-      },
-      {
-        ...cronJob("described-script", "Script check"),
-        description: "Inspect the scripted health check",
-        payload: { kind: "script", script: "return 'healthy'" },
-      },
-      {
-        ...cronJob("described-heartbeat", "Heartbeat check"),
-        description: "Explain the system-owned heartbeat",
-        payload: { kind: "heartbeat" },
-      },
-    ] satisfies [CronJob, ...CronJob[]];
+      describedJob("event", { kind: "systemEvent", text: "Run the system reminder" }),
+      describedJob("agent", { kind: "agentTurn", message: "List overnight deployment activity" }),
+      describedJob("command", { kind: "command", argv: ["echo", "healthy"] }),
+      describedJob("script", { kind: "script", script: "return 'healthy'" }),
+      describedJob("heartbeat", { kind: "heartbeat" }),
+    ] as const;
     const undescribedJob = cronJob("without-description", "Plain task");
     await suite.withPage(pageOptions, async ({ page }) => {
       await installMockGateway(page, {
@@ -161,24 +142,14 @@ suite.define(() => {
 
   it("configured duration precision: shows exact saved intervals in rows and details", async () => {
     const cases = [
-      { id: "minute-control", name: "One-minute control", everyMs: 60_000, text: "Every 1m" },
-      {
-        id: "mixed-interval",
-        name: "Ninety-second cadence",
-        everyMs: 90_000,
-        text: "Every 1m 30s",
-      },
-      {
-        id: "precise-interval",
-        name: "Full cadence",
-        everyMs: 3_661_001,
-        text: "Every 1h 1m 1s 1ms",
-      },
+      { id: "minute-control", everyMs: 60_000, text: "Every 1m" },
+      { id: "mixed-interval", everyMs: 90_000, text: "Every 1m 30s" },
+      { id: "precise-interval", everyMs: 3_661_001, text: "Every 1h 1m 1s 1ms" },
     ] as const;
     const jobs = cases.map(
-      ({ id, name, everyMs }) =>
+      ({ id, everyMs }) =>
         ({
-          ...cronJob(id, name),
+          ...cronJob(id, id),
           enabled: false,
           configRevision: `${id}-definition`,
           schedule: { kind: "every", everyMs },
@@ -190,21 +161,12 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}cron`);
       await page.locator(`[data-test-id="cron-row-${cases[0].id}"]`).waitFor();
-      const rows = await page
-        .locator(".cron-table__schedule .cron-table__cell-value")
-        .allTextContents();
       await captureDurationProof(
         page,
         "interval-list",
-        { rows, jobs },
         page.locator(`[data-test-id="cron-row-${cases[0].id}"]`),
       );
-      const observed: Array<{
-        id: string;
-        row: string | undefined;
-        detail: string | undefined;
-      }> = [];
-      for (const job of jobs) {
+      for (const [index, job] of jobs.entries()) {
         const row = page.locator(`[data-test-id="cron-row-${job.id}"]`);
         expect(await row.getAttribute("class")).toContain("cron-table__row--paused");
         const rowText = (
@@ -214,17 +176,12 @@ suite.define(() => {
         const subtitle = page.locator(".cron-detail-meta > .cron-detail-sub");
         await subtitle.waitFor();
         const detail = (await subtitle.textContent())?.trim();
-        observed.push({ id: job.id, row: rowText, detail });
-        await captureDurationProof(
-          page,
-          job.id,
-          { everyMs: job.schedule.everyMs, row: rowText, detail },
-          subtitle,
-        );
+        const text = cases[index]?.text;
+        expect({ row: rowText, detail }).toEqual({ row: text, detail: text });
+        await captureDurationProof(page, job.id, subtitle);
         await page.locator('[data-test-id="cron-back"]').click();
         await row.waitFor();
       }
-      expect(observed).toEqual(cases.map(({ id, text }) => ({ id, row: text, detail: text })));
       expect(await gateway.getRequests("cron.run")).toHaveLength(0);
     });
   });
@@ -245,12 +202,7 @@ suite.define(() => {
       await page.locator("details.cron-advanced > summary").click();
       const amount = page.locator("#cron-stagger-amount");
       const loadedStagger = await amount.inputValue();
-      await captureDurationProof(
-        page,
-        "stagger-loaded",
-        { loadedStagger, schedule: job.schedule },
-        amount,
-      );
+      await captureDurationProof(page, "stagger-loaded", amount);
       await page.locator("#cron-cron-expr").fill("*/5 * * * *");
       const previousUpdates = (await gateway.getRequests("cron.update")).length;
       await gateway.deferNext("cron.update");
@@ -260,7 +212,6 @@ suite.define(() => {
       await captureDurationProof(
         page,
         "stagger-submitted",
-        { loadedStagger, request },
         page.locator('[data-test-id="cron-submit"]'),
       );
       // Echo the actual wire patch, so a lossy submission cannot become a correct fixture response.
@@ -273,12 +224,7 @@ suite.define(() => {
         .poll(() => page.locator('[data-test-id="cron-submit"]').isDisabled())
         .toBe(false);
       const reloadedStagger = await amount.inputValue();
-      await captureDurationProof(
-        page,
-        "stagger-readback",
-        { loadedStagger, request, reloadedStagger },
-        amount,
-      );
+      await captureDurationProof(page, "stagger-readback", amount);
       expect({ loadedStagger, request: request.params, reloadedStagger }).toMatchObject({
         loadedStagger: "1.001",
         request: {
