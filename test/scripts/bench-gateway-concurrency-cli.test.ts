@@ -15,10 +15,10 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const testNodeExecPath = resolveTestNodeExecPath();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const diagnosticPrivateMarker = "synthetic-private-probe at /private/fixture/probe-content";
+const diagnosticMode = "mock-activity-summary-diagnostics";
 
 type Samples = Awaited<ReturnType<typeof testing.runBenchmarkSamples>>;
 type Report = Omit<Samples, "failedAttempt"> & {
-  mode: string;
   failedAttempt: NonNullable<Samples["failedAttempt"]>;
   summary: { turnCount: number };
 };
@@ -30,6 +30,7 @@ const failureMessages = {
   diagnostic: "Activity-summary diagnostic benchmark failed",
 };
 const memorySample = { heapUsedMb: 4, rssMb: 16 };
+const processInspection = { errorPolicy: "indeterminate" } as const;
 type Scenario = keyof typeof failureMessages;
 
 async function withBenchmark(scenario: Scenario) {
@@ -103,8 +104,7 @@ syncBuiltinESMExports();\n`,
     const report = JSON.parse(readFileSync(output, "utf8")) as Report;
     expect(JSON.parse(result.stdout)).toEqual(report);
     expect(report).toMatchObject({
-      mode:
-        scenario === "diagnostic" ? "mock-activity-summary-diagnostics" : "mock-streaming-agent",
+      mode: scenario === "diagnostic" ? diagnosticMode : "mock-streaming-agent",
       warmupRuns: [],
       failedAttempt: {
         status: "failure",
@@ -118,7 +118,7 @@ syncBuiltinESMExports();\n`,
     );
     for (const child of children) {
       expect(child.startTime).not.toBeNull();
-      expect(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" })).toBe("dead");
+      expect(inspectManagedProcessGroup(child, processInspection)).toBe("dead");
       if (child.role === "gateway") {
         expect(existsSync(child.root)).toBe(false);
       }
@@ -130,10 +130,7 @@ syncBuiltinESMExports();\n`,
     checkReport(report, scenario);
     if (scenario === "diagnostic") {
       const sidecar = readFileSync(`${output}.failure.json`, "utf8");
-      expect(JSON.parse(sidecar)).toMatchObject({
-        mode: "mock-activity-summary-diagnostics",
-        status: "failed",
-      });
+      expect(JSON.parse(sidecar)).toMatchObject({ mode: diagnosticMode, status: "failed" });
       expect(
         `${readFileSync(output, "utf8")}${result.stdout}${result.stderr}${sidecar}`,
       ).not.toContain(diagnosticPrivateMarker);
@@ -143,33 +140,27 @@ syncBuiltinESMExports();\n`,
   } finally {
     const cleanups = await Promise.allSettled(
       children.map(async (child) => {
-        if (inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }) !== "dead") {
-          if (
-            child.startTime === null ||
-            getFileLockProcessStartTime(child.pid) !== child.startTime
-          ) {
-            throw new Error("Child identity unavailable or changed; refusing cleanup signal");
-          }
-          terminateManagedChild(
-            { pid: child.pid, kill: (signal) => process.kill(child.pid, signal) },
-            "SIGKILL",
-            { processGroupFallback: "never" },
-          );
-          expect(
-            await waitForManagedProcessGroupExit(child, 5_000, { errorPolicy: "indeterminate" }),
-          ).toBe(true);
+        if (inspectManagedProcessGroup(child, processInspection) === "dead") {
+          return;
         }
+        const { pid, startTime } = child;
+        if (startTime === null || getFileLockProcessStartTime(pid) !== startTime) {
+          throw new Error("Child identity unavailable or changed; refusing cleanup signal");
+        }
+        terminateManagedChild({ pid, kill: (signal) => process.kill(pid, signal) }, "SIGKILL", {
+          processGroupFallback: "never",
+        });
+        expect(await waitForManagedProcessGroupExit(child, 5_000, processInspection)).toBe(true);
       }),
     );
     errors.push(
       ...cleanups.flatMap((cleanup) => (cleanup.status === "rejected" ? [cleanup.reason] : [])),
     );
   }
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Benchmark validation or cleanup failed");
+  if (errors.length) {
+    throw errors.length === 1
+      ? errors[0]
+      : new AggregateError(errors, "Benchmark validation or cleanup failed");
   }
 }
 
@@ -203,24 +194,20 @@ function checkReport(report: Report, scenario: Scenario) {
   if (scenario === "workload") {
     expect(report.runs).toHaveLength(1);
     const completed = report.runs[0]!;
+    const scans = completed.pluginMetadataScans;
     expect(completed).not.toHaveProperty("failures");
     expect(completed).not.toHaveProperty("cleanup");
     expect(completed).toMatchObject({
       freshConnection: { ok: true },
       memory: { before: memorySample, after: memorySample },
     });
-    expect(completed.pluginMetadataScans).toEqual({
-      count: 0,
-      durationMs: null,
-      totalDurationMs: 0,
-    });
+    expect(scans).toEqual({ count: 0, durationMs: null, totalDurationMs: 0 });
     expect(report.summary).toMatchObject({ turnCount: 1, pluginMetadataScanCount: 0 });
     expect(partialRun.sessionsList?.some((sample) => sample.ok)).toBe(true);
     expect(partialRun.memory.before).toMatchObject(memorySample);
     return;
   }
-  expect(report.runs).toEqual([]);
-  expect(report.summary.turnCount).toBe(0);
+  expect(report).toMatchObject({ runs: [], summary: { turnCount: 0 } });
   expect(partialRun.memory.after).toMatchObject(memorySample);
   if (scenario === "teardown") {
     expect(partialRun).toMatchObject({

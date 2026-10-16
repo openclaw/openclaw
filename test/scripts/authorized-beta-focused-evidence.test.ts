@@ -59,6 +59,10 @@ const workflowSource = (name: string) => readFileSync(workflowPath(name), "utf8"
 const readWorkflow = (name: string) => parse(workflowSource(name)) as ParsedWorkflow;
 const readJson = <T>(file: string): T => JSON.parse(readFileSync(file, "utf8"));
 const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
+const cliArgs = (options: Record<string, string>) =>
+  Object.entries(options).flatMap(([option, value]) => [`--${option}`, value]);
+const runNode = (args: string[], env = process.env) =>
+  spawnSync(process.execPath, args, { encoding: "utf8", env });
 const producerIdentity: AuthorizedBetaFocusedProducerIdentity = {
   repository: "openclaw/openclaw",
   runId: "123",
@@ -81,6 +85,14 @@ function expectCandidateVerification(step: ReturnType<typeof namedStep>) {
   expect(step.run?.indexOf("gh attestation verify")).toBeLessThan(
     step.run?.indexOf(candidateVerifier) ?? -1,
   );
+}
+
+function expectOrderedSteps(workflow: ParsedWorkflow, job: string, names: string[]) {
+  const positions = names.map((name) => stepNames(workflow, job).indexOf(name));
+  expect(positions[0]).toBeGreaterThan(-1);
+  for (const [index, position] of positions.slice(1).entries()) {
+    expect(positions[index]).toBeLessThan(position);
+  }
 }
 
 const VALIDATOR_CLOSURE = [
@@ -213,15 +225,14 @@ function runFocusedValidatorLogProbe(
   const validatorPath = stageValidatorClosure(trustedRoot);
   const artifactPath = join(trustedRoot, "evidence.json");
   const callsPath = join(trustedRoot, "gh-log-calls.jsonl");
-  const historical = policy.historicalFrv;
-  const focused = policy.focusedProof;
+  const { historicalFrv: historical, focusedProof: focused } = policy;
   const producer = producerIdentity;
   const { workflowSha: producerSha, workflowRef: producerRef } = producer;
   const createRun = (
     id: string,
     name: string,
     path: string,
-    conclusion: string,
+    conclusion = "failure",
     headBranch = historical.workflowRef,
     headSha = policy.historicalToolingSha,
   ) => ({
@@ -244,84 +255,69 @@ function runFocusedValidatorLogProbe(
     head_sha: policy.historicalToolingSha,
   });
   const historicalTitle = `full-release-validation-${historical.runId}-${historical.runAttempt}`;
-  const runs = [
-    createRun(
+  const focusedRef = policy.historicalToolingRef.replace("refs/tags/", "");
+  const runSpecs: Parameters<typeof createRun>[] = [
+    [
       producer.runId,
       "Authorized Beta Focused Validation",
       producer.workflowPath,
       "success",
       producerRef,
       producerSha,
-    ),
-    createRun(historical.runId, "Full Release Validation", historical.workflowPath, "failure"),
-    ...(
-      [
-        [historical.ciRunId, `CI ${historicalTitle}-ci`, "ci", "failure"],
-        [
-          historical.pluginRunId,
-          `Plugin Prerelease ${historicalTitle}-plugin-prerelease`,
-          "plugin-prerelease",
-          "failure",
-        ],
-        [
-          historical.releaseChecksRunId,
-          `OpenClaw Release Checks ${historicalTitle}-release-checks`,
-          "openclaw-release-checks",
-          "success",
-        ],
-        [
-          historical.performanceRunId,
-          `OpenClaw Performance ${historicalTitle}`,
-          "openclaw-performance",
-          "failure",
-        ],
-      ] as const
-    ).map(([id, name, workflow, conclusion]) =>
-      createRun(id, name, workflowPath(workflow), conclusion),
-    ),
-    ...(
-      [
-        [focused.ciRunId, "CI beta3-slack-proof-e347223a", "ci", "success"],
-        [
-          focused.pluginRunId,
-          "Plugin Prerelease beta3-slack-proof-e347223a",
-          "plugin-prerelease",
-          "failure",
-        ],
-      ] as const
-    ).map(([id, name, workflow, conclusion]) =>
-      createRun(
-        id,
-        name,
-        workflowPath(workflow),
-        conclusion,
-        policy.historicalToolingRef.replace("refs/tags/", ""),
-      ),
-    ),
-  ];
-  const h = historical;
-  const f = focused;
-  const jobs = [
-    createJob(h.ciFailedJobId, h.ciRunId, "check-lint", "failure"),
-    createJob(h.ciAggregateJobId, h.ciRunId, "openclaw/ci-gate", "failure"),
-    createJob(h.pluginFailedJobId, h.pluginRunId, "checks-node-extensions-shard-7", "failure"),
-    createJob(h.pluginAggregateJobId, h.pluginRunId, "plugin-prerelease-suite", "failure"),
-    createJob(
-      h.releaseChecksVerifierJobId,
-      h.releaseChecksRunId,
-      "Verify release checks",
+    ],
+    [historical.runId, "Full Release Validation", historical.workflowPath],
+    [historical.ciRunId, `CI ${historicalTitle}-ci`, workflowPath("ci")],
+    [
+      historical.pluginRunId,
+      `Plugin Prerelease ${historicalTitle}-plugin-prerelease`,
+      workflowPath("plugin-prerelease"),
+    ],
+    [
+      historical.releaseChecksRunId,
+      `OpenClaw Release Checks ${historicalTitle}-release-checks`,
+      workflowPath("openclaw-release-checks"),
       "success",
-    ),
-    createJob(
-      h.performanceFailedJobId,
-      h.performanceRunId,
-      "OpenClaw source performance probes",
+    ],
+    [
+      historical.performanceRunId,
+      `OpenClaw Performance ${historicalTitle}`,
+      workflowPath("openclaw-performance"),
+    ],
+    [focused.ciRunId, "CI beta3-slack-proof-e347223a", workflowPath("ci"), "success", focusedRef],
+    [
+      focused.pluginRunId,
+      "Plugin Prerelease beta3-slack-proof-e347223a",
+      workflowPath("plugin-prerelease"),
       "failure",
-    ),
-    createJob(f.ciSuccessJobId, f.ciRunId, "check-lint", "success"),
-    createJob(f.ciTargetLogJobId, f.ciRunId, "preflight", "success"),
-    createJob(f.pluginSuccessJobId, f.pluginRunId, "checks-node-extensions-shard-7", "success"),
-    createJob(f.pluginTargetLogJobId, f.pluginRunId, "Build plugin prerelease plan", "success"),
+      focusedRef,
+    ],
+  ];
+  const runs = runSpecs.map((args) => createRun(...args));
+  const jobGroup = (conclusion: string, entries: [string, string, string][]) =>
+    entries.map(([id, runId, name]) => createJob(id, runId, name, conclusion));
+  const jobs = [
+    ...jobGroup("failure", [
+      [historical.ciFailedJobId, historical.ciRunId, "check-lint"],
+      [historical.ciAggregateJobId, historical.ciRunId, "openclaw/ci-gate"],
+      [historical.pluginFailedJobId, historical.pluginRunId, "checks-node-extensions-shard-7"],
+      [historical.pluginAggregateJobId, historical.pluginRunId, "plugin-prerelease-suite"],
+      [
+        historical.performanceFailedJobId,
+        historical.performanceRunId,
+        "OpenClaw source performance probes",
+      ],
+    ]),
+    ...jobGroup("success", [
+      [
+        historical.releaseChecksVerifierJobId,
+        historical.releaseChecksRunId,
+        "Verify release checks",
+      ],
+      [focused.ciSuccessJobId, focused.ciRunId, "check-lint"],
+      [focused.ciTargetLogJobId, focused.ciRunId, "preflight"],
+      [focused.pluginSuccessJobId, focused.pluginRunId, "checks-node-extensions-shard-7"],
+      [focused.pluginTargetLogJobId, focused.pluginRunId, "Build plugin prerelease plan"],
+    ]),
   ];
   const plan = {
     parentRunId: historical.runId,
@@ -392,21 +388,14 @@ function runFocusedValidatorLogProbe(
     { mode: 0o755 },
   );
 
-  const result = spawnSync(
-    process.execPath,
+  const result = runNode(
     [
       validatorPath,
       "verify",
-      "--candidate-root",
-      root,
-      "--artifact",
-      artifactPath,
+      ...cliArgs({ "candidate-root": root, artifact: artifactPath }),
       ...producerArgs(producer),
     ],
-    {
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${trustedRoot}:${process.env.PATH ?? ""}` },
-    },
+    { ...process.env, PATH: `${trustedRoot}:${process.env.PATH ?? ""}` },
   );
   const calls = readFileSync(callsPath, "utf8")
     .trim()
@@ -450,33 +439,24 @@ function runCandidateVerifier(params: {
   validatorPath: string;
   verifierArgs?: string[];
 }) {
-  return spawnSync(
-    process.execPath,
-    [
-      params.helperPath ?? join(REPO_ROOT, "scripts", candidateVerifier),
-      "--repository-root",
-      params.repositoryRoot,
-      "--validator",
-      params.validatorPath,
-      "--policy",
-      params.policyPath,
-      ...(params.verifierArgs ?? []),
-    ],
-    { encoding: "utf8" },
-  );
+  return runNode([
+    params.helperPath ?? join(REPO_ROOT, "scripts", candidateVerifier),
+    ...cliArgs({
+      "repository-root": params.repositoryRoot,
+      validator: params.validatorPath,
+      policy: params.policyPath,
+    }),
+    ...(params.verifierArgs ?? []),
+  ]);
 }
 
 function producerArgs(producer = producerIdentity) {
-  return [
-    "--producer-run-id",
-    producer.runId,
-    "--producer-run-attempt",
-    String(producer.runAttempt),
-    "--producer-workflow-full-ref",
-    producer.workflowFullRef,
-    "--producer-workflow-sha",
-    producer.workflowSha,
-  ];
+  return cliArgs({
+    "producer-run-id": producer.runId,
+    "producer-run-attempt": String(producer.runAttempt),
+    "producer-workflow-full-ref": producer.workflowFullRef,
+    "producer-workflow-sha": producer.workflowSha,
+  });
 }
 
 function candidateFixture(
@@ -639,21 +619,15 @@ it("gates Docker registry access on post-approval focused evidence revalidation"
     attestations: "read",
     contents: "read",
   });
-  const names = stepNames(docker, "publish");
-  const revalidation = names.indexOf("Revalidate focused evidence producer after Docker approval");
-  const download = names.indexOf("Download focused release evidence after Docker approval");
-  const verification = names.indexOf("Verify focused release evidence after Docker approval");
-  const credentials = names.indexOf("Log in to GHCR");
-  expect(revalidation).toBeGreaterThan(-1);
-  expect(revalidation).toBeLessThan(download);
-  expect(download).toBeLessThan(verification);
-  expect(verification).toBeLessThan(credentials);
-  const verifyStep = namedStep(
-    docker,
-    "publish",
+  expectOrderedSteps(docker, "publish", [
+    "Revalidate focused evidence producer after Docker approval",
+    "Download focused release evidence after Docker approval",
     "Verify focused release evidence after Docker approval",
+    "Log in to GHCR",
+  ]);
+  expectCandidateVerification(
+    namedStep(docker, "publish", "Verify focused release evidence after Docker approval"),
   );
-  expectCandidateVerification(verifyStep);
 });
 
 it("accepts skipped historical release-plan children without run identities", () => {
@@ -664,14 +638,9 @@ it("accepts skipped historical release-plan children without run identities", ()
 
 it.each(["legacy", "unrelated"] as const)("handles %s gh job-log errors", (outcome) => {
   const { calls, policy, result } = runFocusedValidatorLogProbe(outcome);
-  const ciLogArgs = [
-    "api",
-    `repos/openclaw/openclaw/actions/jobs/${policy.focusedProof.ciTargetLogJobId}/logs`,
-  ];
-  const pluginLogArgs = [
-    "api",
-    `repos/openclaw/openclaw/actions/jobs/${policy.focusedProof.pluginTargetLogJobId}/logs`,
-  ];
+  const logArgs = (id: string) => ["api", `repos/openclaw/openclaw/actions/jobs/${id}/logs`];
+  const ciLogArgs = logArgs(policy.focusedProof.ciTargetLogJobId);
+  const pluginLogArgs = logArgs(policy.focusedProof.pluginTargetLogJobId);
   const flaggedCiLogArgs = [...ciLogArgs, "--allow-escape-sequences"];
   const flaggedPluginLogArgs = [...pluginLogArgs, "--allow-escape-sequences"];
 
@@ -682,20 +651,12 @@ it.each(["legacy", "unrelated"] as const)("handles %s gh job-log errors", (outco
     return;
   }
 
-  expect(result.stderr).toBe(
-    outcome === "legacy"
-      ? "unknown flag: --allow-escape-sequences\r\n\r\nUsage: gh api <endpoint> [flags]\r\n"
-      : "",
-  );
-  expect(result.status).toBe(0);
-  expect(result.stdout).toBe(
-    `authorized beta focused evidence verified for ${policy.releaseTag} at ${policy.candidateSha}\n`,
-  );
-  expect(calls).toEqual(
-    outcome === "legacy"
-      ? [flaggedCiLogArgs, ciLogArgs, flaggedPluginLogArgs]
-      : [flaggedCiLogArgs, flaggedPluginLogArgs],
-  );
+  expect(result).toMatchObject({
+    stderr: "unknown flag: --allow-escape-sequences\r\n\r\nUsage: gh api <endpoint> [flags]\r\n",
+    status: 0,
+    stdout: `authorized beta focused evidence verified for ${policy.releaseTag} at ${policy.candidateSha}\n`,
+  });
+  expect(calls).toEqual([flaggedCiLogArgs, ciLogArgs, flaggedPluginLogArgs]);
 });
 
 it("binds the direct-child tree, exact diff, and unchanged published projection", () => {
@@ -730,11 +691,13 @@ it("verifies the policy candidate when the release checkout has diverged", () =>
     { mode: 0o755 },
   );
   const verifierArgs = ["--artifact", join(root, "evidence.json"), ...producerArgs()];
-  const direct = spawnSync(
-    process.execPath,
-    [staged.validatorPath, "verify", "--candidate-root", root, ...verifierArgs],
-    { encoding: "utf8" },
-  );
+  const direct = runNode([
+    staged.validatorPath,
+    "verify",
+    "--candidate-root",
+    root,
+    ...verifierArgs,
+  ]);
   expect(direct.status).toBe(1);
   expect(direct.stderr).toContain(
     `candidate checkout must be ${policy.candidateSha}, got ${releaseSha}`,
@@ -931,12 +894,11 @@ it("wires a no-input attested producer and explicit parent/child evidence mode",
       "validate-full-release-validation-evidence.mjs",
     ]);
   }
-  const parentSource = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
-  expect(parentSource).toContain('proof_label="authorized beta focused validation"');
-  expect(parentSource).toContain('proof_run_id="${FOCUSED_RELEASE_EVIDENCE_RUN_ID}"');
-  expect(parentSource).toContain(
+  expectContains(readFileSync("scripts/lib/release-publish-children.sh", "utf8"), [
+    'proof_label="authorized beta focused validation"',
+    'proof_run_id="${FOCUSED_RELEASE_EVIDENCE_RUN_ID}"',
     "${process.env.RELEASE_VALIDATION_LABEL}: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_VALIDATION_RUN_ID}",
-  );
+  ]);
   const toolingCheckout = namedStep(
     parentWorkflow,
     "resolve_release_target",

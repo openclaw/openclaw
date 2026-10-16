@@ -21,8 +21,7 @@ const testNodeExecPath = resolveTestNodeExecPath();
 const benchmarkUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.benchCli);
 const benchmarkArgs = resolveRuntimeWorkerArgv(benchmarkUrl, testNodeExecPath);
 
-type SuiteResult = Parameters<typeof testing.collectFailedSamples>[0];
-type CaseResult = SuiteResult["cases"][number];
+type CaseResult = Parameters<typeof testing.collectFailedSamples>[0]["cases"][number];
 type CliSample = CaseResult["samples"][number];
 
 const stats = (value: number) => ({ avg: value, p50: value, p95: value, min: value, max: value });
@@ -31,8 +30,8 @@ function cliSample(overrides: Partial<CliSample> = {}): CliSample {
   return { ms: 10, firstOutputMs: 5, maxRssMb: 50, exitCode: 0, signal: null, ...overrides };
 }
 
-function failures(overrides: Partial<CaseResult> = {}, entry = "openclaw.mjs") {
-  return testing.collectFailedSamples({
+const failures = (overrides: Partial<CaseResult> = {}, entry = "openclaw.mjs") =>
+  testing.collectFailedSamples({
     entry,
     cases: [
       {
@@ -52,7 +51,6 @@ function failures(overrides: Partial<CaseResult> = {}, entry = "openclaw.mjs") {
       },
     ],
   });
-}
 
 function runBenchmarkCli(
   args: string[],
@@ -74,8 +72,7 @@ function sampleArgs(entry: string, caseId = "version") {
 
 function expectCliRejection(args: string[], error: string) {
   const result = runBenchmarkCli(args);
-  expect(result.status).toBe(1);
-  expect(result.stdout).toBe("");
+  expect(result).toMatchObject({ status: 1, stdout: "" });
   expect(result.stderr.trim()).toBe(error);
   expect(result.stderr).not.toContain("Node.js");
   expect(result.stderr).not.toContain("\n    at ");
@@ -92,12 +89,10 @@ function transportEnv(root: string, prefix: string, env = {}) {
   };
 }
 
-function configFixture(id: string) {
-  return testing.buildConfigFixture({ id, name: id, args: [], presets: [] });
-}
+const configFixture = (id: string) =>
+  testing.buildConfigFixture({ id, name: id, args: [], presets: [] });
 
-// The synchronous driver cannot retain product-owned ChildProcess handles. Rescue
-// SIGKILL starts termination, so foreign-PID extinction still needs observation.
+// Synchronous drivers lack child handles; SIGKILL still needs observed process extinction.
 async function waitForBenchmarkExit(pid: number, signal: AbortSignal) {
   while (isProcessAlive(pid)) {
     await delay(5, undefined, { signal }).catch((cause: unknown) => {
@@ -185,10 +180,9 @@ throw new Error("SUT prefix must not launch");`,
     ["--runtime-rss", "--entry", join(root, "missing-entry.mjs")],
     transportEnv(root, prefix),
   );
-  expect(result.status).toBe(1);
+  expect(result).toMatchObject({ status: 1, stdout: "" });
   expect(existsSync(witness)).toBe(false);
   expect(result.stderr.trim()).toBe("Cross-user runtime RSS sampling is not supported");
-  expect(result.stdout).toBe("");
 });
 
 it("selects the same runtime when its launcher exits first", () => {
@@ -196,8 +190,7 @@ it("selects the same runtime when its launcher exits first", () => {
   const entryPath = join(tmpDir, "entry.mjs");
   writeFileSync(
     entryPath,
-    `
-import { fork } from "node:child_process";
+    `import { fork } from "node:child_process";
 const runtime = process.env.FIXTURE_RUNTIME === "1";
 const usage = process.resourceUsage();
 process.resourceUsage = () => ({ ...usage, maxRSS: (runtime ? 32 : 64) * 1024 });
@@ -217,9 +210,8 @@ if (runtime) {
   expect(result.status, result.stderr).toBe(0);
   const sample = JSON.parse(result.stdout).primary.cases[0].samples[0];
   expect(sample.maxRssMb).toBe(32);
-  expect(sample.memory.processes.map((record: { role: string }) => record.role).toSorted()).toEqual(
-    ["launcher", "runtime"],
-  );
+  const roles = sample.memory.processes.map((record: { role: string }) => record.role);
+  expect(roles.toSorted()).toEqual(["launcher", "runtime"]);
 });
 
 it("rejects unknown CLI options before running benchmarks", () => {
@@ -250,13 +242,11 @@ it.runIf(process.platform !== "win32")(
     try {
       writeFileSync(
         entryPath,
-        `
-import { spawn } from "node:child_process";
+        `import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 process.on("SIGTERM", () => process.exit(0));
 writeFileSync(${JSON.stringify(leaderPidPath)}, String(process.pid));
-spawn(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(`
-import { writeFileSync } from "node:fs";
+spawn(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(`import { writeFileSync } from "node:fs";
 process.on("SIGTERM", () => writeFileSync(${JSON.stringify(childTermPath)}, String(process.pid)));
 writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));
 setInterval(() => {}, 1000);
@@ -272,8 +262,7 @@ setInterval(() => {}, 1000);
         [
           "--input-type=module",
           "-e",
-          `
-import assert from "node:assert/strict";
+          `import assert from "node:assert/strict";
 import { mock } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -320,11 +309,8 @@ try {
         benchmarkArgs.slice(0, -1),
       );
 
-      expect([result.error, result.status, result.signal], result.stderr).toEqual([
-        undefined,
-        1,
-        null,
-      ]);
+      const outcome = [result.error, result.status, result.signal];
+      expect(outcome, result.stderr).toEqual([undefined, 1, null]);
       expect(result.stderr).toContain("version sample 1: timed out");
       expect(JSON.parse(result.stdout).primary.cases[0].samples).toMatchObject([
         { timedOut: true, exitCode: 0, signal: null },
@@ -405,15 +391,13 @@ it("rejects invalid measured run counts", () => {
   }
 });
 
-it("writes a config fixture for config get benchmarks", () => {
-  for (const id of ["configGetGatewayPort", "gatewayHealthJson", "health", "healthJson"]) {
+it.each([
+  ["none", ["configGetGatewayPort", "gatewayHealthJson", "health", "healthJson"]],
+  ["token", ["gatewayHealthJsonWarmState", "gatewayHealthJsonFreshState"]],
+] as const)("writes %s-auth config fixtures", (mode, ids) => {
+  for (const id of ids) {
     expect(withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () => configFixture(id))).toEqual({
-      gateway: { auth: { mode: "none" }, bind: "loopback", mode: "local", port: 32123 },
-    });
-  }
-  for (const id of ["gatewayHealthJsonWarmState", "gatewayHealthJsonFreshState"]) {
-    expect(withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () => configFixture(id))).toEqual({
-      gateway: { auth: { mode: "token" }, bind: "loopback", mode: "local", port: 32123 },
+      gateway: { auth: { mode }, bind: "loopback", mode: "local", port: 32123 },
     });
   }
 });

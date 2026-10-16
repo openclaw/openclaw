@@ -4,32 +4,25 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import * as apple from "../../scripts/apple-app-i18n.ts";
-import {
-  type NativeI18nInventoryEntry,
-  parseNativeI18nInventory,
-} from "../../scripts/native-i18n-inventory.ts";
+import { parseNativeI18nInventory } from "../../scripts/native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 
 const readInventory = async () =>
   parseNativeI18nInventory(await readFile("apps/.i18n/native-source.json", "utf8"));
+type Entry = Parameters<typeof apple.buildIosCatalog>[1][number];
 const emptyCatalog = { sourceLanguage: "en", strings: {}, version: "1.0" };
 const unit = (value: string, state = "translated") => ({ stringUnit: { state, value } });
-const cameraSource = "Camera";
-const cameraTranslation = "Caméra";
+const [cameraSource, cameraTranslation] = ["Camera", "Caméra"];
 const site = (kind: string, platform: "ios" | "macos") => ({
   kind,
   path: `apps/${platform}/Sources/${platform === "macos" ? "OpenClaw/" : ""}Example.swift`,
 });
-const makeEntry = (
-  id: string,
-  source: string,
-  sites: NativeI18nInventoryEntry["sites"],
-): NativeI18nInventoryEntry => ({ id: `native.apple.${id}`, source, surface: "apple", sites });
-const artifact = (translations: Record<string, string>) => ({
-  version: 2,
-  locale: "fr",
-  translations,
-});
+function makeEntry(id: string, source: string, sites: Entry["sites"]): Entry {
+  return { id: `native.apple.${id}`, source, surface: "apple", sites };
+}
+function artifact(translations: Record<string, string>) {
+  return { version: 2, locale: "fr", translations };
+}
 
 const probe = vi.hoisted(() => ({
   source: "",
@@ -97,11 +90,10 @@ it("verification and compile-macos reject raw macOS interpolation and retain sha
 });
 
 it("derives shared discovery status coverage into the iOS catalog", async () => {
-  expect(
-    Object.keys(
-      apple.buildIosCatalog(emptyCatalog, await readInventory(), []).catalog.strings ?? {},
-    ),
-  ).toEqual(expect.arrayContaining(["Searching…", "Stopped", "Waiting"]));
+  const { catalog } = apple.buildIosCatalog(emptyCatalog, await readInventory(), []);
+  expect(Object.keys(catalog.strings ?? {})).toEqual(
+    expect.arrayContaining(["Searching…", "Stopped", "Waiting"]),
+  );
 });
 
 it("warns only when obsolete Apple keys are the entire catalog drift", async () => {
@@ -122,7 +114,6 @@ it("warns only when obsolete Apple keys are the entire catalog drift", async () 
     }),
   );
   try {
-    // Source PRs can await generation; keep this fixture's active resources current.
     for (const { filePath, catalog } of catalogs) {
       probe.catalogs.set(filePath, apple.serializeAppleCatalog(catalog));
     }
@@ -197,7 +188,7 @@ it("warns only when obsolete Apple keys are the entire catalog drift", async () 
 });
 
 it("routes merged sites by coupled path and kind while preserving shipped translations", () => {
-  const coveredMacosEntries: NativeI18nInventoryEntry[] = [
+  const coveredMacosEntries: Entry[] = [
     "ui-call-concatenated",
     "ui-localized-call-concatenated",
     "ui-modifier-concatenated",
@@ -206,7 +197,7 @@ it("routes merged sites by coupled path and kind while preserving shipped transl
   ].map((kind, index) =>
     makeEntry(`concatenated.${index}`, `Concatenated ${index}`, [site(kind, "macos")]),
   );
-  const inventory: NativeI18nInventoryEntry[] = [
+  const inventory: Entry[] = [
     makeEntry("connect", "Connect now", [site("ui-call", "ios"), site("ui-call", "macos")]),
     makeEntry("decoy", "Do not catalog", [
       { kind: "plist-string", path: "apps/ios/Sources/Info.plist" },
@@ -226,12 +217,10 @@ it("routes merged sites by coupled path and kind while preserving shipped transl
 
   const localized = ios.catalog.strings?.["Connect now"]?.localizations;
   expect(localized?.de?.stringUnit?.value).toBe("Jetzt verbinden");
-  for (const [locale, value, state] of [
-    ["fr", "Se connecter", "translated"],
-    ["es", "Connect now", "new"],
-  ]) {
-    expect(localized?.[locale]?.stringUnit).toEqual(unit(value, state).stringUnit);
-  }
+  expect([localized?.fr?.stringUnit, localized?.es?.stringUnit]).toEqual([
+    unit("Se connecter").stringUnit,
+    unit("Connect now", "new").stringUnit,
+  ]);
   expect(ios.catalog.strings?.["Do not catalog"]).toBeUndefined();
   expect(macos.catalog.strings?.["Connect now"]).toBeDefined();
   expect(Object.keys(macos.catalog.strings ?? {})).toEqual(
@@ -242,7 +231,8 @@ it("routes merged sites by coupled path and kind while preserving shipped transl
 });
 
 it("rejects interpolated runtime copy across every supported Swift syntax", () => {
-  const source = String.raw`
+  expect(
+    apple.findAmbiguousRuntimeInterpolations(String.raw`
       let key = LocalizedStringKey("Hello \(name)")
       let detail = String(localized: """
         Welcome \(name)
@@ -254,9 +244,8 @@ it("rejects interpolated runtime copy across every supported Swift syntax", () =
       view.accessibilityHint("""
         Select \(item)
         """)
-    `;
-
-  expect(apple.findAmbiguousRuntimeInterpolations(source)).toEqual([
+    `),
+  ).toEqual([
     "interpolated localized resource",
     "interpolated multiline localized resource",
     "interpolated SwiftUI text literal",
@@ -270,14 +259,11 @@ it.each<[string, string[], string, string, string]>([
   ["Share", [], "Share", "Partager", "Partager"],
   [cameraSource, [cameraSource], cameraSource, cameraTranslation, cameraTranslation],
   ["Video camera", [], cameraSource, cameraTranslation, "Video camera"],
-])(
-  "refreshes InfoPlist copy from translations for %s",
-  (source, candidates, previous, value, expected) => {
-    expect(apple.selectInfoPlistTranslation(source, candidates, { source: previous, value })).toBe(
-      expected,
-    );
-  },
-);
+])("refreshes InfoPlist %s", (source, candidates, old, value, expected) => {
+  expect(apple.selectInfoPlistTranslation(source, candidates, { source: old, value })).toBe(
+    expected,
+  );
+});
 
 it("selects InfoPlist candidates by stable ID instead of shared source text", () => {
   const translations = artifact({

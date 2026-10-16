@@ -143,9 +143,7 @@ function barnacleGithub(
         removeLabel: async (params: { issue_number: number; name: string }) => {
           calls.removeLabel.push(params);
           if (removeLabelNotFound.has(params.name)) {
-            const error = new Error("not found") as Error & { status: number };
-            error.status = 404;
-            throw error;
+            throw Object.assign(new Error("not found"), { status: 404 });
           }
         },
         update: record(calls.update),
@@ -163,9 +161,7 @@ function barnacleGithub(
           if (maintainerLogins.has(username.toLowerCase())) {
             return { data: { state: "active" } };
           }
-          const error = new Error("not found") as Error & { status: number };
-          error.status = 404;
-          throw error;
+          throw Object.assign(new Error("not found"), { status: 404 });
         },
       },
     },
