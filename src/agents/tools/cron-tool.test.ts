@@ -959,4 +959,3 @@ it.each([
   await expect(executeCron(updateJob(id, { payload }), options)).rejects.toThrow(error);
   expect(expectSingleCall("cron.get")).toEqual({ id });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
