@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, afterAll, beforeAll, beforeEach, vi } from "vitest";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import type { OpenRetainedKeyedStoreOptions } from "../plugin-sdk/plugin-state-runtime.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -22,6 +23,16 @@ import {
   seedPluginStateEntriesForTests,
   clearPluginStateStoreForTests,
 } from "./plugin-state-store.test-helpers.js";
+
+const moveFault = useSqliteWorkerFault([
+  {
+    name: "fail_last_retained_move",
+    match: /^delete from plugin_state_entries\b/u,
+    sql: `CREATE TEMP TRIGGER fail_last_retained_move BEFORE DELETE ON main.plugin_state_entries
+      WHEN OLD.plugin_id = 'retained-storage-test' AND OLD.namespace = 'history' AND OLD.entry_key = '64'
+      BEGIN SELECT RAISE(ABORT, 'synthetic retained move failure'); END;`,
+  },
+]);
 
 describe("plugin-state-store.retained", () => {
   const pluginId = "retained-storage-test";
@@ -210,11 +221,6 @@ describe("plugin-state-store.retained", () => {
           )
           .all(pluginId);
         expect(before).toHaveLength(67);
-        openOpenClawStateDatabase().db.exec(`
-          CREATE TRIGGER fail_last_retained_move BEFORE DELETE ON plugin_state_entries
-          WHEN OLD.plugin_id = 'retained-storage-test' AND OLD.namespace = 'history' AND OLD.entry_key = '64'
-          BEGIN SELECT RAISE(ABORT, 'synthetic retained move failure'); END;
-        `);
         await closeOpenClawStateDatabaseAsync();
         const source = createPluginStateKeyedStore<{ id: number }>(pluginId, {
           namespace: "history",
@@ -230,9 +236,12 @@ describe("plugin-state-store.retained", () => {
         });
         try {
           const move = { namespace: "history", entries };
+          moveFault.enable();
           await expect(retained.moveEntriesFrom(move)).rejects.toMatchObject({
             code: "PLUGIN_STATE_WRITE_FAILED",
+            cause: { message: "synthetic retained move failure" },
           });
+          moveFault.disable();
           expect(commits).toBe(0);
           await closeOpenClawStateDatabaseAsync();
           expect(
@@ -242,7 +251,6 @@ describe("plugin-state-store.retained", () => {
               )
               .all(pluginId),
           ).toEqual(before);
-          openOpenClawStateDatabase().db.exec("DROP TRIGGER fail_last_retained_move");
           await closeOpenClawStateDatabaseAsync();
 
           expect(await source.lookup("0")).toEqual({ id: 0 });
@@ -269,6 +277,7 @@ describe("plugin-state-store.retained", () => {
             })),
           ]);
         } finally {
+          moveFault.disable();
           stop();
         }
       });

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -35,6 +36,16 @@ import {
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
+
+const receiptFault = useSqliteWorkerFault([
+  {
+    name: "fail_receipt_batch",
+    match: /^delete from github_personal_publication_requests\b/u,
+    sql: `CREATE TEMP TRIGGER fail_receipt_batch BEFORE DELETE ON main.github_personal_publication_requests
+      WHEN OLD.request_id = '00000000-0000-4000-8000-000000000064'
+      BEGIN SELECT RAISE(ABORT, 'synthetic receipt deletion failure'); END;`,
+  },
+]);
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterAll(cleanup));
 
@@ -276,9 +287,9 @@ describe("retained publication lifecycle authority", () => {
     openOpenClawStateDatabase();
     lifecycleContext = captureOpenClawStateWorkerContext();
     const selected = Array.from({ length: 65 }, (_, index) =>
-      personalRow(`batch-delete-${String(index).padStart(3, "0")}`),
+      personalRow(`00000000-0000-4000-8000-${String(index).padStart(12, "0")}`),
     );
-    const retained = personalRow("batch-retained");
+    const retained = personalRow(randomUUID());
     runOpenClawStateWriteTransaction((database) => {
       for (const row of [...selected, retained]) {
         insertPersonalGitHubPublicationInDatabase(
@@ -295,11 +306,6 @@ describe("retained publication lifecycle authority", () => {
         lifecycleRevision: "shared-revision",
         requester,
       });
-      database.db.exec(`
-        CREATE TRIGGER fail_receipt_batch BEFORE DELETE ON github_personal_publication_requests
-        WHEN OLD.request_id = 'batch-delete-064'
-        BEGIN SELECT RAISE(ABORT, 'synthetic receipt deletion failure'); END;
-      `);
     });
     await closeOpenClawStateDatabaseByPathAsync(databasePath);
     lifecycleContext = captureOpenClawStateWorkerContext();
@@ -321,24 +327,25 @@ describe("retained publication lifecycle authority", () => {
         agentId: "main",
         generations,
       });
+      receiptFault.enable();
       await expect(remove()).rejects.toThrow("synthetic receipt deletion failure");
+      receiptFault.disable();
       expect(installed.size).toBe(0);
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
       const { db } = openOpenClawStateDatabase();
       expect(
         db
           .prepare(`SELECT request_id FROM github_personal_publication_requests
-          WHERE request_id LIKE 'batch-delete-%' ORDER BY request_id`)
+          WHERE request_id LIKE '00000000-0000-4000-8000-%' ORDER BY request_id`)
           .all(),
       ).toEqual(selected.map((row) => ({ request_id: row.request_id })));
       expect(
         db
           .prepare(`SELECT request_id FROM github_publication_session_lifecycles
-          WHERE publication_kind = 'personal' AND request_id LIKE 'batch-delete-%'
+          WHERE publication_kind = 'personal' AND request_id LIKE '00000000-0000-4000-8000-%'
           ORDER BY request_id`)
           .all(),
       ).toEqual(selected.map((row) => ({ request_id: row.request_id })));
-      db.exec("DROP TRIGGER fail_receipt_batch");
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
       lifecycleContext = captureOpenClawStateWorkerContext();
       const retry = await preparePersonalGitHubSessionReceiptDeletion({
@@ -357,13 +364,13 @@ describe("retained publication lifecycle authority", () => {
       expect(
         reopened
           .prepare(`SELECT count(*) AS count FROM github_personal_publication_requests
-          WHERE request_id LIKE 'batch-delete-%'`)
+          WHERE request_id LIKE '00000000-0000-4000-8000-%'`)
           .get(),
       ).toEqual({ count: 0 });
       expect(
         reopened
           .prepare(`SELECT count(*) AS count FROM github_publication_session_lifecycles
-          WHERE publication_kind = 'personal' AND request_id LIKE 'batch-delete-%'`)
+          WHERE publication_kind = 'personal' AND request_id LIKE '00000000-0000-4000-8000-%'`)
           .get(),
       ).toEqual({ count: 0 });
       expect(
@@ -381,9 +388,9 @@ describe("retained publication lifecycle authority", () => {
         )?.lifecycle_revision,
       ).toBe("shared-revision");
     } finally {
+      receiptFault.disable();
       unsubscribe();
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
-      openOpenClawStateDatabase().db.exec("DROP TRIGGER IF EXISTS fail_receipt_batch");
       lifecycleContext = captureOpenClawStateWorkerContext();
     }
   });

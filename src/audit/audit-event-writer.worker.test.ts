@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
@@ -28,6 +29,15 @@ import {
   persistExecutionIdentityAdmissionEnvelope,
 } from "./execution-identity.test-support.js";
 import { recordOutboundMessageProgressInDatabase } from "./message-delivery-progress-store.js";
+
+const pruneFault = useSqliteWorkerFault([
+  {
+    name: "fail_audit_identity_prune",
+    match: /^delete from execution_identity_contexts\b/u,
+    sql: `CREATE TEMP TRIGGER fail_audit_identity_prune BEFORE DELETE ON main.execution_identity_contexts
+      BEGIN SELECT RAISE(ABORT, 'synthetic identity prune failure'); END;`,
+  },
+]);
 
 let restoreConstructor: (() => void) | undefined;
 afterEach(async () => {
@@ -215,12 +225,9 @@ describe("audit writer shared worker", () => {
     } finally {
       clock.mockRestore();
     }
-    options.database.db.exec(`
-      CREATE TRIGGER fail_audit_identity_prune BEFORE DELETE ON execution_identity_contexts
-      BEGIN SELECT RAISE(ABORT, 'synthetic identity prune failure'); END;
-    `);
     await closeOpenClawStateDatabaseAsync();
 
+    pruneFault.enable();
     expect(
       await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(database), {
         type: "audit.writer.prune",
@@ -232,6 +239,7 @@ describe("audit writer shared worker", () => {
       { status: "settled", deleted: 1 },
       { status: "settled", deleted: 1 },
     ]);
+    pruneFault.disable();
     await closeOpenClawStateDatabaseAsync();
     expect(
       openOpenClawStateDatabase(database)
