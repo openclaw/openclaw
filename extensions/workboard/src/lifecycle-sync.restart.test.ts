@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { createWorkboardLifecycleService, syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
-import { createDeferred } from "./lifecycle-sync.test-support.js";
+import { createDeferred, createLinkedCard } from "./lifecycle-sync.test-support.js";
 import { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteTestHarness, sqliteTestAuxStores } from "./test/sqlite-store.js";
 
@@ -88,6 +88,51 @@ async function cleanupInterruptedDispatch(
 }
 
 describe("Workboard prepared launch restart recovery", () => {
+  it("bounds orphan recovery searches and advances past unmatched cards on later sweeps", async () => {
+    const { store } = createWorkboardSqliteTestHarness();
+    for (let index = 0; index < 40; index += 1) {
+      await createLinkedCard(store, { sessionKey: `subagent:workboard-orphan-${index}` });
+    }
+    const exactKey = "agent:main:dashboard:bounded-recovery";
+    const exact = await createLinkedCard(store, { sessionKey: exactKey });
+    const searches: string[] = [];
+    const readSessions: Parameters<
+      typeof createWorkboardLifecycleService
+    >[0]["readSessions"] = async ({ search }) => {
+      if (search !== undefined) {
+        searches.push(search);
+        return { sessions: [], complete: true };
+      }
+      return {
+        sessions: [{ key: exactKey, status: "done", updatedAt: exact.updatedAt + 1 }],
+        complete: false,
+      };
+    };
+    const service = createWorkboardLifecycleService({ store, readSessions });
+    const runOperation = vi.spyOn(store, "runOperation");
+    const warn = vi.fn();
+    vi.useFakeTimers();
+    try {
+      await service.start({ logger: { warn } } as never);
+      service.onGatewayStart();
+      await runOperation.mock.results[0]?.value;
+      expect(searches).toHaveLength(32);
+      expect((await store.get(exact.id))?.status).toBe("review");
+
+      runOperation.mockClear();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await runOperation.mock.results[0]?.value;
+      expect(searches).toHaveLength(64);
+      expect(new Set(searches).size).toBe(40);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      service.onGatewayStop();
+      await runOperation.mock.results[0]?.value;
+      runOperation.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { prepared: true, complete: true, exact: false },
     { prepared: false, complete: true, exact: false },

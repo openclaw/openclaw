@@ -22,6 +22,7 @@ const WORKBOARD_LIFECYCLE_SWEEP_MS = 60_000;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 const WORKBOARD_SESSION_SWEEP_LIMIT = 10_000;
 const WORKBOARD_SESSION_PAGE_SIZE = 200;
+const WORKBOARD_SESSION_RECOVERY_SWEEP_LIMIT = 32;
 const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
 // Prepared hook generations share the active service reader, never a worker's
 // caller authority. Gateway restart clears both readiness and that reader.
@@ -283,8 +284,12 @@ async function syncWorkboardLifecycleSessions(params: {
   complete?: boolean;
   now?: number;
   onMatched?: WorkboardLifecycleMatchHandler;
-  readSessions?: WorkboardLifecycleSessionReader;
-}): Promise<number> {
+  recovery?: {
+    readSessions: WorkboardLifecycleSessionReader;
+    remaining: number;
+    nextOffset: number;
+  };
+}): Promise<void> {
   const now = params.now ?? Date.now();
   const sessionsByKey = new Map<string, WorkboardLifecycleSession>();
   const sessionsByWorkboardSuffix = new Map<string, WorkboardLifecycleSession>();
@@ -303,8 +308,8 @@ async function syncWorkboardLifecycleSessions(params: {
       }
     }
   }
-  let count = 0;
-  for (const card of params.cards ?? (await params.store.list())) {
+  const cards = params.cards ?? (await params.store.list());
+  for (const [index, card] of cards.entries()) {
     if (card.metadata?.archivedAt) {
       continue;
     }
@@ -338,15 +343,20 @@ async function syncWorkboardLifecycleSessions(params: {
       (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt);
     if (
       !params.complete &&
-      params.readSessions &&
+      params.recovery &&
       ((!exactSession && canMatchSuffix) || preparedNeedsRecovery)
     ) {
       // Moving pages cannot establish absence or a unique cross-agent suffix.
-      const snapshot = await params.readSessions({
+      if (params.recovery.remaining === 0) {
+        continue;
+      }
+      params.recovery.remaining -= 1;
+      params.recovery.nextOffset = index + 1;
+      const snapshot = await params.recovery.readSessions({
         includeUnknown: linkedSessionKey === "unknown",
         search: canMatchSuffix ? lookupKey.slice(suffixIndex) : lookupKey,
       });
-      count += await syncWorkboardLifecycleSessions({
+      await syncWorkboardLifecycleSessions({
         store: params.store,
         cards: [card],
         ...snapshot,
@@ -356,15 +366,12 @@ async function syncWorkboardLifecycleSessions(params: {
       continue;
     }
     if (preparedNeedsRecovery) {
-      if (
-        params.complete &&
-        (await params.store.failPreparedLaunch(card.id, {
+      if (params.complete) {
+        await params.store.failPreparedLaunch(card.id, {
           expectedLaunch: launch,
           reason: "Gateway did not accept the prepared Workboard session before restart.",
           failedAt: now,
-        }))
-      ) {
-        count += 1;
+        });
       }
       continue;
     }
@@ -386,13 +393,11 @@ async function syncWorkboardLifecycleSessions(params: {
         },
       })
     ) {
-      count += 1;
       if (observation.state === "succeeded" || observation.state === "failed") {
         await params.onMatched?.({ cards: [card], sessionKey: session.key });
       }
     }
   }
-  return count;
 }
 
 function normalizeSession(value: unknown): WorkboardLifecycleSession | undefined {
@@ -511,6 +516,7 @@ export function createWorkboardLifecycleService(params: {
   let begin: (() => void) | undefined;
   let removeDrainListener: (() => void) | undefined;
   let cleanupCursor = 0;
+  let recoveryCursor = 0;
   let serviceReader: WorkboardLifecycleSessionReader | undefined;
   const cleanupWorktrees = async (
     cards: readonly WorkboardCard[],
@@ -617,14 +623,29 @@ export function createWorkboardLifecycleService(params: {
                   const exact = await params.readSessions({ includeUnknown: false, sessionKey });
                   snapshot.sessions.push(...exact.sessions);
                 }
-                await syncWorkboardLifecycleSessions({
-                  store: params.store,
-                  cards: lifecycleCards,
-                  ...snapshot,
-                  now: params.now?.() ?? Date.now(),
-                  onMatched,
+                const recoveryStart = recoveryCursor % lifecycleCards.length;
+                const recovery = {
                   readSessions: params.readSessions,
-                });
+                  remaining: WORKBOARD_SESSION_RECOVERY_SWEEP_LIMIT,
+                  nextOffset: 0,
+                };
+                try {
+                  await syncWorkboardLifecycleSessions({
+                    store: params.store,
+                    cards: [
+                      ...lifecycleCards.slice(recoveryStart),
+                      ...lifecycleCards.slice(0, recoveryStart),
+                    ],
+                    ...snapshot,
+                    now: params.now?.() ?? Date.now(),
+                    onMatched,
+                    recovery,
+                  });
+                } finally {
+                  // Rotate past attempted lookups, including failures, so orphaned
+                  // cards cannot monopolize the next sweep's recovery budget.
+                  recoveryCursor = recoveryStart + recovery.nextOffset;
+                }
                 cards = await params.store.list();
               } catch (error) {
                 if (generation === owner) {
