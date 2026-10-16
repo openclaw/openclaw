@@ -34,77 +34,55 @@ async function collect<T>(values: AsyncIterable<T>): Promise<T[]> {
 
 describe("Codex app-server binding reads", () => {
   it.each([
-    {
-      changed: "thread",
-      threadId: "thread-new",
-      clientId: "client-old",
-      initialClientId: "client-old",
-    },
-    {
-      changed: "physical client",
-      threadId: "thread-old",
-      clientId: "client-new",
-      initialClientId: "client-old",
-    },
-    {
-      changed: "previously absent client",
-      threadId: "thread-old",
-      clientId: "client-new",
-      initialClientId: undefined,
-    },
-  ])("keeps a replacement $changed when stale mutations complete later", async (successorOwner) => {
-    const state = createCodexTestBindingStateStore();
-    const store = createCodexAppServerBindingStore(state);
-    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
-    const original = {
-      threadId: "thread-old",
-      clientId: successorOwner.initialClientId,
-      cwd: "/repo",
-    };
-    const successor = {
-      threadId: successorOwner.threadId,
-      clientId: successorOwner.clientId,
-      cwd: "/repo",
-    };
-    await store.mutate(identity, {
-      kind: "set",
-      binding: original,
-    });
-    await expect(
-      store.mutate(identity, {
-        kind: "patch",
+    ["thread", "thread-new", "client-old", "client-old"],
+    ["physical client", "thread-old", "client-new", "client-old"],
+    ["previously absent client", "thread-old", "client-new", undefined],
+  ] as const)(
+    "keeps a replacement %s when stale mutations complete later",
+    async (_, threadId, clientId, initialClientId) => {
+      const state = createCodexTestBindingStateStore();
+      const store = createCodexAppServerBindingStore(state);
+      const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
+      const original = {
+        threadId: "thread-old",
+        clientId: initialClientId,
+        cwd: "/repo",
+      };
+      const successor = { ...original, threadId, clientId };
+      await store.mutate(identity, { kind: "set", binding: original });
+      await expect(
+        store.mutate(identity, {
+          kind: "patch",
+          threadId: original.threadId,
+          clientId: original.clientId,
+          patch: { cwd: original.cwd },
+        }),
+      ).resolves.toBe(true);
+      await store.mutate(identity, { kind: "set", binding: successor });
+
+      const staleOwner = {
+        kind: "clear" as const,
         threadId: original.threadId,
         clientId: original.clientId,
-        patch: { cwd: original.cwd },
-      }),
-    ).resolves.toBe(true);
-    await store.mutate(identity, {
-      kind: "set",
-      binding: successor,
-    });
-
-    const stalePatch = {
-      kind: "patch" as const,
-      threadId: original.threadId,
-      clientId: original.clientId,
-      patch: { model: "must-not-publish" },
-    };
-    const staleClear = {
-      kind: "clear" as const,
-      threadId: original.threadId,
-      clientId: original.clientId,
-    };
-    await expect(store.mutate(identity, stalePatch)).resolves.toBe(false);
-    await expect(store.mutate(identity, staleClear)).resolves.toBe(false);
-    expect(store.read(identity)).toEqual(successor);
-    const currentClear = {
-      kind: "clear" as const,
-      threadId: successor.threadId,
-      clientId: successor.clientId,
-    };
-    await expect(store.mutate(identity, currentClear)).resolves.toBe(true);
-    expect(store.read(identity)).toBeUndefined();
-  });
+      };
+      await expect(
+        store.mutate(identity, {
+          ...staleOwner,
+          kind: "patch",
+          patch: { model: "must-not-publish" },
+        }),
+      ).resolves.toBe(false);
+      await expect(store.mutate(identity, staleOwner)).resolves.toBe(false);
+      expect(store.read(identity)).toEqual(successor);
+      const currentClear = {
+        kind: "clear" as const,
+        threadId: successor.threadId,
+        clientId: successor.clientId,
+      };
+      await expect(store.mutate(identity, currentClear)).resolves.toBe(true);
+      expect(store.read(identity)).toBeUndefined();
+    },
+  );
 
   it("rechecks physical ownership after a worker comparison loses to a same-thread successor", async () => {
     const fixture = await createOpenClawTestState({
@@ -475,6 +453,11 @@ describe("Codex app-server binding codec", () => {
       });
       const store = createCodexAppServerBindingStore(state);
       const identity = { kind: "conversation" as const, bindingId: "binding-json" };
+      const contextEngine = {
+        schemaVersion: 1 as const,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-1",
+      };
 
       await expect(
         store.mutate(identity, {
@@ -483,12 +466,7 @@ describe("Codex app-server binding codec", () => {
             threadId: "thread-json",
             cwd: "/repo",
             model: undefined,
-            contextEngine: {
-              schemaVersion: 1,
-              engineId: "lossless-claw",
-              policyFingerprint: "policy-1",
-              projection: undefined,
-            },
+            contextEngine: { ...contextEngine, projection: undefined },
           },
         }),
       ).resolves.toBe(true);
@@ -498,11 +476,7 @@ describe("Codex app-server binding codec", () => {
         binding: {
           threadId: "thread-json",
           cwd: "/repo",
-          contextEngine: {
-            schemaVersion: 1,
-            engineId: "lossless-claw",
-            policyFingerprint: "policy-1",
-          },
+          contextEngine,
         },
       });
 

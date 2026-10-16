@@ -1,4 +1,3 @@
-// Codex tests cover schema normalization runtime contract plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,12 +17,6 @@ import {
   createAppServerOptions as createBaseAppServerOptions,
   startOrResumeThreadWithEmptySkillCatalog as startOrResumeThreadImpl,
 } from "./thread-lifecycle.test-fixtures.js";
-
-function startOrResumeThread(
-  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
-) {
-  return startOrResumeThreadImpl({ ...params, bindingStore });
-}
 
 let tempDir: string;
 let bindingStore: ReturnType<typeof createCodexTestBindingStore>;
@@ -49,13 +42,6 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
   } as EmbeddedRunAttemptParams;
 }
 
-function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["appServer"] {
-  return {
-    ...createBaseAppServerOptions(),
-    connectionClass: "local-loopback",
-  };
-}
-
 function threadStartResult(threadId = "thread-1", serviceTier: string | null = null) {
   const result = nativeThreadStartResult(threadId, tempDir);
   return {
@@ -64,6 +50,33 @@ function threadStartResult(threadId = "thread-1", serviceTier: string | null = n
     model: "gpt-5.4",
     serviceTier,
   };
+}
+
+function createRun(result = () => threadStartResult()) {
+  const workspaceDir = path.join(tempDir, "workspace");
+  const appServer = { ...createBaseAppServerOptions(), connectionClass: "local-loopback" as const };
+  const request = vi.fn(async (method: string, _payload?: unknown) => {
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "thread/start") {
+      return result();
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const start = (dynamicTools: Parameters<typeof startOrResumeThreadImpl>[0]["dynamicTools"]) =>
+    startOrResumeThreadImpl({
+      client: { request } as never,
+      params: createParams(path.join(tempDir, "session.jsonl"), workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools,
+      appServer,
+      bindingStore,
+    });
+  return { request, start, workspaceDir };
 }
 
 describe("Codex app-server dynamic tool schema boundary contract", () => {
@@ -78,8 +91,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
   });
 
   it("passes prepared executable dynamic tool schemas through canonical thread start specs", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
+    const { request, start, workspaceDir } = createRun();
     const parameterFreeTool = createParameterFreeTool("message");
     const dynamicTool = {
       type: "function" as const,
@@ -87,26 +99,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       description: parameterFreeTool.description,
       inputSchema: normalizedParameterFreeSchema(),
     };
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [dynamicTool],
-      appServer: createAppServerOptions(),
-    });
+    await start([dynamicTool]);
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "config/read",
@@ -127,92 +120,48 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
         inputSchema: dynamicTool.inputSchema,
       },
     ]);
-    expect(startPayload?.cwd).toBe(workspaceDir);
-    expect(startPayload?.model).toBe("gpt-5.4");
+    expect(startPayload).toMatchObject({
+      cwd: workspaceDir,
+      model: "gpt-5.4",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandbox: "workspace-write",
+      serviceName: "OpenClaw",
+      experimentalRawEvents: true,
+    });
     expect(startPayload?.modelProvider).toBeUndefined();
-    expect(startPayload?.approvalPolicy).toBe("never");
-    expect(startPayload?.approvalsReviewer).toBe("user");
-    expect(startPayload?.sandbox).toBe("workspace-write");
-    expect(startPayload?.serviceName).toBe("OpenClaw");
-    expect(startPayload?.experimentalRawEvents).toBe(true);
     expect(typeof startPayload?.developerInstructions).toBe("string");
     expect(startPayload?.developerInstructions).toContain("OpenClaw");
   });
 
   it("accepts Codex app-server priority service tier responses", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-priority", "priority");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const binding = await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-    });
+    const { start } = createRun(() => threadStartResult("thread-priority", "priority"));
+    const binding = await start([]);
 
     expect(binding.threadId).toBe("thread-priority");
   });
 
   it("treats dynamic tool schema changes as thread-fingerprint changes", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const appServer = createAppServerOptions();
     let nextThreadId = 1;
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult(`thread-${nextThreadId++}`);
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const { request, start } = createRun(() => threadStartResult(`thread-${nextThreadId++}`));
 
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [
-        {
-          type: "function",
-          name: "message",
-          description: "Permissive test tool",
-          inputSchema: { type: "object" },
-        },
-      ],
-      appServer,
-    });
+    await start([
+      {
+        type: "function",
+        name: "message",
+        description: "Permissive test tool",
+        inputSchema: { type: "object" },
+      },
+    ]);
     const permissiveTool = createPermissiveTool("message");
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [
-        {
-          type: "function",
-          name: permissiveTool.name,
-          description: permissiveTool.description,
-          inputSchema: permissiveTool.parameters,
-        },
-      ],
-      appServer,
-    });
+    await start([
+      {
+        type: "function",
+        name: permissiveTool.name,
+        description: permissiveTool.description,
+        inputSchema: permissiveTool.parameters,
+      },
+    ]);
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "config/read",
