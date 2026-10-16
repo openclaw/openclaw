@@ -500,6 +500,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       pathname: pathForMemoryTab(tab, application.basePath),
     });
   }
+  // Synchronize the URL's selected agent and canonical route with their owners.
   createEffect(
     () => props.routeData,
     () => {
@@ -511,7 +512,8 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   // pending reads even when Solid batches both publications into one render.
   onSettled(() => {
     const unsubscribe = [
-      gateway.subscribe(() => untrack(() => syncGateway(gateway.read().snapshot))),
+      gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
+      // A config event samples the current probe state; it must not subscribe its publisher.
       runtime.subscribe(() => untrack(() => syncSupport(application.runtimeConfig))),
     ];
     syncRouteAgent();

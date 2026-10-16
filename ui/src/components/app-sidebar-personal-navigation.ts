@@ -18,7 +18,7 @@ import {
   setStoredSessionCatalogHidden,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
@@ -89,7 +89,7 @@ export function hidePersonalSidebarCatalog(
 export function createSidebarPinnedSessions(host: {
   readonly isConnected: boolean;
   readonly sessionDataContext: PersonalNavigationHost["sessionDataContext"];
-  readonly sessionData: Pick<SessionDataController, "requestSessionDataUpdate">;
+  readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
 }) {
   let source: ApplicationContext["sessions"] | undefined;
   let scope: SessionConnectionScope | null = null;

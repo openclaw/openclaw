@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as dispatch from "../../auto-reply/dispatch.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   appendTranscriptMessage,
@@ -26,12 +25,10 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import * as sessionStores from "../session-utils-store.js";
-import * as chatDispatch from "./chat-send-agent-dispatch.js";
+import { holdProjectedChatDispatch } from "./chat-send-authority.test-support.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 
-type DispatchOptions = Parameters<typeof dispatch.dispatchInboundMessageWithProjectedDispatcher>[0];
-
-it.each<{
+type IdentityScenario = {
   name: string;
   raw: boolean;
   literal: boolean;
@@ -52,101 +49,60 @@ it.each<{
     | "model"
     | "security"
     | "routing";
-}>([
-  {
-    name: "raw global only",
+};
+function identityScenario(
+  name: string,
+  overrides: Partial<IdentityScenario> = {},
+): IdentityScenario {
+  return {
+    name,
     raw: true,
     literal: false,
     shared: false,
     key: "global",
     allowed: true,
-  },
-  {
-    name: "colliding raw request",
-    raw: true,
+    ...overrides,
+  };
+}
+
+it.each<IdentityScenario>([
+  identityScenario("raw global only"),
+  identityScenario("colliding raw request", { literal: true, allowed: false }),
+  identityScenario("colliding literal request", {
     literal: true,
-    shared: false,
-    key: "global",
-    allowed: false,
-  },
-  {
-    name: "colliding literal request",
-    raw: true,
-    literal: true,
-    shared: false,
     key: "agent:research:global",
     allowed: false,
-  },
-  {
-    name: "missing raw with literal present",
+  }),
+  identityScenario("missing raw with literal present", {
     raw: false,
     literal: true,
-    shared: false,
-    key: "global",
     allowed: false,
-  },
-  {
-    name: "distinct owner in shared store",
-    raw: true,
+  }),
+  identityScenario("distinct owner in shared store", {
     literal: true,
     shared: true,
     key: "agent:research:global",
-    allowed: true,
-  },
-  {
-    name: "empty counterpart store preserves raw source",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: true,
-    separateStore: true,
-  },
-  {
-    name: "collision across discovered stores",
-    raw: true,
+  }),
+  identityScenario("empty counterpart store preserves raw source", { separateStore: true }),
+  identityScenario("collision across discovered stores", {
     literal: true,
-    shared: false,
-    key: "global",
     allowed: false,
     separateStore: true,
-  },
-  {
-    name: "missing raw with literal in another store",
+  }),
+  identityScenario("missing raw with literal in another store", {
     raw: false,
     literal: true,
-    shared: false,
-    key: "global",
     allowed: false,
     separateStore: true,
-  },
-  ...(["copy", "symlink"] as const).map((replaceDatabase) => ({
-    name: `database ${replaceDatabase} after selection`,
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: false,
-    replaceDatabase,
-  })),
-  {
-    name: "cached retry after collision",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: true,
-    replayAfterCollision: true,
-  },
-  {
-    name: "unrelated row appears while admission waits",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: true,
-    writeDuringAdmission: true,
-  },
+  }),
+  ...(["copy", "symlink"] as const).map((replaceDatabase) =>
+    identityScenario(`database ${replaceDatabase} after selection`, {
+      allowed: false,
+      replaceDatabase,
+    }),
+  ),
+  identityScenario("cached retry after collision", { replayAfterCollision: true }),
+  identityScenario("unrelated row appears while admission waits", { writeDuringAdmission: true }),
   ...(
     [
       "unrelated",
@@ -156,43 +112,20 @@ it.each<{
       "security",
       "routing",
     ] as const
-  ).map((configDuringAdmission) => ({
-    name: `${configDuringAdmission} config changes during admission read`,
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: configDuringAdmission.startsWith("unrelated"),
-    configDuringAdmission,
-  })),
-  {
-    name: "database replacement after recorder target resolution",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: true,
+  ).map((configDuringAdmission) =>
+    identityScenario(`${configDuringAdmission} config changes during admission read`, {
+      allowed: configDuringAdmission.startsWith("unrelated"),
+      configDuringAdmission,
+    }),
+  ),
+  identityScenario("database replacement after recorder target resolution", {
     replaceDuringPersistence: true,
-  },
-  {
-    name: "pending custody survives replacement through cleanup",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: true,
+  }),
+  identityScenario("pending custody survives replacement through cleanup", {
     replaceDuringPersistence: true,
     pendingReplacement: true,
-  },
-  {
-    name: "config store changes after ACK",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: true,
-    switchStoreAfterAck: true,
-  },
+  }),
+  identityScenario("config store changes after ACK", { switchStoreAfterAck: true }),
 ])("binds chat.send to its stored global identity: $name", async (scenario) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await loadOrCreateProcessDeviceIdentityAsync();
@@ -283,19 +216,15 @@ it.each<{
       scenario.replaceDuringPersistence && !scenario.pendingReplacement
         ? "/status"
         : "Keep this input in the selected physical row.";
-    const entered = createDeferred<DispatchOptions>();
-    const release = createDeferred();
+    const {
+      entered,
+      release,
+      observe: observeDispatch,
+      hold: holdDispatch,
+    } = holdProjectedChatDispatch();
     const admissionOwned = createDeferred();
     const resumeAdmission = createDeferred();
     let sending: Promise<void> | undefined;
-    const observeDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
-    const holdDispatch = vi
-      .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
-      .mockImplementation(async (options) => {
-        entered.resolve(options);
-        await release.promise;
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-      });
     const context = createDirectChatContext({ getRuntimeConfig });
     let configReloaded = false;
     const readQualifiedEntry = sessionStores.withQualifiedGatewaySessionEntry;

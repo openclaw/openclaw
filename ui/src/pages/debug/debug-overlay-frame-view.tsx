@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { children, createEffect, createMemo, onCleanup, onSettled, Show, untrack } from "solid-js";
+import { children, createMemo, onSettled, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../styles/debug.css";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -33,11 +33,11 @@ export function DebugOverlayFrame(props: {
       .catch((error: unknown) =>
         console.error("System busyness position controls could not load. Reload to retry.", error),
       );
-  });
-  createEffect(body, () => layout?.update(untrack(mode)));
-  onCleanup(() => {
-    disposed = true;
-    layout?.disconnect();
+    // The layout's ResizeObserver follows body changes after its initial placement.
+    return () => {
+      disposed = true;
+      layout?.disconnect();
+    };
   });
   return (
     <aside

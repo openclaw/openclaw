@@ -697,6 +697,13 @@ an explanation in chat.
 
 ### Source previews and copying code
 
+Hover over a `SKILL.md` link in chat to preview the installed skill's current
+source, with syntax colors and line numbers. Focus the link to use the keyboard,
+or tap/click to keep the card open. Copy the source or choose **Open full file**
+to read it in **Review**. The card shows up to 400 lines and rereads the file
+each time it opens; the full-file view includes all lines. Press Escape to
+dismiss it.
+
 Long clipboard text appears as a file-sized card in the composer and a compact
 chip in the transcript. Its label shows the first 30 characters of a plain-text
 excerpt, with HTML and Markdown formatting removed. Empty or unavailable excerpts

@@ -10,6 +10,7 @@ import { formatByteSize } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
+import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type {
   SessionWorkspaceFilter,
@@ -98,23 +99,17 @@ function RailRow(props: {
               class="chat-workspace-rail__row-action"
               type="button"
               aria-label={t("chat.workspaceFiles.preview")}
-              ref={(button) =>
-                button.addEventListener("click", (event) => {
-                  event.stopPropagation();
-                  props.onOpen();
-                })
-              }
+              ref={nativeListener("click", (event) => {
+                event.stopPropagation();
+                props.onOpen();
+              })}
             >
               <Icon name="eye" />
             </button>
           </openclaw-tooltip>
           {props.download}
           <Show when={props.path !== undefined}>
-            <span
-              ref={(element) =>
-                element.addEventListener("click", (event) => event.stopPropagation())
-              }
-            >
+            <span ref={nativeListener("click", (event) => event.stopPropagation())}>
               <CopyButton text={props.path ?? ""} idleLabel={t("chat.workspaceFiles.copyPath")} />
             </span>
           </Show>

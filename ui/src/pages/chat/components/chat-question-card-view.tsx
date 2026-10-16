@@ -31,6 +31,7 @@ export const ChatQuestionCard = defineSolidBridge<CardProps>(
     host.style.display = "contents";
     const loader = createLazyCustomElementRequests();
     const loadState = projectOwner(loader, (owner) => owner.visibleState);
+    // Activate the external lazy-module loader only while a question is present.
     createEffect(
       () => Boolean(props.props),
       (active) => loader.requestWhileActive(questionPanelElement, active),

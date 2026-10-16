@@ -90,6 +90,7 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       // Synchronous owners release boot snapshots and restore query state before row consumers read.
       snapshot.synchronize();
       owner.prepareRender();
+      owner.sessionData.synchronize();
       owner.pinnedSessions.synchronize();
       return owner;
     },
@@ -182,6 +183,7 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     },
     () =>
       untrack(() => {
+        owner.sessionData.refreshPresentation();
         owner.commitRender();
         snapshot.capture();
         people.syncRendered();
@@ -205,11 +207,16 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     sidebarOwners.set(host, owner);
     if (host.isConnected && !owner.isConnected) {
       owner.attach();
+    } else {
+      owner.sessionData.connect();
     }
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => owner.classList.add("sidebar-r"));
     });
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      owner.sessionData.disconnect(owner.isConnected);
+    };
   });
   onCleanup(() => disconnectSidebarOwner(host));
   return content;

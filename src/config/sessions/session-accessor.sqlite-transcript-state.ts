@@ -25,7 +25,6 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
-import type { TranscriptAppendCursor } from "./session-accessor.sqlite-transcript-append.types.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import {
   assertCanonicalSqliteSessionRootWrite,
@@ -687,7 +686,7 @@ export function touchTranscriptWindowRecency(
   database: OpenClawAgentDatabase,
   sessionId: string,
   updatedAt: number,
-  cursor: TranscriptAppendCursor,
+  cursor: { updateWindow?: (createdAt: number) => unknown },
 ): void {
   withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
     cursor.updateWindow ??= prepareSqliteQuerySync<number>(database.db, (parameter) =>

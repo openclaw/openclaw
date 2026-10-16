@@ -25,7 +25,7 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
   const lifecycle = new PluginPageOwner(props, context, host);
   const projection = projectOwner(lifecycle, (source) => source);
   host.style.display = "contents";
-  // Owner notifications sample current route props without creating render dependencies.
+  // Owner callbacks snapshot route props at admission; frame auth and lazy views retire stale results.
   const update = () => untrack(lifecycle.update);
   const unsubscribeGateway = context.gateway.subscribe(update);
   const unsubscribePlugins = context.plugins?.subscribe(update);

@@ -11,6 +11,7 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { VoiceWakeEditorState } from "./talk-device.tsx";
 import {
@@ -548,9 +549,9 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
   );
   syncCatalog(catalogConnection(context.gateway));
   refreshCatalogOnConfigChange(context.runtimeConfig.state);
-  window.addEventListener("focus", refreshOnFocus);
+  const stopFocus = listen(window, "focus", refreshOnFocus);
   onCleanup(() => {
-    window.removeEventListener("focus", refreshOnFocus);
+    stopFocus();
     stopGateway();
     stopConfig();
     connectionValue = null;

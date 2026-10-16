@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, onCleanup, Show, untrack, useContext } from "solid-js";
+import { createEffect, createSignal, Show, useContext } from "solid-js";
 import { observeScrollState } from "../../../components/scroll-state-observer.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
@@ -12,27 +12,25 @@ import type { CommentPreview } from "./chat-comment-preview.ts";
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 function scrollRef() {
-  let element: HTMLElement | undefined;
-  let observation: ReturnType<typeof observeScrollState> | undefined;
+  const [element, setElement] = createSignal<HTMLElement>();
   const presented = useContext(ContentPresentation);
-  const connect = (active: boolean) => {
-    observation?.disconnect();
-    observation = undefined;
-    if (!active || !element) {
-      return;
-    }
-    const target = element;
-    observation = observeScrollState(target, (state) => {
-      for (const key of ["scrollable", "atStart", "atEnd"] as const) {
-        target.dataset[key] = String(state[key]);
+  // Observe the currently rendered scroll region only while it is presented.
+  createEffect(
+    () => [presented(), element()] as const,
+    ([active, target]) => {
+      if (!active || !target) {
+        return undefined;
       }
-    });
-  };
-  createEffect(presented, connect);
-  onCleanup(() => observation?.disconnect());
+      const observation = observeScrollState(target, (state) => {
+        for (const key of ["scrollable", "atStart", "atEnd"] as const) {
+          target.dataset[key] = String(state[key]);
+        }
+      });
+      return () => observation.disconnect();
+    },
+  );
   return (value: HTMLElement) => {
-    element = value;
-    connect(untrack(presented));
+    setElement(value);
   };
 }
 
@@ -75,11 +73,7 @@ export function CommentPreviewChip(props: ChipProps) {
   const ref = scrollRef();
   return (
     <openclaw-tooltip
-      class={
-        props.removal
-          ? "chat-comment-preview chat-comment-preview--editable"
-          : "chat-comment-preview"
-      }
+      class={["chat-comment-preview", { "chat-comment-preview--editable": Boolean(props.removal) }]}
       prop:placement="top-start"
       prop:autoSize={true}
       prop:describe={false}

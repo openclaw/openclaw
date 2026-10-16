@@ -57,7 +57,7 @@ const controlUiPerformanceBudgets = {
   // Allow 3 above the maximum while catching the roughly 19-request facade regression.
   routeBootJsRequests: 35,
   startupCssRequests: 1,
-  startupJsGzipBytes: 374_285,
+  startupJsGzipBytes: 342_000,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,

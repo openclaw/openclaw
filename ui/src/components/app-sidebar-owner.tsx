@@ -253,6 +253,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   override disconnectedCallback() {
+    this.sessionData.disconnect();
     this.peopleView?.dismiss();
     window.removeEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
     window.removeEventListener(
@@ -346,6 +347,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   override connectedCallback() {
+    this.sessionData.connect();
     this.snapshot.connect();
     super.connectedCallback();
     window.addEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);

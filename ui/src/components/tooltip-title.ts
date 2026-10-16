@@ -73,11 +73,13 @@ export function installTitleTooltips(ownerDocument: Document) {
   // Title suppression and accessible naming still use the normal restoration lifecycle.
   const ownsPreview = (link: HTMLAnchorElement | null | undefined) =>
     Boolean(link && ownsHoverPreview(link));
+  const dialogExpanded = () =>
+    active?.anchor.matches('[aria-haspopup="dialog"][aria-expanded="true"]') === true;
   const content = () => {
     if (ownsPreview(active?.link)) {
       return "";
     }
-    return active?.anchor.matches('[aria-haspopup="dialog"][aria-expanded="true"]')
+    return dialogExpanded()
       ? ""
       : (active?.anchor.getAttribute("data-tooltip") ?? active?.title ?? "");
   };
@@ -125,10 +127,14 @@ export function installTitleTooltips(ownerDocument: Document) {
       active.label = active.title;
       active.anchor.setAttribute("aria-label", active.label);
     }
-    if (tooltip && !active.filePath) {
-      // Updates refresh an open hint, never reopen a dismissed action. Reentry
-      // or keyboard focus supplies new intent after an empty title clears it.
-      tooltip.content = content();
+    if (tooltip) {
+      // Rich file-path content also yields to the trigger's expanded dialog.
+      tooltip.disabled = dialogExpanded();
+      if (!active.filePath) {
+        // Updates refresh an open hint, never reopen a dismissed action. Reentry
+        // or keyboard focus supplies new intent after an empty title clears it.
+        tooltip.content = content();
+      }
     }
   };
   const observer = new MutationObserver(update);
@@ -252,6 +258,7 @@ export function installTitleTooltips(ownerDocument: Document) {
     const tooltipContent = active.filePath ?? content();
     if (!explicit && tooltipContent) {
       tooltip ??= ownerDocument.createElement("openclaw-tooltip");
+      tooltip.disabled = dialogExpanded();
       if (active.filePath) {
         const current = active;
         const path = active.filePath;

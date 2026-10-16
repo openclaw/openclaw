@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, For, onCleanup, Show } from "solid-js";
 import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
 import { MarkdownBlocks } from "../../components/markdown-blocks-owner.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
@@ -175,21 +175,18 @@ export type CustodianSurfaceProps = {
 
 function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
   const context = useApplication();
-  const projection = projectOwner(
-    untrack(() => props.store),
-    (store) => store,
-  );
+  const projection = createMemo(() => projectOwner(props.store, (store) => store));
   const alerts = projectOwner(custodianAlertStore, (store) => store.alert);
-  const store = () => projection.read();
+  const store = () => projection().read();
   const currentAlert = createMemo(() => {
     // Alert admission derives from the session's current authority as well as the alert store.
-    projection.revision();
+    projection().revision();
     return alerts.read();
   });
+  // The session owner retargets Gateway requests when this surface's route intent changes.
   createEffect(
     () => [props.store, props.onboarding, props.newAgentIntent] as const,
     ([source, onboarding, newAgentIntent]) => {
-      projection.replaceSource(source);
       source.connect(context, sessionVariant(onboarding, newAgentIntent));
     },
   );
@@ -218,58 +215,59 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
   );
   let textarea: HTMLTextAreaElement | null = null;
   let transcript: HTMLElement | null = null;
+  let textareaNode: HTMLTextAreaElement | null = null;
+  let transcriptNode: HTMLDivElement | null = null;
   let markdown: MarkdownBlocks | undefined;
   let lastMessageId: number | null = null;
   let lastPluginHelpFocus = 0;
+  // Keep textarea sizing, Markdown observers, focus, and scroll aligned with committed DOM.
   createEffect(
-    () => ({ revision: projection.revision(), alert: alerts.read(), setup: store().setupRequired }),
-    () =>
-      untrack(() => {
-        const nextTextarea = host.querySelector<HTMLTextAreaElement>("textarea");
-        if (textarea && textarea !== nextTextarea) {
-          disconnectTextareaOverflowObserver(textarea);
+    () => ({
+      source: store(),
+      alert: alerts.read(),
+      focusRequest: pluginHelpFocusRequest(context),
+    }),
+    ({ source, focusRequest }) => {
+      const nextTextarea = host.contains(textareaNode) ? textareaNode : null;
+      if (textarea && textarea !== nextTextarea) {
+        disconnectTextareaOverflowObserver(textarea);
+      }
+      textarea = nextTextarea;
+      if (textarea) {
+        observeTextareaOverflow(textarea);
+        adjustTextareaHeight(textarea);
+      }
+      const nextTranscript = host.contains(transcriptNode) ? transcriptNode : null;
+      if (transcript !== nextTranscript) {
+        markdown?.dispose();
+        transcript = nextTranscript;
+        markdown = transcript ? new MarkdownBlocks(transcript) : undefined;
+      }
+      markdown?.update(true);
+      if (source.canSend && !source.sensitive && !source.hasUnresolvedQuestion()) {
+        custodianAlertStore.askIfReady(
+          (question, admission, display) => void source.send(question, display, false, admission),
+        );
+      }
+      if (
+        focusRequest > 0 &&
+        focusRequest !== lastPluginHelpFocus &&
+        !source.sensitive &&
+        !source.wizardInputPending &&
+        source.chatAvailable
+      ) {
+        lastPluginHelpFocus = focusRequest;
+        textarea?.focus();
+      }
+      const messageId = source.messages.at(-1)?.id ?? null;
+      if (messageId !== lastMessageId) {
+        lastMessageId = messageId;
+        const lastMessage = transcript?.lastElementChild;
+        if (lastMessage instanceof HTMLElement) {
+          lastMessage.scrollIntoView?.({ block: "nearest" });
         }
-        textarea = nextTextarea;
-        if (textarea) {
-          observeTextareaOverflow(textarea);
-          adjustTextareaHeight(textarea);
-        }
-        const nextTranscript = host.querySelector<HTMLElement>(".custodian__messages");
-        if (transcript !== nextTranscript) {
-          markdown?.dispose();
-          transcript = nextTranscript;
-          markdown = transcript ? new MarkdownBlocks(transcript) : undefined;
-        }
-        markdown?.update(true);
-        if (store().canSend && !store().sensitive && !store().hasUnresolvedQuestion()) {
-          custodianAlertStore.askIfReady(
-            (question, admission, display) =>
-              void store().send(question, display, false, admission),
-          );
-        }
-        const focusRequest = pluginHelpFocusRequest(context);
-        if (
-          focusRequest > 0 &&
-          focusRequest !== lastPluginHelpFocus &&
-          !store().sensitive &&
-          !store().wizardInputPending &&
-          store().chatAvailable
-        ) {
-          lastPluginHelpFocus = focusRequest;
-          textarea?.focus();
-        }
-        const messageId = store().messages.at(-1)?.id ?? null;
-        if (messageId !== lastMessageId) {
-          lastMessageId = messageId;
-          const lastChild = transcript?.lastElementChild;
-          const lastMessage = lastChild?.classList.contains("lit-content")
-            ? lastChild.lastElementChild
-            : lastChild;
-          if (lastMessage instanceof HTMLElement) {
-            lastMessage.scrollIntoView?.({ block: "nearest" });
-          }
-        }
-      }),
+      }
+    },
   );
   onCleanup(() => {
     if (textarea) {
@@ -342,6 +340,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
         ]}
       >
         <div
+          ref={(node) => (transcriptNode = node)}
           class="custodian__messages"
           aria-live="polite"
           onClick={(event) => {
@@ -470,6 +469,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
                     when={store().sensitive}
                     fallback={
                       <textarea
+                        ref={(node) => (textareaNode = node)}
                         rows="1"
                         value={store().input}
                         autocomplete="on"

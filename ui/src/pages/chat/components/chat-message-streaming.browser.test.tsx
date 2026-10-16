@@ -302,6 +302,14 @@ describe("streaming Markdown DOM", () => {
           wrapper.querySelector(".code-block-viewport")?.id,
         );
         expect(wrap.getAttribute("aria-pressed")).toBe("true");
+        if (!json) {
+          expect(wrapper.classList.contains("is-wrapped")).toBe(true);
+          expect(wrapper.classList.contains("is-collapsible")).toBe(true);
+          expect(wrapper.querySelector(".code-block-viewport")?.id).not.toBe("");
+          expect(readMarkdownCodeBlockCopyText(copy)).toBe(
+            initial.slice("```ts\n".length) + suffix,
+          );
+        }
         if (json) {
           expect(wrapper.querySelector(".code-block-json-modes")).not.toBeNull();
           expect(expand).toBe(previousExpand);
@@ -333,6 +341,14 @@ describe("streaming Markdown DOM", () => {
           expect(wrap.getAttribute("aria-pressed")).toBe("true");
           expect(expand.classList.contains("copied")).toBe(false);
           expect(expand.classList.contains("copy-failed")).toBe(false);
+          expand.click();
+          const growth = "\nconst ninth = 9;";
+          draw(initial + suffix + growth);
+          expect(wrapper.classList.contains("is-expanded")).toBe(true);
+          expect(expand.getAttribute("aria-expanded")).toBe("true");
+          expect(readMarkdownCodeBlockCopyText(copy)).toBe(
+            initial.slice("```ts\n".length) + suffix + growth,
+          );
         }
       } finally {
         vi.useRealTimers();
@@ -614,7 +630,7 @@ describe("streaming Markdown promotion", () => {
     "preserves $language code controls when a live fence closes and finishes",
     async ({ language, code }) => {
       const initial = `\`\`\`${language}\n${code}`;
-      draw(initial);
+      draw(initial, { options: { linkFavicons: false } });
       await Promise.resolve();
       const wrapper = container.querySelector<HTMLElement>(".code-block-wrapper")!;
       const wrap = wrapper.querySelector<HTMLButtonElement>(".code-block-wrap")!;
@@ -627,14 +643,23 @@ describe("streaming Markdown promotion", () => {
       draw(closed);
       await Promise.resolve();
       expect(container.querySelector(".code-block-wrapper")).toBe(wrapper);
+      expect(container.querySelector(".chat-text > p:last-child")?.textContent).toBe(
+        "Following paragraph",
+      );
       expect(wrapper.querySelector(".code-block-wrap")).toBe(wrap);
       expect(wrapper.querySelector(".code-block-expand")).toBe(expand);
       expect(wrapper.querySelector(".code-block-copy")).toBe(copy);
       expect(wrapper.querySelector(".code-block-viewport")).toBe(viewport);
       const raw = wrapper.querySelector<HTMLButtonElement>('[data-json-mode="raw"]');
       raw?.click();
-      draw(closed, { streaming: false });
+      const completed = closed + "\n\nMore is arriving.";
+      draw(completed);
       expect(container.querySelector(".code-block-wrapper")).toBe(wrapper);
+      draw(completed, { streaming: false, options: { linkFavicons: true } });
+      expect(container.querySelector(".code-block-wrapper")).toBe(wrapper);
+      expect(container.querySelector(".chat-text > p:last-child")?.textContent).toBe(
+        "More is arriving.",
+      );
       expect(wrapper.classList.contains("is-wrapped")).toBe(true);
       expect(wrapper.classList.contains("is-expanded")).toBe(true);
       expect(wrap.getAttribute("aria-pressed")).toBe("true");
@@ -702,6 +727,7 @@ describe("streaming Markdown promotion", () => {
         change === "citation" || change === "reference" ? "p" : ".code-block-wrapper";
       draw(source);
       const previous = container.querySelector(selector);
+      container.querySelector<HTMLButtonElement>(".code-block-wrap")?.click();
       const next =
         change === "correction"
           ? source.replace("value", "corrected")
@@ -717,6 +743,7 @@ describe("streaming Markdown promotion", () => {
       expect(container.querySelector(selector)).not.toBe(previous);
       if (change === "options") {
         expect(container.querySelector(".code-block-wrap")).toBeNull();
+        expect(container.querySelector(".code-block-copy")).not.toBeNull();
       } else if (change === "citation") {
         expect(container.textContent?.trim()).toBe("Before");
         expect(container.textContent).not.toContain("source");
@@ -724,8 +751,14 @@ describe("streaming Markdown promotion", () => {
         expect(container.querySelector("a")?.getAttribute("href")).toBe("https://example.com/docs");
         expect(container.querySelector("a")?.textContent).toBe("docs");
       } else {
-        expect(container.querySelector("pre code")?.textContent).toContain(
-          change === "correction" ? "corrected" : "value",
+        if (change === "message") {
+          expect(container.querySelector(".code-block-wrap")?.getAttribute("aria-pressed")).toBe(
+            "false",
+          );
+        }
+        expect(container.querySelectorAll("pre code")).toHaveLength(1);
+        expect(container.querySelector("pre code")?.textContent).toBe(
+          change === "correction" ? "const corrected = 1;\n" : "const value = 1;\n",
         );
       }
     },

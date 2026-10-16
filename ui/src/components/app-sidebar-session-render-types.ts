@@ -32,7 +32,7 @@ import type {
   SidebarToolActivity,
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import type { AgentAvatarProps } from "./solid/agent-avatar.tsx";
@@ -57,7 +57,7 @@ export interface SessionListHost {
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly connected: boolean;
   readonly sessionData: Pick<
-    SessionDataController,
+    SessionDataOwner,
     | "childSessionErrorsByParent"
     | "dismissSessionMutationError"
     | "loadMoreSessionCatalog"
@@ -209,7 +209,7 @@ export type SidebarSessionListHost = SessionListHost & {
   readonly sidebarAgentsMode: "chip" | "roster";
   readonly sessionData: SessionListHost["sessionData"] &
     Pick<
-      SessionDataController,
+      SessionDataOwner,
       | "context"
       | "sessionsLoading"
       | "sessionsStartingUp"
