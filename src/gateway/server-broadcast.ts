@@ -286,10 +286,7 @@ export function createGatewayBroadcaster(params: {
     let skipSourcePayload = false;
     let sessionProjectionPrepared = false;
     let outboundEventLogged = false;
-    let lastFrameSequence = 0;
-    let lastFrameRecipientProfileId: string | undefined;
-    let lastFrame: string | Buffer | undefined;
-    let lastPayloadFragment: FramePayload | undefined;
+    const encodedFrames = new Map<FramePayload, Map<string, string | Buffer>>();
     const frames: PreparedFrames = retained?.frames ?? {};
     // Private coalescers preserve inputs; identical pending histories can share this merge.
     let mergedFrames: Map<unknown, { payload: unknown; frames: PreparedFrames }> | undefined;
@@ -625,19 +622,18 @@ export function createGatewayBroadcaster(params: {
         // A drained write can refresh the recipient; cache only the profile at this send.
         const recipientProfileId =
           (c.connect.role ?? "operator") === "operator" ? c.preparedRecipientProfileId : undefined;
-        if (
-          lastFrame !== undefined &&
-          lastFrameSequence === nextSeq &&
-          lastFrameRecipientProfileId === recipientProfileId &&
-          lastPayloadFragment === payloadFragment
-        ) {
-          frame = lastFrame;
-        } else {
+        // Reuse across interleaved audiences only after each recipient's live projection.
+        let audienceFrames = encodedFrames.get(payloadFragment);
+        if (!audienceFrames) {
+          encodedFrames.set(payloadFragment, (audienceFrames = new Map()));
+        }
+        const audience = JSON.stringify([nextSeq, recipientProfileId]);
+        const cached = audienceFrames.get(audience);
+        if (cached === undefined) {
           frame = frameWithSequence(base, nextSeq, payloadFragment, recipientProfileId);
-          lastFrameSequence = nextSeq;
-          lastFrameRecipientProfileId = recipientProfileId;
-          lastPayloadFragment = payloadFragment;
-          lastFrame = frame;
+          audienceFrames.set(audience, frame);
+        } else {
+          frame = cached;
         }
       } catch (err) {
         log.error(`broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`);
