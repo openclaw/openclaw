@@ -27,6 +27,89 @@ import { runPostSessionPluginDoctorStateRepairs } from "./state-migrations.plugi
 import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 
 const tempDirs = createTrackedTempDirs();
+const sessionAction = { id: "session-action", phase: "after-session-repair", doctorOnly: true };
+
+function writePlugin(params: {
+  pluginRoot: string;
+  pluginId: string;
+  markerPath: string;
+  action?: typeof sessionAction;
+  declarations?: Array<{ id: string; phase?: string; doctorOnly: boolean }>;
+  label?: string;
+  change?: string;
+  prepareStateDir?: string;
+  rejectRuntimeLoad?: boolean;
+}) {
+  const { pluginRoot, pluginId, markerPath, action = sessionAction } = params;
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  for (const [filename, content] of Object.entries({
+    "package.json": {
+      name: `@test/${pluginId}`,
+      version: "0.0.0",
+      type: "commonjs",
+      openclaw: { extensions: ["./index.cjs"] },
+    },
+    "openclaw.plugin.json": {
+      id: pluginId,
+      configSchema: {},
+      doctorContract: { stateMigrations: params.declarations ?? [action] },
+    },
+  })) {
+    fs.writeFileSync(path.join(pluginRoot, filename), JSON.stringify(content));
+  }
+  fs.writeFileSync(
+    path.join(pluginRoot, "index.cjs"),
+    params.rejectRuntimeLoad
+      ? "throw new Error('metadata discovery loaded plugin runtime');\n"
+      : "module.exports = {};\n",
+  );
+  fs.writeFileSync(
+    path.join(pluginRoot, "doctor-contract-api.cjs"),
+    `const fs = require("node:fs");
+module.exports = { stateMigrations: [{
+  ...${JSON.stringify(action)}, label: ${JSON.stringify(params.label ?? pluginId)},
+  detectLegacyState: () => fs.existsSync(${JSON.stringify(markerPath)}) ? null : { preview: ["pending"] },
+  migrateLegacyState: () => {
+${params.prepareStateDir ? `    fs.mkdirSync(${JSON.stringify(params.prepareStateDir)}, { recursive: true });\n` : ""}    fs.writeFileSync(${JSON.stringify(markerPath)}, "migrated");
+    return { changes: [${JSON.stringify(params.change ?? `migrated ${pluginId}`)}], warnings: [] };
+  },
+}] };\n`,
+  );
+}
+
+function makeEnv(root: string, bundled = true): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    HOME: root,
+    OPENCLAW_HOME: root,
+    OPENCLAW_STATE_DIR: path.join(root, "state"),
+    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+    ...(bundled
+      ? {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+        }
+      : { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
+  };
+}
+
+function repairResult(requiredPluginIds: string[], changes: string[] = []) {
+  return { changes, completedPluginIds: undefined, requiredPluginIds, warnings: [] };
+}
+
+function repair(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  plannedActions: Array<{ pluginId: string; id: string }>,
+) {
+  return withDoctorSqliteMaintenanceLock({
+    env,
+    operation: "plugin session repair",
+    run: (maintenanceAuthority) =>
+      runPostSessionPluginDoctorStateRepairs({ config, env, maintenanceAuthority, plannedActions }),
+  });
+}
 
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -43,59 +126,19 @@ it("repairs a planned bundled owner omitted by a partial index after acquiring f
   const configPath = path.join(root, "openclaw.json");
   const bundledRoot = path.join(root, "bundled");
   const pluginIds = ["kept-owner", "omitted-owner"];
-  const action = { id: "session-action", phase: "after-session-repair", doctorOnly: true };
   for (const pluginId of pluginIds) {
-    const pluginRoot = path.join(bundledRoot, pluginId);
-    const markerPath = path.join(stateDir, `${pluginId}-migrated`);
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginRoot, "package.json"),
-      JSON.stringify({
-        name: `@test/${pluginId}`,
-        version: "0.0.0",
-        type: "commonjs",
-        openclaw: { extensions: ["./index.cjs"] },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(pluginRoot, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        configSchema: {},
-        doctorContract: { stateMigrations: [action] },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(pluginRoot, "index.cjs"),
-      "throw new Error('metadata discovery loaded plugin runtime');\n",
-    );
-    fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.cjs"),
-      `const fs = require("node:fs");
-module.exports = { stateMigrations: [{
-  ...${JSON.stringify(action)}, label: ${JSON.stringify(pluginId)},
-  detectLegacyState: () => fs.existsSync(${JSON.stringify(markerPath)}) ? null : { preview: ["pending"] },
-  migrateLegacyState: () => {
-    fs.writeFileSync(${JSON.stringify(markerPath)}, "migrated");
-    return { changes: [${JSON.stringify(`migrated ${pluginId}`)}], warnings: [] };
-  },
-}] };\n`,
-    );
+    writePlugin({
+      pluginRoot: path.join(bundledRoot, pluginId),
+      pluginId,
+      markerPath: path.join(stateDir, `${pluginId}-migrated`),
+      rejectRuntimeLoad: true,
+    });
   }
   const config: OpenClawConfig = {
     agents: { entries: { main: { workspace: path.join(root, "workspace") } } },
     plugins: { allow: ["kept-owner"] },
   };
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: root,
-    OPENCLAW_HOME: root,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-  };
+  const env = makeEnv(root);
   fs.writeFileSync(configPath, JSON.stringify(config));
   const fullIndex = withPluginCache(createPluginCache(), () =>
     loadInstalledPluginIndex({ config, env }),
@@ -126,36 +169,15 @@ module.exports = { stateMigrations: [{
           { pluginId: "kept-owner", id: "session-action" },
           { pluginId: "omitted-owner", id: "session-action" },
         ]);
-        const repair = () =>
-          withDoctorSqliteMaintenanceLock({
-            env,
-            operation: "plugin session repair",
-            run: (maintenanceAuthority) =>
-              runPostSessionPluginDoctorStateRepairs({
-                config,
-                env,
-                maintenanceAuthority,
-                plannedActions,
-              }),
-          });
-
-        await expect(repair()).resolves.toEqual({
-          changes: ["migrated kept-owner", "migrated omitted-owner"],
-          completedPluginIds: undefined,
-          requiredPluginIds: ["kept-owner", "omitted-owner"],
-          warnings: [],
-        });
+        await expect(repair(config, env, plannedActions)).resolves.toEqual(
+          repairResult(pluginIds, ["migrated kept-owner", "migrated omitted-owner"]),
+        );
         for (const pluginId of pluginIds) {
           expect(fs.readFileSync(path.join(stateDir, `${pluginId}-migrated`), "utf8")).toBe(
             "migrated",
           );
         }
-        await expect(repair()).resolves.toEqual({
-          changes: [],
-          completedPluginIds: undefined,
-          requiredPluginIds: ["kept-owner", "omitted-owner"],
-          warnings: [],
-        });
+        await expect(repair(config, env, plannedActions)).resolves.toEqual(repairResult(pluginIds));
       },
       { config, env },
     );
@@ -174,48 +196,16 @@ it("keeps supported discovery and execution order stable when a configured alias
     acpx: path.join(stateDir, "acpx-migrated"),
     codex: path.join(stateDir, "codex-migrated"),
   };
-  const writePlugin = (pluginRoot: string, pluginId: "acpx" | "codex", markerPath: string) => {
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    const actionId = `${pluginId}-session-action`;
-    fs.writeFileSync(
-      path.join(pluginRoot, "package.json"),
-      JSON.stringify({
-        name: `@test/${pluginId}`,
-        version: "0.0.0",
-        type: "commonjs",
-        openclaw: { extensions: ["./index.cjs"] },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(pluginRoot, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        configSchema: {},
-        doctorContract: {
-          stateMigrations: [{ id: actionId, doctorOnly: true, phase: "after-session-repair" }],
-        },
-      }),
-    );
-    fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n");
-    fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.cjs"),
-      `const fs = require("node:fs");
-module.exports = { stateMigrations: [{
-  id: ${JSON.stringify(actionId)},
-  label: ${JSON.stringify(`${pluginId} session action`)},
-  phase: "after-session-repair",
-  doctorOnly: true,
-  detectLegacyState: () => fs.existsSync(${JSON.stringify(markerPath)}) ? null : { preview: ["pending"] },
-  migrateLegacyState: () => {
-    fs.mkdirSync(${JSON.stringify(stateDir)}, { recursive: true });
-    fs.writeFileSync(${JSON.stringify(markerPath)}, "migrated");
-    return { changes: [${JSON.stringify(`migrated ${pluginId}`)}], warnings: [] };
-  },
-}] };\n`,
-    );
-  };
-  writePlugin(path.join(bundledRoot, "acpx"), "acpx", markerPaths.acpx);
-  writePlugin(path.join(bundledRoot, "codex"), "codex", markerPaths.codex);
+  for (const pluginId of ["acpx", "codex"] as const) {
+    writePlugin({
+      pluginRoot: path.join(bundledRoot, pluginId),
+      pluginId,
+      markerPath: markerPaths[pluginId],
+      action: { ...sessionAction, id: `${pluginId}-session-action` },
+      label: `${pluginId} session action`,
+      prepareStateDir: stateDir,
+    });
+  }
   fs.mkdirSync(stateDir, { recursive: true });
 
   const baseConfig: OpenClawConfig = {
@@ -229,16 +219,7 @@ module.exports = { stateMigrations: [{
       load: { paths: [path.join(bundledRoot, "codex")] },
     },
   };
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: root,
-    OPENCLAW_HOME: root,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-  };
+  const env = makeEnv(root);
 
   const frozenActions = resolveLivePluginDoctorStateMigrationInventory({
     config: aliasConfig,
@@ -255,33 +236,16 @@ module.exports = { stateMigrations: [{
   }).descriptors.map(({ pluginId, id }) => ({ pluginId, id }));
   expect(afterAliasRemoval).toEqual(frozenActions);
 
-  const runRepair = (config: OpenClawConfig, plannedActions: typeof frozenActions) =>
-    withDoctorSqliteMaintenanceLock({
-      env,
-      operation: "plugin doctor order",
-      run: (maintenanceAuthority) =>
-        runPostSessionPluginDoctorStateRepairs({
-          config,
-          env,
-          maintenanceAuthority,
-          plannedActions,
-        }),
-    });
-  const refused = await runRepair(baseConfig, frozenActions.toReversed());
+  const refused = await repair(baseConfig, env, frozenActions.toReversed());
   expect(refused).toEqual({
-    changes: [],
-    completedPluginIds: undefined,
-    requiredPluginIds: ["acpx", "codex"],
+    ...repairResult(["acpx", "codex"]),
     warnings: [expect.stringContaining("immutable action order")],
     warningDisposition: undefined,
   });
 
-  await expect(runRepair(baseConfig, frozenActions)).resolves.toEqual({
-    changes: ["migrated acpx", "migrated codex"],
-    completedPluginIds: undefined,
-    requiredPluginIds: ["acpx", "codex"],
-    warnings: [],
-  });
+  await expect(repair(baseConfig, env, frozenActions)).resolves.toEqual(
+    repairResult(["acpx", "codex"], ["migrated acpx", "migrated codex"]),
+  );
   expect(fs.readFileSync(markerPaths.acpx, "utf8")).toBe("migrated");
   expect(fs.readFileSync(markerPaths.codex, "utf8")).toBe("migrated");
 });
@@ -297,71 +261,40 @@ it.each([
   "does not silently drop a live post-session action when inventory is %s",
   async (inventory) => {
     const root = await tempDirs.make("openclaw-doctor-live-inventory-");
-    const stateDir = path.join(root, "state");
     const pluginId = "inventory-owner";
     const pluginRoot = path.join(root, pluginId);
     const mutationPath = path.join(root, "migrated");
     const cacheRoot = path.join(root, "cache");
     const unavailableCacheRoot = path.join(root, "unavailable-cache");
-    fs.mkdirSync(pluginRoot);
     fs.mkdirSync(cacheRoot);
     if (inventory === "staging-unavailable") {
       fs.writeFileSync(unavailableCacheRoot, "not a directory");
     }
     vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
-    const action = { id: "session-action", phase: "after-session-repair", doctorOnly: true };
-    fs.writeFileSync(
-      path.join(pluginRoot, "package.json"),
-      JSON.stringify({
-        name: "@test/inventory-owner",
-        version: "0.0.0",
-        type: "commonjs",
-        openclaw: { extensions: ["./index.cjs"] },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(pluginRoot, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        configSchema: {},
-        doctorContract: {
-          stateMigrations:
-            inventory === "undeclared-post-action"
-              ? []
-              : [
-                  {
-                    ...action,
-                    ...(inventory === "changed-phase" ? { phase: undefined } : {}),
-                    ...(inventory === "changed-authority" ? { doctorOnly: false } : {}),
-                  },
-                ],
-        },
-      }),
-    );
-    fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n");
-    fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.cjs"),
-      `const fs = require("node:fs");
-module.exports = { stateMigrations: [{
-  ...${JSON.stringify(action)}, label: "Session action",
-  detectLegacyState: () => fs.existsSync(${JSON.stringify(mutationPath)}) ? null : { preview: ["pending"] },
-  migrateLegacyState: () => {
-    fs.writeFileSync(${JSON.stringify(mutationPath)}, "migrated");
-    return { changes: ["migrated session action"], warnings: [] };
-  },
-}] };\n`,
-    );
+    writePlugin({
+      pluginRoot,
+      pluginId,
+      markerPath: mutationPath,
+      label: "Session action",
+      change: "migrated session action",
+      declarations:
+        inventory === "undeclared-post-action"
+          ? []
+          : [
+              {
+                ...sessionAction,
+                ...(inventory === "changed-phase" ? { phase: undefined } : {}),
+                ...(inventory === "changed-authority" ? { doctorOnly: false } : {}),
+              },
+            ],
+    });
     const cfg: OpenClawConfig = {
       agents: { entries: { main: {} } },
       plugins: { load: { paths: [pluginRoot] }, entries: { [pluginId]: { enabled: true } } },
     };
     const env = {
-      ...process.env,
-      HOME: root,
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: stateDir,
+      ...makeEnv(root, false),
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       XDG_CACHE_HOME: cacheRoot,
     };
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
@@ -466,12 +399,7 @@ module.exports = { stateMigrations: [{
         maintenanceAuthority: { assertCurrent() {} },
         plannedActions: prepared?.plannedActions,
       }),
-    ).resolves.toEqual({
-      changes: ["migrated session action"],
-      completedPluginIds: undefined,
-      requiredPluginIds: ["inventory-owner"],
-      warnings: [],
-    });
+    ).resolves.toEqual(repairResult(["inventory-owner"], ["migrated session action"]));
     expect(fs.readFileSync(mutationPath, "utf8")).toBe("migrated");
   },
 );

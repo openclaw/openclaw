@@ -32,6 +32,7 @@ import {
 } from "./state-migrations.exec-approvals.js";
 
 type MigrationDatabase = Pick<OpenClawStateKyselyDatabase, "migration_runs" | "migration_sources">;
+const denyPolicy = { version: 1 as const, defaults: { security: "deny" as const }, agents: {} };
 
 describe("legacy exec approvals migration", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -44,17 +45,13 @@ describe("legacy exec approvals migration", () => {
     });
   });
 
-  function useStateDir(): { env: NodeJS.ProcessEnv; stateDir: string; sourcePath: string } {
-    const stateDir = tempDirs.make("openclaw-exec-approvals-migration-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    return { env, stateDir, sourcePath: resolveExecApprovalsPath(env) };
-  }
-
   let stateDir: string;
   let env: NodeJS.ProcessEnv;
   let sourcePath: string;
   beforeEach(() => {
-    ({ stateDir, env, sourcePath } = useStateDir());
+    stateDir = tempDirs.make("openclaw-exec-approvals-migration-");
+    env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    sourcePath = resolveExecApprovalsPath(env);
   });
 
   async function writeLegacy(targetPath: string, value: unknown): Promise<string> {
@@ -173,11 +170,10 @@ describe("legacy exec approvals migration", () => {
   ])("retires $name", async ({ socket, canonical }) => {
     const stub = { defaults: {}, agents: {}, ...(socket ? { socket } : {}) };
     const claimed = canonical === "valid";
-    const policy = { version: 1 as const, defaults: { security: "deny" as const }, agents: {} };
     if (canonical !== "missing") {
       writeExecApprovalsConfigRow({
         db: database(),
-        file: policy,
+        file: denyPolicy,
         raw: canonical === "invalid" ? "{invalid" : undefined,
       });
     }
@@ -302,28 +298,28 @@ describe("legacy exec approvals migration", () => {
     });
   }
 
+  function invalidCase(name: string, raw: string | Buffer, problem: string) {
+    return { name, raw, problem };
+  }
+
   it.each([
-    {
-      name: "invalid string metadata alongside nullable usage",
-      raw: legacyWithInvalidEntry({
-        pattern: "private-marker",
-        lastUsedAt: null,
-        lastUsedCommand: 42,
-      }),
-      problem: "agents entry #2.allowlist[1].lastUsedCommand: expected a string",
-    },
-    {
-      name: "null policy alongside historical null usage",
-      raw: JSON.stringify({
+    invalidCase(
+      "invalid string metadata alongside nullable usage",
+      legacyWithInvalidEntry({ pattern: "private-marker", lastUsedAt: null, lastUsedCommand: 42 }),
+      "agents entry #2.allowlist[1].lastUsedCommand: expected a string",
+    ),
+    invalidCase(
+      "null policy alongside historical null usage",
+      JSON.stringify({
         version: 1,
         defaults: { security: null },
         agents: { main: { allowlist: [{ pattern: "private-marker", lastUsedAt: null }] } },
       }),
-      problem: "defaults.security: expected a supported value",
-    },
-    {
-      name: "hostile long keys, values, and multiple failures",
-      raw: legacyWithInvalidEntry(
+      "defaults.security: expected a supported value",
+    ),
+    invalidCase(
+      "hostile long keys, values, and multiple failures",
+      legacyWithInvalidEntry(
         {
           pattern: "/private-marker/pattern",
           lastUsedAt: { ["private-marker-value".repeat(1_000)]: "private-marker" },
@@ -331,44 +327,39 @@ describe("legacy exec approvals migration", () => {
         },
         "private-marker-\n\u001b[31m".repeat(1_000),
       ),
-      problem: "agents entry #2.allowlist[1].lastUsedAt: expected a finite number",
-    },
-    {
-      name: "socket token",
-      raw: JSON.stringify({ version: 1, socket: { token: { "private-marker": true } } }),
-      problem: "socket.token: expected a string",
-    },
-    {
-      name: "whole entry shape",
-      raw: legacyWithInvalidEntry(42),
-      problem:
-        "agents entry #2.allowlist[1]: expected a non-empty string or an object with a non-empty pattern",
-    },
-    {
-      name: "blank string entry",
-      raw: legacyWithInvalidEntry("  "),
-      problem: "agents entry #2.allowlist[1]: expected a non-empty string",
-    },
-    {
-      name: "blank object pattern without a union wrapper",
-      raw: legacyWithInvalidEntry({ pattern: "  " }),
-      problem: "agents entry #2.allowlist[1].pattern: expected a non-empty string",
-    },
-    {
-      name: "unversioned policy is not an empty stub",
-      raw: JSON.stringify({ defaults: { security: "deny" }, agents: {} }),
-      problem: "version: expected a supported value",
-    },
-    {
-      name: "JSON syntax",
-      raw: "{malformed-private-marker",
-      problem: "invalid JSON syntax",
-    },
-    {
-      name: "UTF-8 encoding",
-      raw: Buffer.concat([Buffer.from("private-marker"), Buffer.from([0xff])]),
-      problem: "invalid UTF-8 encoding",
-    },
+      "agents entry #2.allowlist[1].lastUsedAt: expected a finite number",
+    ),
+    invalidCase(
+      "socket token",
+      JSON.stringify({ version: 1, socket: { token: { "private-marker": true } } }),
+      "socket.token: expected a string",
+    ),
+    invalidCase(
+      "whole entry shape",
+      legacyWithInvalidEntry(42),
+      "agents entry #2.allowlist[1]: expected a non-empty string or an object with a non-empty pattern",
+    ),
+    invalidCase(
+      "blank string entry",
+      legacyWithInvalidEntry("  "),
+      "agents entry #2.allowlist[1]: expected a non-empty string",
+    ),
+    invalidCase(
+      "blank object pattern without a union wrapper",
+      legacyWithInvalidEntry({ pattern: "  " }),
+      "agents entry #2.allowlist[1].pattern: expected a non-empty string",
+    ),
+    invalidCase(
+      "unversioned policy is not an empty stub",
+      JSON.stringify({ defaults: { security: "deny" }, agents: {} }),
+      "version: expected a supported value",
+    ),
+    invalidCase("JSON syntax", "{malformed-private-marker", "invalid JSON syntax"),
+    invalidCase(
+      "UTF-8 encoding",
+      Buffer.concat([Buffer.from("private-marker"), Buffer.from([0xff])]),
+      "invalid UTF-8 encoding",
+    ),
   ])(
     "diagnoses $name while preserving bytes and a non-removal receipt",
     async ({ raw, problem }) => {
@@ -418,9 +409,8 @@ describe("legacy exec approvals migration", () => {
   );
 
   it("removes a byte-identical source when canonical state already exists", async () => {
-    const file = { version: 1 as const, defaults: { security: "deny" as const }, agents: {} };
-    const raw = serializeExecApprovals(file);
-    writeExecApprovalsConfigRow({ db: database(), file, raw });
+    const raw = serializeExecApprovals(denyPolicy);
+    writeExecApprovalsConfigRow({ db: database(), file: denyPolicy, raw });
     await fsp.writeFile(sourcePath, raw, "utf8");
 
     const result = await migrate();
@@ -432,12 +422,7 @@ describe("legacy exec approvals migration", () => {
   });
 
   it("preserves conflicting legacy bytes while canonical SQLite wins", async () => {
-    const canonical = {
-      version: 1 as const,
-      defaults: { security: "deny" as const },
-      agents: {},
-    };
-    writeExecApprovalsConfigRow({ db: database(), file: canonical });
+    writeExecApprovalsConfigRow({ db: database(), file: denyPolicy });
     await writeLegacy(sourcePath, {
       version: 1,
       defaults: { security: "full" },
@@ -452,7 +437,7 @@ describe("legacy exec approvals migration", () => {
     expect(result.warnings[0]).toContain("reconcile this file");
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(readExecApprovalsConfigRow(database())?.raw_json).toBe(
-      serializeExecApprovals(canonical),
+      serializeExecApprovals(denyPolicy),
     );
     expect(receipt()).toMatchObject({ removed_source: 0 });
   });
@@ -462,7 +447,7 @@ describe("legacy exec approvals migration", () => {
     db.prepare(
       "INSERT INTO exec_approvals_config (config_key, raw_json, socket_path, has_socket_token, default_security, default_ask, default_ask_fallback, auto_allow_skills, agent_count, allowlist_count, updated_at_ms) VALUES ('current', '{invalid', NULL, 0, NULL, NULL, NULL, NULL, 0, 0, 1)",
     ).run();
-    await writeLegacy(sourcePath, { version: 1, defaults: { security: "deny" }, agents: {} });
+    await writeLegacy(sourcePath, denyPolicy);
 
     const result = await migrate();
 
@@ -478,10 +463,7 @@ describe("legacy exec approvals migration", () => {
 
     const result = await migrate({
       beforeVerify: () => {
-        fs.writeFileSync(
-          sourcePath,
-          serializeExecApprovals({ version: 1, defaults: { security: "deny" }, agents: {} }),
-        );
+        fs.writeFileSync(sourcePath, serializeExecApprovals(denyPolicy));
       },
     });
 

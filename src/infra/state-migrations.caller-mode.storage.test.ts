@@ -27,7 +27,10 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { deriveMeetingTranscriptSessionColumns } from "../transcripts/store-columns.js";
 import { meetingTranscriptDb } from "../transcripts/store-sqlite.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
-import { snapshotFiles } from "./state-migrations.caller-mode.test-helpers.js";
+import {
+  createCallerModeSnapshot,
+  snapshotFiles,
+} from "./state-migrations.caller-mode.test-helpers.js";
 import {
   autoMigrateLegacyState,
   detectLegacyStateMigrations,
@@ -39,13 +42,6 @@ import type { LegacyStateMigrationPlan } from "./state-migrations.types.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
 
 const tempDirs = createTrackedTempDirs();
-
-function candidateAt(
-  root: string,
-  version = "test",
-): Pick<LegacyStateMigrationPlan["candidate"], "root" | "version"> {
-  return { root, version };
-}
 
 async function makeFixture() {
   const root = await tempDirs.make("openclaw-doctor-caller-mode-");
@@ -82,6 +78,25 @@ async function makeFixture() {
     OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
   };
   return { root, homeDir, stateDir, configPath, env };
+}
+
+function planFixture(fixture: Awaited<ReturnType<typeof makeFixture>>) {
+  return planLegacyStateMigrationsReadOnly({
+    mode: "doctor",
+    candidate: { root: fixture.root, version: "test" },
+    snapshot: createCallerModeSnapshot(fixture),
+    env: fixture.env,
+  });
+}
+
+const installDefaults = { custom: true, override: "none", sqlite: false, malformed: false };
+
+function installCase(
+  name: string,
+  agentId: string,
+  overrides: Partial<typeof installDefaults> = {},
+) {
+  return { name, agentId, ...installDefaults, ...overrides };
 }
 
 afterEach(async () => {
@@ -166,46 +181,14 @@ describe("legacy state migration caller storage", () => {
   );
 
   it.each([
-    {
-      name: "deferred main SQLite family",
-      agentId: "main",
-      custom: true,
-      override: "none",
-      sqlite: true,
-      malformed: false,
-    },
-    {
-      name: "configured non-main directory",
-      agentId: "worker",
-      custom: true,
-      override: "none",
-      sqlite: false,
-      malformed: false,
-    },
-    {
-      name: "non-main default",
-      agentId: "worker",
-      custom: false,
-      override: "none",
-      sqlite: false,
-      malformed: false,
-    },
-    {
-      name: "malformed default config",
-      agentId: "main",
-      custom: true,
-      override: "none",
-      sqlite: false,
-      malformed: true,
-    },
-    {
-      name: "explicit tilde legacy directory in a named profile",
-      agentId: "worker",
-      custom: true,
+    installCase("deferred main SQLite family", "main", { sqlite: true }),
+    installCase("configured non-main directory", "worker"),
+    installCase("non-main default", "worker", { custom: false }),
+    installCase("malformed default config", "main", { malformed: true }),
+    installCase("explicit tilde legacy directory in a named profile", "worker", {
       override: "tilde",
-      sqlite: false,
       malformed: true,
-    },
+    }),
   ])(
     "shares the install directory between SDK and Doctor: $name (malformed: $malformed)",
     async (testCase) => {
@@ -398,10 +381,7 @@ describe("legacy state migration caller storage", () => {
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
     const agentDatabasePath = path.join(
       fixture.stateDir,
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
+      "agents/main/agent/openclaw-agent.sqlite",
     );
     const stateDatabasePath = resolveOpenClawStateSqlitePath(fixture.env);
     openOpenClawStateDatabase({ env: fixture.env });
@@ -456,16 +436,7 @@ describe("legacy state migration caller storage", () => {
       expect(fs.existsSync(`${agentDatabasePath}-wal`)).toBe(true);
       expect(fs.existsSync(`${stateDatabasePath}-wal`)).toBe(true);
 
-      plan = await planLegacyStateMigrationsReadOnly({
-        mode: "doctor",
-        candidate: candidateAt(fixture.root),
-        snapshot: {
-          homeDir: fixture.homeDir,
-          configPath: fixture.configPath,
-          stateDir: fixture.stateDir,
-        },
-        env: fixture.env,
-      });
+      plan = await planFixture(fixture);
     } finally {
       agentDatabase.close();
       stateDatabase.close();
@@ -534,16 +505,7 @@ describe("legacy state migration caller storage", () => {
       legacy.close();
     }
 
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     expect(plan.steps[0]).toMatchObject({ id: "state-schema", requiredness: "required" });
     expect(plan.steps.find((step) => step.id === "managed-worktrees")).toMatchObject({

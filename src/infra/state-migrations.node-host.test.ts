@@ -24,6 +24,20 @@ import {
 
 type NodeHostConfigDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 const fixtureDigest = ["fixture", "digest"].join("-");
+const gateway = {
+  host: "gateway.example",
+  port: 18443,
+  tls: false,
+  tlsFingerprint: fixtureDigest,
+  contextPath: "/openclaw-gw",
+};
+const nodeIdentity = {
+  version: 1 as const,
+  nodeId: "legacy-node-id",
+  displayName: "Legacy Node",
+  gateway,
+};
+const canonicalConfig: NodeHostConfig = { ...nodeIdentity, installedAppsSharing: false };
 
 describe("legacy node-host Doctor migration", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -56,17 +70,8 @@ describe("legacy node-host Doctor migration", () => {
 
   function legacyConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
-      version: 1,
-      nodeId: "legacy-node-id",
+      ...nodeIdentity,
       token: "test-token-placeholder",
-      displayName: "Legacy Node",
-      gateway: {
-        host: "gateway.example",
-        port: 18443,
-        tls: false,
-        tlsFingerprint: fixtureDigest,
-        contextPath: "/openclaw-gw",
-      },
       ...overrides,
     };
   }
@@ -95,17 +100,10 @@ describe("legacy node-host Doctor migration", () => {
         .values({
           state_key: NODE_HOST_CONFIG_KEY,
           value_json: JSON.stringify({
-            version: 1,
+            ...canonicalConfig,
             nodeId: params.nodeId ?? "legacy-node-id",
             displayName: params.displayName ?? "Legacy Node",
-            gateway: {
-              host: params.gatewayHost ?? "gateway.example",
-              port: 18443,
-              tls: false,
-              tlsFingerprint: fixtureDigest,
-              contextPath: "/openclaw-gw",
-            },
-            installedAppsSharing: false,
+            gateway: { ...gateway, host: params.gatewayHost ?? gateway.host },
           } satisfies NodeHostConfig),
           updated_at_ms: params.updatedAtMs,
         }),
@@ -137,37 +135,14 @@ describe("legacy node-host Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toContain("Migrated node-host config to shared SQLite state.");
-    await expect(loadNodeHostConfig(env)).resolves.toEqual({
-      version: 1,
-      nodeId: "legacy-node-id",
-      displayName: "Legacy Node",
-      gateway: {
-        host: "gateway.example",
-        port: 18443,
-        tls: false,
-        tlsFingerprint: fixtureDigest,
-        contextPath: "/openclaw-gw",
-      },
-      installedAppsSharing: false,
-    });
+    await expect(loadNodeHostConfig(env)).resolves.toEqual(canonicalConfig);
     expect(readCanonicalRow(env)?.value).not.toHaveProperty("token");
     expect(fs.existsSync(sourcePath)).toBe(false);
   });
 
   it("normalizes a legacy empty gateway context path to unset", async () => {
     const { env, stateDir, migrate } = useStateDir();
-    await writeLegacy(
-      stateDir,
-      legacyConfig({
-        gateway: {
-          host: "gateway.example",
-          port: 18443,
-          tls: false,
-          tlsFingerprint: fixtureDigest,
-          contextPath: "",
-        },
-      }),
-    );
+    await writeLegacy(stateDir, legacyConfig({ gateway: { ...gateway, contextPath: "" } }));
 
     const result = await migrate();
 
@@ -201,43 +176,29 @@ describe("legacy node-host Doctor migration", () => {
   });
 
   it.each([
-    [
-      "unknown top-level field",
-      legacyConfig({ unknown: true }),
-      "legacy node-host config has unexpected field unknown",
-    ],
-    [
-      "empty top-level field",
-      legacyConfig({ "": 1, later: 2 }),
-      'legacy node-host config has unexpected field ""',
-    ],
-    ["invalid version", legacyConfig({ version: 2 }), "legacy node-host config version must be 1"],
-    [
-      "blank node id",
-      legacyConfig({ nodeId: " " }),
-      "legacy node-host nodeId must be a non-empty string",
-    ],
+    ["unknown top-level field", { unknown: true }, "config has unexpected field unknown"],
+    ["empty top-level field", { "": 1, later: 2 }, 'config has unexpected field ""'],
+    ["invalid version", { version: 2 }, "config version must be 1"],
+    ["blank node id", { nodeId: " " }, "nodeId must be a non-empty string"],
     [
       "unknown gateway field",
-      legacyConfig({ gateway: { host: "gateway.example", unknown: true } }),
-      "legacy node-host gateway has unexpected field unknown",
+      { gateway: { host: "gateway.example", unknown: true } },
+      "gateway has unexpected field unknown",
     ],
     [
       "__proto__ gateway field",
-      legacyConfig({ gateway: { ["__proto__"]: 1, later: 2 } }),
-      "legacy node-host gateway has unexpected field __proto__",
+      { gateway: { ["__proto__"]: 1, later: 2 } },
+      "gateway has unexpected field __proto__",
     ],
-    [
-      "invalid token",
-      legacyConfig({ token: 42 }),
-      "legacy node-host token must be a string when present",
-    ],
-  ])("rejects strict legacy shape: %s", async (_label, value, message) => {
+    ["invalid token", { token: 42 }, "token must be a string when present"],
+  ])("rejects strict legacy shape: %s", async (_label, overrides, message) => {
     const { env, stateDir, migrate } = useStateDir();
-    const { sourcePath } = await writeLegacy(stateDir, value);
+    const { sourcePath } = await writeLegacy(stateDir, legacyConfig(overrides));
     const result = await migrate();
 
-    expect(result.warnings[0]).toBe(`Failed reading legacy node-host state: Error: ${message}`);
+    expect(result.warnings[0]).toBe(
+      `Failed reading legacy node-host state: Error: legacy node-host ${message}`,
+    );
     expect(readCanonicalRow(env)).toBeUndefined();
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
@@ -348,21 +309,13 @@ describe("legacy node-host Doctor migration", () => {
   });
 
   it("refuses symlinked, hardlinked, and oversized sources", async () => {
-    const symlinkCase = useStateDir();
-    const outside = path.join(symlinkCase.stateDir, "outside.json");
-    await fsp.writeFile(outside, JSON.stringify(legacyConfig()), "utf8");
-    const symlinkPath = path.join(symlinkCase.stateDir, "node.json");
-    await fsp.symlink(outside, symlinkPath);
-    const symlinkResult = await symlinkCase.migrate();
-    expect(symlinkResult.warnings[0]).toContain("Failed reading legacy node-host state");
-
-    const hardlinkCase = useStateDir();
-    const hardlinkOutside = path.join(hardlinkCase.stateDir, "outside.json");
-    await fsp.writeFile(hardlinkOutside, JSON.stringify(legacyConfig()), "utf8");
-    const hardlinkPath = path.join(hardlinkCase.stateDir, "node.json");
-    await fsp.link(hardlinkOutside, hardlinkPath);
-    const hardlinkResult = await hardlinkCase.migrate();
-    expect(hardlinkResult.warnings[0]).toContain("Failed reading legacy node-host state");
+    for (const link of [fsp.symlink, fsp.link]) {
+      const { stateDir, migrate } = useStateDir();
+      const outside = path.join(stateDir, "outside.json");
+      await fsp.writeFile(outside, JSON.stringify(legacyConfig()), "utf8");
+      await link(outside, path.join(stateDir, "node.json"));
+      expect((await migrate()).warnings[0]).toContain("Failed reading legacy node-host state");
+    }
 
     const oversizedCase = useStateDir();
     await fsp.writeFile(path.join(oversizedCase.stateDir, "node.json"), "x".repeat(65 * 1024));
