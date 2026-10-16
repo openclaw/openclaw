@@ -145,16 +145,8 @@ it.each(["import", "require"])(
     const root = temp.make("plugin-missing-conditional-target-");
     const entry = mode === "import" ? "index.mjs" : "index.cjs";
     write(root, {
-      "package.json": JSON.stringify({
-        type: "module",
-        imports: {
-          "#selected": {
-            "module-sync": "./missing.mjs",
-            import: "./fallback.mjs",
-            require: "./fallback.mjs",
-          },
-        },
-      }),
+      "package.json":
+        '{"type":"module","imports":{"#selected":{"module-sync":"./missing.mjs","import":"./fallback.mjs","require":"./fallback.mjs"}}}',
       "fallback.mjs": "export const value = 'wrong fallback';",
       [entry]:
         mode === "import"
@@ -225,11 +217,8 @@ it.each(["import", "require"])(
     const root = temp.make("plugin-invalid-optional-metadata-");
     const entry = mode === "import" ? "index.mjs" : "index.cjs";
     write(root, {
-      "package.json": JSON.stringify({
-        imports: {
-          "#selected": { "module-sync": "invalid-dependency", default: "valid-dependency" },
-        },
-      }),
+      "package.json":
+        '{"imports":{"#selected":{"module-sync":"invalid-dependency","default":"valid-dependency"}}}',
       [entry]:
         mode === "import"
           ? "export const read = async () => (await import('#selected')).value;"
@@ -293,9 +282,7 @@ const computedFixtures: ComputedFixture[] = [
     modes: ["import", "require"],
     tsconfig: true,
     files: {
-      "tsconfig.json": JSON.stringify({
-        compilerOptions: { baseUrl: ".", paths: { "@fixture/*": ["./lib/*"] } },
-      }),
+      "tsconfig.json": '{"compilerOptions":{"baseUrl":".","paths":{"@fixture/*":["./lib/*"]}}}',
       "lib/value.ts": "export const value: number = 42;",
     },
     reads: [["@fixture/value", 42]],
@@ -322,9 +309,7 @@ const computedFixtures: ComputedFixture[] = [
     name: "wildcard trailer precedence",
     modes: ["import", "require"],
     files: {
-      "package.json": JSON.stringify({
-        imports: { "#selected/*": "./broad.cjs", "#selected/*.js": "./specific.cjs" },
-      }),
+      "package.json": '{"imports":{"#selected/*":"./broad.cjs","#selected/*.js":"./specific.cjs"}}',
       "broad.cjs": "exports.value = 'broad';",
       "specific.cjs": "exports.value = 'specific';",
     },
@@ -339,9 +324,8 @@ const computedFixtures: ComputedFixture[] = [
     name: "unselected native runtime alias exclusion",
     modes: ["require"],
     files: {
-      "package.json": JSON.stringify({
-        imports: { "#selected": { bun: "bun-dependency", default: "node-dependency" } },
-      }),
+      "package.json":
+        '{"imports":{"#selected":{"bun":"bun-dependency","default":"node-dependency"}}}',
       ...Object.fromEntries(
         ["bun-dependency", "node-dependency"].flatMap((name) => [
           [
@@ -442,12 +426,8 @@ it("scopes observed package-map absences to the target selected by custom condit
     const filename = mode === "import" ? "index.mjs" : "index.cjs";
     const entry = path.join(root, filename);
     write(root, {
-      "package.json": JSON.stringify({
-        imports: {
-          "#selected": { "openclaw-custom": "./valid.cjs", default: "./missing.cjs" },
-          "#late": "./missing.cjs",
-        },
-      }),
+      "package.json":
+        '{"imports":{"#selected":{"openclaw-custom":"./valid.cjs","default":"./missing.cjs"},"#late":"./missing.cjs"}}',
       "valid.cjs": "exports.value = 42;",
       [filename]:
         mode === "import"

@@ -20,6 +20,26 @@ import {
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
+type Artifact = ReturnType<typeof capturePluginGenerationArtifact>;
+type Cache = ReturnType<typeof createPluginCache>;
+
+function captureInCache(cache: Cache, root: string) {
+  return withPluginCache(cache, () => capturePluginGenerationArtifact(root));
+}
+function expectBytes(filename: string, bytes: Buffer) {
+  expect(fs.readFileSync(filename).equals(bytes)).toBe(true);
+}
+function readText(filename: string) {
+  return fs.readFileSync(filename, "utf8");
+}
+
+function write(root: string, name: string, content: string) {
+  fs.writeFileSync(path.join(root, name), content);
+}
+function writeJson(root: string, name: string, value: unknown) {
+  write(root, name, JSON.stringify(value));
+}
+
 it("records a native host mismatch while preserving unrelated channel accounts", async () => {
   await withOpenClawTestState({ label: "native-host-load-failure" }, async (state) => {
     const fixture = createFixture(state.path("installed"), true);
@@ -33,16 +53,14 @@ it("records a native host mismatch while preserving unrelated channel accounts",
     });
     const healthy = state.path("healthy");
     fs.mkdirSync(healthy);
-    fs.writeFileSync(
-      path.join(healthy, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "healthy",
-        channels: ["healthy-chat"],
-        configSchema: { type: "object" },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(healthy, "index.js"),
+    writeJson(healthy, "openclaw.plugin.json", {
+      id: "healthy",
+      channels: ["healthy-chat"],
+      configSchema: { type: "object" },
+    });
+    write(
+      healthy,
+      "index.js",
       `export default { id: "healthy", register(api) {
         api.registerChannel({ plugin: {
           id: "healthy-chat",
@@ -113,9 +131,9 @@ it("validates overlapping hardlinked companion placements once per member, inclu
   await withOpenClawTestState({ label: "native-reference-verdict" }, async (state) => {
     const root = state.path("plugin");
     fs.mkdirSync(root);
-    fs.writeFileSync(path.join(root, "package.json"), '{"name":"native-reference-fixture"}');
-    fs.writeFileSync(path.join(root, "index.cjs"), "exports.value = 1;");
-    fs.writeFileSync(path.join(root, "helper.dat"), "original companion");
+    write(root, "package.json", '{"name":"native-reference-fixture"}');
+    write(root, "index.cjs", "exports.value = 1;");
+    write(root, "helper.dat", "original companion");
     fs.mkdirSync(path.join(root, "nested", "companion-sentinel"), { recursive: true });
     for (let index = 0; index < 33; index++) {
       const directory = index % 2 ? path.join(root, "nested") : root;
@@ -134,12 +152,10 @@ it("validates overlapping hardlinked companion placements once per member, inclu
         ([filename]) => filename === path.join(directory, "nested", "companion-sentinel"),
       ).length;
     const cache = createPluginCache();
-    const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
-    let recovery:
-      | ReturnType<ReturnType<typeof capturePluginGenerationArtifact>["captureRecoverySource"]>
-      | undefined;
+    const artifacts: Artifact[] = [];
+    let recovery: ReturnType<Artifact["captureRecoverySource"]> | undefined;
     const capture = () => {
-      const artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(root));
+      const artifact = captureInCache(cache, root);
       artifacts.push(artifact);
       return artifact;
     };
@@ -170,24 +186,18 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       paths.mockClear();
       recovery = first.captureRecoverySource();
       expect.soft(walks(recovery.rootDir)).toBe(1);
-      expect(fs.readFileSync(path.join(recovery.rootDir, "helper.dat"), "utf8")).toBe(
-        "original companion",
-      );
+      expect(readText(path.join(recovery.rootDir, "helper.dat"))).toBe("original companion");
 
-      fs.writeFileSync(path.join(root, "helper.dat"), "replacement companion");
+      write(root, "helper.dat", "replacement companion");
       const replacement = capture();
       expect(replacement.sourceDigest).not.toBe(first.sourceDigest);
       expect(fs.statSync(replacement.resolve(path.join(root, "addon-0.node"))).ino).not.toBe(
         fs.statSync(first.resolve(path.join(root, "addon-0.node"))).ino,
       );
       expect.soft(walks(replacement.rootDir)).toBe(1);
-      expect(fs.readFileSync(path.join(replacement.rootDir, "helper.dat"), "utf8")).toBe(
-        "replacement companion",
-      );
-      expect(fs.readFileSync(path.join(first.rootDir, "helper.dat"), "utf8")).toBe(
-        "original companion",
-      );
-      fs.writeFileSync(path.join(replacement.rootDir, "helper.dat"), "damaged capture");
+      expect(readText(path.join(replacement.rootDir, "helper.dat"))).toBe("replacement companion");
+      expect(readText(path.join(first.rootDir, "helper.dat"))).toBe("original companion");
+      write(replacement.rootDir, "helper.dat", "damaged capture");
       expect(() => replacement.linkHost(hosts[0]!)).toThrow(
         "Native plugin companions cannot be preserved",
       );
@@ -227,47 +237,32 @@ it.each([
       if (hoisted) {
         const dependency = path.join(path.dirname(fixture.installRoot), "native-fixture");
         fs.mkdirSync(dependency);
-        fs.writeFileSync(
-          path.join(dependency, "package.json"),
-          JSON.stringify({ name: "native-fixture", version: "1.0.0" }),
-        );
+        writeJson(dependency, "package.json", { name: "native-fixture", version: "1.0.0" });
         nativeFilename = path.join(dependency, "fixture.bin");
         fs.renameSync(fixture.filename, nativeFilename);
         const manifestPath = path.join(fixture.root, "package.json");
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+        const manifest = JSON.parse(readText(manifestPath));
         fs.writeFileSync(
           manifestPath,
           JSON.stringify({ ...manifest, dependencies: { "native-fixture": "1.0.0" } }),
         );
       }
-      fs.writeFileSync(
-        path.join(fixture.root, "child.cjs"),
-        "module.exports = require('openclaw/plugin-sdk/identity');",
-      );
+      write(fixture.root, "child.cjs", "module.exports = require('openclaw/plugin-sdk/identity');");
       const hosts = ["first", "second"].map((identity) => {
         const host = state.path(`fallback-host-${identity}`);
         fs.mkdirSync(host);
-        fs.writeFileSync(
-          path.join(host, "package.json"),
-          JSON.stringify({
-            name: "openclaw",
-            exports: { "./plugin-sdk/identity": "./identity.cjs" },
-          }),
-        );
-        fs.writeFileSync(
-          path.join(host, "identity.cjs"),
-          `module.exports = ${JSON.stringify(identity)};`,
-        );
+        writeJson(host, "package.json", {
+          name: "openclaw",
+          exports: { "./plugin-sdk/identity": "./identity.cjs" },
+        });
+        write(host, "identity.cjs", `module.exports = ${JSON.stringify(identity)};`);
         return host;
       });
-      fs.writeFileSync(
-        path.join(fixture.installRoot, "package.json"),
-        JSON.stringify({
-          name: "fixture-package",
-          version: "1.0.0",
-          peerDependencies: { openclaw: "*" },
-        }),
-      );
+      writeJson(fixture.installRoot, "package.json", {
+        name: "fixture-package",
+        version: "1.0.0",
+        peerDependencies: { openclaw: "*" },
+      });
       await linkOpenClawPeerDependencies({
         installedDir: fixture.installRoot,
         peerDependencies: { openclaw: "*" },
@@ -286,11 +281,11 @@ it.each([
         }
         link(from, to);
       });
-      let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
-      let successor: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+      let artifact: Artifact | undefined;
+      let successor: Artifact | undefined;
       try {
         const capture = () => {
-          artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
+          artifact = captureInCache(cache, fixture.root);
         };
         if (source === "archive") {
           expect(capture).toThrow(failure);
@@ -302,9 +297,9 @@ it.each([
             ? require.resolve("native-fixture/fixture.bin")
             : artifact!.resolve(nativeFilename);
           expect(fs.realpathSync(native)).toBe(nativeFilename);
-          expect(fs.readFileSync(native).equals(fixture.bytes)).toBe(true);
+          expectBytes(native, fixture.bytes);
           expect(require("./child.cjs")).toBe("first");
-          successor = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
+          successor = captureInCache(cache, fixture.root);
           const peer = path.join(
             hoisted ? path.dirname(nativeFilename) : fixture.installRoot,
             "node_modules",
@@ -339,7 +334,7 @@ it("keeps temporary native inspections from hardlinking rehearsal companions", a
     fs.writeFileSync(companion, '{"vips":"fixture"}');
     const before = fs.statSync(companion, { bigint: true });
     const cache = createPluginCache();
-    let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+    let artifact: Artifact | undefined;
     try {
       artifact = withPluginCache(cache, () =>
         withPluginSourceCaptureStorage({ stateDir: state.stateDir, placement: "temporary" }, () => {
@@ -348,7 +343,7 @@ it("keeps temporary native inspections from hardlinking rehearsal companions", a
         }),
       );
       const captured = fs.realpathSync(artifact.resolve(companion));
-      expect(fs.readFileSync(captured, "utf8")).toBe('{"vips":"fixture"}');
+      expect(readText(captured)).toBe('{"vips":"fixture"}');
       expect(fs.statSync(companion, { bigint: true })).toMatchObject({
         dev: before.dev,
         ino: before.ino,
@@ -357,7 +352,7 @@ it("keeps temporary native inspections from hardlinking rehearsal companions", a
       });
       expect(fs.statSync(captured, { bigint: true }).ino).not.toBe(before.ino);
       fs.writeFileSync(captured, "private inspection change");
-      expect(fs.readFileSync(companion, "utf8")).toBe('{"vips":"fixture"}');
+      expect(readText(companion)).toBe('{"vips":"fixture"}');
     } finally {
       await artifact?.disposeAsync();
       await retirePluginCache(cache);
@@ -390,7 +385,7 @@ it.each(["state root", "temporary placement", "publication root"] as const)(
         ];
         const publicationRoots = [...new Set(scopes.map(({ roots }) => roots.stateDir))];
         const cache = createPluginCache();
-        const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
+        const artifacts: Artifact[] = [];
         const capturedPaths: string[] = [];
         try {
           for (const stateDir of publicationRoots) {
@@ -414,7 +409,7 @@ it.each(["state root", "temporary placement", "publication root"] as const)(
             if (storage.placement === "temporary") {
               expect(captured.startsWith(fs.realpathSync(runtimeTemp) + path.sep)).toBe(true);
             }
-            expect(fs.readFileSync(captured).equals(fixture.bytes)).toBe(true);
+            expectBytes(captured, fixture.bytes);
           }
           expect(capturedPaths[0] === capturedPaths[1]).toBe(false);
           await settlePluginNativeAdmissions(cache);
@@ -425,7 +420,7 @@ it.each(["state root", "temporary placement", "publication root"] as const)(
               change === "publication root" ? capturedPaths[index] : capturedPaths[1];
             expect(receipt?.nativeArtifacts[fixture.filename]?.capturedPath).toBe(expected);
           }
-          expect(fs.readFileSync(capturedPaths[0]!).equals(fixture.bytes)).toBe(true);
+          expectBytes(capturedPaths[0]!, fixture.bytes);
         } finally {
           for (const artifact of artifacts) {
             await artifact.disposeAsync();
