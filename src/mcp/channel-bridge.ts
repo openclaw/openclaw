@@ -211,7 +211,6 @@ export class OpenClawChannelBridge {
       max: CONVERSATIONS_LIST_LIMIT,
     });
     const response: SessionListResult = await this.requestGateway("sessions.list", {
-      rowMode: "compact",
       limit,
       search: params?.search,
       includeDerivedTitles: params?.includeDerivedTitles ?? true,

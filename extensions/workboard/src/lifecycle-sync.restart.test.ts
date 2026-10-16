@@ -302,7 +302,12 @@ describe("Workboard prepared launch restart recovery", () => {
 
       lifecycle.service.onGatewayStart();
       const readSessions = lifecycle.readSessions;
-      await vi.waitFor(() => expect(readSessions).toHaveBeenCalledOnce());
+      await vi.waitFor(() =>
+        expect(readSessions).toHaveBeenCalledWith({
+          includeUnknown: false,
+          search: interrupted.prepared.sessionKey,
+        }),
+      );
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 0);
       });

@@ -125,10 +125,7 @@ describe("acp translator stable lifecycle handlers", () => {
     expect(second.sessions.map((session) => session.cwd)).toEqual(["/work/a", "/work/a"]);
     expect(second.nextCursor).toBeNull();
     expect(request.mock.calls).toEqual(
-      [3, 6, 5, 10].map((limit) => [
-        "sessions.list",
-        { rowMode: "compact", limit, includeDerivedTitles: true },
-      ]),
+      [3, 6, 5, 10].map((limit) => ["sessions.list", { limit, includeDerivedTitles: true }]),
     );
     await expect(
       agent.listSessions({ cwd: "/work/a", cursor: ` ${first.nextCursor} ` }),

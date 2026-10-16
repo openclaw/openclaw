@@ -176,7 +176,6 @@ export class AcpTranslatorSessionLifecycle {
 
     while (true) {
       const result = await this.gateway.request<SessionsListResult>("sessions.list", {
-        rowMode: "compact",
         limit: fetchLimit,
         includeDerivedTitles: true,
       });

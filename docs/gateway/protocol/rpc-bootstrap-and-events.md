@@ -32,13 +32,6 @@ or the full `chat.history.sessionInfo` for details. Omitting `rowMode` preserves
 the full row contract. Title, preview, and Activity recap enrichment remain
 controlled by their existing include flags.
 
-Full-detail lists (omitted `rowMode`) default to 100 rows and cap the shared page
-at 200 rows, including when a larger `limit` is requested. This bounds row
-preparation and synchronous presentation during large roster reads. Follow
-`hasMore` and `nextOffset` to retrieve the remaining rows; `limitApplied` reports
-the effective page size. Compact, sidebar, and dashboard modes retain their
-requested limits. The same cap applies to the initial `sessions.subscribe` list.
-
 The sidebar requests `rowMode: "sidebar"` to retain navigation, identity, unread,
 run, placement, and membership facts while omitting execution settings and usage.
 Repeated display objects are sent once in the response's `sharedFacts` array.

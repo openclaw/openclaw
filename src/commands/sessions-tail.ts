@@ -163,7 +163,6 @@ async function selectSessionsToTail(
         "sessions.list",
         { config: cfg },
         {
-          rowMode: "compact",
           activeOnly: true,
           agentId: opts.allAgents ? undefined : selections[0]?.agentId,
           limit: selections.length,

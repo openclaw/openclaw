@@ -1,4 +1,5 @@
 import { AsyncResource } from "node:async_hooks";
+import { setImmediate } from "node:timers/promises";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -20,6 +21,7 @@ import type { WorkboardStore } from "./store.js";
 const WORKBOARD_LIFECYCLE_SWEEP_MS = 60_000;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 const WORKBOARD_SESSION_SWEEP_LIMIT = 10_000;
+const WORKBOARD_SESSION_PAGE_SIZE = 200;
 const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
 // Prepared hook generations share the active service reader, never a worker's
 // caller authority. Gateway restart clears both readiness and that reader.
@@ -70,6 +72,7 @@ function sessionProvesPreparedAcceptance(session: WorkboardLifecycleSession): bo
 type WorkboardLifecycleSessionReadOptions = {
   includeUnknown: boolean;
   sessionKey?: string;
+  search?: string;
 };
 
 type WorkboardLifecycleSessionReader = (
@@ -280,6 +283,7 @@ async function syncWorkboardLifecycleSessions(params: {
   complete?: boolean;
   now?: number;
   onMatched?: WorkboardLifecycleMatchHandler;
+  readSessions?: WorkboardLifecycleSessionReader;
 }): Promise<number> {
   const now = params.now ?? Date.now();
   const sessionsByKey = new Map<string, WorkboardLifecycleSession>();
@@ -331,6 +335,23 @@ async function syncWorkboardLifecycleSessions(params: {
       launch?.phase === "prepared" &&
       (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt)
     ) {
+      if (!params.complete && params.readSessions) {
+        // Offset pages can move as sessions update. Only a bounded search can
+        // establish absence for this prepared launch after an incomplete sweep.
+        const snapshot = await params.readSessions({
+          includeUnknown: linkedSessionKey === "unknown",
+          search:
+            canUseAgentlessFallback && suffixIndex >= 0 ? lookupKey.slice(suffixIndex) : lookupKey,
+        });
+        count += await syncWorkboardLifecycleSessions({
+          store: params.store,
+          cards: [card],
+          ...snapshot,
+          now,
+          onMatched: params.onMatched,
+        });
+        continue;
+      }
       if (
         params.complete &&
         (await params.store.failPreparedLaunch(card.id, {
@@ -423,28 +444,53 @@ export async function readWorkboardLifecycleSessions(
     // captured link only while the Gateway proves that its owner is unambiguous.
     includeUnknown = !agentsPayload.selectionRequired;
   }
-  const payload = await gateway.request(
-    "sessions.list",
-    {
-      rowMode: "compact",
-      limit: WORKBOARD_SESSION_SWEEP_LIMIT,
-      configuredAgentsOnly: true,
-      archived: "all",
-      includeGlobal: false,
-      includeUnknown,
-    },
-    { scopes: ["operator.read"] },
-  );
-  if (!isRecord(payload) || !Array.isArray(payload.sessions)) {
-    throw new Error("sessions.list returned an invalid lifecycle snapshot");
-  }
-  return {
-    sessions: payload.sessions.flatMap((value) => {
+  const sessions = new Map<string, WorkboardLifecycleSession>();
+  let complete = false;
+  let offset = 0;
+  while (offset < WORKBOARD_SESSION_SWEEP_LIMIT) {
+    const payload = await gateway.request(
+      "sessions.list",
+      {
+        rowMode: "compact",
+        limit: Math.min(WORKBOARD_SESSION_PAGE_SIZE, WORKBOARD_SESSION_SWEEP_LIMIT - offset),
+        offset,
+        ...(options.search !== undefined ? { search: options.search } : {}),
+        configuredAgentsOnly: true,
+        archived: "all",
+        includeGlobal: false,
+        includeUnknown,
+      },
+      { scopes: ["operator.read"] },
+    );
+    if (!isRecord(payload) || !Array.isArray(payload.sessions)) {
+      throw new Error("sessions.list returned an invalid lifecycle snapshot");
+    }
+    for (const value of payload.sessions) {
       const session = normalizeSession(value);
-      return session ? [session] : [];
-    }),
-    complete: payload.hasMore === false,
-  };
+      if (session) {
+        sessions.set(session.key, session);
+      }
+    }
+    if (payload.hasMore === false) {
+      // A moving multi-page roster supplies positive observations, never absence.
+      complete = offset === 0;
+      break;
+    }
+    const nextOffset = offset + payload.sessions.length;
+    if (
+      options.search !== undefined ||
+      payload.hasMore !== true ||
+      payload.sessions.length === 0 ||
+      payload.nextOffset !== nextOffset
+    ) {
+      break;
+    }
+    offset = nextOffset;
+    if (offset < WORKBOARD_SESSION_SWEEP_LIMIT) {
+      await setImmediate();
+    }
+  }
+  return { sessions: [...sessions.values()], complete };
 }
 
 export function createWorkboardLifecycleService(params: {
@@ -575,6 +621,7 @@ export function createWorkboardLifecycleService(params: {
                   ...snapshot,
                   now: params.now?.() ?? Date.now(),
                   onMatched,
+                  readSessions: params.readSessions,
                 });
                 cards = await params.store.list();
               } catch (error) {

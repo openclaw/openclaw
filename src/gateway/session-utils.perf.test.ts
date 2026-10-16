@@ -440,7 +440,7 @@ describe("session list resolver cache", () => {
           for (let request = 0; request < 2; request++) {
             const result = await listProjectedSessions({
               projection,
-              opts: { limit, search, rowMode: "compact" },
+              opts: { limit, search },
             });
             expect(result.sessions.map((row) => row.key)).toEqual(
               !search ? Object.keys(store).toReversed().slice(0, limit) : [],
@@ -549,7 +549,6 @@ describe("session list resolver cache", () => {
             ownerFirst: Boolean(ownerId),
             includeDerivedTitles: true,
             includeLastMessage: true,
-            rowMode: "compact",
             limit: scenario.limit,
           },
         });
@@ -578,7 +577,6 @@ describe("session list resolver cache", () => {
             ownerFirst: Boolean(ownerId),
             includeDerivedTitles: false,
             includeLastMessage: false,
-            rowMode: "compact",
             limit: scenario.limit,
           },
         });

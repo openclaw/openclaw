@@ -10,7 +10,7 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 it.runIf(process.env.OPENCLAW_SESSION_DIRTY_PARENT_BENCH === "1")(
-  "measures a 200-row page after parent publications over 5,000 candidates",
+  "measures a 245-row page after parent publications over 5,000 candidates",
   async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {
@@ -53,9 +53,9 @@ it.runIf(process.env.OPENCLAW_SESSION_DIRTY_PARENT_BENCH === "1")(
       try {
         await projection.ensureMaterialized();
         const list = () =>
-          listProjectedSessions({ projection, opts: { limit: 200, archived: "all" } });
+          listProjectedSessions({ projection, opts: { limit: 245, archived: "all" } });
         const golden = await list();
-        expect(golden.sessions).toHaveLength(200);
+        expect(golden.sessions).toHaveLength(245);
         expect(golden.totalCount).toBe(candidates);
         const digest = (value: unknown) =>
           createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -64,7 +64,7 @@ it.runIf(process.env.OPENCLAW_SESSION_DIRTY_PARENT_BENCH === "1")(
         const search = () =>
           listProjectedSessions({
             projection,
-            opts: { limit: 200, archived: "all", search: "Session" },
+            opts: { limit: 245, archived: "all", search: "Session" },
           });
         expect(await search()).toEqual(golden);
         const cleanMs: number[] = [];
