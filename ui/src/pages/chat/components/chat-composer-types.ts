@@ -218,6 +218,7 @@ export type ChatComposerState = SkillMenuState &
     composerInputIntentKey: string | null;
     pendingClearedSubmittedDraft: ScopedComposerDraft | null;
     presentation: {
+      dictationError: string | null;
       goalExpandedId: string | null;
       activeQuestionKey: string | null;
       gatewayQuestionIds: Set<string>;

@@ -26,8 +26,16 @@ export function ChatComposer(props: ChatComposerProps) {
     composerDraftKey(props);
     return null;
   });
-  const [error, setError] = createSignal<string | null>(null);
-  const interaction = { composition, setComposition, error, setError };
+  const interaction = {
+    composition,
+    setComposition,
+    error: () => state.presentation.dictationError,
+    setError: (error: string | null) => {
+      state.updatePresentation((draft) => {
+        draft.dictationError = error;
+      });
+    },
+  };
   const [revision, setRevision] = createSignal(0);
   let computingFrame = false;
   let deferredInvalidation = false;

@@ -1,5 +1,9 @@
 import { createSignal, createStore } from "solid-js";
-import type { ChatGoalDraftMode, ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
+import type {
+  ChatGoalDraftMode,
+  ChatQueueItem,
+  HumanMention,
+} from "../../../lib/chat/chat-types.ts";
 import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import {
@@ -14,6 +18,7 @@ import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types
 
 function createChatComposerState(): ChatComposerState {
   const [presentation, updatePresentation] = createStore<ChatComposerState["presentation"]>({
+    dictationError: null,
     goalExpandedId: null,
     activeQuestionKey: null,
     gatewayQuestionIds: new Set(),
