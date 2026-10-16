@@ -7,7 +7,7 @@ import { subscribeBrowserAuthRestored } from "../app/browser-http.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { resolveProfileAppearancePrefs } from "../app/server-prefs-profile.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "../styles/session-background.css";
 import { backgroundPaletteKey, readBackgroundOpacityLimit } from "./session-background-contrast.ts";
 import { backgroundImageReadIdentity, readBackgroundImage } from "./session-background-image.ts";

@@ -61,6 +61,7 @@ const modelFieldsSchema = z.object({
     .optional(),
   contextWindowDefault: z.string().trim().min(1).optional(),
   contextTokens: z.number().int().positive().optional(),
+  parameterCount: z.number().int().positive().optional(),
   maxTokens: z.number().finite().positive().optional(),
   thinkingLevelMap: z
     .partialRecord(z.enum(MODEL_CATALOG_THINKING_LEVELS), z.string().nullable())

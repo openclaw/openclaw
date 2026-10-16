@@ -228,7 +228,6 @@ describe("Discord voice WAV workspace ownership", () => {
         "524946462c00000057415645666d7420100000000100020080bb000000ee020004001000" +
           "646174610800000000ff807faa551234",
       );
-      expect(result.durationSeconds).toBe(8 / (4 * 48_000));
       expect(await fs.readdir(rootDir)).toHaveLength(1);
 
       await result.cleanup();

@@ -2895,6 +2895,7 @@ export const en: TranslationMap & {
     },
     waitingForApproval: "Waiting for approval…",
     waitingOnSubagents: "Waiting on subagents",
+    waitingForMessage: "Waiting for a message",
     turnElapsed: "Total time since your message, including subagent waits",
     waitingOnSubagent: "Waiting on {name}",
     subagentsRunning: "{count} subagents running",

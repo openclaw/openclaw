@@ -42,13 +42,6 @@ export function logMessageQueuedWithBacklogPolicy(
     state.queueDepth += 1;
   }
   touchDiagnosticSessionState(state);
-  if (diagnosticLogger.isEnabled("debug")) {
-    diagnosticLogger.debug(
-      `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
-        state.sessionKey ?? "unknown"
-      } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
-    );
-  }
   emitDiagnosticEvent({
     type: "message.queued",
     sessionId: state.sessionId,
@@ -64,7 +57,6 @@ export function logLaneEnqueue(lane: string, queueSize: number): void {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  diagnosticLogger.debug(`lane enqueue: lane=${lane} queueSize=${queueSize}`);
   emitDiagnosticEvent({
     type: "queue.lane.enqueue",
     lane,
@@ -77,7 +69,6 @@ export function logLaneDequeue(lane: string, waitMs: number, queueSize: number):
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  diagnosticLogger.debug(`lane dequeue: lane=${lane} waitMs=${waitMs} queueSize=${queueSize}`);
   emitDiagnosticEvent({
     type: "queue.lane.dequeue",
     lane,

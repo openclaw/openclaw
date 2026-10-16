@@ -1,8 +1,9 @@
-import { createMemo } from "@solidjs/signals";
+import { createMemo, untrack } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { Match, Switch } from "solid-js";
+import { Match, onCleanup, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
@@ -97,6 +98,11 @@ function HeaderActions(
 }
 
 function Toolbar(props: ControllerProps & { embedded: boolean }) {
+  // The address node belongs to this toolbar's retained synchronous panel owner.
+  const controller = untrack(() => props.controller);
+  onCleanup(() => {
+    controller.addressInput = undefined;
+  });
   const nativeTab = createMemo(() => props.controller.native.activeTab);
   const hasView = createMemo(() => Boolean(nativeTab() || props.controller.view));
   return (
@@ -147,6 +153,7 @@ function Toolbar(props: ControllerProps & { embedded: boolean }) {
       />
       <input
         class="bp-url"
+        ref={(element) => (controller.addressInput = element)}
         type="text"
         spellcheck="false"
         autocomplete="off"
@@ -302,22 +309,37 @@ function InspectTooltip(props: ControllerProps) {
   );
 }
 
+function NativeViewport(props: ControllerProps) {
+  let stage!: HTMLDivElement;
+  // Native geometry retains this viewport’s synchronous presentation owner.
+  onSettled(() => untrack(() => props.controller.native.presentation).mountStage(stage));
+  return (
+    <div
+      ref={(element) => (stage = element)}
+      class="bp-stage bp-stage--native"
+      aria-busy={props.controller.native.activeTab?.loading ? "true" : "false"}
+    >
+      {props.controller.native.activeTab?.loading ? (
+        <span class="bp-native-loading" role="status">
+          {t("browser.loading")}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function ViewportContent(props: ControllerProps) {
+  // Input queues belong to this viewport’s synchronous browser owner.
+  const input = untrack(() => props.controller.input);
+  onCleanup(() => {
+    input.elements = {};
+  });
   return (
     <Switch>
       <Match
         when={Boolean(props.controller.native.activeTab) && props.controller.mode === "interact"}
       >
-        <div
-          class="bp-stage bp-stage--native"
-          aria-busy={props.controller.native.activeTab?.loading ? "true" : "false"}
-        >
-          {props.controller.native.activeTab?.loading ? (
-            <span class="bp-native-loading" role="status">
-              {t("browser.loading")}
-            </span>
-          ) : null}
-        </div>
+        <NativeViewport controller={props.controller} />
       </Match>
       <Match
         when={
@@ -359,13 +381,14 @@ function ViewportContent(props: ControllerProps) {
         />
       </Match>
       <Match when={Boolean(props.controller.view)}>
-        <div class="bp-stage">
+        <div class="bp-stage" ref={(element) => (input.elements.stage = element)}>
           <img
             class="bp-shot"
             src={props.controller.view!.dataUrl}
             alt={props.controller.view?.metrics?.title || ""}
           />
           <canvas
+            ref={(element) => (input.elements.overlay = element)}
             class={[
               "bp-overlay",
               {
@@ -382,6 +405,7 @@ function ViewportContent(props: ControllerProps) {
           />
           {props.controller.mode === "interact" ? (
             <textarea
+              ref={(element) => (input.elements.input = element)}
               class="bp-overlay bp-input"
               aria-label={t("browser.inputLabel")}
               autocomplete="off"
@@ -420,6 +444,27 @@ export function BrowserPanelChrome(
     tabsInHeader: boolean;
   },
 ) {
+  // Resource callbacks retain this viewport's synchronous browser owner.
+  const controller = untrack(() => props.controller);
+  let viewport!: HTMLDivElement;
+  onSettled(() => {
+    const observer =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver(([entry]) => {
+            if (entry) {
+              controller.handleViewportResize(entry.contentRect.width, entry.contentRect.height);
+            }
+          })
+        : undefined;
+    observer?.observe(viewport);
+    // SAFETY: Native wheel events are WheelEvents; cancel local scrolling before they bubble.
+    const handleWheel = (event: Event) => controller.handleWheel(event as WheelEvent);
+    const stopWheel = listen(viewport, "wheel", handleWheel, { passive: false });
+    return () => {
+      observer?.disconnect();
+      stopWheel();
+    };
+  });
   const panelId = `browser-tab-panel-${generateUUID()}`;
   const rendersTabStrip = createMemo(
     () =>
@@ -472,12 +517,7 @@ export function BrowserPanelChrome(
         </div>
       ) : null}
       <div
-        ref={(element) => {
-          // Remote scrolling must cancel local scrolling before the event bubbles.
-          element.addEventListener("wheel", (event) => props.controller.handleWheel(event), {
-            passive: false,
-          });
-        }}
+        ref={(element) => (viewport = element)}
         id={panelId}
         class="bp-viewport"
         role="tabpanel"

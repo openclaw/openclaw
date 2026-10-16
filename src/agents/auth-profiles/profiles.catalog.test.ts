@@ -111,9 +111,13 @@ describe("auth profile catalog credential removal", () => {
         const scrub = catalogCredentials.removePersistedPluginModelCatalogCredentials;
         const publishHeldRefresh = async () => {
           release.resolve();
-          await refresh;
+          const result = await refresh;
           const persisted =
             catalogs.loadPersistedPluginModelCatalogsReadOnly(agentDir)[0]?.contents;
+          expect(result.publishedSource?.modelsJsonContents).toBe('{"providers":{}}\n');
+          expect(result.publishedSource?.pluginCatalogs).toEqual([
+            { pluginId: "fixture", contents: persisted },
+          ]);
           if (window === "before-delete") {
             expect(persisted).toContain(key);
           } else {

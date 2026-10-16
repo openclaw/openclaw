@@ -50,7 +50,6 @@ type Health = {
   config: PluginEntryConfig | undefined;
   failures: number;
   openUntil: number;
-  authFailed: boolean;
   trial: boolean;
   lastSuccessAt?: number;
 };
@@ -89,7 +88,6 @@ export class DecisionProviderHost {
         config: providerConfig,
         failures: 0,
         openUntil: 0,
-        authFailed: false,
         trial: false,
       };
     }
@@ -162,9 +160,13 @@ export class DecisionProviderHost {
     await Promise.all([...this.pending.values()].map((request) => request.done));
   }
 
-  private ready(): boolean {
+  private ready(): boolean | undefined {
     try {
-      const available = this.provider.isReady?.() ?? true;
+      // Providers may resolve per-call credentials without prepared local evidence.
+      if (this.provider.isReady === undefined) {
+        return undefined;
+      }
+      const available = this.provider.isReady();
       if (typeof available !== "boolean") {
         throw new DecisionContractError();
       }
@@ -182,17 +184,16 @@ export class DecisionProviderHost {
       config.plugins?.enabled !== false &&
       config.plugins?.entries?.[this.record.id]?.enabled !== false;
     const admitted = !this.retired && !this.reloadPause && instance?.acceptingCalls === true;
-    const credentialReady = admitted && instance.run(() => this.ready());
+    const readiness = admitted && instance.run(() => this.ready());
     return {
       providerId: this.provider.id,
       pluginId: this.record.id,
       configured,
-      credentialReady,
+      credentialReady: readiness === true,
       callable:
         configured &&
         enabled &&
-        credentialReady &&
-        !health.authFailed &&
+        readiness !== false &&
         !health.trial &&
         health.openUntil <= performance.now() &&
         this.pending.size < MAX_CONCURRENT,
@@ -264,10 +265,10 @@ export class DecisionProviderHost {
     }
     const health = this.generation(config);
     const readConfig = createRuntimeConfigReader(config);
-    if (!instance.runInRegistry(registry, () => this.ready())) {
+    if (instance.runInRegistry(registry, () => this.ready()) === false) {
       return this.unavailable("credentials-unavailable");
     }
-    if (health.authFailed || health.openUntil > performance.now() || health.trial) {
+    if (health.openUntil > performance.now() || health.trial) {
       return this.unavailable("circuit-open");
     }
     if (this.pending.size >= MAX_CONCURRENT) {
@@ -310,7 +311,7 @@ export class DecisionProviderHost {
         performance.now() >= deadlineMonotonicMs
       ) {
         // The host deadline bounds this request; it is not a provider-reported outage.
-        // Genuine transport, rate-limit, and auth failures are accounted below.
+        // Genuine transport and rate-limit failures are accounted below.
         return this.unavailable("deadline");
       }
       if (observedInterruption) {
@@ -451,11 +452,13 @@ export class DecisionProviderHost {
     ) {
       return;
     }
-    if (reason === "authentication") {
-      health.authFailed = true;
-      return;
-    }
-    if (reason === "unsupported-input" || reason === "credentials-unavailable") {
+    // The provider resolves credentials per evaluation. Rejecting one credential
+    // must not block other agents or a replacement credential at this shared host.
+    if (
+      reason === "authentication" ||
+      reason === "unsupported-input" ||
+      reason === "credentials-unavailable"
+    ) {
       return;
     }
     health.failures++;

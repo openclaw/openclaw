@@ -268,6 +268,7 @@ describe("manifest model suppression", () => {
 
   it.each([
     { name: "native", baseUrl: "https://api.x.ai/v1", id: "auto", retired: true },
+    { name: "native endpoint URL", baseUrl: "https://api.x.ai/v1", id: "auto", retired: true },
     { name: "custom", baseUrl: "https://custom.invalid/v1", id: "auto", retired: false },
     { name: "private ID", baseUrl: "https://api.x.ai/v1", id: "private-model", retired: false },
     { name: "ambiguous", baseUrl: "https://api.x.ai/v1", id: "auto", retired: false },
@@ -279,7 +280,15 @@ describe("manifest model suppression", () => {
       {
         id: "xai",
         providers: ["xai"],
-        providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
+        providerEndpoints:
+          scenario.name === "native endpoint URL"
+            ? [
+                {
+                  endpointClass: "future-endpoint",
+                  baseUrls: ["HTTPS://API.X.AI/V1/?ignored=1#fragment"],
+                },
+              ]
+            : [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
         modelCatalog: {
           providers: { xai: native },
           suppressions: [

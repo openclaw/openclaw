@@ -620,7 +620,7 @@ export async function startControlUiE2eServer(
     },
     logLevel: "error",
     optimizeDeps: {
-      include: ["ipaddr.js", "lit/directives/repeat.js", ...commonJsOptimizeDeps],
+      include: ["ipaddr.js", ...commonJsOptimizeDeps],
     },
     publicDir: path.join(uiRoot, "public"),
     plugins: [controlUiSolidPlugin(), controlUiLocaleModulesPlugin()],

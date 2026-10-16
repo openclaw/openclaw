@@ -473,12 +473,19 @@ for (const [label, options, firstDispatchAtMs] of [
 }
 
 function successorActivation(t, { stopSeconds = 94, listenerAt = 60, rpcAt = listenerAt,
-  fault = "", mode = "deploy", retrySeconds = 2 } = {}) {
+  fault = "", mode = "deploy", retrySeconds = 2, pointers = false, suspensionState = "DRAINING" } = {}) {
   const root = mkdtempSync(join(tmpdir(), "team-successor-window-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
+  if (pointers) {
+    for (const sha of ["a".repeat(40), "b".repeat(40), "c".repeat(40)]) {
+      mkdirSync(join(root, sha));
+    }
+    symlinkSync(join(root, "a".repeat(40)), join(root, "current"));
+    symlinkSync(join(root, "c".repeat(40)), join(root, "previous"));
+  }
   const source = readFileSync(ownerPath, "utf8");
   const functions = ["assert_single_listener", "capture_service_generation", "capture_generation",
-    "recheck_generation", "assert_protected_identity", "assert_policy", "verification_failure",
+    "recheck_generation", "read_pointer", "check_suspension", "assert_protected_identity", "assert_policy", "verification_failure",
     "verification_step", "verify_convergence", "wait_for_live", "bind_successor_generation",
     "profile_admit", "profile_finish", "verify_deployed_candidate", "prepare_rollback_suspension",
     "rollback_activation", "activate_release"].map(name => ownerFunction(source, name)).join("\n");
@@ -495,6 +502,7 @@ verification_owned_generation=""
 verification_owned_scope=""
 mode="$FIXTURE_MODE"
 serving_root="$FIXTURE_ROOT"
+releases_root="$serving_root"
 previous_release="$serving_root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 candidate_release="$serving_root/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 [[ "$mode" != runtime ]] || candidate_release="$previous_release"
@@ -530,7 +538,15 @@ predecessor_stopped=0
 restart_failed=0
 held_suspension=""
 suspension_expiry=expiry
-suspension_state=DRAINING
+suspension_state="$FIXTURE_SUSPENSION_STATE"
+suspension_cleanup_only=0
+suspension_scope=system
+suspension_release="$previous_release"
+suspension_pid=111
+suspension_generation=1110
+suspension_write_custody=clear
+suspension_blockers=""
+drain_budget_elapsed=1
 verified_pid=""
 verified_generation=""
 active=predecessor
@@ -581,6 +597,7 @@ proof() {
       if [[ "$active" == successor && "$FIXTURE_FAULT" == policy ]]; then printf drift; else printf policy; fi ;;
     candidate-config-accept) record config-refused; return 1 ;;
     compatibility)
+      if [[ "$FIXTURE_FAULT" == stale-lease ]]; then touch "$serving_root/lease-expired"; fi
       if ((rollback_armed == 0)) && ((successor_started >= 0)); then record rollback-compatibility; else record activation-compatibility; fi ;;
     journal-create) printf '{"phase":"A_PREPARED","originalWitness":"fixture"}' >"$journal_file" ;;
     journal-read) cat "$journal_file" ;;
@@ -598,7 +615,10 @@ proof() {
     unlink-exact) record journal-retired; rm "$journal_file" ;;
     probes) printf READY ;;
     channels) printf CHANNELS_OK ;;
-    validate-release|gateway-runtime) : ;;
+    validate-release)
+      record "release-audit $2"
+      if [[ "$FIXTURE_FAULT" == invalid-release ]]; then fail 'synthetic sealed release is invalid'; return 1; fi ;;
+    gateway-runtime) : ;;
     *) return 90 ;;
   esac
 }
@@ -616,8 +636,11 @@ assert_scheduler_owner() { :; }
 assert_frozen_predecessor() { :; }
 assert_stop_start_contract() { :; }
 read_process_instance() { printf fixture-instance; }
-prepare_suspension() { record suspension; held_suspension=lease; }
-check_suspension() { :; }
+prepare_suspension() {
+  record suspension; held_suspension=lease
+  if [[ "$FIXTURE_FAULT" == current-changed ]]; then rm "$current_link"; ln -s "$candidate_release" "$current_link"; fi
+}
+poll_suspension() { record suspension-status; [[ ! -e "$serving_root/lease-expired" ]]; }
 arm_suspension_handoff() { :; }
 system_unit_state() { printf enabled; }
 system_state() { printf active; }
@@ -630,7 +653,7 @@ restore_pointer_topology() { record restore-pointers; }
 record_failed() { record candidate-failed; }
 verified_markers() { record verified-marker; }
 cleanup_releases() { :; }
-realpath() { printf '%s' "$previous_release"; }
+realpath() { if [[ -L "$1" ]]; then readlink "$1"; else printf '%s' "$previous_release"; fi; }
 ` + functions + String.raw`
 if activate_release system; then exit 0; else activation_exit=$?; fi
 rollback_activation "$activation_exit" || exit "$?"
@@ -640,6 +663,7 @@ rollback_activation "$activation_exit" || exit "$?"
     env: { PATH: "/usr/bin:/bin", HOME: root, LANG: "C", LC_ALL: "C",
       OPENCLAW_TEAM_OPERATOR_PROFILE: process.env.OPENCLAW_TEAM_OPERATOR_PROFILE,
       FIXTURE_ROOT: root, FIXTURE_NODE: process.execPath, FIXTURE_MODE: mode,
+      FIXTURE_SUSPENSION_STATE: suspensionState,
       OPENCLAW_TEAM_RETRY_SECONDS: String(retrySeconds),
       FIXTURE_STOP_SECONDS: String(stopSeconds), FIXTURE_LISTENER_AT: String(listenerAt),
       FIXTURE_RPC_AT: String(rpcAt), FIXTURE_FAULT: fault },
@@ -651,6 +675,36 @@ rollback_activation "$activation_exit" || exit "$?"
   const journal = existsSync(join(root, "journal.json")) ? JSON.parse(readFileSync(join(root, "journal.json"))) : null;
   const startIndex = rows.findIndex(row => row.event === "successor-start");
   return { result, rows, journal, started: rows[startIndex]?.at, afterStart: rows.slice(startIndex + 1) };
+}
+
+test("activation preparation: a rejected sealed release leaves admission open", t => {
+  const { result, rows, journal } = successorActivation(t, { pointers: true, fault: "invalid-release" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /synthetic sealed release is invalid/);
+  assert.equal(rows.some(row => row.event === "suspension"), false);
+  assert.equal(journal, null);
+});
+
+for (const suspensionState of ["DRAINING", "READY"]) {
+  test(`activation preparation: ${suspensionState} audits sealed releases before closing admission`, t => {
+    const { result, rows } = successorActivation(t, { pointers: true, suspensionState, stopSeconds: 0, listenerAt: 0 });
+    assert.equal(result.status, 0, result.stderr);
+    const closed = rows.findIndex(row => row.event === "suspension");
+    const stopping = rows.findIndex(row => row.event === "systemctl stop");
+    const audits = rows.slice(0, stopping).flatMap((row, index) => row.event.startsWith("release-audit ") ? [index] : []);
+    assert.equal(audits.length, 2);
+    assert.ok(audits.every(index => index < closed), JSON.stringify(rows));
+    assert.ok(rows.some(row => row.event === "systemctl stop"));
+  });
+  for (const fault of ["current-changed", "stale-lease"]) {
+    test(`activation preparation: ${suspensionState} rejects ${fault} before journal or stop`, t => {
+      const { result, rows, journal } = successorActivation(t, { pointers: true, suspensionState, fault });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, fault === "current-changed" ? /current release changed before journal publication/ : /SUSPENSION_CHECK_FAILED stage=status/);
+      assert.equal(journal, null);
+      assert.equal(rows.some(row => row.event === "systemctl stop" || row.event === "successor-start"), false);
+    });
+  }
 }
 
 for (const mode of ["runtime", "deploy"]) test(`successor convergence: ${mode} waits for a late listener and RPC after a 94-second stop`, t => {

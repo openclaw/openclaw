@@ -21,7 +21,60 @@ import {
   iteratePendingExecNotificationEntriesInWorker,
   readPendingInputRecoveryEntriesInWorker,
 } from "./session-entry-read-maintenance.js";
+import { readSessionEntrySummariesInWorker } from "./session-entry-read-runtime.js";
 import { readSessionSendRecoveryPage } from "./session-pending-input-history.js";
+import type { InternalSessionEntry } from "./types.js";
+
+it("selects unarchived recovery custody including completed rows that still need settlement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const recovery = { cycleId: "interrupted-cycle", revision: 1, chargedAttempts: 0 };
+    const runs = [{ runId: "interrupted-run", lifecycleGeneration: "previous-gateway" }];
+    const entries: Record<string, Partial<InternalSessionEntry>> = {
+      archived: { archivedAt: 1, mainRestartRecovery: recovery },
+      empty: { restartRecoveryRuns: [] },
+      settled: { status: "done" },
+      terminal: { restartRecoveryRuns: runs, restartRecoveryTerminalRunIds: ["interrupted-run"] },
+      tombstoned: { mainRestartRecovery: { ...recovery, tombstone: { reason: "exhausted" } } },
+      "pending-cycle": { abortedLastRun: true, mainRestartRecovery: recovery },
+      "pending-delivery": { status: "done", restartRecoveryDeliveryRunId: "delivery-run" },
+      "pending-execution": { status: "done", restartRecoveryRuns: runs },
+      "pending-final": {
+        status: "done",
+        pendingFinalDelivery: { createdAt: 1, kind: "transport-only" },
+      },
+      "pending-residue": {
+        status: "done",
+        mainRestartRecovery: recovery,
+        restartRecoveryRuns: runs,
+        restartRecoveryTerminalRunIds: ["interrupted-run"],
+      },
+    };
+    for (const [name, entry] of Object.entries(entries)) {
+      replaceSessionEntrySync(
+        { agentId: "main", env, sessionKey: `agent:main:${name}` },
+        { sessionId: name, updatedAt: 1, ...entry },
+      );
+    }
+
+    const selected = await readSessionEntrySummariesInWorker({
+      agentId: "main",
+      storePath: database.path,
+      env,
+      mainSessionRecovery: true,
+    });
+    expect(selected.map(({ sessionKey }) => sessionKey)).toEqual([
+      "agent:main:pending-cycle",
+      "agent:main:pending-delivery",
+      "agent:main:pending-execution",
+      "agent:main:pending-final",
+      "agent:main:pending-residue",
+    ]);
+    expect(
+      await readSessionEntrySummariesInWorker({ agentId: "main", storePath: database.path, env }),
+    ).toHaveLength(Object.keys(entries).length);
+  });
+});
 
 it("pages only pending exec owners without reading unrelated session entries or saved prompts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {

@@ -116,6 +116,67 @@ function expectStats(value: unknown, fields: Record<string, unknown>) {
 }
 
 describe("getCachedPluginModuleLoader", () => {
+  it.each(["cold", "legacy-cache"] as const)(
+    "settles concurrent first imports before using dependency-backed exports (%s)",
+    async (cacheState) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-concurrent-import-"));
+      vi.stubEnv("XDG_CACHE_HOME", path.join(root, "cache"));
+      vi.stubEnv("JITI_FS_CACHE", "1");
+      try {
+        const entry = path.join(root, "entry.ts");
+        const sources = [
+          [
+            entry,
+            'export async function run() { const { read } = await import("./handler.ts"); return read(); }',
+            false,
+          ],
+          [
+            path.join(root, "handler.ts"),
+            'import { readWorkspaceSkillsRequest } from "./helper.ts"; export function read() { return readWorkspaceSkillsRequest(); }',
+            true,
+          ],
+          [
+            path.join(root, "helper.ts"),
+            'import path from "node:path"; export function readWorkspaceSkillsRequest() { return path.basename("/a/ready"); }',
+            true,
+          ],
+        ] as const;
+        for (const [filename, source] of sources) {
+          fs.writeFileSync(filename, source);
+        }
+        if (cacheState === "legacy-cache") {
+          const { createJiti } = await import("./jiti-factory.js");
+          const { buildPluginLoaderJitiOptions } = await import("./sdk-alias.js");
+          const legacy = createJiti(entry, {
+            ...buildPluginLoaderJitiOptions({}, { modulePath: entry }),
+            tryNative: false,
+          });
+          for (const [filename, source, asynchronous] of sources) {
+            legacy.transform({ filename, source, ts: true, async: asynchronous });
+          }
+        }
+        const { getCachedPluginModuleLoader } = await importPluginModuleLoader(
+          "./plugin-module-loader-cache.js?scope=concurrent-first-import",
+        );
+        const load = getCachedPluginModuleLoader({
+          cache: new Map(),
+          modulePath: entry,
+          importerUrl: import.meta.url,
+          tryNative: false,
+          aliasMap: {},
+        });
+        const loaded = load(entry) as { run(): Promise<string> };
+        await expect(Promise.all([loaded.run(), loaded.run()])).resolves.toEqual([
+          "ready",
+          "ready",
+        ]);
+      } finally {
+        vi.unstubAllEnvs();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("keeps source SDK evaluation native and preserves terminal failures", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sdk-graph-"));
     try {

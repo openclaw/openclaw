@@ -266,6 +266,20 @@ export async function ensureCanonicalUserProfileForEmail(
     ),
   );
 }
+export async function ensureCanonicalEnterpriseGitHubProfile(
+  principal: string,
+  name: string,
+  options: ProfileWriteOptions,
+  verifiedMetadata: { login: string; email?: string },
+) {
+  return unwrap(
+    await write(
+      "userProfiles.ensureEnterpriseGitHub",
+      { principal, name, verifiedMetadata },
+      options,
+    ),
+  );
+}
 export async function ensureCanonicalUserProfileForTailscaleIdentity(
   identity: UserProfileWriteOperations["userProfiles.ensureTailscale"]["input"],
   options: ProfileWriteOptions = {},

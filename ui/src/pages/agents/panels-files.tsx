@@ -405,7 +405,7 @@ export function AgentFiles(
                             </div>
                             <div class="md-preview-dialog__meta">
                               <div
-                                class={`md-preview-dialog__chip ${preview().previewStatusClass}`}
+                                class={["md-preview-dialog__chip", preview().previewStatusClass]}
                                 data-priority="essential"
                               >
                                 <strong>{preview().previewStatusLabel}</strong>

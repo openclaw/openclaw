@@ -1,5 +1,6 @@
+import { dynamic, type JSX } from "@solidjs/web";
 import { For, Show, createEffect, createMemo, onCleanup, refresh } from "solid-js";
-import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
+import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
   type PanelHostedTab,
@@ -8,11 +9,7 @@ import { PanelTabStrip } from "../../../components/panel-tab-strip-solid.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import {
-  defineSolidBridge,
-  LitContent,
-  type SolidBridgeElement,
-} from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -21,9 +18,8 @@ type Props = {
   previews: SessionWorkspacePreview[];
   activeId: string | null;
   tabsInHeader: boolean;
-  /** Opaque output of the retained workspace renderer, consumed only by LitContent. */
-  browser: unknown;
-  renderDetail: ((content: SidebarContent) => unknown) | null;
+  browser: JSX.Element;
+  renderDetail: ((props: { content: SidebarContent }) => JSX.Element) | null;
   onSelect: (id: string | null) => void;
   onClose: (id: string) => void;
 };
@@ -41,8 +37,8 @@ defineSolidBridge<Props, Methods>(
   (props, host) => {
     const contentId = `chat-files-content-${++filesPanelSequence}`;
     let completeCommit = () => {};
-    const appUnmount = new McpAppUnmountGate<Props>(
-      { requestUpdate: () => void refresh(rendered) },
+    const appUnmount = createMcpAppUnmountGate<Props>(
+      () => void refresh(rendered),
       () =>
         new Promise<void>((resolve) => {
           completeCommit = resolve;
@@ -72,6 +68,7 @@ defineSolidBridge<Props, Methods>(
           ),
       );
     });
+    const Detail = dynamic(() => rendered().renderDetail ?? (() => null));
     createEffect(rendered, () => completeCommit());
     // Disposal also settles the gate; it restarts only views that remain connected.
     onCleanup(() => completeCommit());
@@ -80,12 +77,13 @@ defineSolidBridge<Props, Methods>(
         id,
         label,
         title: content.kind === "file" ? content.path : label,
-        icon:
-          content.kind === "mcp-app" ? (
+        get icon() {
+          return content.kind === "mcp-app" ? (
             <Icon name="puzzle" />
           ) : (
             <AttachmentFileIcon filename={label} mode="preview-with-favicon" />
-          ),
+          );
+        },
         className: content.kind === "loading" ? "is-connecting" : undefined,
       }));
       return props.activeId === null && tabs.length
@@ -112,7 +110,7 @@ defineSolidBridge<Props, Methods>(
     <button
       ref={(element) => {
         browseAction = element;
-        // The Lit header hosts this action outside Solid's delegated event root.
+        // The hosted header mounts this action outside this panel's delegated event root.
         browseAction.addEventListener("click", showBrowser);
       }}
       class="rail-header__action"
@@ -167,7 +165,7 @@ defineSolidBridge<Props, Methods>(
         </Show>
         <div id={contentId} class="chat-files-panel__content">
           <div class="chat-files-panel__page" hidden={rendered().activeId !== null}>
-            <LitContent render={() => rendered().browser} />
+            {rendered().browser}
           </div>
           <For each={rendered().previews} keyed={(preview) => preview.id}>
             {(preview) => {
@@ -175,11 +173,11 @@ defineSolidBridge<Props, Methods>(
                 rendered();
                 return preview();
               };
-              const renderDetail = () => {
+              const detail = () => {
                 const content = entry().content;
                 return content.kind === "loading" || content.kind === "unavailable"
                   ? undefined
-                  : rendered().renderDetail?.(content);
+                  : content;
               };
               return (
                 <div
@@ -197,7 +195,7 @@ defineSolidBridge<Props, Methods>(
                       })()}
                     </div>
                   ) : (
-                    <LitContent render={renderDetail} />
+                    <Show when={detail()}>{(content) => <Detail content={content()} />}</Show>
                   )}
                 </div>
               );

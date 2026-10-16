@@ -192,9 +192,8 @@ final class VoicePushToTalk {
         }
         self.activeConfig = config
         self.isCapturing = true
-        self.logger.info("ptt begin adopted_prefix_len=\(self.adoptedPrefix.count, privacy: .public)")
         if config.triggerChime != .none {
-            VoiceWakeChimePlayer.play(config.triggerChime, reason: "ptt.trigger")
+            VoiceWakeChimePlayer.play(config.triggerChime)
         }
         let adoptedPrefix = self.adoptedPrefix
         let adoptedAttributed: NSAttributedString? = adoptedPrefix.isEmpty ? nil : VoiceOverlayTextFormatting
@@ -203,7 +202,6 @@ final class VoicePushToTalk {
                 volatile: "",
                 isFinal: false)
         self.overlayToken = self.sessions.startSession(
-            source: .pushToTalk,
             text: adoptedPrefix,
             attributed: adoptedAttributed,
             forwardEnabled: true)
@@ -220,7 +218,7 @@ final class VoicePushToTalk {
             }
         } catch {
             self.logger.debug("push-to-talk failed to start: \(error.localizedDescription, privacy: .public)")
-            self.finalize(transcriptOverride: nil, reason: "startFailed", forward: false)
+            self.finalize(transcriptOverride: nil, forward: false)
         }
     }
 
@@ -229,7 +227,7 @@ final class VoicePushToTalk {
         self.holdID = nil
         SimpleTaskSupport.stop(task: &self.startupTask)
         if cancelled || wasStarting {
-            self.finalize(transcriptOverride: nil, reason: "cancelled", forward: false)
+            self.finalize(transcriptOverride: nil, forward: false)
             return
         }
         guard self.isCapturing else { return }
@@ -242,14 +240,14 @@ final class VoicePushToTalk {
 
         // If we captured nothing, dismiss immediately when the user lets go.
         if self.committed.isEmpty, self.volatile.isEmpty, self.adoptedPrefix.isEmpty {
-            self.finalize(transcriptOverride: "", reason: "emptyOnRelease")
+            self.finalize(transcriptOverride: "")
             return
         }
 
         // Otherwise, give Speech a brief window to deliver the final result; then fall back.
         SimpleTaskSupport.schedule(task: &self.timeoutTask, delay: 1.5) { [weak self] in
             guard let self, self.sessionID == sessionID else { return }
-            self.finalize(transcriptOverride: nil, reason: "timeout")
+            self.finalize(transcriptOverride: nil)
         }
     }
 
@@ -257,7 +255,6 @@ final class VoicePushToTalk {
 
     private func handle(transcript: String?, isFinal: Bool, sessionID: UUID) {
         guard !self.finalized, sessionID == self.sessionID else {
-            self.logger.debug("push-to-talk drop transcript for stale session")
             return
         }
         guard let transcript else { return }
@@ -281,7 +278,6 @@ final class VoicePushToTalk {
 
     private func finalize(
         transcriptOverride: String?,
-        reason: String,
         forward: Bool = true)
     {
         if self.finalized { return }
@@ -300,12 +296,11 @@ final class VoicePushToTalk {
         self.adoptedPrefix = ""
 
         // All old audio and mutable session state are retired before UI callbacks or awaited cleanup.
-        self.logger.info("ptt finalize reason=\(reason, privacy: .public) len=\(finalText.count, privacy: .public)")
         if let token {
             if forward {
                 self.sessions.finalize(
                     token: token, text: finalText, sendChime: chime, autoSendAfter: nil)
-                self.sessions.sendNow(token: token, reason: reason)
+                self.sessions.sendNow(token: token)
             } else {
                 self.sessions.dismiss(token: token, reason: .explicit, outcome: .empty)
             }

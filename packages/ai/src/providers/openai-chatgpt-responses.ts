@@ -369,7 +369,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       };
       const transport = options?.transport || "auto";
       let websocketAuthority: CodexWebSocketAuthority | undefined;
-      if (!transportHost.requiresManagedTransport(model)) {
+      if (!transportHost.requiresManagedTransport(model, "fetch")) {
         try {
           websocketAuthority = resolveCodexWebSocketAuthority({
             transport,
@@ -1333,7 +1333,7 @@ async function readChatGptResponsesErrorTextLimited(
     signal?.removeEventListener("abort", onAbort);
     if (!completed) {
       // This provider module is browser-safe, so keep error-body cleanup on Web APIs.
-      await cancel();
+      void cancel();
     }
     try {
       reader.releaseLock();

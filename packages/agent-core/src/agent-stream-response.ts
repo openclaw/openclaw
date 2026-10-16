@@ -6,18 +6,16 @@ import {
 import {
   appendTextDeltaToAssistantMessage,
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+  REPETITIVE_OUTPUT_ERROR_CODE,
 } from "@openclaw/llm-core";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
-  ThinkingContent,
   Context,
   ToolResultMessage,
 } from "@openclaw/llm-core";
-import {
-  appendAssistantThinking,
-  readAssistantThinkingAppend,
-} from "@openclaw/llm-core/event-stream";
+import { AssistantRepetitionGuard } from "./assistant-repetition-guard.js";
+import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
 import { copyInternalToolResultState } from "./internal-hooks.js";
 import {
@@ -71,152 +69,6 @@ function resolveAssistantMessageUpdate(
     return currentMessage;
   }
   return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
-}
-
-// Batch only append-owned updates. Snapshot text can replace content or change
-// phase; reasoning requires the producer's mutation fact for the same block.
-async function* coalesceStreamDeltas(
-  source: AsyncIterable<AssistantMessageEvent>,
-  signal: AbortSignal,
-  close: () => void,
-): AsyncGenerator<AssistantMessageEvent> {
-  type Delta = Extract<AssistantMessageEvent, { type: "text_delta" | "thinking_delta" }>;
-  const iterator = source[Symbol.asyncIterator]();
-  let next: Promise<IteratorResult<AssistantMessageEvent>> | undefined;
-  let pending: Delta | undefined;
-  let thinking: ThinkingContent | undefined;
-  let thinkingText = "";
-  let thinkingBefore = "";
-  let thinkingSignature: string | undefined;
-  let thinkingRedacted: boolean | undefined;
-  let deadline: Promise<undefined> | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let wake: (() => void) | undefined;
-  let ended = false;
-  const projectBatch = (batch: Delta): Delta => {
-    if (batch.type !== "thinking_delta") {
-      return batch;
-    }
-    // The batch owns this projection and its append fact. Reusing the mutable
-    // provider block loses the combined append and makes rendering rescan it.
-    const block: ThinkingContent = {
-      type: "thinking",
-      thinking: thinkingBefore,
-      thinkingSignature,
-      redacted: thinkingRedacted,
-    };
-    appendAssistantThinking(block, batch.delta);
-    return {
-      ...batch,
-      partial: {
-        ...batch.partial,
-        content: batch.partial.content.with(batch.contentIndex, block),
-      },
-    };
-  };
-  const clearDeadline = () => {
-    clearTimeout(timer);
-    timer = undefined;
-    deadline = undefined;
-    wake = undefined;
-  };
-  const onAbort = () => wake?.();
-  signal.addEventListener("abort", onAbort);
-  try {
-    while (true) {
-      next ??= iterator.next();
-      const result = deadline ? await Promise.race([next, deadline]) : await next;
-      if (!result) {
-        const batch = pending;
-        pending = undefined;
-        clearDeadline();
-        if (batch) {
-          yield projectBatch(batch);
-        }
-        continue;
-      }
-      next = undefined;
-      if (result.done) {
-        ended = true;
-        if (pending) {
-          clearDeadline();
-          yield projectBatch(pending);
-        }
-        return;
-      }
-      const event = result.value;
-      const block =
-        event.type === "thinking_delta" ? event.partial.content[event.contentIndex] : undefined;
-      const append =
-        block?.type === "thinking" ? readAssistantThinkingAppend(block, thinkingText) : undefined;
-      const batchable =
-        !signal.aborted &&
-        ((event.type === "text_delta" && !event.partial) ||
-          (event.type === "thinking_delta" &&
-            block?.type === "thinking" &&
-            append === event.delta));
-      if (
-        batchable &&
-        pending?.type === event.type &&
-        pending.contentIndex === event.contentIndex &&
-        (event.type === "text_delta" ||
-          (block?.type === "thinking" &&
-            block === thinking &&
-            block.thinkingSignature === thinkingSignature &&
-            block.redacted === thinkingRedacted))
-      ) {
-        pending = { ...event, delta: pending.delta + event.delta };
-        if (block?.type === "thinking") {
-          thinkingText = block.thinking;
-        }
-        continue;
-      }
-      if (pending) {
-        const batch = pending;
-        pending = undefined;
-        clearDeadline();
-        yield projectBatch(batch);
-      }
-      if (!batchable || signal.aborted) {
-        if (block?.type === "thinking") {
-          thinkingText = block.thinking;
-        }
-        yield event;
-        continue;
-      }
-      pending = event;
-      thinking = block?.type === "thinking" ? block : undefined;
-      thinkingBefore = thinkingText;
-      thinkingText = thinking?.thinking ?? "";
-      thinkingSignature = thinking?.thinkingSignature;
-      thinkingRedacted = thinking?.redacted;
-      deadline = new Promise<undefined>((resolve) => {
-        wake = () => resolve(undefined);
-        timer = setTimeout(wake, 32);
-      });
-    }
-  } catch (error) {
-    if (pending) {
-      yield projectBatch(pending);
-    }
-    throw error;
-  } finally {
-    clearDeadline();
-    signal.removeEventListener("abort", onAbort);
-    // A timed flush may leave next() pending. Abort before returning the
-    // iterator so an early consumer failure cannot wait on provider I/O.
-    if (!ended) {
-      close();
-    }
-    const returned = iterator.return?.();
-    if (next) {
-      // Custom streams can ignore abort. Their pending read must not hold a
-      // failed consumer open; return() will finish when that read settles.
-      void returned?.catch(() => {});
-    } else {
-      await returned;
-    }
-  }
 }
 
 function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
@@ -323,10 +175,13 @@ export async function streamAgentResponse(
   const executionSignal = signal
     ? AbortSignal.any([signal, executionAbort.signal])
     : executionAbort.signal;
+  const modelAbort = new AbortController();
+  const requestSignal = AbortSignal.any([executionSignal, modelAbort.signal]);
   const abortFailedResponse = (message?: AssistantMessage) => {
     if (
       message &&
       (message.stopReason === "error" || message.stopReason === "aborted") &&
+      message.errorCode !== REPETITIVE_OUTPUT_ERROR_CODE &&
       !isResponsesOutputLimitToolCallError(message)
     ) {
       executionAbort.abort(new Error(message.errorMessage ?? "Model response interrupted"));
@@ -415,7 +270,7 @@ export async function streamAgentResponse(
     const stream = streamFunction(config.model, llmContext, {
       ...config,
       apiKey: resolvedApiKey,
-      signal: executionSignal,
+      signal: requestSignal,
       onActiveResponse: steering.onActiveResponse,
       asyncToolExecution: true,
     });
@@ -424,6 +279,9 @@ export async function streamAgentResponse(
       stream,
       async () => {
         const response = await stream;
+        const repetitionGuard = config.repetitionGuard?.(config.model)
+          ? new AssistantRepetitionGuard()
+          : undefined;
         let partialMessage: AssistantMessage | null = null;
         let partialIndex: number | undefined;
         let committedContentCount = 0;
@@ -450,9 +308,7 @@ export async function streamAgentResponse(
           await emit({ type: "message_end", message });
         };
 
-        for await (const event of coalesceStreamDeltas(response, executionSignal, () => {
-          executionAbort.abort(new Error("Model stream consumption closed"));
-        })) {
+        for await (const event of response) {
           switch (event.type) {
             case "start": {
               const message = event.partial;
@@ -477,6 +333,15 @@ export async function streamAgentResponse(
                 partialMessage = message;
                 if (event.contentIndex < committedContentCount) {
                   break;
+                }
+                const stopped = repetitionGuard?.check(
+                  message,
+                  committedContentCount,
+                  event.type === "toolcall_end" ? undefined : event.contentIndex,
+                );
+                if (stopped) {
+                  modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));
+                  return await finalizeAssistantMessage(stopped);
                 }
                 const fragment = remainingFragment(message);
                 if (partialIndex === undefined) {
@@ -545,9 +410,22 @@ export async function streamAgentResponse(
         return await finalizeAssistantMessage();
 
         async function finalizeAssistantMessage(terminal?: AssistantMessage) {
-          // Output-limit recovery drains admitted tools; other failures fence queued starts.
-          abortFailedResponse(terminal);
-          const result = await response.result();
+          const stoppedTerminal =
+            terminal?.errorCode === REPETITIVE_OUTPUT_ERROR_CODE
+              ? terminal
+              : terminal && repetitionGuard?.check(terminal, committedContentCount);
+          if (stoppedTerminal) {
+            modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));
+          }
+          // Classify first: repetition drains admitted tools even in a provider error snapshot.
+          abortFailedResponse(stoppedTerminal ?? terminal);
+          const providerResult = await response.result();
+          const stopped =
+            stoppedTerminal ?? repetitionGuard?.check(providerResult, committedContentCount);
+          if (stopped) {
+            modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));
+          }
+          const result = stopped ? { ...stopped, usage: providerResult.usage } : providerResult;
           abortFailedResponse(result);
           const outputLimit = isResponsesOutputLimitToolCallError(result);
           if (outputLimit) {

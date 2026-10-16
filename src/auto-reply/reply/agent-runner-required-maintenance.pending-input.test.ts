@@ -7,10 +7,8 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../agents/admitted-run-context.js";
-import {
-  getSessionMcpRuntimeManagerForTesting,
-  setSessionMcpRuntimeScheduler,
-} from "../../agents/agent-bundle-mcp-manager-api.js";
+import { setSessionMcpRuntimeScheduler } from "../../agents/agent-bundle-mcp-manager-api.js";
+import { getSessionMcpRuntimeTestManager } from "../../agents/agent-bundle-mcp-manager.test-support.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
@@ -447,7 +445,7 @@ describe("required maintenance with restart-safe admitted input", () => {
           await waitForSessionMaintenance(sessionKey);
           recorder?.finishPendingInput?.("interrupted");
           admissionOwner.close();
-          const mcpManager = getSessionMcpRuntimeManagerForTesting();
+          const mcpManager = getSessionMcpRuntimeTestManager();
           for (const runtimeSessionId of mcpManager.listSessionIds()) {
             if (
               mcpManager.peekSession({ sessionId: runtimeSessionId })?.workspaceDir ===

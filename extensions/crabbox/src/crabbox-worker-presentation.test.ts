@@ -1,13 +1,15 @@
 import { fileURLToPath } from "node:url";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as processRunner from "./crabbox-process.js";
 import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
 
+afterEach(() => vi.restoreAllMocks());
+
 it("derives display identity from validated settings without commands or state access", async () => {
-  const runCommand = vi.fn();
+  const runCommand = vi.spyOn(processRunner, "runCrabboxProcess");
   const openKeyedStore = vi.fn();
   const provider = createCrabboxWorkerProvider({
     state: { openKeyedStore },
-    runCommand,
     wallpaperPath: fileURLToPath(
       new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
     ),

@@ -729,5 +729,6 @@ export function buildChatItems(
     projectYields(coalesceToolActivityMessages(items, hidden), complete),
     { items: complete, people: props.replyPeople, localPerson: props.replyLocalPerson },
     props.showReasoning ? props.reasoning : undefined,
+    props.showReasoning,
   );
 }

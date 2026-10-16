@@ -24,7 +24,8 @@ export function runPostgresTransactionSync<T>(
 ): T {
   assertPostgresTransactionUsable(db);
   assertPostgresOperationCurrent();
-  return withSqlitePostCommitPublications(sqlPublicationAnchor(db), () => {
+  const anchor = sqlPublicationAnchor(db);
+  return withSqlitePostCommitPublications(anchor, () => {
     const nested = db.isTransaction && !reserved;
     try {
       if (nested) {
@@ -43,8 +44,9 @@ export function runPostgresTransactionSync<T>(
         db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       } else {
         const scope = currentSqliteWorkerOperationAdmission.getStore();
-        if (!readOnly && scope?.active) {
-          deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(db), {});
+        if (!readOnly && scope?.active && !scope.owner.pendingReceipts?.has(anchor)) {
+          // A domain's staged receipt already settles this commit with its typed facts.
+          deferSqliteWorkerCommitReceipt(anchor, {});
         }
         const commit = () => {
           assertPostgresOperationCurrent();

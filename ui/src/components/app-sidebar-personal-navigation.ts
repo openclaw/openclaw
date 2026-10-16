@@ -6,11 +6,14 @@ import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type {
+  SolidController,
+  SolidControllerHost,
+} from "../lib/reactive/solid-controller-host.ts";
+import type {
   SessionConnectionScope,
   SessionListSnapshot,
 } from "../lib/sessions/session-capability.ts";
 import { showToast } from "../lib/toast.ts";
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { buildReconciledSidebarZone } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
@@ -20,7 +23,7 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
-import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
+import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type PersonalNavigationHost = {
@@ -246,7 +249,7 @@ export function projectUnpinnedSessionRows(
 export function personalSidebarOwnerFilterId(
   host: PersonalNavigationHost & {
     readonly sidebarAgentsMode: "chip" | "roster";
-    readonly sessionOwnerFilter: SessionOwnerFilterController;
+    readonly sessionOwnerFilter: SessionOwnerFilter;
     expandedAgentId(): string;
   },
 ): string | null {
@@ -255,7 +258,7 @@ export function personalSidebarOwnerFilterId(
   }
   const agentId = host.sidebarAgentsMode === "roster" ? "*" : host.expandedAgentId();
   const hasMultipleOwners = host.sessionOwnerFilter.hasMultipleOwners(agentId);
-  const ownerId = host.sessionOwnerFilter.ownerId;
+  const ownerId = host.sessionOwnerFilter.read().ownerId;
   const context = host.sessionDataContext;
   // Solo installs must include legacy sessions without owner metadata.
   return ownerId ===

@@ -1,4 +1,5 @@
 import type { JSX } from "@solidjs/web";
+import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -13,6 +14,13 @@ import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { AssistantMessageDisclosure } from "./chat-message-text-preparation.ts";
 import type { ReplyLine } from "./chat-reply-attribution.ts";
 import type { ToolRenderOptions } from "./chat-tool-render-model.ts";
+
+export type ActivityOperationProps = {
+  group: ToolCallGroup<ToolCard>;
+  options: Omit<ToolRenderOptions, "messageKey"> &
+    Pick<GroupedMessageOptions, "isToolExpanded" | "onToggleToolExpanded">;
+  contexts: ReadonlyMap<ToolCard, { messageKey: string; disclosureId: string }>;
+};
 
 export type GroupedMessageOptions = {
   isStreaming: boolean;
@@ -39,7 +47,7 @@ export type GroupedMessageOptions = {
   messageActions?: MessageActionDetails | null;
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
-  toolCardOverrides?: ReadonlyMap<ToolCard, unknown>;
+  toolCardOverrides?: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
   onRequestUpdate?: () => void;
   canvasPluginSurfaceUrl?: string | null;
   resourceBasePath?: string;

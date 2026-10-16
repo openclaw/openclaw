@@ -17,71 +17,94 @@ import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar child session archives", () => {
-  it.each(["row", "menu"])("opens the nested archive choice from the sidebar %s", async (entry) => {
-    const modal = createModalDialogTestFixture();
-    const parent: GatewaySessionRow = {
-      key: "agent:main:parent",
-      sessionId: "parent-id",
-      kind: "direct",
-      label: "Parent task",
-      childSessions: ["agent:main:child"],
-    };
-    const child: GatewaySessionRow = {
-      key: "agent:main:child",
-      sessionId: "child-id",
-      kind: "direct",
-      label: "Child task",
-      parentSessionKey: parent.key,
-    };
-    const request = createGatewayRequestMock(async (method, params) => {
-      const query = isRecord(params) ? params : undefined;
-      if (method === "sessions.list") {
-        return sessionsResult(
-          query?.spawnedBy === parent.key ? [child] : query?.spawnedBy ? [] : [parent, child],
-          1,
-        );
+  it.each([
+    { entry: "row", viaWorker: false },
+    { entry: "menu", viaWorker: false },
+    // An unloaded worker stays out of the row's navigation children but still owns descendants.
+    { entry: "row", viaWorker: true },
+  ])(
+    "opens the nested archive choice from the sidebar $entry (worker branch: $viaWorker)",
+    async ({ entry, viaWorker }) => {
+      const modal = createModalDialogTestFixture();
+      const worker: GatewaySessionRow = {
+        key: "agent:main:subagent:worker",
+        sessionId: "worker-id",
+        kind: "direct",
+        parentSessionKey: "agent:main:parent",
+        childSessions: ["agent:main:child"],
+      };
+      const parent: GatewaySessionRow = {
+        key: "agent:main:parent",
+        sessionId: "parent-id",
+        kind: "direct",
+        label: "Parent task",
+        childSessions: [viaWorker ? worker.key : "agent:main:child"],
+      };
+      const child: GatewaySessionRow = {
+        key: "agent:main:child",
+        sessionId: "child-id",
+        kind: "direct",
+        label: "Child task",
+        parentSessionKey: viaWorker ? worker.key : parent.key,
+      };
+      const childrenByParent: Record<string, GatewaySessionRow[]> = viaWorker
+        ? { [parent.key]: [worker], [worker.key]: [child] }
+        : { [parent.key]: [child] };
+      const request = createGatewayRequestMock(async (method, params) => {
+        const query = isRecord(params) ? params : undefined;
+        if (method === "sessions.list") {
+          const spawnedBy = typeof query?.spawnedBy === "string" ? query.spawnedBy : undefined;
+          return sessionsResult(
+            spawnedBy
+              ? (childrenByParent[spawnedBy] ?? [])
+              : viaWorker
+                ? [parent]
+                : [parent, child],
+            1,
+          );
+        }
+        if (method === "sessions.describe") {
+          return { session: query?.key === parent.key ? parent : child };
+        }
+        return {};
+      });
+      const gateway = createGatewayHarness(createTestGatewayClient(request));
+      const sessions = createTestSessionCapability(gateway.gateway);
+      await sessions.refresh({ agentId: "main", force: true });
+      const { sidebar } = await mountSidebar(gateway.gateway, sessions);
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      try {
+        const row = sidebar.querySelector(`[data-session-key="${parent.key}"]`)!;
+        if (entry === "row") {
+          row.querySelector<HTMLButtonElement>("[data-sidebar-session-archive]")!.click();
+        } else {
+          row.querySelector<HTMLButtonElement>("[data-sidebar-session-menu]")!.click();
+          await sidebar.updateComplete;
+          await waitForFast(() =>
+            expect(sidebar.querySelector('[value="toggle-archived"]')).not.toBeNull(),
+          );
+          sidebar
+            .querySelector('[value="toggle-archived"]')!
+            .dispatchEvent(new Event("click", { bubbles: true }));
+        }
+        const actions = await waitForConfirmDialogActions();
+        expect(document.body.textContent).toContain('"Parent task" has a nested session.');
+        expect(actions.textContent).toContain("Archive this session");
+        expect(actions.textContent).toContain("Archive 2 sessions");
+        answerConfirmDialog(actions, "cancel");
+        await vi.dynamicImportSettled();
+        expect(
+          request.mock.calls.some(
+            ([method]) => method === "sessions.patch" || method === "sessions.patchMany",
+          ),
+        ).toBe(false);
+      } finally {
+        sidebar.remove();
+        await modal.cleanup();
       }
-      if (method === "sessions.describe") {
-        return { session: query?.key === parent.key ? parent : child };
-      }
-      return {};
-    });
-    const gateway = createGatewayHarness(createTestGatewayClient(request));
-    const sessions = createTestSessionCapability(gateway.gateway);
-    await sessions.refresh({ agentId: "main", force: true });
-    const { sidebar } = await mountSidebar(gateway.gateway, sessions);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-    try {
-      const row = sidebar.querySelector(`[data-session-key="${parent.key}"]`)!;
-      if (entry === "row") {
-        row.querySelector<HTMLButtonElement>("[data-sidebar-session-archive]")!.click();
-      } else {
-        row.querySelector<HTMLButtonElement>("[data-sidebar-session-menu]")!.click();
-        await sidebar.updateComplete;
-        await waitForFast(() =>
-          expect(sidebar.querySelector('[value="toggle-archived"]')).not.toBeNull(),
-        );
-        sidebar
-          .querySelector('[value="toggle-archived"]')!
-          .dispatchEvent(new Event("click", { bubbles: true }));
-      }
-      const actions = await waitForConfirmDialogActions();
-      expect(document.body.textContent).toContain('"Parent task" has a nested session.');
-      expect(actions.textContent).toContain("Archive this session");
-      expect(actions.textContent).toContain("Archive 2 sessions");
-      answerConfirmDialog(actions, "cancel");
-      await vi.dynamicImportSettled();
-      expect(
-        request.mock.calls.some(
-          ([method]) => method === "sessions.patch" || method === "sessions.patchMany",
-        ),
-      ).toBe(false);
-    } finally {
-      sidebar.remove();
-      await modal.cleanup();
-    }
-  });
+    },
+  );
 
   it.each([{ scenario: "archive", coldLoad: false, unrelated: false }])(
     "updates child disclosure after $scenario",

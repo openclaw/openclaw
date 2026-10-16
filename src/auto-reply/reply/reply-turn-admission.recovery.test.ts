@@ -326,7 +326,7 @@ it.each([
       }),
     ]);
     expect(retry).toHaveBeenCalledOnce();
-    expect(retry.mock.calls[0]?.[0].lane).toBe(kind === "visible" ? "main" : "background");
+    expect(retry.mock.calls[0]?.[0].lane).toBe(kind === "visible" ? "main" : undefined);
     await setImmediate();
     expect(f.read()).toMatchObject(f.entry);
     expect(replyRunRegistry.get(sessionKey)).toBeUndefined();

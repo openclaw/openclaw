@@ -52,6 +52,7 @@ type FixtureOptions = {
   liveRun?: boolean;
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
+  duplicateBootReads?: boolean;
 };
 
 function personId(index: number) {
@@ -134,6 +135,12 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       status: running ? "running" : "done",
       model: "gpt-5-mini",
       modelProvider: "openai",
+      thinkingLevel: "medium",
+      thinkingLevels: [
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+      ],
       contextTokens: 200_000,
       totalTokens: 4_000 + index * 31,
       pinned,
@@ -170,6 +177,8 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   const pinnedRows = sessions.slice(-counts.pinned);
   const pinnedKeys = pinnedRows.map((row) => row.key);
   const selectedSessionKey = pinnedKeys[0]!;
+  pinnedRows[0]!.sharingRole = "admin";
+  pinnedRows[0]!.visibility = "shared";
   if (options.liveRun) {
     Object.assign(pinnedRows[0]!, {
       hasActiveRun: true,
@@ -226,10 +235,26 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       label: person.name,
     })),
   });
-  const historyMessages = Array.from({ length: counts.transcriptMessages }, (_, index) => ({
+  const messageIds = Array.from(
+    { length: counts.transcriptMessages },
+    (_, index) => `team-message-${index + 1}`,
+  );
+  const historyMessages = messageIds.map((id, index) => ({
     role: index % 2 ? "assistant" : "user",
+    __openclaw: { id, seq: index + 1 },
     timestamp: now - (counts.transcriptMessages - index) * 60_000,
     content: [
+      ...(options.duplicateBootReads && index === counts.transcriptMessages - 1
+        ? Array.from({ length: 6 }, (_unused, alias) => ({
+            type: "image",
+            artifactId: "artifact_managed_image_team-scale",
+            url: `/api/chat/media/outgoing/${encodeURIComponent(selectedSessionKey)}/team-scale/full?mediaTicket=historical-${alias}`,
+            alt: `Shared artifact ${alias + 1}`,
+            mimeType: "image/png",
+            width: 1,
+            height: 1,
+          }))
+        : []),
       {
         type: "text",
         text: [
@@ -376,6 +401,14 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     sessions,
     presenceUsers: people,
     historyMessages,
+    sessionReactions: {
+      [selectedSessionKey]: Object.fromEntries(
+        messageIds.map((id) => [
+          id,
+          [{ emoji: "👍", count: 1, identities: [{ id: people[1]!.id, label: people[1]!.name! }] }],
+        ]),
+      ),
+    },
     ...(options.liveRun
       ? {
           inFlightRun: {
@@ -401,9 +434,26 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "board.get",
       "canvas.document.view",
       "progressCard.get",
+      ...(options.duplicateBootReads ? ["session.suggestions.list"] : []),
     ],
     methodResponses: {
       "question.list": { questions: [] },
+      ...(options.duplicateBootReads
+        ? {
+            "session.suggestions.list": { suggestions: [], role: "owner" },
+            "artifacts.download": {
+              artifact: {
+                id: "artifact_managed_image_team-scale",
+                title: "Shared artifact",
+                type: "image",
+                mimeType: "image/png",
+                download: { mode: "bytes" },
+              },
+              encoding: "base64",
+              data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
+            },
+          }
+        : {}),
       "agents.list": agents,
       "agent.identity.get": {
         cases: agents.agents.map((agent) => ({

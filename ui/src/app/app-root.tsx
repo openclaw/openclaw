@@ -15,7 +15,6 @@ import {
   runWithOwner,
   untrack,
 } from "solid-js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/link-reader-hovercard-registration.ts";
 import { LazyElementStateView, LazyViewError } from "../components/solid/lazy-view-error.tsx";
@@ -29,7 +28,7 @@ import {
 } from "../lib/reactive/application.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { projectI18n } from "../lib/reactive/i18n.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -45,7 +44,7 @@ import {
   DASHBOARD_DOCUMENT_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   isOptionalElementDefined,
-  LazyCustomElementRequestController,
+  createLazyCustomElementRequests,
   LOGIN_GATE_ELEMENT,
   type OptionalCustomElement,
   QUESTION_PAGE_ELEMENT,
@@ -94,20 +93,31 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
   const onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
   const [startupPending, setStartupPending] = createSignal(true);
   // A submitted login keeps ownership until the Gateway admits the connection.
-  const [loginGatePinned, setLoginGatePinned] = createSignal(false);
-  const [loginGatewayUrl, setLoginGatewayUrl] = createSignal(context.gateway.connection.gatewayUrl);
-  const [loginToken, setLoginToken] = createSignal(context.gateway.connection.token);
-  const [loginPassword, setLoginPassword] = createSignal(context.gateway.connection.password);
-  const [loginShowGatewaySecret, setLoginShowGatewaySecret] = createSignal(false);
+  const [loginGatePinned, setLoginGatePinned] = createSignal<boolean>(
+    (previous) => !connected() && (previous ?? false),
+  );
+  // Drafts reset only for a replacement client, not same-client status publications.
+  const loginConnection = createMemo(
+    () => {
+      const current = gateway.read();
+      return { client: current.snapshot.client, ...current.connection };
+    },
+    { equals: (previous, next) => previous.client === next.client },
+  );
+  const [loginGatewayUrl, setLoginGatewayUrl] = createSignal(() => loginConnection().gatewayUrl);
+  const [loginToken, setLoginToken] = createSignal(() => loginConnection().token);
+  const [loginPassword, setLoginPassword] = createSignal(() => loginConnection().password);
+  const [loginShowGatewaySecret, setLoginShowGatewaySecret] = createSignal(() => {
+    loginConnection();
+    return false;
+  });
   const [pendingGatewayUrl, setPendingGatewayUrl] = createSignal(
     runtime.pendingGatewayConnection?.gatewayUrl ?? null,
   );
   const [focusDashboardRoute, setFocusDashboardRoute] = createSignal<FocusDashboardRouteState>({
     kind: "loading",
   });
-  const [lazyRevision, setLazyRevision] = createSignal(0);
   let active = true;
-  let loginConnectionClient: GatewayBrowserClient | null = context.gateway.snapshot.client;
   const focusDashboardAbort = new AbortController();
   const closeDocument = () => {
     if (globalThis.history.length > 1) {
@@ -118,22 +128,15 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
   };
   const renderFocusEscape = createLegacyFocusEscape(closeDocument);
   const lazyHost = {
-    requestUpdate: () => setLazyRevision((value) => value + 1),
     get updateComplete() {
       return Promise.resolve();
     },
     queryRenderedElement: (tag: string) => host.querySelector(tag),
   };
-  const loginGateLoader = new LazyCustomElementRequestController(lazyHost);
-  const lazyCustomElements = new LazyCustomElementRequestController(lazyHost, closeDocument);
-  const lazyState = () => {
-    lazyRevision();
-    return lazyCustomElements.visibleState;
-  };
-  const loginLoadState = () => {
-    lazyRevision();
-    return loginGateLoader.visibleState;
-  };
+  const loginGateLoader = createLazyCustomElementRequests(lazyHost);
+  const lazyCustomElements = createLazyCustomElementRequests(lazyHost, closeDocument);
+  const lazyState = projectOwner(lazyCustomElements, (owner) => owner.visibleState);
+  const loginLoadState = projectOwner(loginGateLoader, (owner) => owner.visibleState);
   const disconnectViewport = connectShellViewport();
   const disconnectTooltips = installTitleTooltips(host.ownerDocument);
   const embedHost = nativeEmbedHost();
@@ -148,24 +151,6 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     void import("../styles/native-embed.css");
   }
   void import("../components/session-progress-hovercard-registration.ts");
-
-  createEffect(
-    () => gateway.read(),
-    (current) =>
-      // Nested Lit/Solid mounts can flush this imperative effect under their owner.
-      runWithOwner(null, () => {
-        if (current.snapshot.client !== loginConnectionClient) {
-          loginConnectionClient = current.snapshot.client;
-          setLoginShowGatewaySecret(false);
-          setLoginGatewayUrl(current.connection.gatewayUrl);
-          setLoginToken(current.connection.token);
-          setLoginPassword(current.connection.password);
-        }
-        if (current.snapshot.phase === "connected") {
-          setLoginGatePinned(false);
-        }
-      }),
-  );
 
   const initialConnectPending = () =>
     runtime.documentMode === null &&
@@ -238,7 +223,8 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     gateway.revision();
     router.revision();
     selection.revision();
-    lazyRevision();
+    lazyState.revision();
+    loginLoadState.revision();
     startupPending();
     loginGatePinned();
     loginGatewayUrl();
@@ -330,7 +316,7 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
   }
   function LazyDocument(documentProps: { element: OptionalCustomElement }): SolidJSX.Element {
     return (
-      <Show when={lazyState()?.element === documentProps.element && lazyState()}>
+      <Show when={lazyState.read()?.element === documentProps.element && lazyState.read()}>
         {(state) => (
           <main class="connect-splash">
             <openclaw-route-fragment style={{ display: "contents" }}>
@@ -515,11 +501,12 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
   }
   function Login(): SolidJSX.Element {
     const loadError = () => {
-      const state = loginLoadState();
+      const state = loginLoadState.read();
       return state?.status === "error" ? state : undefined;
     };
     const registered = () => {
-      lazyRevision();
+      lazyState.revision();
+      loginLoadState.revision();
       return isOptionalElementDefined(LOGIN_GATE_ELEMENT);
     };
     return (
@@ -654,7 +641,7 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
               return (
                 <Show when={!(documentMode.kind === "approval" && pendingGatewayUrl())}>
                   <Show
-                    when={lazyState()?.element === element}
+                    when={lazyState.read()?.element === element}
                     fallback={
                       documentMode.kind === "approval" ? (
                         <openclaw-approval-page prop:approvalId={documentMode.approvalId ?? ""} />

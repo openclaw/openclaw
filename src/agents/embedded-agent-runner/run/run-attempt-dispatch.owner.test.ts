@@ -26,6 +26,7 @@ import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { createContextEngine } from "../../harness/context-engine-lifecycle.test-support.js";
 import { registerAgentHarness } from "../../harness/registry.js";
 import type { AgentHarness } from "../../harness/types.js";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "../../model-auth-markers.js";
 import { registerSandboxBackend, type SandboxBackendFactory } from "../../sandbox/backend.js";
 import { createSandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
@@ -63,6 +64,21 @@ vi.mock("../../runtime-plan/build.js", () => ({
 
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
+function backend(id: string, workdir: string, runtimeId = id) {
+  return {
+    id,
+    runtimeId,
+    runtimeLabel: "Synthetic sandbox",
+    workdir,
+    buildExecSpec: async () => {
+      throw new Error("unexpected exec");
+    },
+    runShellCommand: async () => {
+      throw new Error("unexpected shell");
+    },
+  };
+}
+
 it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
   "settles attribution before a writable sandbox setup (%s)",
   async (outcome) => {
@@ -84,18 +100,7 @@ it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
       const setupFile = path.join(state.workspaceDir, "setup.txt");
       const factory = vi.fn(async () => {
         await fs.writeFile(setupFile, "sandbox setup");
-        return {
-          id: "baseline-fixture",
-          runtimeId: "baseline-fixture",
-          runtimeLabel: "Baseline fixture",
-          workdir: "/workspace",
-          buildExecSpec: async () => {
-            throw new Error("unexpected exec");
-          },
-          runShellCommand: async () => {
-            throw new Error("unexpected shell");
-          },
-        };
+        return backend("baseline-fixture", "/workspace");
       });
       const restoreBackend = registerSandboxBackend("baseline-fixture", factory);
       const admission = prepareSystemAgentRunAdmission(config, "baseline", "main", "test");
@@ -149,10 +154,10 @@ it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
 );
 
 type DispatchCase = {
-  agentId: string;
+  agentId?: string;
   sandboxSessionKey?: string;
-  remoteSkills: boolean;
-  skillCatalog: "host" | "sandbox" | "none";
+  remoteSkills?: boolean;
+  skillCatalog?: "host" | "sandbox" | "none";
   oneShotCliRun?: boolean;
   managedWorkspace?: boolean;
   realManagedWorkspace?: boolean;
@@ -161,75 +166,27 @@ type DispatchCase = {
   configuredContextEngine?: boolean;
   diffBaseline?: "settled" | "failed" | "revoked";
   cancelTrajectory?: boolean;
+  preparedAuth?: "explicit-header" | "no-auth";
 };
 
 const dispatchCases: DispatchCase[] = [
-  {
+  ...(["explicit-header", "no-auth"] as const).map((preparedAuth) => ({
     agentId: "main",
-    sandboxSessionKey: undefined,
-    remoteSkills: false,
-    skillCatalog: "none",
-    cancelTrajectory: true,
-  },
+    preparedAuth,
+  })),
+  { agentId: "main", cancelTrajectory: true },
   ...(["settled", "failed", "revoked"] as const).map((diffBaseline) => ({
-    agentId: "work",
     sandboxSessionKey: "global",
-    remoteSkills: false,
-    skillCatalog: "none" as const,
     diffBaseline,
   })),
-  {
-    agentId: "main",
-    sandboxSessionKey: undefined,
-    remoteSkills: false,
-    skillCatalog: "host" as const,
-    oneShotCliRun: undefined,
-    configuredContextEngine: true,
-  },
-  {
-    agentId: "work",
-    sandboxSessionKey: "global",
-    remoteSkills: false,
-    skillCatalog: "sandbox" as const,
-    oneShotCliRun: true,
-  },
-  {
-    agentId: "work",
-    sandboxSessionKey: "agent:main:policy",
-    remoteSkills: false,
-    skillCatalog: "none" as const,
-    oneShotCliRun: false,
-  },
-  {
-    agentId: "work",
-    sandboxSessionKey: undefined,
-    remoteSkills: false,
-    skillCatalog: "none" as const,
-    oneShotCliRun: false,
-    managedWorkspace: true,
-  },
-  {
-    agentId: "work",
-    sandboxSessionKey: undefined,
-    remoteSkills: false,
-    skillCatalog: "none" as const,
-    oneShotCliRun: false,
-    managedWorkspace: true,
-    realManagedWorkspace: true,
-  },
-  {
-    agentId: "main",
-    sandboxSessionKey: undefined,
-    remoteSkills: true,
-    skillCatalog: "none" as const,
-    oneShotCliRun: false,
-    retirePlacement: true,
-  },
+  { agentId: "main", skillCatalog: "host", configuredContextEngine: true },
+  { sandboxSessionKey: "global", skillCatalog: "sandbox", oneShotCliRun: true },
+  { sandboxSessionKey: "agent:main:policy", oneShotCliRun: false },
+  { oneShotCliRun: false, managedWorkspace: true },
+  { oneShotCliRun: false, managedWorkspace: true, realManagedWorkspace: true },
+  { agentId: "main", remoteSkills: true, oneShotCliRun: false, retirePlacement: true },
   ...(["allowed", "outside"] as const).map((hostMedia) => ({
-    agentId: "work",
-    sandboxSessionKey: undefined,
     remoteSkills: true,
-    skillCatalog: "none" as const,
     oneShotCliRun: false,
     managedWorkspace: true,
     realManagedWorkspace: true,
@@ -238,12 +195,12 @@ const dispatchCases: DispatchCase[] = [
 ];
 
 it.each(dispatchCases)(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory",
+  "dispatches $agentId: sandbox $sandboxSessionKey, skills $skillCatalog/$remoteSkills, one-shot $oneShotCliRun, managed $realManagedWorkspace, media $hostMedia, retired $retirePlacement, baseline $diffBaseline, cancelled $cancelTrajectory, prepared auth $preparedAuth",
   async ({
-    agentId,
+    agentId = "work",
     sandboxSessionKey,
-    remoteSkills,
-    skillCatalog,
+    remoteSkills = false,
+    skillCatalog = "none",
     oneShotCliRun,
     managedWorkspace,
     realManagedWorkspace,
@@ -252,6 +209,7 @@ it.each(dispatchCases)(
     configuredContextEngine,
     diffBaseline,
     cancelTrajectory,
+    preparedAuth,
   }) => {
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
@@ -361,18 +319,7 @@ it.each(dispatchCases)(
         if (realManagedWorkspace) {
           throw new Error("LOCAL_DOCKER_UNAVAILABLE");
         }
-        return {
-          id: "owner-fixture",
-          runtimeId: scopeKey,
-          runtimeLabel: "Synthetic sandbox",
-          workdir: "/workspace",
-          buildExecSpec: async () => {
-            throw new Error("unexpected exec");
-          },
-          runShellCommand: async () => {
-            throw new Error("unexpected shell command");
-          },
-        };
+        return backend("owner-fixture", "/workspace", scopeKey);
       });
       const restoreSandbox = registerSandboxBackend(
         realManagedWorkspace ? "docker" : "owner-fixture",
@@ -506,6 +453,8 @@ it.each(dispatchCases)(
         setParams: () => {},
       });
       const authProfileStore = { version: 1, profiles: {} };
+      const sourceApiKey =
+        preparedAuth === "explicit-header" ? CUSTOM_LOCAL_AUTH_MARKER : "source-api-key";
       const contextEngine = createContextEngine({
         info: {
           id: configuredContextEngine ? "selected-context" : "legacy",
@@ -549,12 +498,24 @@ it.each(dispatchCases)(
             effectiveModel: {
               id: "fixture-model",
               provider: "fixture",
-              api: "openai-responses",
+              api: preparedAuth ? "openai-completions" : "openai-responses",
               input: imagePath ? ["text", "image"] : ["text"],
+              ...(preparedAuth
+                ? { headers: { Authorization: "Bearer runtime-token", "X-Test": "fixture" } }
+                : {}),
             },
             thinkLevel: "off",
-            apiKeyInfo: null,
-            runtimeAuthState: null,
+            apiKeyInfo: preparedAuth
+              ? { apiKey: sourceApiKey, source: "fixture", mode: "api-key" }
+              : null,
+            runtimeAuthState: preparedAuth
+              ? {
+                  generation: 1,
+                  sourceApiKey,
+                  apiKey: preparedAuth === "no-auth" ? CUSTOM_LOCAL_AUTH_MARKER : "runtime-api-key",
+                  authMode: "api-key",
+                }
+              : null,
             activePreparedAuthPlan: {
               providerForAuth: "fixture",
               authProfileProviderForAuth: "fixture",
@@ -606,13 +567,7 @@ it.each(dispatchCases)(
         : null;
       if (imagePath && remoteSandbox) {
         remoteSandbox.backend = {
-          id: "remote-fixture",
-          runtimeId: "remote-fixture",
-          runtimeLabel: "Remote fixture",
-          workdir: "/native/guest",
-          buildExecSpec: async () => {
-            throw new Error("unexpected remote process");
-          },
+          ...backend("remote-fixture", "/native/guest"),
           runShellCommand: remoteBridgeCommand,
         };
         remoteSandbox.fsBridge = createSandboxFsBridge({
@@ -802,6 +757,12 @@ it.each(dispatchCases)(
           storePath: undefined,
         });
         expect.soft(runAttempt.mock.calls[0]?.[0].oneShotCliRun).toBe(oneShotCliRun);
+        if (preparedAuth) {
+          expect(runAttempt.mock.calls[0]?.[0].model.headers).toEqual({
+            Authorization: preparedAuth === "explicit-header" ? "Bearer runtime-token" : null,
+            "X-Test": "fixture",
+          });
+        }
         const sandbox = runAttempt.mock.calls[0]?.[0].sandbox;
         if (managedWorkspace && !remoteSkills) {
           expect(preparation).toHaveBeenCalledWith(expect.objectContaining({ admittedRunContext }));

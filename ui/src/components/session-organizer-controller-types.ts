@@ -2,8 +2,8 @@ import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { SolidControllerHost } from "../lib/reactive/solid-controller-host.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
-import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionStatusFilter,

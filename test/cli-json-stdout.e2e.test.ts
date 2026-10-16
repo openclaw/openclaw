@@ -123,12 +123,16 @@ describe("cli json stdout contract", () => {
         if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
           throw new Error(`Expected JSON object stdout, got: ${stdout}`);
         }
-        expect(Object.keys(parsed).toSorted((a, b) => a.localeCompare(b))).toEqual([
-          "availability",
-          "channel",
-          "recoverySets",
-          "update",
-        ]);
+        expect(
+          Object.keys(parsed)
+            .filter((key) => key !== "inspectionErrors")
+            .toSorted((a, b) => a.localeCompare(b)),
+        ).toEqual(["availability", "channel", "recoverySets", "update"]);
+        if ("inspectionErrors" in parsed) {
+          expect(parsed.inspectionErrors).toEqual([
+            { section: "channels", message: expect.any(String) },
+          ]);
+        }
         expect(parsed).toHaveProperty("recoverySets", []);
         expect(stdout).not.toContain("Doctor warnings");
         expect(stdout).not.toContain("Doctor changes");

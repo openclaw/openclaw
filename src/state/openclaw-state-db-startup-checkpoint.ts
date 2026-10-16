@@ -343,6 +343,11 @@ export function initializeNativeOpenClawStateConnection(
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
   withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () => {
+    const initialization = prepareStateDatabaseInitialization(
+      pathname,
+      env,
+      options.initializationAgentPaths,
+    );
     const db = openNodeSqliteDatabase(pathname);
     try {
       assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
@@ -351,7 +356,7 @@ export function initializeNativeOpenClawStateConnection(
         return;
       }
       assertStateDatabaseIntegrityOnce(db, pathname);
-      initializeCanonicalSchema(db, pathname, env, { kind: "existing" });
+      initializeCanonicalSchema(db, pathname, env, initialization);
     } finally {
       clearNodeSqliteKyselyCacheForDatabase(db);
       db.close();

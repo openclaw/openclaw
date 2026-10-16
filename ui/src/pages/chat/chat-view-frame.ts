@@ -21,7 +21,7 @@ import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { buildPendingInputQueueItems, getChatPendingInputs } from "./chat-pending-inputs.ts";
-import type { ChatProviderReviewController } from "./chat-provider-review-controller.tsx";
+import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPlacementStartupNoticeProps } from "./chat-view-notices.tsx";
@@ -85,8 +85,8 @@ export type ChatProps = Omit<
     awaitingActivity?: boolean;
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
     providerPolicyNotice?: ProviderPolicyNotice | null;
-    providerReview?: ChatProviderReviewController;
-    providerReviewRevision?: object;
+    // Resolve after the first pane frame prepares the Solid owner's permission facts.
+    readProviderReview?: () => ChatProviderReviewOwner;
     error: string | null;
     diskSpace?: SessionPlacementDiskSpace;
     workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
@@ -196,9 +196,13 @@ export function createChatViewFrame(props: ChatProps) {
   const asyncQuestions = createAsyncQuestionPresentation(questionState, {
     ...props,
     onReopen: (itemId, scope) => {
-      const composerState = getChatComposerState(props.paneId);
-      composerState.activeQuestionKey = JSON.stringify([scope, itemId]);
-      composerState.questionCollapsed = false;
+      const composer = getChatComposerState(props.paneId);
+      composer.restoreComposerFocus ||= composer.questionTakeoverActive;
+      composer.questionTakeoverActive = false;
+      composer.updatePresentation((draft) => {
+        draft.activeQuestionKey = JSON.stringify([scope, itemId]);
+        draft.questionCollapsed = false;
+      });
     },
   });
   const openImage = props.onOpenImage

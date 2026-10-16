@@ -478,8 +478,6 @@ export class GatewayClient {
     try {
       ws = new WebSocket(url, transport.options);
       ws.binaryType = "nodebuffer";
-    } catch (error) {
-      throw error instanceof Error ? error : new Error(String(error));
     } finally {
       unregisterGatewayLoopbackBypass?.();
     }

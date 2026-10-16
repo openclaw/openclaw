@@ -12,7 +12,9 @@ import {
   createSqliteTableContractReader,
   getCanonicalSqliteNamedIndexContracts,
   getCanonicalSqliteTableNames,
+  hasCanonicalSqliteSchemaFingerprint,
   type CanonicalSqliteNamedIndexContract,
+  type SqliteSchemaSource,
 } from "./sqlite-schema-contract.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -37,7 +39,7 @@ type RepairCanonicalSqliteIndexesOptions = {
 export function* verifyAndRepairCanonicalSqliteIndexSteps(
   db: DatabaseSync,
   databaseLabel: string,
-  schemaSql: string,
+  schemaSql: SqliteSchemaSource,
   options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> & {
     diagnostics?: SqliteIntegrityDiagnostics;
     reuseIntegrity?: boolean;
@@ -71,47 +73,49 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
 export function repairCanonicalSqliteIndexes(
   db: DatabaseSync,
   databaseLabel: string,
-  schemaSql: string,
+  schemaSql: SqliteSchemaSource,
   options: RepairCanonicalSqliteIndexesOptions = {},
 ): string[] {
-  const indexes = getCanonicalSqliteNamedIndexContracts(schemaSql);
-  const indexesByTable = new Map<string, CanonicalSqliteNamedIndexContract[]>();
-  for (const index of indexes) {
-    assertSqliteIdentifier(index.name);
-    assertSqliteIdentifier(index.tableName);
-    const tableIndexes = indexesByTable.get(index.tableName) ?? [];
-    tableIndexes.push(index);
-    indexesByTable.set(index.tableName, tableIndexes);
-  }
   const repairIndexes = new Set<CanonicalSqliteNamedIndexContract>();
   // One read snapshot also avoids a network lock round trip per metadata query.
   runSqliteSchemaReadSnapshotSync(db, () => {
     const readTable = createSqliteTableContractReader(db);
-    for (const tableName of getCanonicalSqliteTableNames(schemaSql)) {
-      assertSqliteIdentifier(tableName);
-      const table = readTable(tableName);
-      if (!table) {
-        continue;
+    if (!hasCanonicalSqliteSchemaFingerprint(schemaSql, readTable)) {
+      const indexes = getCanonicalSqliteNamedIndexContracts(schemaSql);
+      const indexesByTable = new Map<string, CanonicalSqliteNamedIndexContract[]>();
+      for (const index of indexes) {
+        assertSqliteIdentifier(index.name);
+        assertSqliteIdentifier(index.tableName);
+        const tableIndexes = indexesByTable.get(index.tableName) ?? [];
+        tableIndexes.push(index);
+        indexesByTable.set(index.tableName, tableIndexes);
       }
-      const tableIndexes = indexesByTable.get(tableName) ?? [];
-      const canonicalIndexNames = new Set(tableIndexes.map((index) => index.name));
-      const actualIndexes = table.indexes;
-      const unexpected = actualIndexes.find(
-        (index) =>
-          index.unique === 1 &&
-          index.origin === "c" &&
-          index.name !== null &&
-          !canonicalIndexNames.has(index.name),
-      );
-      if (unexpected) {
-        throw new Error(
-          `SQLite schema is incomplete or noncanonical for ${databaseLabel}: unexpected unique index ${unexpected.name}`,
+      for (const tableName of getCanonicalSqliteTableNames(schemaSql)) {
+        assertSqliteIdentifier(tableName);
+        const table = readTable(tableName);
+        if (!table) {
+          continue;
+        }
+        const tableIndexes = indexesByTable.get(tableName) ?? [];
+        const canonicalIndexNames = new Set(tableIndexes.map((index) => index.name));
+        const actualIndexes = table.indexes;
+        const unexpected = actualIndexes.find(
+          (index) =>
+            index.unique === 1 &&
+            index.origin === "c" &&
+            index.name !== null &&
+            !canonicalIndexNames.has(index.name),
         );
-      }
-      for (const index of tableIndexes) {
-        const actual = actualIndexes.find((candidate) => candidate.name === index.name);
-        if (JSON.stringify(actual) !== JSON.stringify(index.fingerprint)) {
-          repairIndexes.add(index);
+        if (unexpected) {
+          throw new Error(
+            `SQLite schema is incomplete or noncanonical for ${databaseLabel}: unexpected unique index ${unexpected.name}`,
+          );
+        }
+        for (const index of tableIndexes) {
+          const actual = actualIndexes.find((candidate) => candidate.name === index.name);
+          if (JSON.stringify(actual) !== JSON.stringify(index.fingerprint)) {
+            repairIndexes.add(index);
+          }
         }
       }
     }

@@ -226,20 +226,21 @@ it.each([
     }),
   });
   const successorClose = vi.fn(async () => {});
+  const successorCreate = vi.fn(async () => ({
+    provider:
+      mode === "late-probe"
+        ? null
+        : {
+            id: targetId,
+            model: "synthetic-embedding",
+            embed: async () => [1, 0, 0],
+            embedBatch: async () => [[1, 0, 0]],
+            close: successorClose,
+          },
+  }));
   const replacement = registerAdapter(successor, config, {
     id: targetId,
-    create: async () => ({
-      provider:
-        mode === "late-probe"
-          ? null
-          : {
-              id: targetId,
-              model: "synthetic-embedding",
-              embed: async () => [1, 0, 0],
-              embedBatch: async () => [[1, 0, 0]],
-              close: successorClose,
-            },
-    }),
+    create: successorCreate,
   });
   const unaffectedConfig = {
     ...config,
@@ -402,10 +403,6 @@ it.each([
           }),
         ],
       });
-      await expect(fresh.manager.probeEmbeddingAvailability()).resolves.toMatchObject({
-        ok: false,
-        cached: true,
-      });
     } else {
       await drain;
       expect(close).toHaveBeenCalledTimes(
@@ -420,16 +417,27 @@ it.each([
     expect(unaffectedClose).not.toHaveBeenCalled();
     const fresh = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
     assert(fresh.manager, fresh.error ?? "Expected a memory manager");
-    await expect(fresh.manager.probeEmbeddingAvailability()).resolves.toMatchObject({
-      ok: mode !== "late-probe",
-    });
-    // A manager fenced during the reload stays cached and live; its own watcher
-    // reconcile sync resumes on the successor adapter whenever its debounce fires.
-    // Acquire that provider here so final cleanup owns a deterministic set.
+    if (mode === "late-probe") {
+      await expect(fresh.manager.search("replacement provider required")).rejects.toThrow(
+        'Memory search unavailable: embedding provider "embedding-probe" is configured but unavailable.',
+      );
+    } else {
+      if (mode.startsWith("pending")) {
+        await expect(fresh.manager.search("replacement provider acquisition")).resolves.toEqual([]);
+      }
+      await expect(fresh.manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
+    }
+    // A real search acquires each required successor provider, unlike advisory cached probes.
     if (lateManager) {
+      if (mode.startsWith("pending")) {
+        await expect(lateManager.search("replacement provider acquisition")).resolves.toEqual([]);
+      }
       await expect(lateManager.probeEmbeddingAvailability()).resolves.toMatchObject({
         ok: mode !== "late-probe",
       });
+    }
+    if (mode.startsWith("pending")) {
+      expect(successorCreate).toHaveBeenCalledTimes(2);
     }
     const attemptedCloses = close.mock.calls.length;
     const finalClose = owner.runtime.closeAllMemorySearchManagers?.();

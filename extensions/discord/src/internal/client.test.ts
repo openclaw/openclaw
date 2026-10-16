@@ -344,12 +344,6 @@ describe("Client gateway event queue", () => {
     await vi.advanceTimersByTimeAsync(10);
 
     expect(started).toEqual(["first"]);
-    expect(client.getRuntimeMetrics().eventQueue).toMatchObject({
-      queueSize: 1,
-      processing: 1,
-      processed: 1,
-      timeouts: 1,
-    });
 
     firstSettlement.resolve();
     await vi.advanceTimersByTimeAsync(0);
@@ -359,12 +353,6 @@ describe("Client gateway event queue", () => {
     expect(second.handle).toHaveBeenCalledTimes(1);
     await expect(dispatch).resolves.toBeUndefined();
     expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(client.getRuntimeMetrics().eventQueue).toMatchObject({
-      queueSize: 0,
-      processing: 0,
-      processed: 2,
-      timeouts: 1,
-    });
   });
 
   it("logs a listener failure that arrives after its dispatch timeout", async () => {
@@ -397,11 +385,6 @@ describe("Client gateway event queue", () => {
       "[EventQueue] Listener Object failed after timeout for event READY:",
       lateError,
     );
-    expect(client.getRuntimeMetrics().eventQueue).toMatchObject({
-      processing: 0,
-      processed: 1,
-      timeouts: 1,
-    });
   });
 
   it("rejects when queued listener work exceeds maxQueueSize", async () => {

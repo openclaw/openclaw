@@ -94,6 +94,8 @@ export type OpenClawDatabasePreflightOptions = {
         registeredDatabases: readonly { agentId: string; path: string }[],
       ) => readonly { agentId: string; path: string }[]);
   configuredAgentDatabaseCandidatePaths?: readonly string[];
+  /** Final verification includes required held stores without granting migration authority. */
+  inspectHeldAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
   agentAdmissionConfig?: OpenClawConfig;
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
 };

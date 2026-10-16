@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { createComponent } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
@@ -17,7 +17,7 @@ import {
 } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
-import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { readBackgroundImage } from "./session-background-image.ts";
 import { backgroundImageOpacityLimit } from "./session-background-opacity.ts";
 import { SessionBackgroundView } from "./session-background-view.tsx";
@@ -111,18 +111,23 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("activates the lazy background slot when its existing theme owner changes from None", async () => {
+it("tracks late and replaced theme owners without recreating the lazy background slot", async () => {
   const source = fixture();
   source.settings.background = selectBackgroundSource({ kind: "none" });
+  const [context, setContext] = createSignal<ApplicationContext | undefined>(undefined);
   const view = mountSolid(() =>
     createComponent(SessionBackgroundView, {
-      context: source.context,
+      get context() {
+        return context();
+      },
       surface: "new-session",
     }),
   );
   const slot = view.container.querySelector<HTMLElement>("openclaw-session-background")!;
   expect(slot.hidden).toBe(true);
 
+  setContext(source.context);
+  flush();
   source.settings.background = selectBackgroundSource({ kind: "theme" });
   source.notify();
   await waitForSolid(() => {
@@ -130,6 +135,24 @@ it("activates the lazy background slot when its existing theme owner changes fro
     expect(slot.hidden).toBe(false);
     expect(slot.querySelector(".session-background__image--theme")).not.toBeNull();
   });
+
+  const replacement = fixture();
+  replacement.settings.background = selectBackgroundSource({ kind: "none" });
+  setContext(replacement.context);
+  await waitForSolid(() => expect(slot.hidden).toBe(true));
+  source.notify();
+  flush();
+  expect(slot.hidden).toBe(true);
+
+  replacement.settings.background = selectBackgroundSource({ kind: "theme" });
+  replacement.notify();
+  await waitForSolid(() => expect(slot.hidden).toBe(false));
+  setContext(undefined);
+  await waitForSolid(() => expect(slot.hidden).toBe(true));
+  replacement.notify();
+  flush();
+  expect(slot.hidden).toBe(true);
+  expect(view.container.querySelector("openclaw-session-background")).toBe(slot);
 });
 
 it("keeps absent preferences distinct from None and independent disabled surfaces", () => {

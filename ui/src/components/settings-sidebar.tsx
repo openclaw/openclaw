@@ -1,5 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { createEffect, createMemo, For, onSettled, Show, untrack } from "solid-js";
+import { createEffect, createMemo, For, onSettled, Show } from "solid-js";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import {
@@ -24,6 +24,7 @@ import { isComposingKeyboardEvent } from "../lib/ime.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectAgentSelection } from "../lib/reactive/application.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -232,11 +233,7 @@ function SettingsNavigationItem(props: {
       touch,
     );
   let anchor!: HTMLAnchorElement;
-  onSettled(() => {
-    const touch = (event: TouchEvent) => preload(event, true);
-    anchor.addEventListener("touchstart", touch, { passive: true });
-    return () => anchor.removeEventListener("touchstart", touch);
-  });
+  onSettled(() => listen(anchor, "touchstart", (event) => preload(event, true), { passive: true }));
   return (
     <a
       ref={(element) => {
@@ -315,21 +312,15 @@ function SettingsBlockItem(props: { sidebar: SettingsSidebarProps; block: Settin
 }
 
 function SettingsAgentSelector(props: SettingsSidebarProps) {
-  const identities = projectOwner(
-    untrack(() => props.agentIdentity),
-    (source) => source.entries(),
-  );
-  const selection = projectAgentSelection(untrack(() => props.settingsAgentSelection));
+  const identitySource = createMemo(() => props.agentIdentity);
+  const selectionSource = createMemo(() => props.settingsAgentSelection);
+  const identities = createMemo(() => projectOwner(identitySource(), (source) => source.entries()));
+  const selection = createMemo(() => projectAgentSelection(selectionSource()));
   createEffect(
-    () => [props.agentIdentity, selection.read().state.selectedId] as const,
+    () => [identitySource(), selection().read().state.selectedId] as const,
     ([source, agentId]) => {
-      identities.replaceSource(source);
       void source.ensure([agentId]);
     },
-  );
-  createEffect(
-    () => props.settingsAgentSelection,
-    (source) => selection.replaceSource(source),
   );
   const agents = createMemo(() =>
     listSelectableAgents(props.agents).map((agent) =>
@@ -354,9 +345,11 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
       <openclaw-agent-select
         prop:options={options()}
         prop:identityById={Object.fromEntries(
-          identities.read().map((identity) => [identity.agentId, identity]),
+          identities()
+            .read()
+            .map((identity) => [identity.agentId, identity]),
         )}
-        prop:value={selection.read().state.selectedId ?? ""}
+        prop:value={selection().read().state.selectedId ?? ""}
         prop:accessibleLabel={t("agentScope.label")}
         prop:menuLabel={t("agentScope.label")}
         prop:disabled={options().length <= 1}
@@ -544,10 +537,9 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                 type="button"
                 class="settings-sidebar__search-clear"
                 aria-label={t("nav.settingsSearchClear")}
-                onClick={(event) => {
-                  const input = event.currentTarget.parentElement?.querySelector("input");
+                onClick={() => {
                   props.onSearchQueryChange("");
-                  input?.focus();
+                  searchInput?.focus();
                 }}
               >
                 <Icon name="x" />

@@ -198,11 +198,10 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
               { runId, timeoutMs: PROOF_TIMEOUT_MS },
               PROOF_TIMEOUT_MS + 5_000,
             );
-            expect(waitResult, `agent.wait ${marker}: ${JSON.stringify(waitResult)}`).toMatchObject(
-              {
-                status: "ok",
-              },
-            );
+            expect(
+              waitResult,
+              `agent.wait ${marker}: ${JSON.stringify(waitResult)}\n${instance.logs()}`,
+            ).toMatchObject({ status: "ok" });
             if (key === remoteKey) {
               await settlement.wait(admin, key, signal);
             }

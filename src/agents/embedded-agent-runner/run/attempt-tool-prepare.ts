@@ -547,7 +547,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   } catch (error) {
     try {
       await runOwnedAgentCleanup({
-        ...attempt,
+        runId: attempt.runId,
+        sessionId: attempt.sessionId,
+        oneShotCliRun: attempt.oneShotCliRun,
         step: "embedded-tool-preparation",
         cleanup: () => releaseTools("error"),
         log,

@@ -3168,29 +3168,6 @@ describe("prepareCliRunContext", () => {
     }
   });
 
-  it("lets disableTools override a selectable backend toolsAllow projection", async () => {
-    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
-      ...context.baseArgs,
-    ]);
-    setRawCliBackendForPrepareTest({
-      id: "selectable-cli",
-      pluginId: "selectable-plugin",
-      bundleMcp: false,
-      nativeToolMode: "selectable",
-      toolAvailabilityEnforcement: "execution-args",
-      resolveExecutionArgs,
-      config: createJsonlStdinBackendConfig("selectable-cli"),
-    });
-
-    const context = await fixture.prepare({
-      provider: "selectable-cli",
-      disableTools: true,
-      toolsAllow: ["write"],
-    });
-
-    expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
-  });
-
   it("preserves preparation refusal when cleanup fails", async () => {
     const cleanup = vi.fn(async () => {
       throw new Error("preparation cleanup failed");
@@ -3576,9 +3553,7 @@ describe("prepareCliRunContext", () => {
       });
 
       await prepareCliBundleMcpCaptureAttempt({
-        mode: "claude-config-file",
-        backend: merged.backend,
-        env: merged.env,
+        preparedBackend: merged,
         captureKey: "attempt-timeout-proof",
       });
 

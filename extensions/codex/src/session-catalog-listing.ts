@@ -161,11 +161,7 @@ export function createCodexSessionCatalogNodeHostCommands(
     : commands;
 }
 
-type CodexNodeSessionTranscriptParams = {
-  threadId: string;
-  cursor?: string;
-  limit: number;
-};
+type CodexNodeSessionTranscriptParams = Parameters<typeof readCodexCatalogTranscriptPage>[1];
 
 function readNodeTranscriptParams(
   value: Record<string, unknown>,

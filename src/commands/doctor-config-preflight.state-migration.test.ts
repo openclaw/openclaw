@@ -156,6 +156,9 @@ describe("runDoctorConfigPreflight state migration", () => {
       async () => snapshot,
       async () => {
         const result = await runDoctorConfigPreflight(doctorMigrationOptions);
+        expect(result.warnings).toContain(
+          `${hostWarning} Run \`openclaw doctor --fix\` to retry plugin repair.`,
+        );
         expect(result.stateMigrationStepReceipts).toContainEqual(
           expect.objectContaining({
             id: "plugin:discord",

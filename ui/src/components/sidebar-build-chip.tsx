@@ -6,7 +6,7 @@ import { formatDateTimeMs } from "../lib/format.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "./tooltip.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import {
   formatSettingsBuildLabel,
   formatSidebarBuildSubtitle,

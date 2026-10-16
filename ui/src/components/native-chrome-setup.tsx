@@ -4,7 +4,7 @@ import type { LegacyChromeInstallResult } from "../app/native-device-settings.ts
 import { projectNativeDeviceSettings } from "../lib/reactive/application-native.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { ChromeSetupStatus, type ChromeSetupStatusProps } from "./chrome-setup-status.tsx";
 import "./native-chrome-setup.css";
 

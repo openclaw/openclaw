@@ -259,20 +259,21 @@ it.for(["current", "historical-v1", "lost-journal"] as const)(
       );
       const output = stripVTControlCharacters(`${first.stdout}\n${first.stderr}`);
       if (sharedState === "lost-journal") {
-        expect(first.code, output).toBe(0);
+        expect(first.code, output).toBe(1);
         expect(doctorResultPath).toBeDefined();
         const result = await consumeUpdatePostInstallDoctorResult(
           doctorResultPath!,
           doctorResultOptions,
         );
         expect(result, output).toMatchObject({
-          status: "ok",
-          warnings: expect.arrayContaining([expect.stringContaining("held back")]),
+          status: "error",
+          maintenanceRefusal: { kind: "data-at-risk", reason: "incomplete-migration" },
         });
         expect(output).toContain("Agent deletion journal reconstructed");
         expect(output).toContain("held back");
         expect(output).toContain("openclaw agents add");
         expect(output).toContain("--non-interactive");
+        expect(output).not.toContain("Doctor complete.");
         for (const [index, pathname] of databasePaths.entries()) {
           expect(output).toContain(pathname);
           expect(fs.readFileSync(pathname)).toEqual(agentDatabaseBytes[index]);

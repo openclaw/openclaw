@@ -11,13 +11,13 @@ import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-previe
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
 import { createAttachmentDownload } from "./chat-attachment-download.ts";
 import { createFileCopy } from "./chat-file-copy.ts";
 import { captureFileEditorDraft, readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
-import { FileHtmlPreviewController } from "./chat-html-preview.ts";
+import { createFileHtmlPreview } from "./chat-html-preview.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import type {
   ChatDetailPanelProps,
@@ -52,15 +52,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     new Promise<void>((resolve) => {
       lifecycle.afterCommit(() => resolve(), resolve);
     });
-  const updatingHost = {
-    get isConnected() {
-      return !disposed && host.isConnected;
-    },
-    requestUpdate: invalidate,
-    get updateComplete() {
-      return afterCommit();
-    },
-  };
+  const isConnected = () => !disposed && host.isConnected;
   let visibleContent: ChatDetailPanelContent | null = null;
   let error: Error | null = null;
   let fileSearchOpen = false;
@@ -68,10 +60,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   let fileSearchQuery = "";
   let fileSearchMatchIndex = 0;
   let fileEditorMenuOpen = false;
-  const fileCopy = createFileCopy(
-    () => visibleContent,
-    () => updatingHost.isConnected,
-  );
+  const fileCopy = createFileCopy(() => visibleContent, isConnected);
   let fileEditorLoading = false;
   let fileEditing = false;
   let fileDirty = false;
@@ -79,15 +68,18 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   let fileSaving = false;
   let fileSaveNotice: { kind: "conflict" } | { kind: "error"; message: string } | null = null;
 
-  const htmlPreview = new FileHtmlPreviewController(
-    updatingHost,
-    () => visibleContent,
+  const htmlPreview = createFileHtmlPreview(
+    () => props.content,
+    () => props.fileNavigation,
     () => currentFileText(),
   );
 
   let fileOperationVersion = 0;
   let rawView: { file: FileSidebarContent | null } | null = null;
   let fileEditor: FileEditorViewHandle | null = null;
+  let editorMount: HTMLElement | undefined;
+  let searchInput: HTMLInputElement | undefined;
+  let searchToggle: HTMLButtonElement | undefined;
   let fileEditorLoad: Promise<void> | null = null;
   let fileDraftContent: string | null = null;
   let fileSavedContent = "";
@@ -95,7 +87,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   const attachmentDownload = createAttachmentDownload(
     () => (props.content === visibleContent ? props.content : null),
     () => props.attachmentRuntime,
-    () => updatingHost.isConnected,
+    isConnected,
   );
 
   function updateSelection(
@@ -109,9 +101,6 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     if (previousRuntime && previousRuntime.connectionEpoch !== runtime.connectionEpoch) {
       releaseChatMediaResourceSubscriber(invalidate);
       attachmentDownload.cancel();
-    }
-    if (navigationChanged && navigation && content?.kind === "file") {
-      htmlPreview.showSource();
     }
     if (!contentChanged) {
       // A line link is navigation, not replacement content: keep drafts, undo,
@@ -152,10 +141,6 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       restoredDraft?.expectedHash ?? (content?.kind === "file" ? (content.edit?.hash ?? "") : "");
     fileEditing = Boolean(restoredDraft);
     fileDirty = Boolean(restoredDraft);
-    htmlPreview.reset(
-      fileDraftContent,
-      Boolean(navigation || (content?.kind === "file" && content.line != null)),
-    );
     fileEditorLoading = content?.kind === "file" && !htmlPreview.showing;
     destroyFileEditor();
   }
@@ -207,7 +192,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       return fileEditorLoad;
     }
     const content = visibleContent;
-    const parent = host.querySelector<HTMLElement>(".file-view__mount");
+    const parent = editorMount;
     if (content?.kind !== "file" || !parent || htmlPreview.showing) {
       return Promise.resolve();
     }
@@ -227,7 +212,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
           wrap: fileWrap,
           onSave: saveFile,
         });
-        if (version !== fileOperationVersion || !updatingHost.isConnected) {
+        if (version !== fileOperationVersion || !isConnected()) {
           editor.destroy();
           return;
         }
@@ -255,7 +240,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
         });
       })
       .catch((cause: unknown) => {
-        if (version !== fileOperationVersion || !updatingHost.isConnected) {
+        if (version !== fileOperationVersion || !isConnected()) {
           return;
         }
         // A failed load is terminal for this selection; renders must not retry it.
@@ -279,8 +264,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     const version = fileOperationVersion;
     if (isStaleChunkImportError(failedError)) {
       void retryStaleChunkReloadWhenReachable({
-        canReload: () =>
-          updatingHost.isConnected && error === failedError && version === fileOperationVersion,
+        canReload: () => isConnected() && error === failedError && version === fileOperationVersion,
       });
     } else {
       error = null;
@@ -306,17 +290,6 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       currentMatch: matches[fileSearchMatchIndex] ?? null,
     });
   }
-
-  const handleDocumentPointerDown = (event: PointerEvent) => {
-    if (!fileEditorMenuOpen) {
-      return;
-    }
-    const editor = host.querySelector(".sidebar-file-view__editor");
-    if (!editor || !event.composedPath().includes(editor)) {
-      fileEditorMenuOpen = false;
-      invalidate();
-    }
-  };
 
   function fileSearchMatches(): number[] {
     const content = visibleContent;
@@ -348,7 +321,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       return;
     }
     void afterCommit().then(() => {
-      host.querySelector<HTMLInputElement>(".file-view__search input")?.focus();
+      searchInput?.focus();
     });
   };
 
@@ -372,9 +345,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       event.preventDefault();
       event.stopPropagation();
       toggleFileSearch();
-      host.querySelector<HTMLButtonElement>(".sidebar-file-view__search-toggle")?.focus({
-        preventScroll: true,
-      });
+      searchToggle?.focus({ preventScroll: true });
       return;
     }
     if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
@@ -639,6 +610,15 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
           mode: props.embedSandboxMode,
         }),
         copyFeedback: fileCopy.feedback(),
+        editorRef: (element) => {
+          editorMount = element;
+        },
+        searchInputRef: (element) => {
+          searchInput = element;
+        },
+        searchToggleRef: (element) => {
+          searchToggle = element;
+        },
         currentMatchIndex,
         dirty: fileDirty,
         execNode: props.execNode,
@@ -707,12 +687,9 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     },
   );
   const unsubscribeNativeGateway = nativeGatewaysCapability()?.subscribe(invalidate);
-  document.addEventListener("pointerdown", handleDocumentPointerDown);
   onCleanup(() => {
     disposed = true;
     unsubscribeNativeGateway?.();
-    htmlPreview.dispose();
-    document.removeEventListener("pointerdown", handleDocumentPointerDown);
     if (fileDirty) {
       fileDraftContent = currentFileText();
     }

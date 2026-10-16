@@ -255,7 +255,7 @@ export function stageSessionPendingInput(
       );
       const accept = () =>
         stagePreparedPendingInput(captured, options, preparedRequest, lifecycleGeneration, store);
-      // Actor commands own the physical FIFO and revalidate the prepared snapshot.
+      // Actor commands own the physical FIFO and check the admitted input's identity.
       // Holding the legacy reservation here would make native acceptance queue behind itself.
       return inputActor ? accept() : store.withAdmission(accept, admission !== undefined);
     };

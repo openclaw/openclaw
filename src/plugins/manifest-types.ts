@@ -401,6 +401,8 @@ export type PluginManifestBackupResource = {
   disposition: "include" | "regenerable";
   scope: "state" | "agent";
   relativePath: string;
+  /** Shared-state databases retained under this state-scoped resource. */
+  databaseFamily?: "state";
 };
 
 /** Provider-authored limits and result semantics available before runtime activation. */

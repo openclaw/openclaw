@@ -1,6 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isPromise } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SearchSchema } from "../infra/database-engine/contract.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   SQLITE_WORKER_PREPARE_COMMAND,
   type SqliteWorkerPreparedBackend,
@@ -11,6 +12,7 @@ import {
   requestSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { admitAgentEngineSearchExtensions } from "./openclaw-agent-db-engine.js";
 
 export type AgentDatabaseAdmissionRestriction = (
   request: SqliteWorkerAdmissionRequest,
@@ -65,7 +67,7 @@ export type AgentDatabaseDomainOperations = {
 /** One admitted publication scope borrows the canonical connection; it never owns its close. */
 export function createAgentDatabaseDomainOwner(context: {
   databasePath: string;
-  assertCurrent(): DatabaseSync;
+  assertCurrent(): EngineConnection;
   assertCleanupCurrent(): void;
   admit(
     stage: "transaction" | "commit",
@@ -102,6 +104,15 @@ export function createAgentDatabaseDomainOwner(context: {
       const backend = factory(input.input, {
         databasePath: context.databasePath,
         database,
+        admitSearchExtensions: (definitions: Readonly<Record<string, SearchSchema>>) => {
+          if (!authority.active) {
+            throw new Error("Agent publication cleanup cannot admit search extensions");
+          }
+          admitAgentEngineSearchExtensions(database, definitions, (stage) => {
+            context.assertCurrent();
+            context.admit(stage);
+          });
+        },
         admit: (
           stage: "transaction" | "commit",
           requestAdmission?: AgentDatabaseAdmissionRestriction,

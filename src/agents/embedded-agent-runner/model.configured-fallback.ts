@@ -7,7 +7,10 @@ import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metad
 import { createProviderModelCatalogIdNormalizer } from "../../plugins/provider-model-routes.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
+import {
+  modelTransportRoutesMatch,
+  resolveCatalogOwnedModelCompat,
+} from "../model-compat-catalog.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
   attachModelProviderRequestRouteFacts,
@@ -180,6 +183,12 @@ export function buildConfiguredFallbackModel(params: {
             }),
             contextWindow: resolvedFallbackContextWindow,
             contextTokens: configuredModel?.contextTokens ?? staticCatalogModel?.contextTokens,
+            parameterCount:
+              configuredModel?.parameterCount ??
+              (staticCatalogModel &&
+              modelTransportRoutesMatch(staticCatalogModel, fallbackTransport)
+                ? staticCatalogModel.parameterCount
+                : undefined),
             // maxTokens is a wire-level output cap, not a context-budget fallback.
             // Omit an unknown cap so strict providers can apply their own limit.
             ...(normalizedResolvedFallbackMaxTokens !== undefined

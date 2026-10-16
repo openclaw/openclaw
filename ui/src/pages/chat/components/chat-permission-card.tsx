@@ -4,7 +4,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { projectNativeDeviceSettings } from "../../../lib/reactive/application-native.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 
 function ChatPermissionCard(props: {
   request: NodePermissionRequest;

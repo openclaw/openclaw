@@ -553,7 +553,7 @@ it("forwards caller cancellation while retaining descendants and transport close
     expect(caller.hasPendingWork).toBe(true);
     expect(callerDrained).toBe(false);
     finishClose.resolve();
-    await reader;
+    expect(await reader).toEqual({ error: reason });
     expect(mocks.removed).toEqual([]);
     expect(caller.hasPendingWork).toBe(true);
     expect(callerDrained).toBe(false);

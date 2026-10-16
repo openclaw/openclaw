@@ -80,6 +80,7 @@ export function createDiagnosticsEventHandler(params: {
       recorders.recordModelCallFinished(evt, metadata, privateData.modelContent),
     "model.call.error": (evt, metadata, privateData) =>
       recorders.recordModelCallFinished(evt, metadata, privateData.modelContent),
+    "model.response.observed": recorders.recordModelResponseObserved.bind(recorders),
     "tool.execution.started": recorders.recordToolExecutionStarted.bind(recorders),
     "tool.execution.completed": (evt, metadata, privateData) =>
       recorders.recordToolExecutionFinished(evt, metadata, privateData.toolContent),

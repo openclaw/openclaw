@@ -30,6 +30,22 @@ import {
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 
+export { createCodexRuntimePlanFixture } from "./test-support.js";
+
+export function createLifecycleRequest(
+  respond: (method: string, requestParams?: unknown) => Promise<unknown>,
+) {
+  return vi.fn((method: string, requestParams?: unknown) => {
+    if (method === "config/read") {
+      return Promise.resolve({ config: {}, origins: {}, layers: [] });
+    }
+    if (method === "configRequirements/read") {
+      return Promise.resolve({ requirements: null });
+    }
+    return respond(method, requestParams);
+  });
+}
+
 type NativeFixtureThread = {
   response: Record<string, unknown>;
   thread: Record<string, unknown>;
@@ -485,17 +501,6 @@ export async function writeNativeCatalogFixture(
   );
 }
 
-export function disabledMcpServerStatus(name: string) {
-  return {
-    name,
-    serverInfo: null,
-    tools: {},
-    resources: [],
-    resourceTemplates: [],
-    authStatus: "unsupported",
-  };
-}
-
 export function createAppServerOptions(): CodexAppServerRuntimeOptions {
   return {
     start: {
@@ -566,27 +571,6 @@ export function setCodexTestModelSupportsTools(
     ...params.model,
     compat: { ...params.model.compat, supportsTools },
   } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
-}
-
-export function createCodexRuntimePlanFixture(): NonNullable<
-  EmbeddedRunAttemptParams["runtimePlan"]
-> {
-  return {
-    auth: {},
-    observability: {
-      resolvedRef: "codex/gpt-5.4-codex",
-      provider: "codex",
-      modelId: "gpt-5.4-codex",
-      harnessId: "codex",
-    },
-    prompt: {
-      resolveSystemPromptContribution: () => undefined,
-    },
-    tools: {
-      normalize: (tools: unknown[]) => tools,
-      logDiagnostics: () => undefined,
-    },
-  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
 }
 
 export function createThreadRequestAttemptParams(params: {

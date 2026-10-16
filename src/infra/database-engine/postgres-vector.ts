@@ -122,7 +122,7 @@ export function bindPostgresVector(
       // Refresh from authoritative bytes, never re-encode a caller's possibly rounded embedding.
       const statement =
         /* sqlite-allow-raw: PostgreSQL projection refresh derives from canonical source bytes. */ db.prepare(
-          `INSERT INTO ${pgSearchName(index.table)}(id, embedding) SELECT ${pgSearchName(source.key)}, openclaw_vector(${pgSearchName(source.embedding)}, ${source.dimensions}) FROM ${pgSearchName(source.source)} WHERE ${pgSearchName(source.key)} = ? AND ${pgSearchName(source.embedding)} IS NOT NULL ON CONFLICT (id) DO UPDATE SET embedding = excluded.embedding`,
+          `INSERT INTO ${pgSearchName(index.table)}(id, embedding) SELECT ${pgSearchName(source.key)}, openclaw_vector(${pgSearchName(source.embedding)}, ${source.dimensions}) FROM ${pgSearchName(source.source)} WHERE ${pgSearchName(source.key)} = ? AND octet_length(${pgSearchName(source.embedding)}) > 0 ON CONFLICT (id) DO UPDATE SET embedding = excluded.embedding`,
         );
       for (const row of rows) {
         if (row.embedding.length !== source.dimensions) {

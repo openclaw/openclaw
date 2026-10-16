@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -16,7 +17,7 @@ const tombstoneAdmission: SqliteDatabaseAdmissionKey<ReadonlyMap<string, string>
   read: (value) => (value instanceof Map ? value : undefined),
 };
 
-function readMemorySessionTombstones(db: DatabaseSync): ReadonlyMap<string, string> {
+function readMemorySessionTombstones(db: EngineConnection): ReadonlyMap<string, string> {
   const admitted = getSqliteDatabaseAdmission(db, tombstoneAdmission);
   if (admitted) {
     return admitted;
@@ -50,7 +51,7 @@ export function ensureMemorySessionTombstones(db: DatabaseSync): void {
 }
 
 export function hasMemorySessionTombstone(
-  db: DatabaseSync,
+  db: EngineConnection,
   agentId: string,
   sessionId: string,
 ): boolean {
@@ -73,7 +74,7 @@ const TOMBSTONE_INSERT_BATCH_SIZE = 128;
 
 /** The caller owns schema admission; preserve the supplied connection and write boundary. */
 export function recordMemorySessionTombstonesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     agentId: string;
     sessionIds: readonly string[];

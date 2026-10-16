@@ -12,6 +12,7 @@ type SubagentAnnounceDeliveryFailureReason =
   | "delivery_suppressed"
   | "generated_media_missing"
   | "message_tool_delivery_missing"
+  | "operator_authority_unavailable"
   | "requester_abandoned"
   | "requester_turn_pending"
   | "source_owner_changed"

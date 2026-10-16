@@ -1,6 +1,9 @@
+import { syncBuiltinESMExports } from "node:module";
+import timers from "node:timers/promises";
 import { inspect as inspectValue } from "node:util";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as processRunner from "./crabbox-process.js";
 import {
   isUnrecognizedLease,
   runCrabboxCommand,
@@ -23,6 +26,11 @@ const absentResult: SpawnResult = {
 
 const leaseTimeout = `Get "https://coordinator.example/v1/leases/${LEASE_ID}?providerMetadata=authoritative": context deadline exceeded`;
 const transportFailure = { ...absentResult, stderr: leaseTimeout };
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
 
 describe("Crabbox coordinator timeouts", () => {
   it.each([
@@ -78,13 +86,14 @@ describe("Crabbox coordinator timeouts", () => {
       .fn()
       .mockResolvedValueOnce(failure)
       .mockResolvedValue({ ...absentResult, code: 0, stderr: "" });
+    vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
+    vi.spyOn(timers, "setTimeout").mockResolvedValue(undefined);
+    syncBuiltinESMExports();
     const stopped = stopCrabboxLease({
       binary: "crabbox",
       id: LEASE_ID,
       provider: "aws",
-      runCommand,
       warn: vi.fn(),
-      sleep: async () => {},
     });
     if (transient || failure.code === 0) {
       await expect(stopped).resolves.toBeUndefined();
@@ -108,13 +117,17 @@ describe("Crabbox coordinator timeouts", () => {
       );
     const warn = vi.fn();
     const sleep = vi.fn(async (_ms: number) => {});
+    vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
+    vi.spyOn(timers, "setTimeout").mockImplementation(async (milliseconds, value) => {
+      await sleep(milliseconds ?? 1);
+      return value;
+    });
+    syncBuiltinESMExports();
     const stopped = stopCrabboxLease({
       binary: "crabbox",
       id: LEASE_ID,
       provider: "aws",
-      runCommand,
       warn,
-      sleep,
     });
     if (outcome === "timeout") {
       await expect(stopped).rejects.toThrow(/Post .*context deadline exceeded.*after 3 attempts/s);
@@ -135,6 +148,18 @@ describe("Crabbox coordinator timeouts", () => {
       const sleep = vi.fn(async (ms: number) => {
         elapsedMs += ms;
       });
+      vi.spyOn(timers, "setTimeout").mockImplementation(async (milliseconds, value) => {
+        await sleep(milliseconds ?? 1);
+        return value;
+      });
+      syncBuiltinESMExports();
+      vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(async (_argv, options) => {
+        timeouts.push(options.timeoutMs);
+        elapsedMs += timeouts.length === 1 ? 60_000 : options.timeoutMs;
+        return processTimeout && timeouts.length > 1
+          ? { ...absentResult, code: null, termination: "timeout", stderr: "" }
+          : transportFailure;
+      });
       try {
         await expect(
           stopCrabboxLease({
@@ -142,14 +167,6 @@ describe("Crabbox coordinator timeouts", () => {
             id: LEASE_ID,
             provider: "aws",
             warn: vi.fn(),
-            sleep,
-            runCommand: async (_argv, options) => {
-              timeouts.push(options.timeoutMs);
-              elapsedMs += timeouts.length === 1 ? 60_000 : options.timeoutMs;
-              return processTimeout && timeouts.length > 1
-                ? { ...absentResult, code: null, termination: "timeout", stderr: "" }
-                : transportFailure;
-            },
           }),
         ).rejects.toThrow(/Get .*context deadline exceeded.*after 2 attempts/s);
         expect(timeouts).toHaveLength(2);
@@ -172,22 +189,26 @@ describe("Crabbox coordinator timeouts", () => {
       const sleep = vi.fn(async (ms: number) => {
         monotonicMs += ms;
       });
+      vi.spyOn(timers, "setTimeout").mockImplementation(async (milliseconds, value) => {
+        await sleep(milliseconds ?? 1);
+        return value;
+      });
+      syncBuiltinESMExports();
+      vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(async (_argv, options) => {
+        timeouts.push(options.timeoutMs);
+        monotonicMs += 1_000;
+        wallStep = clockStepMs;
+        return transportFailure;
+      });
       try {
         const result = await runCrabboxCommandWithCoordinatorRetry({
           action: "stop",
           args: ["stop", "--id", LEASE_ID],
           binary: "crabbox",
           timeoutMs: 5_000,
-          runCommand: async (_argv, options) => {
-            timeouts.push(options.timeoutMs);
-            monotonicMs += 1_000;
-            wallStep = clockStepMs;
-            return transportFailure;
-          },
-          sleep,
         });
         expect(timeouts).toEqual([5_000, 3_000]);
-        expect(sleep.mock.calls).toEqual([[1_000, undefined]]);
+        expect(sleep.mock.calls).toEqual([[1_000]]);
         expect(result).toMatchObject({ ...transportFailure, coordinatorAttempts: 2 });
       } finally {
         wallClock.mockRestore();
@@ -200,7 +221,12 @@ describe("Crabbox coordinator timeouts", () => {
     const controller = new AbortController();
     const reason = new Error("cancelled during coordinator retry");
     const runCommand = vi.fn().mockResolvedValue(transportFailure);
-    const sleep = vi.fn(async () => controller.abort(reason));
+    vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
+    vi.spyOn(timers, "setTimeout").mockImplementation(async (_milliseconds, value) => {
+      controller.abort(reason);
+      return value;
+    });
+    syncBuiltinESMExports();
     await expect(
       runCrabboxCommandWithCoordinatorRetry({
         action: "stop",
@@ -208,12 +234,12 @@ describe("Crabbox coordinator timeouts", () => {
         binary: "crabbox",
         timeoutMs: 5_000,
         signal: controller.signal,
-        runCommand,
-        sleep,
       }),
     ).rejects.toBe(reason);
     expect(runCommand).toHaveBeenCalledOnce();
-    expect(sleep).toHaveBeenCalledExactlyOnceWith(1_000, controller.signal);
+    expect(timers.setTimeout).toHaveBeenCalledExactlyOnceWith(1_000, undefined, {
+      signal: controller.signal,
+    });
   });
 });
 it.each(["output capture failed", "cleanup could not confirm process exit", "spawn ENOENT"])(
@@ -226,14 +252,12 @@ it.each(["output capture failed", "cleanup could not confirm process exit", "spa
       }),
       { stdout: token, stderr: token },
     );
+    vi.spyOn(processRunner, "runCrabboxProcess").mockRejectedValue(cause);
     const error = await runCrabboxCommand({
       action: "warmup",
       args: ["warmup"],
       binary: "crabbox",
       timeoutMs: 1_000,
-      runCommand: async () => {
-        throw cause;
-      },
     }).catch((rejection: unknown) => rejection);
     expect(error).toMatchObject({
       message: expect.stringContaining(`Crabbox warmup execution failed: ${message}`),
@@ -402,11 +426,11 @@ describe("Crabbox lease absence classification", () => {
     expect(isUnrecognizedLease(result, LEASE_ID, "inspect")).toBe(inspect ?? absent);
     expect(isUnrecognizedLease(result, LEASE_ID, "stop")).toBe(absent);
     const warn = vi.fn();
+    vi.spyOn(processRunner, "runCrabboxProcess").mockResolvedValue(result);
     const stop = stopCrabboxLease({
       binary: "crabbox",
       id: LEASE_ID,
       provider: "hetzner",
-      runCommand: async () => result,
       warn,
     });
     if (absent) {

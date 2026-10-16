@@ -269,6 +269,7 @@ function TimeSeriesChart(props: {
   status: TimeSeriesProps["detail"]["timeSeriesStatus"];
 }) {
   const model = () => props.model;
+  let svg!: SVGSVGElement;
   let stopDrag: (() => void) | undefined;
   onCleanup(() => stopDrag?.());
   const moveCursor = (
@@ -313,21 +314,13 @@ function TimeSeriesChart(props: {
     moveCursor(side, timestamp, props.callbacks.onTimeSeriesCursorRangeChange);
   };
   const makeDragHandler = (side: "left" | "right") => (e: MouseEvent) => {
-    if (!(e.currentTarget instanceof HTMLElement)) {
-      return;
-    }
     stopDrag?.();
     e.preventDefault();
     e.stopPropagation();
-    const wrapper = e.currentTarget.closest(".timeseries-chart-wrapper");
-    const svgEl = wrapper?.querySelector("svg");
-    if (!svgEl) {
-      return;
-    }
     // Retain the callback that guards the series identity at the start of this drag.
     const initialOnRangeChange = props.callbacks.onTimeSeriesCursorRangeChange;
     // Capture rect once at mousedown to avoid re-render offset shifts
-    const rect = svgEl.getBoundingClientRect();
+    const rect = svg.getBoundingClientRect();
     const svgWidth = rect.width;
     const initialChartLeftPx = (model().padding.left / model().width) * svgWidth;
     const initialChartRightPx =
@@ -415,7 +408,11 @@ function TimeSeriesChart(props: {
       </div>
       {renderUsageRefreshStatus(props.status, "usage.details.usageOverTime", "timeline")}
       <div class="timeseries-chart-wrapper">
-        <svg viewBox={`0 0 ${model().width} ${model().height + 18}`} class="timeseries-svg">
+        <svg
+          ref={(element) => (svg = element)}
+          viewBox={`0 0 ${model().width} ${model().height + 18}`}
+          class="timeseries-svg"
+        >
           <line
             x1={model().padding.left}
             y1={model().padding.top}
@@ -535,7 +532,7 @@ function TimeSeriesChart(props: {
             const x = () => (side === "left" ? model().leftHandleX : model().rightHandleX);
             return (
               <div
-                class={`chart-handle-zone chart-handle-${side}`}
+                class={["chart-handle-zone", `chart-handle-${side}`]}
                 role="slider"
                 tabindex="0"
                 aria-label={t(
@@ -591,7 +588,7 @@ function TimeSeriesChart(props: {
             <For each={USAGE_TOKEN_CATEGORIES}>
               {({ key, className }) => (
                 <div
-                  class={`cost-segment ${className}`}
+                  class={["cost-segment", className]}
                   style={{
                     width: `${(model().totalTypeTokens > 0 ? (model().filteredTokens[key] / model().totalTypeTokens) * 100 : 0).toFixed(1)}%`,
                   }}
@@ -603,7 +600,7 @@ function TimeSeriesChart(props: {
             <For each={USAGE_TOKEN_CATEGORIES}>
               {({ key, className, labelKey, hintKey }) => (
                 <div class="legend-item" title={t(hintKey)}>
-                  <span class={`legend-dot ${className}`} />
+                  <span class={["legend-dot", className]} />
                   {t(labelKey)} {formatUsageTokens(model().filteredTokens[key])}
                 </div>
               )}

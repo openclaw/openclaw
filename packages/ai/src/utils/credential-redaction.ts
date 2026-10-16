@@ -170,6 +170,8 @@ type DiagnosticMediaField =
       source?: string | Uint8Array;
     };
 export type DiagnosticProjectionPolicy = {
+  maxNodes?: number;
+  maxKeys?: number;
   redactCredentials?: boolean;
   omitField?: (key: string) => boolean;
   propertyScope?: "enumerable" | "error";
@@ -222,7 +224,7 @@ export function projectDiagnosticValue(
   policy: DiagnosticProjectionPolicy = {},
   seen = new WeakSet<object>(),
   mediaPayload = false,
-  state = { changed: false, nodesRemaining: 64 },
+  state = { changed: false, nodesRemaining: policy.maxNodes ?? 64 },
 ): unknown {
   try {
     if (typeof value === "string") {
@@ -267,7 +269,8 @@ export function projectDiagnosticValue(
     const keys = Reflect.ownKeys(value);
     // Snapshot descriptors before recursion; the map restores numeric key order from proxies.
     const descriptors: PropertyDescriptorMap = Object.create(null);
-    for (let index = 0; index < Math.min(keys.length, 64); index += 1) {
+    const maxKeys = policy.maxKeys ?? 64;
+    for (let index = 0; index < Math.min(keys.length, maxKeys); index += 1) {
       const key = keys[index];
       if (typeof key !== "string") {
         continue;
@@ -277,17 +280,18 @@ export function projectDiagnosticValue(
         descriptors[key] = descriptor;
       }
     }
-    state.changed ||= keys.length > 64;
+    state.changed ||= keys.length > maxKeys;
     seen.add(value);
     const out = (Array.isArray(value) ? [] : {}) as Record<string, unknown>;
     const rawName =
       typeof descriptors.name?.value === "string" ? descriptors.name.value : descriptors.key?.value;
     const redactValueField =
       policy.redactCredentials !== false &&
-      (keys.length > 64 ||
+      (keys.length > maxKeys ||
         (typeof rawName === "string" &&
           isCredentialFieldName(normalizeDiagnosticFieldName(rawName))));
-    const redactMedia = mediaPayload || keys.length > 64 || isDiagnosticMediaPayload(descriptors);
+    const redactMedia =
+      mediaPayload || keys.length > maxKeys || isDiagnosticMediaPayload(descriptors);
     for (const key in descriptors) {
       const descriptor = expectDefined(descriptors[key], "diagnostic descriptor");
       if (

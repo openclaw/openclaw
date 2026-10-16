@@ -31,10 +31,10 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
-import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
+import { LEGACY_PARTICIPANTS_SCHEMA } from "../state/openclaw-agent-schema-history.js";
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
-import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   cleanupSessionStateForTest,
   useSessionStoreTempDirs,
@@ -147,7 +147,7 @@ async function createHistoricalSharedStore() {
     database.exec("COMMIT;");
     const goalState = readStoredGoalState(database, store.scope.sessionKey);
     database.exec("DROP TABLE session_participants;");
-    database.exec(withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql()));
+    database.exec(LEGACY_PARTICIPANTS_SCHEMA);
     database
       .prepare(
         "INSERT INTO session_participants VALUES (?, 'human', 'person', 'profile', 3, 10, 20)",
@@ -230,7 +230,9 @@ function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createHistor
     createdVia: "operator",
     createdActor: { type: "human", source: "profile", id: "person", label: "Original creator" },
   });
-  expect(readStoredGoalState(reopened.db, store.scope.sessionKey)).toEqual(store.goalState);
+  expect(
+    readStoredGoalState(requireNativeSqliteDatabase(reopened.db), store.scope.sessionKey),
+  ).toEqual(store.goalState);
   expect(
     readSessionGoalOperationInDatabase(reopened, {
       ...store.scope,

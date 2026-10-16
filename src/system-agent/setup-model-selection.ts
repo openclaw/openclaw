@@ -3,10 +3,13 @@ import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
+import { applyMergePatch } from "../config/merge-patch.js";
 import { mergeAgentModelEntryForConfig } from "../config/model-input.js";
 import { materializeModelPolicyAllowlist } from "../config/model-policy-allowlist-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { materializeUtilityModelSeparation } from "../config/utility-model-separation-migration.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 
@@ -118,11 +121,10 @@ export async function createSystemAgentModelSelectionUpdater(
     }
     const selectedModel = selection.authProfileId ? `${key}@${selection.authProfileId}` : key;
     if (selection.modelTarget === "utility") {
-      if (writesAgent && agent) {
-        agent.utilityModel = selectedModel;
-      } else {
-        agentDefaults.utilityModel = selectedModel;
-      }
+      const owner = writesAgent && agent ? agent : agentDefaults;
+      const existing = owner.utilityModel;
+      owner.utilityModel =
+        typeof existing === "object" ? { ...existing, primary: selectedModel } : selectedModel;
     } else {
       agentScope.setAgentEffectiveModelPrimary(nextConfig, agentId, selectedModel, {
         forceAgent: Boolean(targetAgentId),
@@ -219,6 +221,23 @@ export function prepareSetupModelRuntime(params: {
   };
 }
 
+export function mergeSavedSetupInferenceConfig(base: OpenClawConfig, saved: unknown): unknown {
+  const savedProviders =
+    isRecord(saved) && isRecord(saved.models) ? saved.models.providers : undefined;
+  if (!isRecord(savedProviders)) {
+    return applyMergePatch(base, saved);
+  }
+  const providers = { ...base.models?.providers };
+  // Saved provider entries are complete snapshots; merging would revive omitted credentials.
+  for (const provider of Object.keys(savedProviders)) {
+    const currentKey = findNormalizedProviderKey(providers, provider);
+    if (currentKey) {
+      delete providers[currentKey];
+    }
+  }
+  return applyMergePatch({ ...base, models: { ...base.models, providers } }, saved);
+}
+
 export function projectSetupInferenceConfig(params: {
   base: OpenClawConfig;
   prepared: OpenClawConfig;
@@ -246,7 +265,19 @@ export function projectSetupInferenceConfig(params: {
   if (providerKey && providerConfig) {
     const selectedProvider = structuredClone(providerConfig);
     if (params.profileId) {
-      delete selectedProvider.apiKey;
+      if (params.credential?.type === "api_key" || params.credential?.type === "token") {
+        if (!parseSecretRef(selectedProvider.apiKey, params.prepared.secrets?.defaults)) {
+          const key =
+            params.credential.type === "api_key" ? params.credential.key : params.credential.token;
+          // No-auth markers must remain visible to the provider's transport preparation.
+          selectedProvider.apiKey =
+            key && isNonSecretApiKeyMarker(key, { includeEnvVarName: false })
+              ? key.trim()
+              : params.profileId;
+        }
+      } else {
+        delete selectedProvider.apiKey;
+      }
     }
     if (
       selectedProvider.headers?.["api-key"] &&

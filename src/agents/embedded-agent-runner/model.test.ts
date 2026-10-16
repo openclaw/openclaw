@@ -655,21 +655,29 @@ describe("resolveModel", () => {
     expect(discoverModelsAsync).not.toHaveBeenCalled();
   });
 
-  it("leaves maxTokens undefined when no configured or catalog value is available (regression: #98295)", async () => {
-    // Strict providers reject synthesized caps above their own completion-token ceiling.
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce(undefined);
-    const cfg = makeProviderConfig("xiaomi", {
-      baseUrl: "https://api.xiaomimimo.com/v1",
-      models: [{ id: "mimo-v2.5-pro", name: "mimo-v2.5-pro" }],
-    });
+  it.each([
+    ["xiaomi", "https://api.xiaomimimo.com/v1", "mimo-v2.5-pro", undefined],
+    ["local-custom", "http://127.0.0.1:1234/v1", "local-model", "openai-completions"],
+    ["local-ollama", "http://127.0.0.1:11434", "local-model", "ollama"],
+  ] as const)(
+    "leaves unknown output caps unset for %s (regression: #98295)",
+    async (provider, baseUrl, modelId, api) => {
+      // Strict providers reject synthesized caps above their own completion-token ceiling.
+      resolveBundledStaticCatalogModelMock.mockReturnValueOnce(undefined);
+      const cfg = makeProviderConfig(provider, {
+        baseUrl,
+        ...(api ? { api } : {}),
+        models: [{ id: modelId, name: modelId }],
+      });
 
-    const result = await resolveModelForTest("xiaomi", "mimo-v2.5-pro", cfg);
-    const model = expectResolvedModel(result);
+      const result = await resolveModelForTest(provider, modelId, cfg);
+      const model = expectResolvedModel(result);
 
-    expect(model.id).toBe("mimo-v2.5-pro");
-    expect(model.baseUrl).toBe("https://api.xiaomimimo.com/v1");
-    expect(model.maxTokens).toBeUndefined();
-  });
+      expect(model.id).toBe(modelId);
+      expect(model.baseUrl).toBe(baseUrl);
+      expect(model.maxTokens).toBeUndefined();
+    },
+  );
 
   it("inherits bundled static transport for configured provider fallback models", async () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce(

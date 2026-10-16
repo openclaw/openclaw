@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { buildDiscordComponentMessage, createDiscordFormModal } from "./components.js";
 import type { DiscordComponentBlock } from "./components.types.js";
 import {
-  ButtonInteraction,
+  BaseComponentInteraction,
   ChannelSelectMenu,
   Container,
   MentionableSelectMenu,
@@ -235,7 +235,7 @@ describe("discord select components", () => {
           token: "interaction-token",
         }),
       );
-      if (!(interaction instanceof ButtonInteraction)) {
+      if (!(interaction instanceof BaseComponentInteraction)) {
         throw new Error("Expected a Discord button interaction");
       }
       await interaction.showModal(modal);

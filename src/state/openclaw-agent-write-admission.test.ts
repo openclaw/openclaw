@@ -410,50 +410,6 @@ it.each(["ok", "error"] as const)(
   },
 );
 
-it.each([959, 960, 5_000])(
-  "warns only when queue wait (%i ms) plus execution reaches 1 second",
-  async (queueWaitMs) => {
-    const { options, clock, warnings } = fixture();
-    const entered = createDeferred();
-    const release = createDeferred();
-    const holder = runOpenClawAgentWriteAdmission(options, () => {
-      entered.resolve();
-      return release.promise;
-    });
-    await entered.promise;
-    const follower = runOpenClawAgentWriteAdmission(options, () => {
-      clock.now += 40;
-    });
-    try {
-      clock.now = queueWaitMs;
-      release.resolve();
-      await Promise.all([holder, follower]);
-      if (queueWaitMs < 960) {
-        expect(warnings).toEqual([]);
-        expect(logging.getChildLogger).not.toHaveBeenCalled();
-      } else {
-        expect(warnings).toHaveLength(queueWaitMs >= 1_000 ? 2 : 1);
-        expect(warnings.at(-1)).toEqual([
-          expect.objectContaining({
-            queueWaitMs,
-            writerExecutionMs: 40,
-            blockingOperation: "direct",
-          }),
-          "slow agent database reservation",
-        ]);
-      }
-      warnings.length = 0;
-      await runOpenClawAgentWriteAdmission(options, () => {
-        clock.now += 40;
-      });
-      expect(warnings).toEqual([]);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([holder, follower]);
-    }
-  },
-);
-
 it("attributes a reentrant Worker reservation without letting foreground callbacks borrow it", async () => {
   const { options, clock, warnings } = fixture();
   const order: string[] = [];

@@ -50,9 +50,8 @@ export interface ShellViewHost extends ShellLazyOverlayHost {
   readonly desktopNavigationExpanded: boolean;
   readonly execApprovalElement: OptionalCustomElement;
   readonly onboardingMemoryImportElement: OptionalCustomElement;
-  readonly nativeHistoryState: NativeHistoryState;
+  readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
-  navResizing: boolean;
   readonly shellLayout: ShellLayoutOwner;
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
@@ -80,6 +79,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost {
 }
 
 export function readShellView(host: ShellViewHost) {
+  // Imperative preparation consumes current owner facts; it must not widen view dependencies.
   untrack(() => host.prepareView());
   const context = host.context;
   const runtime = host.runtime;

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { PickerOption, PickerParams } from "./select-picker-types.ts";
 import { PickerContent } from "./select-picker-view.tsx";
 import "../styles/select-picker.css";

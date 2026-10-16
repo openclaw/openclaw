@@ -90,7 +90,7 @@ export function readSessionCostUsageRollupEntry(
   }
   const result = withOpenClawAgentDatabaseReadOnly(
     ({ db }) => {
-      const body = readSessionCostUsageRollupBodyInDatabase(db, row);
+      const body = readSessionCostUsageRollupBodyInDatabase(db, row.key);
       return body
         ? decodeUsageCostRollup(row.valueJson, envelope.pricingFingerprint, body.blob)
         : undefined;

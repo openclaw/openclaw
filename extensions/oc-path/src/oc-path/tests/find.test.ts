@@ -31,11 +31,12 @@ describe("single-match wildcard guards", () => {
   });
 
   it("rejects wildcard writes with an actionable reason", () => {
-    expect(setOcPath(ast, parseOcPath("oc://wf/steps/*/command"), "bar")).toEqual({
-      ok: false,
-      reason: "wildcard-not-allowed",
-      detail: expect.stringContaining("findOcPaths"),
-    });
+    expect(() => setOcPath(ast, parseOcPath("oc://wf/steps/*/command"), "bar")).toThrow(
+      expect.objectContaining({
+        reason: "wildcard-not-allowed",
+        detail: expect.stringContaining("findOcPaths"),
+      }),
+    );
   });
 });
 

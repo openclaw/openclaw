@@ -73,6 +73,7 @@ export function fixture(options: {
   replyText?: string;
   finals?: ReplyPayload[];
   visibleSessionUrl?: string | null;
+  visibleSessionKey?: string;
 }) {
   const cfg = options.cfg ?? config;
   const replies: Array<{ text: string; parent: string }> = [];
@@ -99,6 +100,9 @@ export function fixture(options: {
     getUsersByUsernames: vi.fn<XApiClient["getUsersByUsernames"]>(async () => {
       throw new Error("Unexpected batch user lookup");
     }),
+    uploadMedia: vi.fn<XApiClient["uploadMedia"]>(async () => {
+      throw new Error("Unexpected media upload");
+    }),
     reply: vi.fn(async (params: Parameters<XApiClient["reply"]>[0]) => {
       const assertCurrent = await params.assertActive?.();
       assertCurrent?.();
@@ -118,12 +122,12 @@ export function fixture(options: {
         ? []
         : [
             {
-              sessionKey: "agent:maintainer:work:example",
+              sessionKey: options.visibleSessionKey ?? "agent:maintainer:work:example",
               url: options.visibleSessionUrl ?? "https://example.test/work/42",
               label: "Work session",
             },
           ],
-      { createdSessionKey: "agent:maintainer:work:example" },
+      { createdSessionKey: options.visibleSessionKey ?? "agent:maintainer:work:example" },
     );
     if (!plan.delivery.deliver) {
       throw new Error("Missing X text delivery adapter");
@@ -157,7 +161,18 @@ export function fixture(options: {
   const queue = options.queue ?? createQueue<Payload>();
   // The host doubles expose only the runtime facilities this channel consumes.
   const stateDir = `synthetic-x-monitor:${randomUUID()}`;
+  const sessionEntries = new Map<
+    string,
+    NonNullable<Awaited<ReturnType<PluginRuntime["agent"]["session"]["getSessionEntryAsync"]>>>
+  >();
   const runtime = {
+    agent: {
+      session: {
+        resolveStorePath: () => "/synthetic/sessions.json",
+        getSessionEntryAsync: async ({ sessionKey }: { sessionKey: string }) =>
+          sessionEntries.get(sessionKey),
+      },
+    },
     version: "2026.9.8",
     state: {
       openKeyedStore,
@@ -208,6 +223,7 @@ export function fixture(options: {
     resolveStable,
     logger,
     runtime,
+    sessionEntries,
     openKeyedStore,
     start,
     async stop() {

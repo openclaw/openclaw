@@ -260,7 +260,6 @@ it("serves committed actor postimages without projection SQL and confines facts 
 });
 
 it.each([
-  { kind: "append", event: { ...user, id: "next", parentId: "assistant" }, leaf: "next" },
   {
     kind: "rewind",
     event: { type: "leaf", id: "rewind", parentId: "assistant", targetId: "user" },
@@ -313,6 +312,22 @@ it.each([
           expect(f.read(refreshed)).toMatchObject({
             value: { latestIndexedReset: { seq: 2, active_position: 2, event_type: "reset" } },
           });
+          withSessionTranscriptProjectionReceipt(refreshed, () => {
+            readCurrentProjectionSnapshot(
+              f.database,
+              f.scope,
+              (projection: CurrentTranscriptProjection) => {
+                projection.state.activeMessageCount = 999;
+                if (projection.latestIndexedReset) {
+                  projection.latestIndexedReset.seq = 999;
+                }
+              },
+            );
+            expect(f.read(refreshed)).toMatchObject({
+              kind: "value",
+              value: { state: { activeMessageCount: 2 }, latestIndexedReset: { seq: 2 } },
+            });
+          });
         }
       } finally {
         observed.restore();
@@ -339,7 +354,7 @@ it("invalidates exact rewrites and dirty/rebuilt projections even when the lates
     if (rewritten.kind !== "value") {
       throw new Error("Exact rewrite left the projection unavailable");
     }
-    expect(rewritten.value.version.generation).not.toBe(retained.facts.generation);
+    expect(rewritten.value.version.generation).not.toBe(retained.facts?.generation);
     const beforeDirty = f.receipt();
     f.write(() => {
       markSessionTranscriptIndexDirtyInTransaction(f.database.db, f.scope.sessionId);
@@ -391,37 +406,13 @@ it("rejects stale hot and cold receipts after archive-marker writes and restore"
   });
 });
 
-it("does not let a snapshot consumer mutate the next reader's retained facts", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
-    f.write(() => f.append([{ type: "reset", id: "reset", parentId: "assistant", reason: "new" }]));
-    const receipt = f.receipt();
-    withSessionTranscriptProjectionReceipt(receipt, () => {
-      readCurrentProjectionSnapshot(
-        f.database,
-        f.scope,
-        (projection: CurrentTranscriptProjection) => {
-          projection.state.activeMessageCount = 999;
-          if (projection.latestIndexedReset) {
-            projection.latestIndexedReset.seq = 999;
-          }
-        },
-      );
-      expect(f.read(receipt)).toMatchObject({
-        kind: "value",
-        value: { state: { activeMessageCount: 2 }, latestIndexedReset: { seq: 2 } },
-      });
-    });
-  });
-});
-
 it("covers the first append after hydrating an empty actor", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture([]);
     const actor = f.hydrate();
     f.write(() => withSessionActorTransactionState(f.database, actor, () => f.append([user])));
     const receipt = f.receipt(actor);
-    expect(receipt.facts.contextMetadata).toBeUndefined();
+    expect(receipt.facts?.contextMetadata).toBeUndefined();
     expect(
       withSessionTranscriptProjectionReceipt(receipt, () =>
         readSessionTranscriptBoundedActiveContextCore(f.scope, {
@@ -498,7 +489,7 @@ it("keeps stored header bytes, event limits and admitted-turn fences in the cove
       truncated: true,
     });
     expect(() => read(headerBytes - 1)).toThrow("header exceeds");
-    if (!receipt.facts.generation) {
+    if (!receipt.facts?.generation) {
       throw new Error("Transcript fixture requires a generation");
     }
     const fence = {

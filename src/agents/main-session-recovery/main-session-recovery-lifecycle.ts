@@ -1,5 +1,5 @@
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { mergeRestartRecoveryTerminalRunIds } from "../../config/sessions/restart-recovery-state.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { retryAsync } from "../../infra/retry.js";
 import { isAgentLifecycleYieldedWaiting } from "../agent-lifecycle-parent-state.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";

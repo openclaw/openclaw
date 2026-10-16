@@ -44,7 +44,6 @@ type LogsPayload = {
 };
 
 export function LogsPage() {
-  let host!: HTMLElement;
   const context = useApplication();
   const [status, setStatus] = createSignal(createPanelRefreshStatus(), { ownedWrite: true });
   const [file, setFile] = createSignal<string | null>(null, { ownedWrite: true });
@@ -246,9 +245,8 @@ export function LogsPage() {
     document.removeEventListener("visibilitychange", visibilityChanged);
   });
   onSettled(() => {
-    stream = host.querySelector<HTMLElement>(".log-stream") ?? undefined;
     const resetContentScroll = () => {
-      const content = host.closest<HTMLElement>(".content");
+      const content = stream?.closest<HTMLElement>(".content");
       if (content) {
         content.scrollTop = 0;
         content.scrollLeft = 0;
@@ -260,7 +258,7 @@ export function LogsPage() {
   });
 
   return (
-    <openclaw-logs-page ref={(element) => (host = element)}>
+    <openclaw-logs-page>
       <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
         <section class="content-header">
           <div>
@@ -278,6 +276,7 @@ export function LogsPage() {
             levelFilters={levelFilters()}
             autoFollow={autoFollow()}
             truncated={truncated()}
+            onStreamRef={(element) => (stream = element)}
             onFilterTextChange={setFilterText}
             onLevelToggle={(level, enabled) =>
               setLevelFilters((previous) => ({ ...previous, [level]: enabled }))

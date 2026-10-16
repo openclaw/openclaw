@@ -11,7 +11,7 @@ import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
@@ -71,7 +71,7 @@ function DraftBlock(props: {
     onNavigate: (route, routeOptions) => props.page().context?.navigate(route, routeOptions),
     onFocusComposer: () =>
       submission().composerTextarea.getTextarea()?.focus({ preventScroll: true }),
-    requestUpdate: () => props.page().changed(),
+    onChange: () => props.page().changed(),
   }));
   const permissionControl = (
     <Show when={!catalog.isTarget(props.page().data)}>
@@ -386,14 +386,12 @@ defineSolidBridge<
   { data: NewSessionRouteData | undefined },
   {
     focusComposer(): void;
-    requestUpdate(): void;
   }
 >("openclaw-new-session-page", PageContent, {
   properties: { data: { default: undefined, attribute: false } },
   propertyChanged: (host) => pageOwners.get(host)?.changed(),
   methods: {
     focusComposer: (host) => pageOwners.get(host)?.focusComposer(),
-    requestUpdate: (host) => pageOwners.get(host)?.changed(),
   },
 });
 

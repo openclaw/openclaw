@@ -7,7 +7,7 @@ import {
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import {
   ApprovalCountdown,
   approvalRemainingLabel,

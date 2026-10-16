@@ -143,8 +143,6 @@ describe("Control UI build chunking", () => {
       maxSize: 1024 * 1024,
     });
     for (const [id, expected] of [
-      ["/repo/ui/node_modules/lit/index.js", "lit-runtime"],
-      ["/repo/ui/node_modules/lit-html/directives/repeat.js", "lit-runtime"],
       ["/repo/ui/node_modules/highlight.js/lib/core.js", "markdown-runtime"],
       [String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`, "markdown-runtime"],
       ["/tmp/openclaw-pnpm-node-modules/dompurify/dist/purify.es.mjs", "markdown-runtime"],
@@ -176,20 +174,6 @@ describe("Control UI build chunking", () => {
       ["\0virtual:openclaw-control-ui-locale/ru", undefined],
     ] as const) {
       expect(controlUiStableChunkName(id), id).toBe(expected);
-    }
-    for (const [name, directive] of [
-      ["lit", "cache"],
-      ["lit-html", "cache"],
-      ["lit", "until"],
-      ["lit-html", "until"],
-      ["lit-html", "private-async-helpers"],
-    ]) {
-      expect(
-        controlUiStableChunkName(`/repo/node_modules/${name}/directives/${directive}.js`),
-      ).toBeUndefined();
-      expect(
-        controlUiStableChunkName(`C:\\repo\\node_modules\\${name}\\directives\\${directive}.js`),
-      ).toBeUndefined();
     }
   });
 

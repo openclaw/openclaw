@@ -1,11 +1,15 @@
 import { isNativeError } from "node:util/types";
-import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
+import {
+  AgentHarnessPreflightError,
+  embeddedAgentLog,
+} from "openclaw/plugin-sdk/agent-harness-registration";
+import { areDiagnosticsEnabledForProcess } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import { isCodexAppServerStartupError, resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRequestTimeoutMs } from "./config-runtime.js";
+import { resolveCodexAppServerRequestTimeoutMs } from "./config-options.js";
 import type {
   CodexAppServerRequestMethod,
   CodexAppServerRequestParams,
@@ -13,7 +17,6 @@ import type {
   CodexGetAccountResponse,
   JsonValue,
 } from "./protocol.js";
-import { createCodexRequestTimeoutDiagnostics } from "./request-diagnostics.js";
 import type {
   CodexControlRequestFailureCategory,
   CodexControlRequestObservation,
@@ -304,7 +307,7 @@ export async function withCodexAppServerJsonClient<T>(
         requestTimeoutMs: resolveCodexAppServerRequestTimeoutMs(params.pluginConfig),
       });
   const timeoutMessage = params.timeoutMessage ?? "codex app-server request timed out";
-  const timeoutDiagnostics = createCodexRequestTimeoutDiagnostics(timeoutMs, acquireTimeoutMs);
+  const startedAt = performance.now();
   const scopePhase: { current: CodexControlRequestPhase } = { current: "prepare" };
   let errorPhase: CodexControlRequestPhase | undefined;
   let deadlinePhase: CodexControlRequestPhase | undefined;
@@ -357,7 +360,6 @@ export async function withCodexAppServerJsonClient<T>(
         const acquireClient = params.isolated
           ? createIsolatedCodexAppServerClient
           : getLeasedSharedCodexAppServerClient;
-        const acquireObservation = timeoutDiagnostics?.beginAttempt(1);
         const acquireOptions = {
           startOptions: params.startOptions,
           pluginConfig: params.pluginConfig,
@@ -372,7 +374,6 @@ export async function withCodexAppServerJsonClient<T>(
           abandonSignal: timeoutController.signal,
           assertCurrent: params.assertCurrent,
           assertCurrentAsync: params.assertCurrentAsync,
-          ...acquireObservation,
         };
         setPhase("acquire-client");
         const client = await acquireClient(acquireOptions);
@@ -394,7 +395,6 @@ export async function withCodexAppServerJsonClient<T>(
                 ? performance.now() + timeoutMs
                 : undefined;
           }
-          timeoutDiagnostics?.acquired(client);
           setPhase("prepare");
           assertCurrent();
           const scopedRequest: CodexAppServerScopedRequest = async <R>(
@@ -446,12 +446,7 @@ export async function withCodexAppServerJsonClient<T>(
                 },
               };
               setPhase("client-request");
-              const settled = timeoutDiagnostics?.request(method);
-              try {
-                return await client.request<R>(method, requestParams, requestOptions);
-              } finally {
-                settled?.();
-              }
+              return await client.request<R>(method, requestParams, requestOptions);
             } finally {
               sandboxGuard.release();
             }
@@ -473,13 +468,11 @@ export async function withCodexAppServerJsonClient<T>(
           errorPhase = scopePhase.current;
           if (isPastDeadline()) {
             deadlinePhase = errorPhase;
-            timeoutDiagnostics?.timeout();
           }
           throw error;
         } finally {
           scopeActive = false;
           setPhase("release-client");
-          timeoutDiagnostics?.release();
           const requestErrorPhase = errorPhase;
           const requestDeadlinePhase = deadlinePhase;
           errorPhase = scopePhase.current;
@@ -511,7 +504,18 @@ export async function withCodexAppServerJsonClient<T>(
       { error, deadlineObserved },
     );
     if (deadlineObserved) {
-      timeoutDiagnostics?.timeout();
+      try {
+        if (areDiagnosticsEnabledForProcess() && embeddedAgentLog.isEnabled("warn")) {
+          const phase = deadlinePhase ?? errorPhase ?? scopePhase.current;
+          embeddedAgentLog.warn("codex app-server scope timed out", {
+            phase,
+            timeoutMs: phase === "acquire-client" ? acquireTimeoutMs : timeoutMs,
+            elapsedMs: Math.round(performance.now() - startedAt),
+          });
+        }
+      } catch {
+        // Diagnostic sinks must not replace the timeout or prevent scope cleanup.
+      }
     }
     if (
       (errorPhase ?? scopePhase.current) === "acquire-client" &&

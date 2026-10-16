@@ -348,9 +348,21 @@ describe("createEmbeddedRunAuthController", () => {
     );
     const storedApiKey = setRuntimeApiKey.mock.calls[0]?.[1];
     expectProtectedRuntimeValue(storedApiKey, "runtime-api-key");
+    expectProtectedRuntimeValue(harness.runtimeAuthState?.apiKey, "runtime-api-key");
     expect(harness.runtimeAuthState?.sourceApiKey).toBe("source-api-key");
     expect(harness.runtimeAuthState?.authMode).toBe("api-key");
     expect(harness.runtimeAuthState?.profileId).toBe("default");
+
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue({ apiKey: "refreshed-runtime-api-key" });
+    await expect(
+      controller.maybeRefreshRuntimeAuthForAuthError("401 invalid api key", false),
+    ).resolves.toBe(true);
+    expectProtectedRuntimeValue(harness.runtimeAuthState?.apiKey, "refreshed-runtime-api-key");
+    expectProtectedRuntimeValue(
+      setRuntimeApiKey.mock.calls.at(-1)?.[1],
+      "refreshed-runtime-api-key",
+    );
+    expect(harness.runtimeAuthState?.sourceApiKey).toBe("source-api-key");
   });
 
   it("does not rotate profiles after an explicit SecretRef owner becomes unavailable", async () => {
@@ -556,7 +568,7 @@ describe("createEmbeddedRunAuthController", () => {
     },
   );
 
-  it("unwraps a sentinel for runtime auth exchange but keeps auth storage opaque", async () => {
+  it("keeps credentials opaque until the runtime auth exchange boundary", async () => {
     const harness = createMutableAuthControllerHarness();
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
     const secret = "runtime-exchange-source-secret";
@@ -583,9 +595,7 @@ describe("createEmbeddedRunAuthController", () => {
     expect(mocks.getApiKeyForModelCore).toHaveBeenCalledWith(
       expect.objectContaining({ secretSentinels: true }),
     );
-    expect(mocks.prepareProviderRuntimeAuth).toHaveBeenCalledWith(
-      expect.objectContaining({ context: expect.objectContaining({ apiKey: secret }) }),
-    );
+    expect(mocks.prepareProviderRuntimeAuth.mock.calls[0]?.[0]?.context.apiKey).toBe(sentinel);
     const storedApiKey = setRuntimeApiKey.mock.calls[0]?.[1];
     expect(storedApiKey && looksLikeSecretSentinel(storedApiKey)).toBe(true);
     expect(storedApiKey && resolveSecretSentinel(storedApiKey)).toBe("runtime-exchange-token");
@@ -936,6 +946,7 @@ describe("createEmbeddedRunAuthController", () => {
 
       await controller.initializeAuthProfile();
       expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.profileId).toBe("default");
+      expectProtectedRuntimeValue(harness.runtimeAuthState?.apiKey, "default-runtime-api-key");
 
       vi.advanceTimersByTime(5_000);
       await Promise.resolve();
@@ -944,6 +955,7 @@ describe("createEmbeddedRunAuthController", () => {
 
       await controller.advanceAuthProfile();
       expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.profileId).toBe("backup");
+      expectProtectedRuntimeValue(harness.runtimeAuthState?.apiKey, "backup-runtime-api-key");
       expect(harness.models.runtime.baseUrl).toBe("https://backup-runtime.example.com/v1");
       const backupHeader = harness.models.runtime.headers?.["api-key"];
       expectProtectedRuntimeValue(backupHeader, "backup-runtime-header-token");
@@ -966,6 +978,7 @@ describe("createEmbeddedRunAuthController", () => {
       expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.profileId).toBe("backup");
       expect(harness.models.runtime.baseUrl).toBe("https://backup-runtime.example.com/v1");
       expect(harness.models.runtime.headers?.["api-key"]).toBe(backupHeader);
+      expectProtectedRuntimeValue(harness.runtimeAuthState?.apiKey, "backup-runtime-api-key");
       const storedBackupApiKey = setRuntimeApiKey.mock.calls.at(-1)?.[1];
       expectProtectedRuntimeValue(storedBackupApiKey, "backup-runtime-api-key");
       controller.stopRuntimeAuthRefreshTimer();
@@ -984,6 +997,7 @@ describe("createEmbeddedRunAuthController", () => {
         harness.runtimeAuthState = {
           generation: 1,
           sourceApiKey: "__aws_sdk_auth__",
+          apiKey: "__aws_sdk_auth__",
           authMode: "aws-sdk",
           refreshTimer: setTimeout(() => undefined, 60_000),
         };

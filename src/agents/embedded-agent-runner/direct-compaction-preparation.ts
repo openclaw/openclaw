@@ -6,6 +6,10 @@ import {
   getActiveDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../../plugins/provider-auth-authority.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { resolveUserPath } from "../../utils.js";
@@ -242,8 +246,12 @@ export async function prepareDirectCompactionAttempt(
   } catch (err) {
     return { ok: false as const, result: fail(formatErrorMessage(err), err) };
   }
-  let runtimeModel: ProviderRuntimeModel = resolvedAuthAttempt.model;
   const apiKeyInfo = resolvedAuthAttempt.auth;
+  let runtimeModel: ProviderRuntimeModel = attachProviderAuthAuthority(
+    resolvedAuthAttempt.model,
+    getProviderAuthAuthority(apiKeyInfo),
+  );
+  let runtimeApiKey = apiKeyInfo.apiKey;
   const resolvedRuntimeAuthPlan = resolvedAuthAttempt.plan;
   let hasRuntimeAuthExchange = false;
   try {
@@ -275,7 +283,7 @@ export async function prepareDirectCompactionAttempt(
         preparedAuth: runtimeAuth,
       });
       runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
-      const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
+      runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
       hasRuntimeAuthExchange = Boolean(preparedAuth?.apiKey);
       if (!runtimeApiKey) {
         throw new Error(`Provider "${runtimeModel.provider}" runtime auth returned no apiKey.`);
@@ -377,6 +385,7 @@ export async function prepareDirectCompactionAttempt(
         modelRegistry,
         runtimeModel,
         apiKeyInfo,
+        runtimeApiKey,
         resolvedRuntimeAuthPlan,
         hasRuntimeAuthExchange,
         resolvedWorkspace,

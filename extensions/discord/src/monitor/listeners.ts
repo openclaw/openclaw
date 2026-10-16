@@ -1,21 +1,18 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   type Client,
+  GatewayDispatchEvents,
+  type ListenerDataByEvent,
   type DiscordMessageDispatchData,
   GuildCreateListener,
-  GuildDeleteListener,
-  InteractionCreateListener,
-  MessageCreateListener,
-  PresenceUpdateListener,
   ReadyListener,
-  ThreadDeleteListener,
-  ThreadUpdateListener,
 } from "../internal/discord.js";
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
 import { type DiscordGuildEntryResolved, resolveDiscordGuildEntry } from "./allow-list.js";
@@ -41,9 +38,9 @@ export { DiscordReactionListener, DiscordReactionRemoveListener } from "./listen
 
 type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
 
-type DiscordRawMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
+type DiscordRawMessageEvent = ListenerDataByEvent[GatewayDispatchEvents.MessageCreate];
 export type DiscordMessageEvent = DiscordMessageDispatchData;
-type DiscordInteractionEvent = Parameters<InteractionCreateListener["handle"]>[0];
+type DiscordInteractionEvent = ListenerDataByEvent[GatewayDispatchEvents.InteractionCreate];
 
 export type DiscordMessageHandler = (
   data: DiscordRawMessageEvent,
@@ -59,14 +56,13 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
   return true;
 }
 
-export class DiscordMessageListener extends MessageCreateListener {
+export class DiscordMessageListener {
+  readonly type = GatewayDispatchEvents.MessageCreate;
   constructor(
     private handler: DiscordMessageHandler,
     private logger?: Logger,
     private onEvent?: () => void,
-  ) {
-    super();
-  }
+  ) {}
 
   async handle(data: DiscordRawMessageEvent, client: Client) {
     this.onEvent?.();
@@ -81,13 +77,12 @@ export class DiscordMessageListener extends MessageCreateListener {
   }
 }
 
-export class DiscordInteractionListener extends InteractionCreateListener {
+export class DiscordInteractionListener {
+  readonly type = GatewayDispatchEvents.InteractionCreate;
   constructor(
     private logger?: Logger,
     private onEvent?: () => void,
-  ) {
-    super();
-  }
+  ) {}
 
   async handle(data: DiscordInteractionEvent, client: Client) {
     this.onEvent?.();
@@ -102,12 +97,13 @@ export class DiscordInteractionListener extends InteractionCreateListener {
   }
 }
 
-type PresenceUpdateEvent = Parameters<PresenceUpdateListener["handle"]>[0];
+type PresenceUpdateEvent = ListenerDataByEvent[GatewayDispatchEvents.PresenceUpdate];
 type GuildCreateEvent = Parameters<GuildCreateListener["handle"]>[0];
-type GuildDeleteEvent = Parameters<GuildDeleteListener["handle"]>[0];
+type GuildDeleteEvent = ListenerDataByEvent[GatewayDispatchEvents.GuildDelete];
 type GuildPresenceState = { available: boolean; inferUnknownAsNewlyAvailable: boolean };
 
-export class DiscordPresenceListener extends PresenceUpdateListener {
+export class DiscordPresenceListener {
+  readonly type = GatewayDispatchEvents.PresenceUpdate;
   private readonly presenceBaseline: DiscordPresenceBaselineCache;
   // Retain FIFO across reconnects; each latest chain also settles its predecessors at shutdown.
   private readonly pendingByGuildUser = new Map<string, Promise<void>>();
@@ -132,7 +128,6 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       emissionGate?: DiscordPresenceEmissionGate;
     },
   ) {
-    super();
     this.cooldownStore = params.cooldownStore ?? openDiscordPresenceCooldownStore();
     this.presenceBaseline = params.presenceBaseline ?? new DiscordPresenceBaselineCache();
     this.emissionGate = params.emissionGate ?? new DiscordPresenceEmissionGate();
@@ -215,19 +210,15 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       }
     }
     const presenceKey = `${this.params.accountId}:${data.guild_id}:${userId}`;
-    const previousRun = this.pendingByGuildUser.get(presenceKey) ?? Promise.resolve();
-    const handle = () => this.handleSerial(data, client, userId, presenceKey);
-    const run = previousRun.then(handle, handle);
-    this.pendingByGuildUser.set(presenceKey, run);
     try {
-      await run;
+      await enqueueKeyedTask({
+        tails: this.pendingByGuildUser,
+        key: presenceKey,
+        task: () => this.handleSerial(data, client, userId, presenceKey),
+      });
     } catch (err) {
       const logger = this.params.logger ?? discordEventQueueLog;
       logger.error(danger(`discord presence handler failed: ${String(err)}`));
-    } finally {
-      if (this.pendingByGuildUser.get(presenceKey) === run) {
-        this.pendingByGuildUser.delete(presenceKey);
-      }
     }
   }
 
@@ -466,10 +457,9 @@ export class DiscordPresenceGuildCreateListener extends GuildCreateListener {
   }
 }
 
-export class DiscordPresenceGuildDeleteListener extends GuildDeleteListener {
-  constructor(private readonly presenceListener: DiscordPresenceListener) {
-    super();
-  }
+export class DiscordPresenceGuildDeleteListener {
+  readonly type = GatewayDispatchEvents.GuildDelete;
+  constructor(private readonly presenceListener: DiscordPresenceListener) {}
 
   handle(data: GuildDeleteEvent): void {
     this.presenceListener.invalidateGuild(data.id);
@@ -489,18 +479,17 @@ class DiscordSessionResetListener extends ReadyListener {
 export class DiscordPresenceReadyListener extends DiscordSessionResetListener {}
 export class DiscordThreadReadyListener extends DiscordSessionResetListener {}
 
-type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
+type ThreadUpdateEvent = ListenerDataByEvent[GatewayDispatchEvents.ThreadUpdate];
 const DISCORD_THREAD_REJOIN_CLAIM_MAX_ENTRIES = 10_000;
 
-export class DiscordThreadUpdateListener extends ThreadUpdateListener {
+export class DiscordThreadUpdateListener {
+  readonly type = GatewayDispatchEvents.ThreadUpdate;
   private readonly rejoinClaims = new Map<string, true>();
 
   constructor(
     private cfg: OpenClawConfig,
     private logger?: Logger,
-  ) {
-    super();
-  }
+  ) {}
 
   resetGatewaySession(): void {
     this.rejoinClaims.clear();
@@ -552,16 +541,15 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
   }
 }
 
-type ThreadDeleteEvent = Parameters<ThreadDeleteListener["handle"]>[0];
+type ThreadDeleteEvent = ListenerDataByEvent[GatewayDispatchEvents.ThreadDelete];
 
-export class DiscordThreadDeleteListener extends ThreadDeleteListener {
+export class DiscordThreadDeleteListener {
+  readonly type = GatewayDispatchEvents.ThreadDelete;
   constructor(
     private cfg: OpenClawConfig,
     private accountId: string,
     private logger?: Logger,
-  ) {
-    super();
-  }
+  ) {}
 
   async handle(data: ThreadDeleteEvent) {
     await runDiscordListenerWithSlowLog({

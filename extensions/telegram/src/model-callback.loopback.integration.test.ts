@@ -6,8 +6,7 @@ import { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { TelegramCallbackMessageRuntime } from "./bot-handlers.callback-router-controls.js";
 import { createTelegramCallbackRouter } from "./bot-handlers.callback-router.js";
 import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
@@ -21,6 +20,25 @@ const CHAT_ID = 1234;
 const PROVIDER = "ollama";
 const MODEL = "xentriom/gemma-4-12B-agentic-fable5-composer2.5-v2:latest";
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-telegram-model-loopback-");
+const callbackMocks = vi.hoisted(() => ({
+  getRuntimeConfig:
+    vi.fn<typeof import("openclaw/plugin-sdk/runtime-config-snapshot").readRuntimeConfig>(),
+  buildModelsProviderData:
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/models-provider-runtime").buildPreparedModelsProviderData
+    >(),
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: (...args: Parameters<typeof callbackMocks.getRuntimeConfig>) =>
+    callbackMocks.getRuntimeConfig(...args),
+}));
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
+  buildPreparedModelsProviderData: (
+    ...args: Parameters<typeof callbackMocks.buildModelsProviderData>
+  ) => callbackMocks.buildModelsProviderData(...args),
+}));
 
 type TelegramApiRequest = { method: string; payload: Record<string, unknown> };
 
@@ -141,34 +159,29 @@ describe("Telegram model callback loopback", () => {
 
       const callbackSteps: string[] = [];
       const bot = new Bot(TOKEN, { botInfo: telegramBotInfoForTest, client: { apiRoot } });
-      const telegramDeps = {
-        ...defaultTelegramBotDeps,
-        buildModelsProviderData: async (): ReturnType<
-          TelegramBotDeps["buildModelsProviderData"]
-        > => {
-          callbackSteps.push("catalog");
-          return {
-            byProvider: new Map([
-              ["anthropic", new Set(["claude-opus-4-6"])],
-              [PROVIDER, new Set([MODEL])],
-            ]),
-            providers: ["anthropic", PROVIDER],
-            resolvedDefault: { provider: "anthropic", model: "claude-opus-4-6" },
-            modelNames: new Map<string, string>(),
-            modelCatalog: [
-              {
-                provider: PROVIDER,
-                id: MODEL,
-                name: MODEL,
-                api: "ollama",
-                contextWindow: 32_768,
-                reasoning: true,
-              },
-            ],
-          };
-        },
-        getRuntimeConfig: () => config,
-      };
+      callbackMocks.getRuntimeConfig.mockReturnValue(config);
+      callbackMocks.buildModelsProviderData.mockImplementation(async () => {
+        callbackSteps.push("catalog");
+        return {
+          byProvider: new Map([
+            ["anthropic", new Set(["claude-opus-4-6"])],
+            [PROVIDER, new Set([MODEL])],
+          ]),
+          providers: ["anthropic", PROVIDER],
+          resolvedDefault: { provider: "anthropic", model: "claude-opus-4-6" },
+          modelNames: new Map<string, string>(),
+          modelCatalog: [
+            {
+              provider: PROVIDER,
+              id: MODEL,
+              name: MODEL,
+              api: "ollama",
+              contextWindow: 32_768,
+              reasoning: true,
+            },
+          ],
+        };
+      });
       const authorization = {
         resolveTelegramEventAuthorizationContext: async () => {
           callbackSteps.push("context");
@@ -206,7 +219,6 @@ describe("Telegram model callback loopback", () => {
           accountId: "default",
           bot,
           runtime: {},
-          telegramDeps,
           shouldSkipUpdate: () => false,
         } as unknown as RegisterTelegramHandlerParams,
         message,
@@ -339,31 +351,26 @@ describe("Telegram model callback loopback", () => {
       expect(callbackData).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
 
       const bot = new Bot(TOKEN, { botInfo: telegramBotInfoForTest, client: { apiRoot } });
-      const telegramDeps = {
-        ...defaultTelegramBotDeps,
-        buildModelsProviderData: async (): ReturnType<
-          TelegramBotDeps["buildModelsProviderData"]
-        > => ({
-          byProvider: new Map([
-            ["anthropic", new Set(["claude-opus-4-6"])],
-            [PROVIDER, new Set([MODEL])],
-          ]),
-          providers: ["anthropic", PROVIDER],
-          resolvedDefault: { provider: "anthropic", model: "claude-opus-4-6" },
-          modelNames: new Map<string, string>(),
-          modelCatalog: [
-            {
-              provider: PROVIDER,
-              id: MODEL,
-              name: MODEL,
-              api: "ollama",
-              contextWindow: 32_768,
-              reasoning: true,
-            },
-          ],
-        }),
-        getRuntimeConfig: () => config,
-      };
+      callbackMocks.getRuntimeConfig.mockReturnValue(config);
+      callbackMocks.buildModelsProviderData.mockImplementation(async () => ({
+        byProvider: new Map([
+          ["anthropic", new Set(["claude-opus-4-6"])],
+          [PROVIDER, new Set([MODEL])],
+        ]),
+        providers: ["anthropic", PROVIDER],
+        resolvedDefault: { provider: "anthropic", model: "claude-opus-4-6" },
+        modelNames: new Map<string, string>(),
+        modelCatalog: [
+          {
+            provider: PROVIDER,
+            id: MODEL,
+            name: MODEL,
+            api: "ollama",
+            contextWindow: 32_768,
+            reasoning: true,
+          },
+        ],
+      }));
       const authorization = {
         resolveTelegramEventAuthorizationContext: async () => ({
           threadSpec: { scope: "none" },
@@ -391,7 +398,6 @@ describe("Telegram model callback loopback", () => {
           accountId: "default",
           bot,
           runtime: {},
-          telegramDeps,
           shouldSkipUpdate: () => false,
         } as unknown as RegisterTelegramHandlerParams,
         message,

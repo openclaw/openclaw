@@ -324,14 +324,9 @@ internal class MicCaptureManager(
     if (event != "chat") return
     val payload = parseJsonParamsObject(payloadJson) ?: return
 
-    val runId =
-      pendingRunId ?: run {
-        Log.d("MicCapture", "no pendingRunId — drop")
-        return
-      }
+    val runId = pendingRunId ?: return
     val eventRunId = payload["runId"].asJsonStringOrNull() ?: return
     if (eventRunId != runId) {
-      Log.d("MicCapture", "runId mismatch: event=$eventRunId pending=$runId")
       return
     }
 
@@ -420,7 +415,6 @@ internal class MicCaptureManager(
             closeTranscriptionSession(session)
             return@launch
           }
-          Log.d(tag, "transcription session started sessionId=${session.id}")
         } catch (err: Throwable) {
           if (err is CancellationException) {
             restartAfterCancellation = _micEnabled.value && gatewayConnected && !stopRequested

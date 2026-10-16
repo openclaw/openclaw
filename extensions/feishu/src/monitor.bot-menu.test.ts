@@ -106,35 +106,20 @@ describe("Feishu bot menu handler", () => {
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("reopens replay for explicit retryable fallback failures", async () => {
+  it("reports a fallback failure without reopening the committed menu event", async () => {
     const runtime = createRuntimeSpies() as RuntimeEnv;
     const onBotMenu = await registerHandlers({ runtime });
-    sendCardFeishuMock
-      .mockImplementationOnce(async () => {
-        throw new Error("boom");
-      })
-      .mockImplementationOnce(async () => {
-        throw new Error("boom");
-      });
-    handleFeishuMessageMock
-      .mockRejectedValueOnce(
-        Object.assign(new Error("retry me"), {
-          name: "FeishuRetryableSyntheticEventError",
-        }),
-      )
-      .mockResolvedValueOnce(undefined);
+    sendCardFeishuMock.mockRejectedValueOnce(new Error("launcher unavailable"));
+    handleFeishuMessageMock.mockRejectedValueOnce(new Error("fallback failed"));
 
     await onBotMenu(createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000004" }));
-    await vi.waitFor(() => {
-      expect(runtime.error).toHaveBeenCalledWith(
-        "feishu[default]: error handling bot menu event: FeishuRetryableSyntheticEventError: retry me",
-      );
-    });
+    await Promise.allSettled(pendingTasks);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "feishu[default]: error handling bot menu event: Error: fallback failed",
+    );
     await onBotMenu(createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000004" }));
 
-    expect(sendCardFeishuMock).toHaveBeenCalledTimes(2);
-    await vi.waitFor(() => {
-      expect(handleFeishuMessageMock).toHaveBeenCalledTimes(2);
-    });
+    expect(sendCardFeishuMock).toHaveBeenCalledOnce();
+    expect(handleFeishuMessageMock).toHaveBeenCalledOnce();
   });
 });

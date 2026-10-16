@@ -55,6 +55,9 @@ export function attachRuntimePromptMediaFacts<T extends object>(
   }
   Object.defineProperty(message, RUNTIME_PROMPT_MEDIA_FACTS, {
     configurable: true,
+    // Symbols survive in-memory projections without entering transcript JSON.
+    enumerable: true,
+    writable: true,
     value: normalized,
   });
   return message;
@@ -252,15 +255,6 @@ export function stripLegacyMediaContextFields(ctx: Record<string, unknown>): voi
   for (const key of LEGACY_MEDIA_CONTEXT_KEYS) {
     delete ctx[key];
   }
-}
-
-export function readRuntimePromptImageOrder(message: object): PromptImageOrderEntry[] | undefined {
-  const imageOrder = (
-    readRuntimePromptMediaFacts(message) as
-      | (MediaFact[] & { imageOrder?: PromptImageOrderEntry[] })
-      | undefined
-  )?.imageOrder;
-  return Array.isArray(imageOrder) ? (imageOrder as PromptImageOrderEntry[]) : undefined;
 }
 
 /** Returns whether a declared MIME only describes otherwise unclassified binary bytes. */

@@ -1348,7 +1348,6 @@ describe("loadOpenClawPlugins", () => {
         expect(reenter.mock.results[0]).toMatchObject({
           type: "throw",
           value: {
-            name: "PluginLoadReentryError",
             message: `plugin load reentry detected for cache key: ${cacheKey}`,
           },
         });

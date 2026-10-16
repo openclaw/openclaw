@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
 import "../../styles.css";
@@ -248,6 +249,53 @@ describe("config appearance preferences", () => {
     renderConfigInto(props, container);
     expect(findButtonByText(container, "Light Green").getAttribute("aria-pressed")).toBe("true");
     expect(findButtonByText(container, "Claw").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("focuses its own importer through unrelated updates and retires pending focus on disposal", () => {
+    const otherInput = document.createElement("input");
+    otherInput.setAttribute("data-custom-theme-import-input", "");
+    document.body.append(otherInput);
+    const { container, props } = renderAppearance({ customThemeImportUrl: "amethyst-haze" });
+    document.body.append(container);
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    const requestFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        frames.set(++frameId, callback);
+        return frameId;
+      });
+    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+      frames.delete(id);
+    });
+    onTestFinished(() => {
+      cleanupSolid();
+      requestFrame.mockRestore();
+      cancelFrame.mockRestore();
+      otherInput.remove();
+      container.remove();
+    });
+
+    props.customThemeImportExpanded = true;
+    props.customThemeImportFocusToken = 1;
+    renderConfigInto(props, container);
+    props.textScale = 110;
+    renderConfigInto(props, container);
+    const input = required(container, ".settings-theme-import__input", HTMLInputElement);
+    const pending = [...frames.values()];
+    frames.clear();
+    for (const frame of pending) {
+      frame(0);
+    }
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe("amethyst-haze".length);
+
+    props.customThemeImportFocusToken = 2;
+    renderConfigInto(props, container);
+    expect(frames.size).toBe(1);
+    cleanupSolid();
+    expect(frames.size).toBe(0);
   });
 
   it("keeps direct Appearance default selections independent", () => {

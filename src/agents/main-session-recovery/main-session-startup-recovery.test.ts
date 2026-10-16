@@ -13,9 +13,11 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { callGateway } from "../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
+import * as transcriptReaders from "../../gateway/session-transcript-readers.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
@@ -97,6 +99,175 @@ afterEach(() => {
 });
 
 describe("main-session startup recovery", () => {
+  it("settles a legacy requester once while retrying temporary startup preparation", async ({
+    signal,
+  }) => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+      const { resetSubagentRegistryForTests } =
+        await import("../subagents/registry/subagent-registry.test-helpers.js");
+      await resetSubagentRegistryForTests({ persist: false });
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const sourceRunId = "announce:requester-settle:legacy-cohort";
+      const sessionRoot = path.join(tmpDir, "preserved-workspace");
+      await fs.mkdir(sessionRoot);
+      await fs.writeFile(path.join(sessionRoot, "work.txt"), "unfinished work\n");
+      await writeStore(sessionsDir, {
+        [sessionKey]: mainSessionEntry({
+          lifecycleRevision: "legacy-lifecycle",
+          sessionRoot,
+          restartRecoveryDeliveryRunId: "legacy-recovery-run",
+          restartRecoveryDeliverySourceRunId: sourceRunId,
+          restartRecoverySourceIngress: "internal",
+          pendingFinalDelivery: makePendingFinalDelivery("Saved work from the interrupted turn.", {
+            intentId: "legacy-final",
+            deliveries: [{ id: "legacy-prepared", state: "prepared" }],
+          }),
+          restartRecoveryRuns: [
+            { runId: "legacy-recovery-run", lifecycleGeneration: "previous-gateway" },
+          ],
+        }),
+      });
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: "Continue the interrupted child results." },
+      ]);
+      const target = { agentId: "main", storePath, sessionKey, sessionId: "main-session" };
+      const originalTranscript = await loadTranscriptEvents(target);
+      const otherDir = await makeSessionsDir("other");
+      const transient = {
+        agentId: "other",
+        sessionKey: "agent:other:main",
+        storePath: path.join(otherDir, "sessions.json"),
+      };
+      await writeStore(otherDir, {
+        [transient.sessionKey]: mainSessionEntry({
+          sessionId: "transient-session",
+          pendingFinalDelivery: makePendingFinalDelivery(),
+        }),
+      });
+      const cfg: OpenClawConfig = { agents: { entries: { main: {}, other: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const read = transcriptReaders.readSessionMessagesAsync;
+      let transientReads = 0;
+      const readSpy = vi
+        .spyOn(transcriptReaders, "readSessionMessagesAsync")
+        .mockImplementation(async (...args) => {
+          if (args[0].sessionId === "transient-session" && transientReads++ === 0) {
+            throw new Error("Session reader is temporarily unavailable");
+          }
+          return await read(...args);
+        });
+      const passes = [createDeferred<unknown>(), createDeferred<unknown>()];
+      const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+      let passIndex = 0;
+      const admissionSpy = vi
+        .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+        .mockImplementation(
+          async <T>(run: () => Promise<T>, origin?: string, admissionSignal?: AbortSignal) => {
+            const pass =
+              origin === "main-session:startup-recovery" ? passes[passIndex++] : undefined;
+            try {
+              const result = await admit(run, origin, admissionSignal);
+              pass?.resolve(result);
+              return result;
+            } catch (error) {
+              pass?.reject(error);
+              throw error;
+            }
+          },
+        );
+      vi.useFakeTimers();
+      const recovery = scheduleRestartAbortedMainSessionRecovery({
+        getConfig: () => cfg,
+        delayMs: 0,
+        maxRetries: 2,
+        stateDir: tmpDir,
+      });
+      try {
+        expect(await withinTest(passes[0]!.promise, signal)).toMatchObject({
+          started: 0,
+          settled: 1,
+          failed: 1,
+        });
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(sendRecoveryNotice).not.toHaveBeenCalled();
+        const settled = loadSessionEntry(target);
+        expect(settled).toMatchObject({
+          sessionId: "main-session",
+          lifecycleRevision: "legacy-lifecycle",
+          sessionRoot,
+          status: "interrupted",
+          abortedLastRun: false,
+          restartRecoveryTerminalRunIds: expect.arrayContaining([sourceRunId]),
+        });
+        expect(settled?.mainRestartRecovery).toBeUndefined();
+        expect(settled?.restartRecoveryRuns).toBeUndefined();
+        expect(settled?.restartRecoveryDeliveryRunId).toBeUndefined();
+        expect(settled?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+        expect(settled?.pendingFinalDelivery).toBeUndefined();
+        const transcript = await loadTranscriptEvents(target);
+        expect(transcript.slice(0, originalTranscript.length)).toEqual(originalTranscript);
+        expect(transcript).toHaveLength(originalTranscript.length + 1);
+        expect(transcript.at(-1)).toMatchObject({
+          message: {
+            role: "assistant",
+            idempotencyKey: `main-session-restart-recovery:${sourceRunId}:interrupted`,
+            content: [
+              {
+                type: "text",
+                text: expect.stringContaining(
+                  "Saved reply (delivery unconfirmed):\nSaved work from the interrupted turn.",
+                ),
+              },
+            ],
+          },
+        });
+
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(await withinTest(passes[1]!.promise, signal)).toMatchObject({
+          started: 1,
+          settled: 0,
+          failed: 0,
+        });
+        await mockRecoveryRuntime.expectAdmission(1, recovery, transient);
+        expect(transientReads).toBe(2);
+        expect(await loadTranscriptEvents(target)).toEqual(transcript);
+        expect(await fs.readFile(path.join(sessionRoot, "work.txt"), "utf8")).toBe(
+          "unfinished work\n",
+        );
+
+        resetAgentEventsForTest();
+        await resetSubagentRegistryForTests({ persist: false });
+        await markStartupOrphanedMainSessionsForRecovery({
+          cfg,
+          stateDir: tmpDir,
+          agentIds: new Set(["main"]),
+        });
+        expect(
+          await readSessionEntrySummariesInWorker({ ...target, mainSessionRecovery: true }),
+        ).toEqual([]);
+        expect(
+          await recoverRestartAbortedMainSessions({
+            cfg,
+            stateDir: tmpDir,
+            agentIds: new Set(["main"]),
+          }),
+        ).toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
+        expect(await loadTranscriptEvents(target)).toEqual(transcript);
+        expect(callGateway).toHaveBeenCalledOnce();
+        expect(sendRecoveryNotice).not.toHaveBeenCalled();
+      } finally {
+        dispatchSettlement.resolve();
+        await recovery.stop();
+        admissionSpy.mockRestore();
+        readSpy.mockRestore();
+        vi.useRealTimers();
+        await resetSubagentRegistryForTests({ persist: false });
+      }
+    });
+  });
+
   it("keeps archived interruptions out of writer preparation", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -312,14 +483,11 @@ describe("main-session startup recovery", () => {
         started: 3,
         settled: 0,
         failed: 0,
-        skipped: 1,
+        skipped: 0,
       });
       expect(callGateway).toHaveBeenCalledTimes(3);
-      expect(info.mock.calls.map(([line]) => line)).toContainEqual(
-        expect.stringContaining("skipReasons=archived:1"),
-      );
-      expect(info.mock.calls.map(([line]) => line)).toContainEqual(
-        expect.stringContaining('"decision":"deferred","reason":"archived","nextOwner":"none"'),
+      expect(info.mock.calls.map(([line]) => line)).not.toContainEqual(
+        expect.stringContaining('"reason":"archived"'),
       );
     } finally {
       info.mockRestore();
@@ -470,7 +638,7 @@ describe("main-session startup recovery", () => {
 
     const recovered = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(recovered).toEqual({ started: 2, settled: 0, failed: 0, skipped: 1 });
+    expect(recovered).toEqual({ started: 2, settled: 0, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledTimes(2);
     store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);

@@ -16,6 +16,7 @@ import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   listSessionPendingInputs,
@@ -139,8 +140,10 @@ it("serves empty pending history from its counted snapshot in one data read", as
     };
     const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
     writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
-    const counter = trackSqliteStatementExecutions(database.db, ["pending"], (query) =>
-      /\bfrom\s+"?session_pending_inputs\b/i.test(query) ? "pending" : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["pending"],
+      (query) => (/\bfrom\s+"?session_pending_inputs\b/i.test(query) ? "pending" : null),
     );
     try {
       expect(readPendingInputHistoryInDatabase(database, scope)).toEqual({ rows: [], total: 0 });
@@ -207,7 +210,11 @@ it("reads count-free context in one statement and includes later committed input
     const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
     writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
     const read = () => {
-      const counter = trackSqliteStatementExecutions(database.db, ["read"], () => "read");
+      const counter = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["read"],
+        () => "read",
+      );
       try {
         const page = readPendingInputHistoryInDatabase(database, { ...scope, includeTotal: false });
         expect(counter.counts.read).toBe(1);

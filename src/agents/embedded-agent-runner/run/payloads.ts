@@ -16,7 +16,7 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { HEARTBEAT_TOKEN } from "../../../auto-reply/tokens.js";
 import { applyAssistantDeliveryDirectives } from "../../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
@@ -75,34 +75,30 @@ function renderNativeAssistantReply(
   const sourceBlocks = finalBlocks.length
     ? finalBlocks
     : readAssistantTextBlocksForPhase(assistant);
-  const prefixLength = rawText.length - preparedText.length;
+  const prefixLength = rawText.endsWith(preparedText) ? rawText.length - preparedText.length : 0;
   // Only project native parts when they still represent the authoritative prepared source.
   if (
     sourceBlocks.map((block) => block.text).join("") !== rawText ||
-    (rawText !== preparedText &&
-      (prefixLength !== SILENT_REPLY_TOKEN.length + 1 ||
-        !rawText.startsWith(`${SILENT_REPLY_TOKEN}\n`) ||
-        rawText.slice(prefixLength) !== preparedText))
+    (prefixLength === 0 && !rawText.startsWith(preparedText))
   ) {
     return undefined;
   }
   const rendered = {
     ...assistant,
-    content: assistant.content.map((block) => (block.type === "text" ? { ...block } : block)),
+    content: assistant.content.map((block) => ({ ...block })),
   };
-  if (prefixLength > 0) {
-    // Map the already-consumed raw control line onto its parts without inspecting the suffix.
+  if (rawText !== preparedText) {
+    // Map the prepared range before directives consume bytes from the native parts.
     let remainingPrefix = prefixLength;
+    let remainingLength = preparedText.length;
     for (const block of readAssistantTextBlocksForPhase(
       rendered,
       finalBlocks.length ? "final_answer" : undefined,
     )) {
       const removed = Math.min(remainingPrefix, block.text.length);
-      block.text = block.text.slice(removed);
       remainingPrefix -= removed;
-      if (remainingPrefix === 0) {
-        break;
-      }
+      block.text = block.text.slice(removed, removed + remainingLength);
+      remainingLength -= block.text.length;
     }
   }
   // Native part boundaries carry fence context that is lost after joining the text.

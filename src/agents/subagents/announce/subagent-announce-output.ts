@@ -67,7 +67,10 @@ export function withSubagentOutcomeTiming(
   return { ...outcome, ...nextTiming };
 }
 
-function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutputSnapshot {
+function summarizeSubagentOutputHistory(
+  messages: Array<unknown>,
+  completedCollectorTurn = false,
+): SubagentOutputSnapshot {
   const snapshot: SubagentOutputSnapshot = {};
   let previousAssistantCalledYield = false;
   for (const message of messages) {
@@ -88,12 +91,21 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     if (role === "assistant") {
       previousAssistantCalledYield = assistantCallsSessionsYield(message);
       snapshot.waitingForContinuation = previousAssistantCalledYield;
-      if (previousAssistantCalledYield) {
-        snapshot.latestText = undefined;
-        continue;
+      if (completedCollectorTurn && previousAssistantCalledYield) {
+        // The yielded result replaces earlier progress, even for a timed-out collector.
+        snapshot.latestToolCallCount = undefined;
       }
       if (isSilentAssistantTranscriptMessage(message)) {
         snapshot.latestText = undefined;
+        continue;
+      }
+      if (previousAssistantCalledYield) {
+        // A completed collector cannot resume: its yield closes this execution.
+        // Ordinary subagents still wait rather than treating commentary as a result.
+        // An empty yield is not permission to reuse an earlier assistant reply.
+        snapshot.latestText = completedCollectorTurn
+          ? extractStoredAssistantText(message)?.trim() || undefined
+          : undefined;
         continue;
       }
       const toolCalls = record.toolCalls ?? record.tool_calls;
@@ -116,7 +128,9 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
       continue;
     }
     if (isSessionsYieldToolResult(message, previousAssistantCalledYield)) {
-      snapshot.latestText = undefined;
+      if (!completedCollectorTurn) {
+        snapshot.latestText = undefined;
+      }
       snapshot.waitingForContinuation = true;
       previousAssistantCalledYield = false;
       continue;
@@ -132,6 +146,7 @@ export async function readSubagentOutput(
   options?: {
     childAgentId?: string;
     sessionTarget?: SessionTranscriptRuntimeTarget;
+    completedCollectorTurn?: { startedAt: number; endedAt: number };
   },
 ): Promise<string | undefined> {
   const agentId =
@@ -143,13 +158,24 @@ export async function readSubagentOutput(
   if (!agentId) {
     return undefined;
   }
+  const collectorTurn = options?.completedCollectorTurn;
+  if (
+    collectorTurn &&
+    (!options?.sessionTarget ||
+      !Number.isFinite(collectorTurn.startedAt) ||
+      !Number.isFinite(collectorTurn.endedAt) ||
+      collectorTurn.endedAt < collectorTurn.startedAt)
+  ) {
+    return undefined;
+  }
   let messages: unknown[] | undefined;
   if (options?.sessionTarget) {
-    messages = await readSessionMessagesAsync(options.sessionTarget, {
-      mode: "recent",
-      maxMessages: 100,
-      maxBytes: 1024 * 1024,
-    });
+    messages = await readSessionMessagesAsync(
+      options.sessionTarget,
+      collectorTurn
+        ? { mode: "full", reason: "completed collector execution result" }
+        : { mode: "recent", maxMessages: 100, maxBytes: 1024 * 1024 },
+    );
   }
   const history =
     messages === undefined
@@ -159,8 +185,23 @@ export async function readSubagentOutput(
         })
       : undefined;
   const sourceMessages = messages ?? (Array.isArray(history?.messages) ? history.messages : []);
-  const snapshot = summarizeSubagentOutputHistory(sourceMessages);
-  if (snapshot.waitingForContinuation) {
+  // A restart may read this session long after newer turns evicted the yielded reply
+  // from recent history. Read its original execution, never those later turns.
+  const executionMessages = collectorTurn
+    ? sourceMessages.filter((message) => {
+        const record = asOptionalObjectRecord(message);
+        const metadata = asOptionalObjectRecord(record?.["__openclaw"]);
+        const timestamp =
+          asFiniteNumber(metadata?.recordTimestampMs) ?? asFiniteNumber(record?.timestamp);
+        return (
+          timestamp !== undefined &&
+          timestamp >= collectorTurn.startedAt &&
+          timestamp <= collectorTurn.endedAt
+        );
+      })
+    : sourceMessages;
+  const snapshot = summarizeSubagentOutputHistory(executionMessages, collectorTurn !== undefined);
+  if (snapshot.waitingForContinuation && !collectorTurn) {
     return undefined;
   }
   if (snapshot.latestText) {
@@ -230,6 +271,7 @@ export async function captureSubagentCompletionReply(
     waitForReply?: boolean;
     outcome?: SubagentRunOutcome;
     sessionTarget?: SessionTranscriptRuntimeTarget;
+    completedCollectorTurn?: { startedAt: number; endedAt: number };
   },
 ): Promise<string | undefined> {
   const waitForReply = options?.waitForReply;
@@ -238,6 +280,7 @@ export async function captureSubagentCompletionReply(
   const readOutput = () =>
     readSubagentOutput(sessionKey, options?.outcome, {
       sessionTarget: options?.sessionTarget,
+      completedCollectorTurn: options?.completedCollectorTurn,
     });
   const immediate = await readOutput();
   if (immediate?.trim()) {

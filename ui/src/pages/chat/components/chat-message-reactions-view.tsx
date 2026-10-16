@@ -4,7 +4,7 @@ import { EmojiSearchPanel } from "../../../components/emoji-search-panel.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import type { MessageReactionPlacement } from "./chat-message-reaction-model.ts";
 import "./chat-message-reactions.css";
 
@@ -152,6 +152,8 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
           </button>
         </openclaw-tooltip>
         <Popover
+          lazy="while-open"
+          sameRoot
           id={`${triggerId}-popover`}
           ref={(handle) => {
             popover = handle;

@@ -192,7 +192,6 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
     cfg: { channels: { msteams: {} } } as OpenClawConfig,
     agentId: "agent",
     sessionKey: "agent:msteams:trace",
-    runtime: { error: () => {} } as never,
     log: { info: () => {}, error: () => {} },
     app: {} as never,
     conversationRef: {

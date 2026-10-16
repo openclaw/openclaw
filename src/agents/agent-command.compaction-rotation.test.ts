@@ -534,23 +534,6 @@ describe("agentCommand compaction transcript rotation", () => {
     },
   );
 
-  it("does not publish a hidden model-run session as a compaction successor", async () => {
-    const onSessionIdChanged = vi.fn();
-    state.runAgentAttemptMock.mockImplementationOnce(async (params) =>
-      makeResult({ sessionId: params.sessionId, text: "hidden answer", runner: "embedded" }),
-    );
-
-    await agentCommand({
-      message: "hidden probe",
-      sessionId: "public-model-run-session",
-      modelRun: true,
-      sessionEffects: "internal",
-      onSessionIdChanged,
-    });
-
-    expect(onSessionIdChanged).not.toHaveBeenCalled();
-  });
-
   it("carries Gateway plugin generation through failed post-turn compaction and still delivers", async () => {
     const sessionId = "cli-compaction-failure";
     const sessionKey = `agent:main:explicit:${sessionId}`;

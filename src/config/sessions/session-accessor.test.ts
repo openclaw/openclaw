@@ -25,6 +25,7 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   deliveryContextFromSession,
@@ -325,31 +326,15 @@ describe("session accessor seam", () => {
       "transcript find database path",
     );
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-    const originalPrepare = database.db.prepare.bind(database.db);
-    let transcriptRowsRead = 0;
-    // Count SQLite rows rather than matcher calls: eager materialization happens before matching.
-    const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
-      const statement = originalPrepare(sql);
-      return new Proxy(statement, {
-        get(target, property) {
-          if (property === "iterate") {
-            return (...params: Parameters<typeof target.iterate>) => {
-              const iterator = target.iterate(...params);
-              return (function* () {
-                for (const row of iterator) {
-                  if ("event_json" in row) {
-                    transcriptRowsRead += 1;
-                  }
-                  yield row;
-                }
-              })() as ReturnType<typeof target.iterate>;
-            };
-          }
-          const value = Reflect.get(target, property, target) as unknown;
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
-    });
+    // Count materialized rows, including eager reads before matching.
+    const transcriptRows = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["transcript"],
+      (sql) =>
+        sql.includes('from "transcript_events"') && sql.includes('"event_json"')
+          ? "transcript"
+          : null,
+    );
     const seen: unknown[] = [];
     const found = await Promise.resolve()
       .then(() =>
@@ -358,11 +343,11 @@ describe("session accessor seam", () => {
           return (event as { type?: string }).type === "message";
         }),
       )
-      .finally(() => prepareSpy.mockRestore());
+      .finally(() => transcriptRows.restore());
     // Newest-first with early exit: the older message is never visited.
     expect(found).toEqual({ event: newer });
     expect(seen).toEqual([newer]);
-    expect(transcriptRowsRead).toBe(1);
+    expect(transcriptRows.rowCounts.transcript).toBe(1);
 
     await replaceTranscriptEvents(
       { agentId: "main", sessionId: "session-falsy", sessionKey: "agent:main:falsy", storePath },
@@ -1092,7 +1077,7 @@ describe("session accessor seam", () => {
     );
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     const preparationReads = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["entries", "participants"],
       (sql) => {
         if (/from\s+"session_nodes"/i.test(sql)) {
@@ -2721,55 +2706,73 @@ describe("session accessor seam", () => {
     expect(predicateContext).not.toHaveProperty("sessionEntry");
   });
 
-  it("rejects a guarded transcript turn when same-session lifecycle ownership changes", async () => {
-    const scope = transcriptScope("session-same-owner", "agent:main:same-owner");
-    await upsertSessionEntryCore(scope, {
-      sessionId: scope.sessionId,
-      abortedLastRun: true,
-      restartRecoveryDeliveryRunId: "recovery-run",
-      restartRecoveryDeliverySourceRunId: "control-ui-run",
-      status: "interrupted",
-      updatedAt: 10,
-    });
-    const stored = loadSessionEntry(scope);
-    if (!stored) {
-      throw new Error("expected guarded session");
-    }
-    const expectedSessionState = buildRestartRecoveryExpectedState(stored);
-    const predicateStarted = createDeferred();
-    const predicateGate = createDeferred();
-    const pendingTurn = persistSessionTranscriptTurn(scope, {
-      expectedSessionId: scope.sessionId,
-      expectedSessionState,
-      messages: [
-        {
-          message: { role: "assistant", content: "stale recovery notice", timestamp: 100 },
-          shouldAppend: async () => {
-            predicateStarted.resolve();
-            await predicateGate.promise;
-            return true;
+  it.each(["lifecycle ownership", "pending final delivery"])(
+    "rejects a guarded transcript turn when same-session %s changes",
+    async (change) => {
+      const scope = transcriptScope("session-same-owner", "agent:main:same-owner");
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+        pendingFinalDelivery,
+        status: "interrupted",
+        updatedAt: 10,
+      });
+      const stored = loadSessionEntry(scope);
+      if (!stored) {
+        throw new Error("expected guarded session");
+      }
+      const expectedSessionState = {
+        ...buildRestartRecoveryExpectedState(stored),
+        pendingFinalDelivery: stored.pendingFinalDelivery ?? null,
+      };
+      const predicateStarted = createDeferred();
+      const predicateGate = createDeferred();
+      const pendingTurn = persistSessionTranscriptTurn(scope, {
+        expectedSessionId: scope.sessionId,
+        expectedSessionState,
+        sessionLifecyclePatch: { pendingFinalDelivery: undefined },
+        messages: [
+          {
+            message: { role: "assistant", content: "stale recovery notice", timestamp: 100 },
+            shouldAppend: async () => {
+              predicateStarted.resolve();
+              await predicateGate.promise;
+              return true;
+            },
           },
-        },
-      ],
-      touchSessionEntry: true,
-      updateMode: "file-only",
-    });
+        ],
+        touchSessionEntry: true,
+        updateMode: "file-only",
+      });
 
-    await predicateStarted.promise;
-    replaceSessionEntrySync(scope, {
-      abortedLastRun: false,
-      restartRecoveryDeliveryRunId: "new-run",
-      restartRecoveryDeliverySourceRunId: "new-run",
-      sessionId: scope.sessionId,
-      status: undefined,
-      updatedAt: 20,
-    });
-    predicateGate.resolve();
-    const result = await pendingTurn;
+      await predicateStarted.promise;
+      const replacement: SessionEntry =
+        change === "pending final delivery"
+          ? {
+              ...stored,
+              pendingFinalDelivery: { ...pendingFinalDelivery, intentId: "replacement-intent" },
+            }
+          : {
+              abortedLastRun: false,
+              restartRecoveryDeliveryRunId: "new-run",
+              restartRecoveryDeliverySourceRunId: "new-run",
+              sessionId: scope.sessionId,
+              status: undefined,
+              updatedAt: 20,
+            };
+      replaceSessionEntrySync(scope, replacement);
+      predicateGate.resolve();
+      const result = await pendingTurn;
 
-    expect(result).toMatchObject({ appendedCount: 0, rejectedReason: "session-rebound" });
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
-  });
+      expect(result).toMatchObject({ appendedCount: 0, rejectedReason: "session-rebound" });
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
+      expect(loadSessionEntry(scope)?.pendingFinalDelivery).toEqual(
+        replacement.pendingFinalDelivery,
+      );
+    },
+  );
 
   it("keeps the persisted transcript owner when a caller supplies a stale session key", async () => {
     const sessionId = "session-canonical-owner";

@@ -1,4 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
+  DatabaseSearchCapabilityUnavailableError,
+  isPostgresSqlConnection,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   bindSqliteWorkerDatabase,
   ensureOpenClawAgentStandingIntentsSchema,
@@ -21,8 +25,14 @@ import type { StandingIntentWorkerOperations } from "./standing-intents-model.js
 /** The canonical agent executor retains and closes this connection. */
 export function bindSqliteWorkerBackend(
   _input: undefined,
-  context: { database: DatabaseSync; admit(stage: "transaction" | "commit"): void },
+  context: { database: EngineConnection; admit(stage: "transaction" | "commit"): void },
 ): SqliteWorkerBackend<StandingIntentWorkerOperations> {
+  if (isPostgresSqlConnection(context.database)) {
+    throw new DatabaseSearchCapabilityUnavailableError(
+      "fullText",
+      "PostgreSQL standing intents are unavailable until their lifecycle supports the selected engine.",
+    );
+  }
   const db = context.database;
   const transact = <T>(run: () => T): T => {
     try {

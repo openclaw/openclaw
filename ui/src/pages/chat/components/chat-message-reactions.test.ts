@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 /* @vitest-environment jsdom */
-import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -131,10 +131,20 @@ describe("transcript message reactions", () => {
     expect(onReact).toHaveBeenCalledWith("message-1", "🎉", false);
     const picker = pickers[0]!;
     await picker.updateComplete;
+    expect(picker.querySelector(".palette")).toBeNull();
+    picker.querySelector<HTMLButtonElement>(".trigger")!.click();
     const pressed = pickerButton(picker, "👍")!;
     expect(pressed.getAttribute("aria-pressed")).toBe("true");
+    const hidden = new Promise<void>((resolve) => {
+      picker
+        .querySelector(".chat-reaction-picker")!
+        .addEventListener("overlay-after-hide", () => resolve(), { once: true });
+    });
     pressed.click();
     expect(onReact).toHaveBeenLastCalledWith("message-1", "👍", true);
+    await hidden;
+    expect(picker.querySelector(".palette")).toBeNull();
+    picker.querySelector<HTMLButtonElement>(".trigger")!.click();
     pickerButton(picker, "🚀")!.click();
     expect(onReact).toHaveBeenLastCalledWith("message-1", "🚀", false);
   });

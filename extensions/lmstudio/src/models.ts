@@ -52,6 +52,7 @@ type LmstudioReasoningCapabilityWire = {
 type LmstudioConfiguredCatalogEntry = {
   id: string;
   name?: string;
+  parameterCount?: number;
   contextWindow?: number;
   contextTokens?: number;
   reasoning?: boolean;
@@ -236,7 +237,7 @@ function normalizeConfiguredCompatStringList(value: unknown): string[] | undefin
   ) {
     return undefined;
   }
-  return [...value];
+  return value;
 }
 
 function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfig["compat"] {
@@ -362,6 +363,7 @@ export function normalizeLmstudioConfiguredCatalogEntry(
   const name = typeof record.name === "string" && record.name.trim().length > 0 ? record.name : id;
   const contextWindow = asPositiveSafeInteger(record.contextWindow);
   const contextTokens = asPositiveSafeInteger(record.contextTokens);
+  const parameterCount = asPositiveSafeInteger(record.parameterCount);
   const reasoning = typeof record.reasoning === "boolean" ? record.reasoning : undefined;
   const input = Array.isArray(record.input)
     ? record.input.filter(
@@ -373,6 +375,7 @@ export function normalizeLmstudioConfiguredCatalogEntry(
   return {
     id,
     name,
+    ...(parameterCount !== undefined ? { parameterCount } : {}),
     contextWindow,
     contextTokens,
     reasoning,

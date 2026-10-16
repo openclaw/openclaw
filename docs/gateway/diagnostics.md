@@ -191,8 +191,8 @@ no tracked work is active. Other idle liveness samples remain diagnostic events
 without escalating to a warning.
 
 The Gateway also emits an always-on `main-thread stall` warning after a synchronous
-callback blocks for more than one second. Each line names the longest-running
-known task segment from scheduled jobs, diagnostic phases, timeline spans, or
+callback blocks for at least 250 milliseconds. Each line names the longest-running
+known task segment from RPC handlers, scheduled jobs, diagnostic phases, timeline spans, or
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
 does not count as task execution. Labels cover the synchronous portion of explicit
 task scopes. Asynchronous continuations and unknown callbacks use best-effort unattributed
@@ -202,7 +202,14 @@ windows, the native histogram is disabled: an unscoped stall that finishes befor
 the next sampling deadline can go unreported. Explicit task scopes and overdue
 idle wakes remain observable. Process suspension
 can also produce an unattributed delay. Reporting is bounded to eight pending
-named stalls, with an omitted count if that limit is exceeded. These warnings
+named stalls per sampling window, with an omitted count if that limit is exceeded.
+With the Prometheus plugin enabled, `openclaw_gateway_main_thread_stall_seconds`
+records these callback durations by `task`; its `_count` counts observed stalls.
+`openclaw_gateway_main_thread_stalls_dropped_total` counts observations omitted
+by the pending limit. Unattributed event-loop window delays remain a separate
+metric because a delayed window can contain several short callbacks rather than
+one blocking task. RPC labels remain available even with diagnostics disabled.
+These warnings
 require neither an inspector connection nor a sampling profiler.
 
 Startup phases emit `diagnostic.phase.completed` events with wall-clock and
@@ -695,6 +702,29 @@ bytes from inside their isolate; ArrayBuffers are already included in external
 memory, so do not add those values together. Other direct workers use native heap
 statistics and leave ArrayBuffer bytes unavailable. Nested workers are outside
 the parent registry's coverage.
+
+The prepared-model catalog worker also reports `workerHeaps[].retainedData`: bounded, size-only
+censuses with fixed structure labels, entry counts, approximate bytes, and
+aggregate generation, provider, and account counts where applicable. They never
+include catalog contents, object keys, provider or account identities, or secrets.
+The census uses the existing worker-memory sampling channel; it does not take a
+heap snapshot. Byte counts estimate owner-held data, not V8 retained size; shared
+objects are counted once within each structure, and structures can overlap.
+`stringBytes` estimates string payload bytes, while `objects` counts traversed
+objects. Coverage includes the named structures, not module runtime or closure roots.
+`truncated: true` means the estimator reached its work bound or skipped opaque
+values (proxies, accessors, or custom instances), so that estimate is partial.
+Only plain records and arrays are traversed; plugin iterators and accessors never run. Native-only fallback samples omit the census until the worker responds.
+`catalog-static` counts retained provider records without reading plugin-owned model arrays.
+`catalog-source` covers shared cached provider payloads, which may already be
+normalized. `catalog-request` rows count pending cache loads and active worker
+tasks separately. Pending loads have zero-byte estimates because their state is
+opaque; active task inputs are measured.
+Read the latest sampled census through the existing diagnostics CLI:
+
+```bash
+openclaw gateway stability --type diagnostic.memory.sample --limit 1 --json
+```
 
 `workerHeapSampledCount` and `workerArrayBuffersSampledCount` show coverage against
 `workerCount`. `workerMemoryCoverage` is `complete`, `partial`, or `unavailable`

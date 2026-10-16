@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import * as privateFileStoreRuntime from "../infra/private-file-store.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import {
@@ -18,7 +20,7 @@ vi.mock("../plugins/provider-discovery.js", async (importOriginal) => ({
   resolveRuntimePluginDiscoveryProviders,
 }));
 
-import { planOpenClawModelsJsonSource } from "./models-config.js";
+import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
 import {
   loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -65,6 +67,93 @@ describe("manual root catalog authorship", () => {
     clearRuntimeAuthProfileStoreSnapshots();
     await state.cleanup();
     vi.clearAllMocks();
+  });
+
+  it.each([
+    { name: "missing", contents: undefined },
+    { name: "malformed JSON", contents: "{broken" },
+  ])("rebuilds a $name root catalog", async ({ contents }) => {
+    resolveRuntimePluginDiscoveryProviders.mockResolvedValue([]);
+    const agentDir = state.agentDir();
+    const rootPath = path.join(agentDir, "models.json");
+    await fs.mkdir(agentDir, { recursive: true });
+    if (contents !== undefined) {
+      await fs.writeFile(rootPath, contents);
+    }
+
+    await expect(
+      ensureOpenClawModelsJson({ models: { providers: { configured: native } } }, agentDir, {
+        env: state.env,
+        pluginMetadataSnapshot: metadata,
+      }),
+    ).resolves.toMatchObject({ wrote: true });
+    expect(JSON.parse(await fs.readFile(rootPath, "utf8"))).toMatchObject({
+      providers: { configured: { baseUrl: native.baseUrl, models: [{ id: "native-model" }] } },
+    });
+  });
+
+  it("preserves manual catalog bytes when the existing file cannot be read", async () => {
+    resolveRuntimePluginDiscoveryProviders.mockResolvedValue([]);
+    const agentDir = state.agentDir();
+    const rootPath = path.join(agentDir, "models.json");
+    const originalBytes = Buffer.from(
+      `${JSON.stringify(
+        {
+          providers: {
+            manual: {
+              ...native,
+              baseUrl: "https://manual.example/v1",
+              headers: { "X-Manual": "preserve" },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(rootPath, originalBytes);
+
+    const ioError = Object.assign(new Error("fixture models.json read failed"), { code: "EIO" });
+    const readError = new FsSafeError("read-failed", "models.json could not be read", {
+      cause: ioError,
+    });
+    const actualPrivateFileStore = privateFileStoreRuntime.privateFileStore;
+    let faultTriggered = false;
+    const storeSpy = vi
+      .spyOn(privateFileStoreRuntime, "privateFileStore")
+      .mockImplementation((rootDir) => {
+        const store = actualPrivateFileStore(rootDir);
+        if (rootDir !== agentDir) {
+          return store;
+        }
+        return {
+          ...store,
+          readTextIfExists: async (relativePath, options) => {
+            if (relativePath === "models.json" && !faultTriggered) {
+              faultTriggered = true;
+              throw readError;
+            }
+            return store.readTextIfExists(relativePath, options);
+          },
+        };
+      });
+    try {
+      const outcome = await ensureOpenClawModelsJson(
+        { models: { providers: { configured: native } } },
+        agentDir,
+        { env: state.env, pluginMetadataSnapshot: metadata },
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(faultTriggered).toBe(true);
+      expect(await fs.readFile(rootPath)).toEqual(originalBytes);
+      expect(outcome).toBe(readError);
+    } finally {
+      storeSpy.mockRestore();
+    }
   });
 
   it("keeps manual, implicit, and generated ids literal across replanning", async () => {

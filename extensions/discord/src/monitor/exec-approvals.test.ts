@@ -3,7 +3,11 @@ import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildExecApprovalCustomId, parseExecApprovalData } from "../approval-custom-id.js";
-import { parseCustomId, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
+import {
+  parseCustomId,
+  type BaseComponentInteraction,
+  type ComponentData,
+} from "../internal/discord.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
 
@@ -35,10 +39,10 @@ function buildConfig(
 }
 
 function createInteraction(
-  overrides?: Partial<ButtonInteraction>,
+  overrides?: Partial<BaseComponentInteraction>,
   approvalKind: Parameters<typeof buildExecApprovalCustomId>[1] = "exec",
   approvalId = "abc",
-): ButtonInteraction {
+): BaseComponentInteraction {
   return {
     userId: "123",
     reply: vi.fn(),
@@ -58,7 +62,7 @@ function createInteraction(
     editReply: vi.fn(),
     followUp: vi.fn(),
     ...overrides,
-  } as unknown as ButtonInteraction;
+  } as unknown as BaseComponentInteraction;
 }
 
 function createApprovalResolution(params?: {

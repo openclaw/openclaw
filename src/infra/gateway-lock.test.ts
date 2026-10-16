@@ -677,17 +677,29 @@ describe("gateway lock", () => {
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
   });
 
-  it("acquires when the predecessor releases during the startup wait", async ({ signal }) => {
+  it("acquires promptly when the predecessor releases during a prolonged startup wait", async ({
+    signal,
+  }) => {
     const { child, options } = await holdLifecycleCoordinator(signal);
+    const releasedAtMs = 5_001;
+    let elapsedMs = 0;
     const lock = await acquireGatewayLock({
       ...options,
-      sleep: async () => {
-        child.send("release");
-        await lifecycleChildren.get(child);
+      now: () => elapsedMs,
+      sleep: async (ms) => {
+        elapsedMs += ms;
+        if (elapsedMs >= releasedAtMs) {
+          child.send("release");
+          await lifecycleChildren.get(child);
+        }
       },
     });
-    expect(lock).not.toBeNull();
-    await lock?.release();
+    try {
+      expect(lock).not.toBeNull();
+      expect(elapsedMs - releasedAtMs).toBeLessThanOrEqual(250);
+    } finally {
+      await lock?.release();
+    }
   });
 
   it("bounds a live owner's wait at five minutes and names state ownership", async ({ signal }) => {

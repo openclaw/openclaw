@@ -6,13 +6,22 @@ import type { DatabasePortProvider } from "./port-descriptor.js";
 export const statePortProvider: DatabasePortProvider = {
   id: "state",
   minimumPostgresVersion: 16,
-  async loadDescriptor() {
+  async loadDescriptor(_owner, version) {
     const { loadStatePortDescriptor } = await import("./state-port-descriptor.js");
-    return loadStatePortDescriptor();
+    return loadStatePortDescriptor(version);
   },
   matchesSqlite: (tables) =>
     ["schema_meta", "config_machine_state", "audit_events"].every((table) => tables.has(table)),
-  resolveRoots: resolveStatePortRoots,
+  resolveRoots(context) {
+    return [
+      ...resolveStatePortRoots(context),
+      ...context.plugins.plugins.flatMap((plugin) =>
+        (plugin.backupResources ?? [])
+          .filter((resource) => resource.scope === "state" && resource.databaseFamily === "state")
+          .map((resource) => path.join(context.stateDir, resource.relativePath)),
+      ),
+    ];
+  },
 };
 
 /** Shared-state discovery is also used before plugin metadata can read the state store. */
@@ -32,6 +41,5 @@ export function resolveStatePortRoots(
       );
     }
   }
-  // Matrix account/token roots have their own R18 discovery and custody owner.
   return [...new Set(roots.map((root) => path.resolve(root, "state", "openclaw.sqlite")))];
 }

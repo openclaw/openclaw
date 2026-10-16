@@ -8,16 +8,12 @@ import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import { resolveUserPath } from "../utils.js";
 import * as nonInteractiveApiKeys from "./onboard-non-interactive/api-keys.js";
+import {
+  type ConfigSnapshotStub,
+  registerOnboardResetDiscoveryTests,
+} from "./onboard-reset-discovery.test-support.js";
 import { setupWizardCommand } from "./onboard.js";
 import { createTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
-
-type ConfigSnapshotStub = {
-  exists: boolean;
-  valid: boolean;
-  config: OpenClawConfig;
-  sourceConfig?: OpenClawConfig;
-  readError?: { code: string | null };
-};
 
 type ProviderAuthMethodNonInteractiveValidationContext = Parameters<
   NonNullable<ProviderAuthMethod["validateNonInteractive"]>
@@ -178,6 +174,7 @@ function mockLocalResetPreflight(params: {
 describe("setupWizardCommand", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     vi.clearAllMocks();
     mocks.hasInteractiveOnboardingTty.mockReturnValue(true);
     mocks.readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: false, config: {} });
@@ -784,14 +781,7 @@ describe("setupWizardCommand", () => {
     );
   });
 
-  it("validates an inferred custom auth choice before reset", async () => {
-    await expectAuthPreflightError({ customBaseUrl: "https://example.com/v1" }, () =>
-      [
-        'Auth choice "custom-api-key" requires a base URL and model ID.',
-        "Use --custom-base-url and --custom-model-id.",
-      ].join("\n"),
-    );
-  });
+  registerOnboardResetDiscoveryTests({ mocks, expectAuthPreflightError });
 
   it("rejects no-auth combined with a custom API key before reset", async () => {
     await expectAuthPreflightError(

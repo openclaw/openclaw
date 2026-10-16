@@ -59,14 +59,14 @@ async function replyOptions(
       enqueueSystemEvent(params.event.text, { sessionKey, contextKey: params.event.contextKey });
     }
     replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-    await runHeartbeatOnce({
+    const result = await runHeartbeatOnce({
       cfg,
       agentId,
       sessionKey,
       ...params.wake,
-      deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0, nowMs: () => 0 },
+      deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0 },
     });
-    expect(replySpy).toHaveBeenCalledOnce();
+    expect(replySpy, JSON.stringify(result)).toHaveBeenCalledOnce();
     const [ctx, options, passedConfig] = replySpy.mock.calls[0]!;
     expect(passedConfig).toBe(cfg);
     expect(options?.isHeartbeat).toBe(true);

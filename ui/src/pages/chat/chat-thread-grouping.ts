@@ -12,6 +12,7 @@ import {
   sessionParticipantIdentityKey,
   type SenderIdentity,
 } from "../../lib/chat/sender-label.ts";
+import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantMessageIsInterrupted,
@@ -193,6 +194,7 @@ export function groupMessages(
   items: ChatItem[],
   replyContext: ReplyAttributionContext = {},
   reasoning?: ChatReasoning | null,
+  showReasoning = false,
 ): Array<ChatItem | MessageGroup> {
   const visibleReasoning = new Set(
     reasoning?.items.flatMap(({ receipt }) =>
@@ -203,9 +205,10 @@ export function groupMessages(
     items,
     visibleReasoning,
     replyContext.items && rowsAfterHiddenTurns(items, replyContext.items),
+    showReasoning,
   );
   const context = replyContext.items
-    ? groupChatItems(replyContext.items, visibleReasoning)
+    ? groupChatItems(replyContext.items, visibleReasoning, undefined, showReasoning)
     : result;
   return stampReplyAttribution(result, context, replyContext);
 }
@@ -230,6 +233,7 @@ function groupChatItems(
   items: ChatItem[],
   visibleReasoning: ReadonlySet<string>,
   rowsAfterHiddenTurn?: ReadonlySet<string>,
+  showReasoning = false,
 ): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
@@ -260,13 +264,19 @@ function groupChatItems(
       Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim());
     // Saved reasoning stays visible until its live owner retires the receipts.
     // Legacy mixed rows retain their tool grouping and file-link attribution.
+    // Classify after content projection; prepared outcomes may outlive their blocks.
+    const visibleContent = resolveMessageVisibleContent(item.message, normalized);
+    const normalizedRole = normalizeRoleForGrouping(normalized.role);
+    const hasPreparedActivity =
+      normalizedRole === "assistant" &&
+      visibleContent === "none" &&
+      hasVisiblePreparedActivity(item.message);
     const role =
       hasAssistantText || hasVisibleReasoning
         ? "assistant"
-        : normalizeRoleForGrouping(normalized.role);
-    // Classify after content projection and keep the fact with its group; later
-    // presentation passes reuse it; replacing a message refreshes its facts.
-    const visibleContent = resolveMessageVisibleContent(item.message, normalized);
+        : hasPreparedActivity
+          ? "tool"
+          : normalizedRole;
     const source = {
       message: item.message,
       key: item.key,
@@ -274,9 +284,20 @@ function groupChatItems(
       ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
       hasVisibleContent:
         hasVisibleReasoning ||
+        (showReasoning && role === "assistant" && Boolean(extractThinkingCached(item.message))) ||
         visibleContent === "non-text" ||
         Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim()),
     };
+    // Projection can remove the last tool block, leaving only hidden thinking.
+    // Keep recorded interruptions/errors, which have their own visible outcome.
+    if (
+      role === "assistant" &&
+      !source.hasVisibleContent &&
+      !assistantMessageIsInterrupted(item.message) &&
+      record?.stopReason !== "error"
+    ) {
+      continue;
+    }
     const senderLabel =
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;

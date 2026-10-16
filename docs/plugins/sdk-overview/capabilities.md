@@ -167,6 +167,39 @@ cap. The provider must return one embedding per input chunk in the same order as
 `batch.chunks`; omit the flag when the provider expects file-local batches or
 cannot preserve input ordering across a larger source-wide job.
 
+## Versioned decision data
+
+The focused `openclaw/plugin-sdk/decisions` entrypoint provides additive V2 data
+types and pure validation/conversion helpers for adapters and saved decision fixtures.
+These helpers do not run a provider, collect evidence, choose a model, or issue host
+authority. The existing V1 `api.runtime.decisions.evaluate` and
+`registerDecisionProvider` contracts remain unchanged. V2 execution is a separate
+integration; importing V2 data types does not make a V2 runtime available.
+
+`DecisionContentV2` distinguishes text, JSON, image data, and stable-ID lists.
+Answers preserve explicit Boolean decisions separately from P(true), nullable
+choices, fractional scores, sort/tag results, per-question errors, and reported
+usage. Missing estimates and costs stay missing. Independent estimates are not
+normalized; categorical distributions retain their declared constraints. Data
+and validation results are never permission to execute an action.
+
+`validateDecisionBatchV2` and `validateDecisionResultV2` enforce the bounded data
+contract. Result validation optionally accepts the route's declared decision
+capabilities. Structural validation alone cannot prove that a provider supports
+an operation, an input modality, or a reasoning mode.
+
+The four explicit codecs are `decisionBatchV1ToV2`,
+`decisionBatchV2ToV1`, `decisionResultV1ToV2`, and
+`decisionResultV2ToV1`. Unsupported or unrepresentable data returns
+`undefined` instead of being coerced. Malformed batch input throws
+`DecisionContractError`. They preserve values rather than performing inference,
+thresholding, argmax, probability normalization, or accounting estimates.
+
+For example, an explicit V2 JSON string cannot become V1 text without losing its
+evidence kind. Rich answers, abstention, or accounting that V1 cannot represent
+also cannot be silently downgraded. Compatible conversions may share readonly
+input data; they do not promise an independent deep copy.
+
 ## Decision models (contract version 1)
 
 Start with [Decision models](/concepts/decision-models) for model choices,
@@ -225,6 +258,22 @@ The operator must enable and configure the provider plugin and select
 their feature's activation, evidence selection, and permission to send that
 evidence. Having credentials alone must not activate background collection or
 spending.
+
+The host applies the registered consumer plugin's `allowedCompletionModels`
+policy from `plugins.entries.<consumer-id>.llm` before provider dispatch. An empty
+or invalid-only list denies all models; `["*"]` permits any model at this policy
+layer. Pass the operation's owning `agentId` as before; omitting it selects the
+global decision role, even inside an agent operation. Unlike the agent-bound LLM
+runtime, Decision calls select their owner explicitly and do not require
+`allowAgentIdOverride`.
+
+A configured decision role is not a caller model override, so `allowModelOverride`
+and the override-only `allowedModels` do not gate it. The agent's conversational
+`modelPolicy.allow` is not an all-completion restriction. Current Gateway operator
+model policy remains independently enforced, including revocation and cancellation.
+Request fields cannot substitute consumer identity or another plugin's policy.
+Authorization failures throw rather than return an `unavailable` fallback outcome.
+The built-in decision tool uses its host-bound agent rather than a public override.
 
 Call from a live plugin tool, hook, or other owned operation, carrying its
 cancellation signal:
@@ -288,9 +337,11 @@ same prepared-secret path whether the caller is built-in or third-party.
 
 The host admits at most four requests, with no queue and a 30-second maximum.
 Consumers can request shorter deadlines and choose their own fallback policy.
-Three unhealthy responses open a ten-second circuit; recovery admits one trial.
-Retry-After is bounded to one minute. Auth errors latch until the prepared-secret
-or configuration generation changes. There are no host retries or health checks.
+Three transport, rate-limit, or invalid-response failures open a ten-second circuit;
+recovery admits one trial. Retry-After is bounded to one minute. Authentication
+failures return to the caller without opening the shared provider circuit: another
+agent or a later evaluation may use a different credential. There are no host retries
+or health checks.
 
 Caller cancellation and closed consumer authority reject: do not start fallback.
 Provider retirement returns unavailable while a live consumer can fall back.
@@ -310,8 +361,12 @@ previous value across reload. Refresh with `secrets.reload`; capability failure
 does not retain an old key.
 
 `plugins.inspect` reports configuration, credential readiness, current callability,
-last success, usage, latency, and bounded unavailable counts. Counts are
-instance-local diagnostics, not durable audit records or write authority.
+last success, usage, latency, and bounded unavailable counts. `credentialReady: true`
+means the provider's local `isReady()` confirmed prepared credentials. `false`
+means readiness is unconfirmed or unavailable, not necessarily that credentials
+are missing. Omitting `isReady()` leaves evaluation eligible; returning `false`
+blocks it. `callable` separately reports current admission, not guaranteed success.
+Counts are instance-local diagnostics, not durable audit records or write authority.
 
 For discovery, declare static `decisionModels` entries in the provider manifest
 with `provider`, `id`, and `name`. Each provider must be owned by

@@ -1,6 +1,8 @@
-import { createRenderEffect, onCleanup } from "solid-js";
+import { createEffect, onCleanup } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
 import "./resizable-divider.css";
 
 const DRAG_END_EVENTS = ["pointerup", "pointercancel", "blur"] as const;
@@ -28,6 +30,7 @@ defineSolidBridge<ResizableDividerProps>(
     let dragFrame = 0;
     let pendingPosition: number | null = null;
     let activePointerId: number | null = null;
+    let dragListeners: Array<() => void> = [];
 
     const handlePointerDown = (e: PointerEvent) => {
       if (e.button !== 0 || activePointerId !== null) {
@@ -46,11 +49,11 @@ defineSolidBridge<ResizableDividerProps>(
         host.setPointerCapture(e.pointerId);
       }
 
-      window.addEventListener("pointermove", handlePointerMove);
-      for (const type of DRAG_END_EVENTS) {
-        window.addEventListener(type, finishDragging);
-      }
-      host.addEventListener("lostpointercapture", finishDragging);
+      dragListeners = [
+        listen(window, "pointermove", { handleEvent: handlePointerMove }),
+        ...DRAG_END_EVENTS.map((type) => listen(window, type, finishDragging)),
+        listen(host, "lostpointercapture", finishDragging),
+      ];
 
       e.preventDefault();
       host.dispatchEvent(new CustomEvent("resize-start", { bubbles: true, composed: true }));
@@ -120,7 +123,8 @@ defineSolidBridge<ResizableDividerProps>(
       host.classList.remove("dragging");
       // Releasing capture can synchronously report capture loss. Remove the
       // listener first so one owner end cannot emit resize-end twice.
-      host.removeEventListener("lostpointercapture", finishDragging);
+      dragListeners.forEach((stop) => stop());
+      dragListeners = [];
       activePointerId = null;
       if (
         typeof host.releasePointerCapture === "function" &&
@@ -133,11 +137,6 @@ defineSolidBridge<ResizableDividerProps>(
         dragFrame = 0;
       }
       pendingPosition = null;
-
-      window.removeEventListener("pointermove", handlePointerMove);
-      for (const type of DRAG_END_EVENTS) {
-        window.removeEventListener(type, finishDragging);
-      }
     };
 
     function emitResize(nextRatio: number, type: "resize" | "resize-end" = "resize") {
@@ -198,9 +197,9 @@ defineSolidBridge<ResizableDividerProps>(
 
     host.setAttribute("role", "separator");
     host.setAttribute("tabindex", "0");
-    host.addEventListener("pointerdown", handlePointerDown);
-    host.addEventListener("keydown", handleKeyDown);
-    createRenderEffect(
+    nativeListener("pointerdown", handlePointerDown)(host);
+    nativeListener("keydown", handleKeyDown)(host);
+    createEffect(
       () => ({
         min: toAriaValue(props.minRatio),
         max: toAriaValue(props.maxRatio),
@@ -216,11 +215,7 @@ defineSolidBridge<ResizableDividerProps>(
         setAttribute("aria-orientation", value.orientation);
       },
     );
-    onCleanup(() => {
-      host.removeEventListener("pointerdown", handlePointerDown);
-      host.removeEventListener("keydown", handleKeyDown);
-      finishDragging(new Event("disconnect"));
-    });
+    onCleanup(() => finishDragging(new Event("disconnect")));
     return undefined;
   },
   {

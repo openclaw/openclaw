@@ -6,6 +6,7 @@ import {
   completeGatewayBootLifecycle,
   recordGatewayBootStart,
 } from "../infra/gateway-boot-lifecycle.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { checkGatewayHealth, collectGatewayHealthFindings } from "./doctor-gateway-health.js";
 
@@ -59,6 +60,41 @@ beforeEach(async () => {
 });
 
 describe("Doctor installation replacement diagnostics", () => {
+  it.each(["normal", "lint"])(
+    "reports unavailable history after cancellation without losing %s health results",
+    async (mode) => {
+      const scope = new AsyncWorkScope();
+      const pending = scope.run(() =>
+        mode === "lint"
+          ? collectGatewayHealthFindings({ cfg: {}, env: process.env })
+          : checkGatewayHealth({
+              cfg: {},
+              runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            }),
+      );
+      scope.beginClose(new Error("History inspection deadline"));
+      try {
+        const result = await pending;
+        const message =
+          "Previous installation replacement unavailable: History inspection deadline";
+        if (mode === "lint") {
+          expect(result).toContainEqual(expect.objectContaining({ severity: "warning", message }));
+        } else {
+          expect(result).toMatchObject({ healthOk: true });
+          expect(mocks.note).toHaveBeenCalledWith(
+            message,
+            "Previous Gateway installation replacement",
+          );
+        }
+        expect(mocks.callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({ method: "status" }),
+        );
+      } finally {
+        await scope.drain();
+      }
+    },
+  );
+
   it.each([true, false])(
     "reports historical replacement without changing current health (reachable: %s)",
     async (reachable) => {

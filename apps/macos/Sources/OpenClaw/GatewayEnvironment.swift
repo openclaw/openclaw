@@ -175,8 +175,6 @@ enum GatewayEnvironment {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning("gateway env check slow (\(elapsedMs, privacy: .public)ms)")
-            } else {
-                self.logger.debug("gateway env check ok (\(elapsedMs, privacy: .public)ms)")
             }
         }
         let expectedString = self.expectedGatewayVersionString()

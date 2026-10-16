@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -13,7 +14,11 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { migrateDaemonRuntimePins } from "./state-migrations.daemon-runtime-pins.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
+import {
+  initializeFreshDaemonRuntimePinMigration,
+  migrateDaemonRuntimePins,
+} from "./state-migrations.daemon-runtime-pins.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type DaemonRuntimePinRow = DaemonRuntimePinDatabase["daemon_runtime_pins"];
@@ -69,6 +74,51 @@ function seedSource(rows: DaemonRuntimePinRow[]): void {
 }
 
 describe("daemon runtime pin owner migration", () => {
+  async function holdGatewayOwnership() {
+    const owner = await acquireGatewayLock({ allowInTests: true, env, timeoutMs: 0 });
+    if (!owner) {
+      throw new Error("Expected Gateway state ownership");
+    }
+    return owner;
+  }
+
+  it("consumes the completed same-source receipt while the Gateway owns the profile", async () => {
+    seedSource([pin]);
+    await migrateDaemonRuntimePins(env);
+    const completed = receipt();
+    const owner = await holdGatewayOwnership();
+    try {
+      expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
+      expect(receipt()).toEqual(completed);
+      owner.assertCurrent();
+    } finally {
+      await owner.release();
+    }
+    expect(sourceRows()).toEqual([]);
+    expect(targetRows()).toEqual([pin]);
+  });
+
+  it("keeps pending migration blocked while the Gateway owns the profile", async () => {
+    seedSource([pin]);
+    const owner = await holdGatewayOwnership();
+    try {
+      const result = await migrateDaemonRuntimePins(env);
+      expect(result.changes).toEqual([]);
+      expect(result.warnings).toEqual([expect.stringContaining("Stop the Gateway")]);
+      expect(result.warnings[0]).toContain("same state/config");
+      expect(result.warnings[0]).toContain("openclaw doctor --fix");
+      expect(receipt()).toBeUndefined();
+      expect(targetRows()).toBeUndefined();
+      owner.assertCurrent();
+    } finally {
+      await owner.release();
+    }
+    expect(sourceRows()).toEqual([pin]);
+    expect((await migrateDaemonRuntimePins(env)).changes).toEqual([
+      "Moved 1 daemon runtime pin(s) to local service intent.",
+    ]);
+  });
+
   it("does not write shared state after migration completes", async () => {
     seedSource([]);
     expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
@@ -93,6 +143,20 @@ describe("daemon runtime pin owner migration", () => {
       phase: "complete",
       updated_at: expect.any(Number),
     });
+  });
+
+  it("completes pre-pin released schemas without changing shared state", () => {
+    const sourceState = resolveOpenClawStateSqlitePath(env);
+    const original = gunzipSync(
+      fs.readFileSync("test/fixtures/sqlite/openclaw-state-v2026.7.1-2.sqlite.gz"),
+    );
+    fs.mkdirSync(path.dirname(sourceState), { recursive: true });
+    fs.writeFileSync(sourceState, original);
+
+    initializeFreshDaemonRuntimePinMigration(env);
+
+    expect(receipt()).toMatchObject({ source_state: sourceState, phase: "complete" });
+    expect(fs.readFileSync(sourceState)).toEqual(original);
   });
 
   it("moves raw values and timestamps once, preserving malformed and stale intent", async () => {

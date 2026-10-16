@@ -131,6 +131,7 @@ it.each(["ltr", "rtl"])("uses the same %s edge for drag preview and reorder", (d
     Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
     element.dispatchEvent(event);
   }
+  flush();
   const placement = direction === "rtl" ? "after" : "before";
   expect(target.classList.contains(`is-drop-${placement}`)).toBe(true);
   const drop = new MouseEvent("drop", { clientX: 110, bubbles: true, cancelable: true });
@@ -138,6 +139,8 @@ it.each(["ltr", "rtl"])("uses the same %s edge for drag preview and reorder", (d
   target.dispatchEvent(drop);
   expect(onReorder).toHaveBeenCalledExactlyOnceWith("first", "second", placement);
   expect(view.group()?.hasAttribute("data-dragged-panel-tab")).toBe(false);
+  flush();
+  expect(target.classList.contains(`is-drop-${placement}`)).toBe(false);
 });
 
 it("releases measurement observers on disposal", () => {

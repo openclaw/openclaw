@@ -69,9 +69,9 @@ function PictureInPictureButton(props: {
 }) {
   const label = () =>
     t(
-      props.controller.active
+      props.controller.feedback().active
         ? "desktop.exitPictureInPicture"
-        : props.controller.supported
+        : props.controller.supported()
           ? "desktop.enterPictureInPicture"
           : "desktop.pictureInPictureUnavailable",
     );
@@ -84,9 +84,11 @@ function PictureInPictureButton(props: {
       type="button"
       title={label()}
       aria-label={label()}
-      aria-pressed={props.controller.active ? "true" : "false"}
-      aria-busy={props.controller.pending ? "true" : "false"}
-      disabled={!props.controller.supported || !props.connected || props.controller.pending}
+      aria-pressed={props.controller.feedback().active ? "true" : "false"}
+      aria-busy={props.controller.feedback().pending ? "true" : "false"}
+      disabled={
+        !props.controller.supported() || !props.connected || props.controller.feedback().pending
+      }
       onClick={() => void props.controller.toggle()}
     >
       <svg
@@ -120,14 +122,14 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
         <>
           <DesktopNotice
             errorText={
-              props.view.pictureInPicture.errorText ??
+              props.view.pictureInPicture.feedback().errorText ??
               props.view.fullscreenMode.errorText() ??
               props.view.content.errorText
             }
             noticeText={props.view.content.noticeText}
             availability={props.view.content.availability}
           />
-          <DesktopAudioNotice state={props.view.audio.state} />
+          <DesktopAudioNotice state={props.view.audio.state()} />
           {props.view.startup && (
             <DesktopNotice
               errorText={null}
@@ -165,7 +167,7 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
   );
   const audioControl = () => (
     <DesktopAudioControl
-      state={props.view.audio.state}
+      state={props.view.audio.state()}
       connected={props.view.content.state === "connected"}
       documentMode={props.view.documentMode}
       onToggle={() => props.view.audio.toggle()}
@@ -178,13 +180,10 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
           {...content}
           controlling={props.view.controlling}
           sizing={props.view.sizing}
-          keyboardInputValue={props.view.mobileKeyboard.value}
+          keyboard={props.view.mobileKeyboard}
           pictureInPictureControl={pictureInPictureControl()}
           audioControl={audioControl()}
           onControlToggle={props.view.onControlToggle}
-          onKeyboardFocus={(event) => props.view.mobileKeyboard.focus(event)}
-          onKeyboardEvent={(event) => props.view.mobileKeyboard.handleKeyboardEvent(event)}
-          onKeyboardInput={(event) => props.view.mobileKeyboard.handleInput(event)}
           onClose={props.view.onDocumentClose}
         />
       ) : (
