@@ -1,0 +1,34 @@
+{
+  "id": "cloud-run-sandbox",
+  "name": "Cloud Run Sandbox (experimental)",
+  "description": "Isolated per-command Google Cloud Run sandboxes; not a Gateway hosting or persistence backend.",
+  "categories": [
+    "security"
+  ],
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "rootfs"
+    ],
+    "properties": {
+      "rootfs": {
+        "type": "string",
+        "minLength": 1
+      },
+      "allowEgress": {
+        "type": "boolean",
+        "default": false
+      },
+      "guestLifetimeSeconds": {
+        "type": "integer",
+        "minimum": 30,
+        "maximum": 3600,
+        "default": 600
+      }
+    }
+  }
+}
