@@ -1,13 +1,9 @@
 import fs from "node:fs/promises";
 import type { Worker } from "node:worker_threads";
-import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import {
-  persistSessionTranscriptTurn,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import {
   loadCostUsageSummary,
   loadCostUsageSummaryFromCache,
@@ -17,7 +13,7 @@ import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
-import type { GatewayRequestContext } from "./types.js";
+import { invokeUsage, writeUsage } from "./usage.test-support.js";
 
 const observedWorkers = vi.hoisted(() => new Set<Worker>());
 
@@ -102,30 +98,6 @@ if (parentPort) {
       .map((line) => JSON.parse(line) as DecodeObservation);
 }
 
-function appendSessionUsage(
-  target: Parameters<typeof persistSessionTranscriptTurn>[0],
-  cwd: string,
-) {
-  const timestamp = Date.parse("2026-09-18T12:00:00Z");
-  return persistSessionTranscriptTurn(target, {
-    cwd,
-    updateMode: "none",
-    messages: [
-      {
-        message: {
-          role: "assistant",
-          content: "Synthetic usage",
-          timestamp,
-          provider: "synthetic",
-          model: "synthetic",
-          usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
-        },
-        now: timestamp,
-      },
-    ],
-  });
-}
-
 it("refreshes registered usage.cost without decoding unchanged date partitions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const config = {};
@@ -141,26 +113,21 @@ it("refreshes registered usage.cost without decoding unchanged date partitions",
       }));
       for (const session of sessions) {
         replaceSessionEntrySync(session, { sessionId: session.sessionId, updatedAt: timestamp });
-        await appendSessionUsage(session, state.workspaceDir);
+        await writeUsage(session, state.workspaceDir, 10, timestamp, 1, 3);
       }
       const params = { config, agentId: "main", startMs: timestamp - 1, endMs: timestamp + 1 };
       expect((await loadCostUsageSummary(params)).totals.totalTokens).toBe(40);
-      await appendSessionUsage(sessions[0]!, state.workspaceDir);
+      await writeUsage(sessions[0]!, state.workspaceDir, 10, timestamp, 1, 3);
       const work = new AsyncWorkScope();
       const respond = vi.fn();
       try {
         await work.track(() =>
-          expectDefined(
-            coreGatewayHandlers["usage.cost"],
-            "registered usage.cost",
-          )({
-            req: { type: "req", id: "checkpoint-refresh", method: "usage.cost" },
-            params: { agentId: "main", startDate: "2026-09-18", endDate: "2026-09-18" },
-            respond,
-            client: null,
-            isWebchatConnect: () => false,
-            context: { getRuntimeConfig: () => config } as GatewayRequestContext,
-          }),
+          invokeUsage(
+            "usage.cost",
+            { agentId: "main", startDate: "2026-09-18", endDate: "2026-09-18" },
+            config,
+            { respond, handlers: coreGatewayHandlers, context: { getRuntimeConfig: () => config } },
+          ),
         );
         await AsyncWorkScope.runWhenAllIdle(
           () => [work],
@@ -175,8 +142,10 @@ it("refreshes registered usage.cost without decoding unchanged date partitions",
         undefined,
       );
       const fresh = await loadCostUsageSummaryFromCache({ ...params, requestRefresh: false });
-      expect(fresh.cacheStatus).toMatchObject({ status: "fresh" });
-      expect(fresh.totals.totalTokens).toBe(50);
+      expect(fresh).toMatchObject({
+        cacheStatus: { status: "fresh" },
+        totals: { totalTokens: 50 },
+      });
       const records = await observations();
       const refreshes = records.filter((record) => record.operation === "refresh");
       expect(refreshes).toHaveLength(2);
@@ -187,15 +156,14 @@ it("refreshes registered usage.cost without decoding unchanged date partitions",
         parsedCheckpoints: 1,
         parsedBucketBodies: 1,
       });
-      expect(
-        records.some(
-          (record) =>
-            record.operation === "summary" &&
-            record.parsedRollups === 4 &&
-            record.parsedCheckpoints === 4 &&
-            record.parsedBucketBodies === 0,
-        ),
-      ).toBe(true);
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          operation: "summary",
+          parsedRollups: 4,
+          parsedCheckpoints: 4,
+          parsedBucketBodies: 0,
+        }),
+      );
     });
   });
 });

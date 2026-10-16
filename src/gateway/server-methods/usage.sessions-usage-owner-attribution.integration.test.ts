@@ -20,12 +20,10 @@ import {
   projectionLane,
   targetDiscoveryLane,
 } from "../../config/sessions/session-transcript-worker-resources.js";
-import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
 import { prepareCronSession } from "../../cron/isolated-agent/session.js";
 import { refreshCostUsageCacheForAgent } from "../../infra/session-cost-usage-aggregation.js";
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
-import type { AssistantMessage } from "../../llm/types.js";
 import { buildUsageOverview } from "../../shared/usage-overview.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -38,10 +36,15 @@ import {
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createResidentSessionRowReader } from "../session-row-projection.test-support.js";
-import type { RespondFn } from "./types.js";
 import { loadUsageSessionSummaries } from "./usage-session-loading.js";
 import * as usageSessionSelection from "./usage-session-selection.js";
-import { usageHandlers } from "./usage.js";
+import {
+  contextReport,
+  invokeUsage,
+  usageMessage,
+  usageReply,
+  writeUsage,
+} from "./usage.test-support.js";
 
 let sessionRows: ReturnType<typeof createResidentSessionRowReader>;
 
@@ -50,39 +53,6 @@ beforeEach(() => {
   sessionRows = reader;
   onTestFinished(() => reader.dispose());
 });
-
-function usageMessage(tokens: number, timestamp: number): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: "Recorded usage" }],
-    api: "openai-responses",
-    provider: "fixture",
-    model: "usage-model",
-    stopReason: "stop",
-    timestamp,
-    usage: {
-      input: tokens,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: tokens,
-      cost: { input: 0.01, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
-    },
-  };
-}
-
-function writeUsage(
-  state: OpenClawTestState,
-  target: Parameters<typeof persistSessionTranscriptTurn>[0],
-  tokens: number,
-  timestamp: number,
-) {
-  return persistSessionTranscriptTurn(target, {
-    cwd: state.workspaceDir,
-    updateMode: "none",
-    messages: [{ message: usageMessage(tokens, timestamp), now: timestamp }],
-  });
-}
 
 function sessionScope(state: OpenClawTestState, agentId: string, sessionKey: string) {
   return { agentId, sessionKey, storePath: path.join(state.sessionsDir(agentId), "sessions.json") };
@@ -97,22 +67,15 @@ async function warmUsage(agentIds: string[]) {
 }
 
 async function requestUsage(params: Record<string, unknown>, method = "sessions.usage") {
-  const respond = vi.fn<RespondFn>();
-  const handler = expectDefined(usageHandlers[method], "usage handler");
   const projection = await sessionRows.ready();
-  await handler({
-    req: { type: "req", id: "usage", method },
-    params,
-    respond,
-    client: null,
-    isWebchatConnect: () => false,
-    context: bindSessionRowProjection(
-      createDirectChatContext({ getRuntimeConfig }),
-      () => projection,
-    ),
-  });
-  expect(respond).toHaveBeenCalledOnce();
-  return expectDefined(respond.mock.calls[0], "usage response");
+  return usageReply(
+    await invokeUsage(method, params, getRuntimeConfig(), {
+      context: bindSessionRowProjection(
+        createDirectChatContext({ getRuntimeConfig }),
+        () => projection,
+      ),
+    }),
+  );
 }
 
 async function readUsage(params: Record<string, unknown>) {
@@ -136,21 +99,6 @@ async function withUsageState(run: (state: OpenClawTestState) => Promise<void>) 
   });
 }
 
-function contextReport(generatedAt: number, ordinal = 0): SessionSystemPromptReport {
-  return {
-    source: "run",
-    generatedAt,
-    systemPrompt: {
-      chars: 100 + ordinal,
-      projectContextChars: ordinal,
-      nonProjectContextChars: 100,
-    },
-    injectedWorkspaceFiles: [],
-    skills: { promptChars: 65_536, entries: [] },
-    tools: { listChars: ordinal, schemaChars: 0, entries: [] },
-  };
-}
-
 it("preserves global session addition order across agents before overview pagination", async () => {
   await withUsageState(async (state) => {
     const config = getRuntimeConfig();
@@ -166,17 +114,7 @@ it("preserves global session addition order across agents before overview pagina
           type: "message",
           id: sessionId,
           parentId: null,
-          message: {
-            role: "assistant",
-            timestamp: startMs,
-            provider: "fixture",
-            model: "same-model",
-            usage: {
-              input: 1,
-              totalTokens: 1,
-              cost: { total: cost, input: cost, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
-          },
+          message: usageMessage(1, startMs, cost),
         })}\n`,
       );
       sessions.push({
@@ -248,7 +186,7 @@ it("keeps same-key overview context reports with their selected agent", async ()
         updatedAt: timestamp,
         systemPromptReport: reports[index],
       });
-      await writeUsage(state, scope, index + 1, timestamp);
+      await writeUsage(scope, state.workspaceDir, index + 1, timestamp);
       await loadSessionCostSummary({ agentId, sessionId, sessionTarget: scope, config });
       candidates.push(
         ...(await usageSessionSelection.selectUsageSessions({
@@ -321,7 +259,7 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
       })();
       const sessionId = cronSession.sessionEntry.sessionId;
       sessionIds.push(sessionId);
-      await writeUsage(state, { ...scope, sessionId }, tokens, timestamp);
+      await writeUsage({ ...scope, sessionId }, state.workspaceDir, tokens, timestamp);
     }
     expect(loadSessionEntryReadOnly(scope)).toMatchObject({
       usageFamilyKey: sessionKey,
@@ -376,7 +314,7 @@ it("uses committed metadata for selected usage and families with an empty curren
       updatedAt: timestamp,
       label: "Before rename",
     });
-    await writeUsage(state, { ...scope, sessionId: firstId }, 17, timestamp);
+    await writeUsage({ ...scope, sessionId: firstId }, state.workspaceDir, 17, timestamp);
     await loadSessionCostSummary({
       config,
       agentId: scope.agentId,
@@ -459,7 +397,7 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
         skillsSnapshot: { prompt: fixture.promptMarker + "x".repeat(65_536), skills: [] },
         systemPromptReport: fixture.report,
       });
-      await writeUsage(state, scope, fixture.tokens, fixture.updatedAt);
+      await writeUsage(scope, state.workspaceDir, fixture.tokens, fixture.updatedAt);
       fixture.updatedAt = expectDefined(
         loadSessionEntryReadOnly({ ...scope, projection: "list" }),
         "persisted usage fixture",
@@ -727,7 +665,7 @@ it.each(["direct owner", "compressed history", "current JSONL"])(
           await writeArtifact(tokens);
           continue;
         }
-        await writeUsage(state, { ...scope, sessionId }, tokens, timestamp);
+        await writeUsage({ ...scope, sessionId }, state.workspaceDir, tokens, timestamp);
       }
       const current = await upsertSessionEntryCore(mainScope, {
         sessionId: currentId,

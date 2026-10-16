@@ -11,6 +11,7 @@ import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStoreAsync: vi.fn(),
@@ -46,12 +47,22 @@ import {
   readProviderUsageStaleWhileRevalidate,
 } from "./models-auth-status-usage-cache.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
-import { usageHandlers } from "./usage.js";
+import { invokeUsage, usageClient, usageReply } from "./usage.test-support.js";
 
 const config: OpenClawConfig = { agents: { entries: { main: {} } } };
-const refreshingCapableClient = { connect: { caps: ["usage-refreshing"] } };
+const statusClient = usageClient();
+const refreshingCapableClient = {
+  ...statusClient,
+  connect: { ...statusClient.connect, caps: ["usage-refreshing"] },
+};
 const providerDescriptor = { provider: "openai", displayName: "OpenAI" };
 const visibleProvider = { providers: [{ provider: "openai" }] };
+const oauthProfile = {
+  type: "oauth" as const,
+  provider: "openai",
+  refresh: "refresh-one",
+  expires: 1_000_000,
+};
 
 function usageSummary(updatedAt: number, usedPercent: number): UsageSummary {
   return {
@@ -60,43 +71,36 @@ function usageSummary(updatedAt: number, usedPercent: number): UsageSummary {
   };
 }
 
-function createStore(access = "access-one"): AuthProfileStore {
+function createStore(
+  profiles: Record<string, string> = { default: "access-one" },
+): AuthProfileStore {
   return {
     version: 1,
-    profiles: {
-      "openai:default": {
-        type: "oauth",
-        provider: "openai",
-        access,
-        refresh: "refresh-one",
-        expires: 1_000_000,
-      },
-    },
+    profiles: Object.fromEntries(
+      Object.entries(profiles).map(([id, access]) => [`openai:${id}`, { ...oauthProfile, access }]),
+    ),
   };
 }
 
-async function runUsageStatus(params: { runtimeConfig?: OpenClawConfig; client?: unknown } = {}) {
-  const respond = vi.fn();
-  const handler = expectDefined(usageHandlers["usage.status"], "usage.status handler");
-  await handler({
-    respond,
-    params: {},
-    context: { getRuntimeConfig: () => params.runtimeConfig ?? config },
-    client: params.client ?? null,
-  } as unknown as Parameters<(typeof usageHandlers)["usage.status"]>[0]);
-  expect(respond).toHaveBeenCalledTimes(1);
-  expect(respond.mock.calls[0]?.[0]).toBe(true);
-  return expectDefined(respond.mock.calls[0]?.[1], "usage.status result");
+async function runUsageStatus(client: GatewayClient | null = null) {
+  const [ok, payload] = usageReply(
+    await invokeUsage("usage.status", {}, config, {
+      client,
+      context: { getRuntimeConfig: () => config },
+    }),
+  );
+  expect(ok).toBe(true);
+  return expectDefined(payload, "usage.status result");
 }
 
 function runCapableUsageStatus() {
-  return runUsageStatus({ client: refreshingCapableClient });
+  return runUsageStatus(refreshingCapableClient);
 }
 
-async function settledStatus(client: unknown = refreshingCapableClient) {
+async function settledStatus(client: GatewayClient | null = refreshingCapableClient) {
   const scope = new AsyncWorkScope();
   try {
-    return await scope.track(() => runUsageStatus({ client }));
+    return await scope.track(() => runUsageStatus(client));
   } finally {
     await scope.drain();
   }
@@ -167,43 +171,35 @@ describe("usage.status provider usage cache", () => {
     }
   });
 
-  it("keeps serving usage while run bookkeeping refreshes the runtime snapshot", async () => {
-    await expect(settledStatus()).resolves.toMatchObject({ refreshing: true });
-    await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
-    publishStore({ ...store, usageStats: { "openai:default": { lastUsed: now } } });
-    now += 1;
-    await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
-    await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
-  });
-
-  it("refreshes when usage bookkeeping changes the selected profile", async () => {
-    publishStore({
-      version: 1,
-      profiles: Object.fromEntries(
-        ["first", "second"].map((id) => [
-          `openai:${id}`,
-          expectDefined(
-            createStore(`access-${id}`).profiles["openai:default"],
-            `${id} auth profile`,
-          ),
-        ]),
-      ),
-      usageStats: { "openai:first": { lastUsed: 100 }, "openai:second": { lastUsed: 200 } },
-    });
-    await expect(settledStatus()).resolves.toMatchObject({ refreshing: true });
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
-    publishStore({
-      ...store,
-      usageStats: { "openai:first": { lastUsed: 300 }, "openai:second": { lastUsed: 200 } },
-    });
-    now += 1;
-    await expect(settledStatus()).resolves.toMatchObject({ refreshing: true });
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
-    await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
-    await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
-  });
+  it.each([false, true])(
+    "refreshes bookkeeping only when profile selection changes: %s",
+    async (selectionChanges) => {
+      publishStore({
+        ...createStore({ first: "access-first", second: "access-second" }),
+        usageStats: { "openai:first": { lastUsed: 100 }, "openai:second": { lastUsed: 200 } },
+      });
+      await expect(settledStatus()).resolves.toMatchObject({ refreshing: true });
+      if (!selectionChanges) {
+        await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
+      }
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
+      publishStore({
+        ...store,
+        usageStats: {
+          "openai:first": { lastUsed: selectionChanges ? 300 : 100 },
+          "openai:second": { lastUsed: selectionChanges ? 200 : 300 },
+        },
+      });
+      now += 1;
+      if (selectionChanges) {
+        await expect(settledStatus()).resolves.toMatchObject({ refreshing: true });
+        expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+      }
+      await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
+      await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(selectionChanges ? 2 : 1);
+    },
+  );
 
   it("keeps a failed refresh incomplete for capable clients and recovers", async () => {
     mocks.loadProviderUsageSummary.mockRejectedValueOnce(new Error("provider stack down"));
@@ -237,7 +233,7 @@ describe("usage.status provider usage cache", () => {
     });
     expect(usage.get("openai")?.windows[0]?.usedPercent).toBe(10);
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
-    publishStore(createStore("access-two"));
+    publishStore(createStore({ default: "access-two" }));
     await expect(runUsageStatus()).resolves.toMatchObject({
       providers: [{ windows: [{ usedPercent: 20 }] }],
     });

@@ -47,7 +47,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
         : [],
     ),
     loadSessionCostSummariesFromCache: vi.fn(async ({ sessions }: { sessions: unknown[] }) =>
-      summaryBatch(sessions.map(() => createEmptyCostUsageTotals())),
+      tokenBatch(sessions.length),
     ),
     loadSessionUsageTimeSeries: vi.fn(async () => ({ sessionId: "s-opus", points: [] })),
     loadSessionLogs: vi.fn(async () => []),
@@ -61,9 +61,13 @@ import {
   resolveUsageSessionSource,
 } from "../../infra/session-cost-usage.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
-import { usageHandlers } from "./usage.js";
 import {
+  contextReport,
   createUsageSessionStoreFixture,
+  freshUsageBatch,
+  invokeUsage,
+  usageReply,
+  usageTotals,
   type UsageSessionStoreFixture,
 } from "./usage.test-support.js";
 
@@ -77,16 +81,10 @@ let TEST_RUNTIME_CONFIG: OpenClawConfig = {
 };
 let projectionFixture: UsageSessionStoreFixture = { store: {} };
 const BASE_USAGE_RANGE = { startDate: "2026-02-01", endDate: "2026-02-02", limit: 10 };
-function summaryBatch(summaries: Array<SessionCostSummary | null>) {
-  return {
-    summaries,
-    cacheStatus: {
-      status: "fresh" as const,
-      cachedFiles: summaries.length,
-      pendingFiles: 0,
-      staleFiles: 0,
-    },
-  };
+function tokenBatch(count: number, totalTokens = 0) {
+  return freshUsageBatch(
+    Array.from({ length: count }, () => ({ ...createEmptyCostUsageTotals(), totalTokens })),
+  );
 }
 function discoveredRows(prefix: string, count: number, newestFirst = false) {
   return Array.from({ length: count }, (_, index) => ({
@@ -95,40 +93,26 @@ function discoveredRows(prefix: string, count: number, newestFirst = false) {
     mtime: newestFirst ? count - index : index + 1,
   }));
 }
-async function runSessionsUsageMethod(
+function runSessionsUsageMethod(
   method: "sessions.usage" | "sessions.usage.timeseries" | "sessions.usage.logs",
   params: Record<string, unknown>,
-  options: {
-    signal?: AbortSignal;
-    respond?: ReturnType<typeof vi.fn>;
-    context?: { getRuntimeConfig: () => OpenClawConfig; sessionRowProjectionOwner?: object };
-  } = {},
+  options: Parameters<typeof invokeUsage>[3] = {},
 ) {
-  const respond = options.respond ?? vi.fn();
-  const handler = expectDefined(usageHandlers[method], "usage handler");
-  const projection = options.context
-    ? undefined
-    : createSessionRowProjectionFixture({ cfg: TEST_RUNTIME_CONFIG, ...projectionFixture });
-  try {
-    await handler({
-      respond,
-      params,
-      signal: options.signal,
-      context:
-        options.context ??
-        bindSessionRowProjection({ getRuntimeConfig: () => TEST_RUNTIME_CONFIG }, () => projection),
-    } as unknown as Parameters<typeof handler>[0]);
-  } finally {
-    projection?.dispose();
-  }
-  return respond;
+  return invokeUsage(method, params, TEST_RUNTIME_CONFIG, {
+    rows: projectionFixture,
+    getRuntimeConfig: () => TEST_RUNTIME_CONFIG,
+    ...options,
+  });
 }
 const runSessionsUsage = (params: Record<string, unknown>) =>
   runSessionsUsageMethod("sessions.usage", params);
 function readResult(respond: ReturnType<typeof vi.fn>): SessionsUsageResult {
-  expect(respond).toHaveBeenCalledOnce();
-  expect(respond.mock.calls[0]?.[0]).toBe(true);
-  return respond.mock.calls[0]?.[1] as SessionsUsageResult;
+  const [ok, payload] = usageReply(respond);
+  expect(ok).toBe(true);
+  return payload as SessionsUsageResult;
+}
+async function readSessionsUsage(params: Record<string, unknown>) {
+  return readResult(await runSessionsUsage({ ...BASE_USAGE_RANGE, ...params }));
 }
 
 describe("sessions.usage", () => {
@@ -146,7 +130,7 @@ describe("sessions.usage", () => {
       vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async () => {
         started.resolve();
         await released.promise;
-        return summaryBatch([{ ...createEmptyCostUsageTotals(), totalTokens: 123 }]);
+        return tokenBatch(1, 123);
       });
       const pending = runSessionsUsage(BASE_USAGE_RANGE);
       await started.promise;
@@ -175,7 +159,7 @@ describe("sessions.usage", () => {
         const signal = getAsyncWorkSignal();
         started.resolve(signal);
         await release.promise;
-        return summaryBatch([createEmptyCostUsageTotals()]);
+        return tokenBatch(1);
       });
       const pending = runSessionsUsageMethod("sessions.usage", BASE_USAGE_RANGE, {
         signal: controller.signal,
@@ -218,94 +202,82 @@ describe("sessions.usage", () => {
     },
   );
 
-  it("returns completed batches and a range hint when the next batch exceeds its budget", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const started = createDeferred();
-    const release = createDeferred();
-    const discovered = vi.mocked(discoverAllSessions);
-    const originalDiscovery = discovered.getMockImplementation()!;
-    const load = vi.mocked(loadSessionCostSummariesFromCache);
-    const originalLoad = load.getMockImplementation()!;
-    discovered.mockResolvedValue(discoveredRows("budget", 257, true));
-    load.mockImplementation(async ({ sessions }) => {
-      if (sessions.some(({ sessionId }) => sessionId === "budget-256")) {
-        const signal = getAsyncWorkSignal()!;
-        const abort = () => release.resolve();
-        signal.addEventListener("abort", abort, { once: true });
-        started.resolve();
-        try {
-          await release.promise;
-          signal.throwIfAborted();
-        } finally {
-          signal.removeEventListener("abort", abort);
-        }
+  it.each(["time", "report allowance"])(
+    "keeps completed batches after exhausting %s",
+    async (budget) => {
+      const timed = budget === "time";
+      if (timed) {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       }
-      return summaryBatch(
-        sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 })),
-      );
-    });
-    const pending = runSessionsUsage({ ...BASE_USAGE_RANGE, projection: "overview" });
-    try {
-      await started.promise;
-      await vi.advanceTimersByTimeAsync(15_000);
-      const result = readResult(await pending);
-      expect(result.totals.totalTokens).toBe(256 * 7);
-      expect(result.sessions).toHaveLength(50);
-      expect(result.cacheStatus).toMatchObject({
-        status: "partial",
-        cachedFiles: 256,
-        pendingFiles: 1,
+      const started = createDeferred();
+      const release = createDeferred();
+      const discovered = vi.mocked(discoverAllSessions);
+      const originalDiscovery = discovered.getMockImplementation()!;
+      const load = vi.mocked(loadSessionCostSummariesFromCache);
+      const originalLoad = load.getMockImplementation()!;
+      discovered.mockResolvedValue(discoveredRows("budget", 257, true));
+      load.mockImplementation(async ({ sessions, reportBudgetBytes }) => {
+        if (timed && sessions.some(({ sessionId }) => sessionId === "budget-256")) {
+          const signal = getAsyncWorkSignal()!;
+          const abort = () => release.resolve();
+          signal.addEventListener("abort", abort, { once: true });
+          started.resolve();
+          try {
+            await release.promise;
+            signal.throwIfAborted();
+          } finally {
+            signal.removeEventListener("abort", abort);
+          }
+        }
+        if (!timed) {
+          return {
+            summaries: sessions.map(() =>
+              reportBudgetBytes === 0 ? null : { ...createEmptyCostUsageTotals(), totalTokens: 7 },
+            ),
+            remainingReportBytes: 0,
+            cacheStatus: {
+              status: reportBudgetBytes === 0 ? "partial" : "fresh",
+              cachedFiles: reportBudgetBytes === 0 ? 0 : sessions.length,
+              pendingFiles: reportBudgetBytes === 0 ? sessions.length : 0,
+              staleFiles: 0,
+            },
+          };
+        }
+        return tokenBatch(sessions.length, 7);
       });
-      expect(result.partial?.reason).toBe("time-budget");
-      expect(result.overview?.queryWarnings).toContain(result.partial?.message);
-      // A timed-out snapshot must not become a complete cached empty/subtotal result.
-      load.mockImplementation(originalLoad);
-      const retried = readResult(
-        await runSessionsUsage({ ...BASE_USAGE_RANGE, projection: "overview" }),
-      );
-      expect(retried.partial).toBeUndefined();
-      expect(retried.cacheStatus?.status).toBe("fresh");
-    } finally {
-      release.resolve();
-      await pending;
-      discovered.mockImplementation(originalDiscovery);
-      load.mockImplementation(originalLoad);
-      vi.useRealTimers();
-    }
-  });
-
-  it("carries the remaining report allowance into later batches", async () => {
-    const discovered = vi.mocked(discoverAllSessions);
-    const originalDiscovery = discovered.getMockImplementation()!;
-    const load = vi.mocked(loadSessionCostSummariesFromCache);
-    const originalLoad = load.getMockImplementation()!;
-    discovered.mockResolvedValue(discoveredRows("memory", 257, true));
-    load.mockImplementation(async ({ sessions, reportBudgetBytes }) => ({
-      summaries: sessions.map(() =>
-        reportBudgetBytes === 0 ? null : { ...createEmptyCostUsageTotals(), totalTokens: 7 },
-      ),
-      remainingReportBytes: 0,
-      cacheStatus: {
-        status: reportBudgetBytes === 0 ? "partial" : "fresh",
-        cachedFiles: reportBudgetBytes === 0 ? 0 : sessions.length,
-        pendingFiles: reportBudgetBytes === 0 ? sessions.length : 0,
-        staleFiles: 0,
-      },
-    }));
-    try {
-      const result = readResult(await runSessionsUsage(BASE_USAGE_RANGE));
-      expect(load.mock.calls[1]?.[0].reportBudgetBytes).toBe(0);
-      expect(result.totals.totalTokens).toBe(256 * 7);
-      expect(result.cacheStatus).toMatchObject({
-        status: "partial",
-        cachedFiles: 256,
-        pendingFiles: 1,
-      });
-    } finally {
-      discovered.mockImplementation(originalDiscovery);
-      load.mockImplementation(originalLoad);
-    }
-  });
+      const params = { ...BASE_USAGE_RANGE, ...(timed ? { projection: "overview" } : {}) };
+      const pending = runSessionsUsage(params);
+      try {
+        if (timed) {
+          await started.promise;
+          await vi.advanceTimersByTimeAsync(15_000);
+        }
+        const result = readResult(await pending);
+        expect(result).toMatchObject({
+          totals: { totalTokens: 256 * 7 },
+          cacheStatus: { status: "partial", cachedFiles: 256, pendingFiles: 1 },
+        });
+        if (timed) {
+          expect(result.sessions).toHaveLength(50);
+          expect(result.partial?.reason).toBe("time-budget");
+          expect(result.overview?.queryWarnings).toContain(result.partial?.message);
+          // A timed-out subtotal must not be cached as a complete result.
+          load.mockImplementation(originalLoad);
+          const retried = await readSessionsUsage(params);
+          expect(retried.partial).toBeUndefined();
+          expect(retried.cacheStatus?.status).toBe("fresh");
+        } else {
+          expect(load.mock.calls[1]?.[0].reportBudgetBytes).toBe(0);
+        }
+      } finally {
+        release.resolve();
+        await pending;
+        discovered.mockImplementation(originalDiscovery);
+        load.mockImplementation(originalLoad);
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("keeps an identical cold usage request alive when the first client disconnects", async ({
     signal: testSignal,
@@ -329,9 +301,7 @@ describe("sessions.usage", () => {
       try {
         await Promise.race([release.promise, aborted.promise]);
         signal.throwIfAborted();
-        return summaryBatch(
-          sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 123 })),
-        );
+        return tokenBatch(sessions.length, 123);
       } finally {
         signal.removeEventListener("abort", abort);
       }
@@ -388,7 +358,7 @@ describe("sessions.usage", () => {
       .mockResolvedValueOnce(discovered)
       .mockResolvedValueOnce(discovered);
     vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async (params) =>
-      summaryBatch(
+      freshUsageBatch(
         params.sessions.map(({ sessionId }) => ({
           ...createEmptyCostUsageTotals(),
           sessionId,
@@ -407,16 +377,13 @@ describe("sessions.usage", () => {
         })),
       ),
     );
-    const overview = readResult(
-      await runSessionsUsage({
-        ...BASE_USAGE_RANGE,
-        projection: "overview",
-        offset: 50,
-        query: "row-",
-        sort: "recent",
-        selectedSessions: ["agent:main:row-0"],
-      }),
-    );
+    const overview = await readSessionsUsage({
+      projection: "overview",
+      offset: 50,
+      query: "row-",
+      sort: "recent",
+      selectedSessions: ["agent:main:row-0"],
+    });
     expect(overview.overview).toMatchObject({
       total: 1001,
       offset: 50,
@@ -427,13 +394,10 @@ describe("sessions.usage", () => {
     expect(overview.sessions[0]?.key).toBe("agent:main:row-950");
     expect(overview.totals.totalTokens).toBe(7);
     expect(overview.sessions[0]?.usage?.dailyBreakdown).toBeUndefined();
-    const exported = readResult(
-      await runSessionsUsage({
-        ...BASE_USAGE_RANGE,
-        query: "row-",
-        limit: Number.MAX_SAFE_INTEGER,
-      }),
-    );
+    const exported = await readSessionsUsage({
+      query: "row-",
+      limit: Number.MAX_SAFE_INTEGER,
+    });
     expect(exported.sessions).toHaveLength(1001);
     expect(exported.totals.totalTokens).toBe(7007);
     expect(exported.sessions[0]?.usage?.dailyBreakdown).toHaveLength(1);
@@ -488,11 +452,9 @@ describe("sessions.usage", () => {
       );
       vi.mocked(discoverAllSessions).mockResolvedValueOnce([...unrelated, selected]);
       vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async ({ sessions }) =>
-        summaryBatch(sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 }))),
+        tokenBatch(sessions.length, 7),
       );
-      const result = readResult(
-        await runSessionsUsage({ ...BASE_USAGE_RANGE, creatorKey: '["system",null]', limit: 1 }),
-      );
+      const result = await readSessionsUsage({ creatorKey: '["system",null]', limit: 1 });
       expect(result.sessions).toMatchObject([{ key }]);
       expect(result.totals.totalTokens).toBe(7);
     });
@@ -504,14 +466,7 @@ describe("sessions.usage", () => {
       await withOpenClawTestState({ label: "usage-context-resident" }, async (state) => {
         const storePath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
         const store: Record<string, SessionEntry> = {};
-        const report = {
-          source: "run" as const,
-          generatedAt: 1,
-          systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
-          injectedWorkspaceFiles: [],
-          skills: { promptChars: 0, entries: [] },
-          tools: { listChars: 0, schemaChars: 0, entries: [] },
-        };
+        const report = contextReport(1);
         const discovered = Array.from({ length: 61 }, (_, index) => {
           const sessionId = `context-${index}`;
           const key = `agent:main:${sessionId}`;
@@ -622,14 +577,11 @@ describe("sessions.usage", () => {
       await withEnvAsync({ TZ: "America/New_York" }, async () => {
         expect(new Date("2026-03-08T05:00:00Z").getTimezoneOffset()).toBe(300);
         expect(new Date("2026-03-09T04:00:00Z").getTimezoneOffset()).toBe(240);
-        const response = readResult(
-          await runSessionsUsage({
-            ...BASE_USAGE_RANGE,
-            ...params,
-            startDate: date,
-            endDate: date,
-          }),
-        );
+        const response = await readSessionsUsage({
+          ...params,
+          startDate: date,
+          endDate: date,
+        });
         expect(loadSessionCostSummariesFromCache).toHaveBeenCalledWith(
           expect.objectContaining({
             startMs: Date.parse(start),
@@ -637,8 +589,7 @@ describe("sessions.usage", () => {
             dayBucket,
           }),
         );
-        expect(response.startDate).toBe(date);
-        expect(response.endDate).toBe(date);
+        expect(response).toMatchObject({ startDate: date, endDate: date });
       });
     },
   );
@@ -659,10 +610,9 @@ describe("sessions.usage", () => {
         },
         [["agent:main:shared", "main"]],
       );
-      expect(
-        readResult(await runSessionsUsage({ ...BASE_USAGE_RANGE, key: "shared", agentId: "opus" }))
-          .sessions,
-      ).toMatchObject([{ key: "agent:opus:shared", agentId: "opus" }]);
+      expect((await readSessionsUsage({ key: "shared", agentId: "opus" })).sessions).toMatchObject([
+        { key: "agent:opus:shared", agentId: "opus" },
+      ]);
       expect(loadSessionCostSummariesFromCache).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: "opus",
@@ -730,13 +680,7 @@ describe("sessions.usage", () => {
           : historical
             ? { count: 2, avgMs: 25, p95Ms: 30, minMs: 20, maxMs: 30 }
             : { count: 1, avgMs: 10, p95Ms: 10, minMs: 10, maxMs: 10 };
-        const totals = {
-          ...createEmptyCostUsageTotals(),
-          input: totalTokens,
-          totalTokens,
-          totalCost,
-          inputCost: totalCost,
-        };
+        const totals = usageTotals(totalTokens, totalCost);
         const daily = {
           ...totals,
           date,
@@ -783,88 +727,86 @@ describe("sessions.usage", () => {
         sourceSnapshots.push(structuredClone(summary));
         return summary;
       });
-      return summaryBatch(summaries);
+      return freshUsageBatch(summaries);
     });
 
-    const respond = await runSessionsUsage({
-      ...BASE_USAGE_RANGE,
+    const result = await readSessionsUsage({
       key: storeKey,
       groupBy: "family",
       includeHistorical: true,
     });
 
-    const result = readResult(respond);
-    expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0]?.key).toBe(storeKey);
-    expect(result.sessions[0]?.scope).toBe("family");
-    expect(result.sessions[0]?.includedSessionIds).toEqual(["current", "old", "oldest"]);
-    expect(result.sessions[0]?.usage?.totalTokens).toBe(60);
-    expect(result.sessions[0]?.usage?.totalCost).toBeCloseTo(0.06);
-    const usage = result.sessions[0]?.usage;
-    expect(usage?.dailyBreakdown).toMatchObject([
-      {
-        date: "2026-02-01",
-        tokens: 30,
-        cost: 0.03,
-        totalTokens: 30,
-        totalCost: 0.03,
-        input: 30,
-        inputCost: 0.03,
-        missingCostEntries: 2,
-        missingCostByModel: { "fixture/unpriced": 2 },
-      },
-      {
-        date: "2026-02-02",
-        totalTokens: 30,
-        totalCost: 0.03,
-        missingCostByModel: { "fixture/unpriced": 1 },
-      },
-    ]);
+    const models = [
+      { provider: "fixture", model: "bedrock::arn" },
+      { provider: "fixture::bedrock", model: "arn" },
+    ];
+    const dailyModels = [
+      { provider: "fixture", model: "bedrock:arn" },
+      { provider: "fixture:bedrock", model: "arn" },
+    ];
+    expect(result).toMatchObject({
+      sessions: [
+        {
+          key: storeKey,
+          scope: "family",
+          includedSessionIds: ["current", "old", "oldest"],
+          usage: {
+            totalTokens: 60,
+            totalCost: expect.closeTo(0.06),
+            dailyBreakdown: [
+              {
+                date: "2026-02-01",
+                tokens: 30,
+                cost: 0.03,
+                totalTokens: 30,
+                totalCost: 0.03,
+                input: 30,
+                inputCost: 0.03,
+                missingCostEntries: 2,
+                missingCostByModel: { "fixture/unpriced": 2 },
+              },
+              {
+                date: "2026-02-02",
+                totalTokens: 30,
+                totalCost: 0.03,
+                missingCostByModel: { "fixture/unpriced": 1 },
+              },
+            ],
+            activityDates: ["2026-02-01", "2026-02-02"],
+            messageCounts: { total: 3 },
+            dailyMessageCounts: [
+              { date: "2026-02-01", total: 2 },
+              { date: "2026-02-02", total: 1 },
+            ],
+            utcQuarterHourMessageCounts: [
+              { date: "2026-02-01", quarterIndex: 2, total: 2 },
+              { date: "2026-02-02", quarterIndex: 2, total: 1 },
+            ],
+            utcQuarterHourTokenUsage: [
+              { date: "2026-02-01", quarterIndex: 2, totalTokens: 30, totalCost: 0.03 },
+              { date: "2026-02-02", quarterIndex: 2, totalTokens: 30, totalCost: 0.03 },
+            ],
+            dailyLatency: [
+              { date: "2026-02-01", count: 3, avgMs: 20, p95Ms: 30, minMs: 10, maxMs: 30 },
+              { date: "2026-02-02", count: 3, avgMs: 7, p95Ms: 9, minMs: 5, maxMs: 9 },
+            ],
+            latency: { count: 6, avgMs: 13.5, p95Ms: 30, minMs: 5, maxMs: 30 },
+            // a-second overtakes z-first before their counts tie again.
+            toolUsage: {
+              tools: [
+                { name: "a-second", count: 3 },
+                { name: "z-first", count: 3 },
+              ],
+            },
+            modelUsage: models,
+            dailyModelUsage: [dailyModels[0], dailyModels[1], dailyModels[0]],
+          },
+        },
+      ],
+      aggregates: { byModel: models, modelDaily: [dailyModels[1], dailyModels[0], dailyModels[0]] },
+      totals: { totalTokens: 60, totalCost: expect.closeTo(0.06) },
+    });
     expect(sources).toEqual(sourceSnapshots);
-    expect(usage?.activityDates).toEqual(["2026-02-01", "2026-02-02"]);
-    expect(usage?.messageCounts?.total).toBe(3);
-    expect(usage?.dailyMessageCounts).toMatchObject([
-      { date: "2026-02-01", total: 2 },
-      { date: "2026-02-02", total: 1 },
-    ]);
-    expect(usage?.utcQuarterHourMessageCounts).toMatchObject([
-      { date: "2026-02-01", quarterIndex: 2, total: 2 },
-      { date: "2026-02-02", quarterIndex: 2, total: 1 },
-    ]);
-    expect(usage?.utcQuarterHourTokenUsage).toMatchObject([
-      { date: "2026-02-01", quarterIndex: 2, totalTokens: 30, totalCost: 0.03 },
-      { date: "2026-02-02", quarterIndex: 2, totalTokens: 30, totalCost: 0.03 },
-    ]);
-    expect(usage?.dailyLatency).toEqual([
-      { date: "2026-02-01", count: 3, avgMs: 20, p95Ms: 30, minMs: 10, maxMs: 30 },
-      { date: "2026-02-02", count: 3, avgMs: 7, p95Ms: 9, minMs: 5, maxMs: 9 },
-    ]);
-    expect(usage?.latency).toEqual({ count: 6, avgMs: 13.5, p95Ms: 30, minMs: 5, maxMs: 30 });
-    // a-second overtakes z-first before the final instance brings their counts level.
-    expect(usage?.toolUsage?.tools).toEqual([
-      { name: "a-second", count: 3 },
-      { name: "z-first", count: 3 },
-    ]);
-    expect(usage?.modelUsage).toMatchObject([
-      { provider: "fixture", model: "bedrock::arn" },
-      { provider: "fixture::bedrock", model: "arn" },
-    ]);
-    expect(usage?.dailyModelUsage).toMatchObject([
-      { provider: "fixture", model: "bedrock:arn" },
-      { provider: "fixture:bedrock", model: "arn" },
-      { provider: "fixture", model: "bedrock:arn" },
-    ]);
-    expect(result.aggregates.byModel).toMatchObject([
-      { provider: "fixture", model: "bedrock::arn" },
-      { provider: "fixture::bedrock", model: "arn" },
-    ]);
-    expect(result.aggregates.modelDaily).toMatchObject([
-      { provider: "fixture:bedrock", model: "arn" },
-      { provider: "fixture", model: "bedrock:arn" },
-      { provider: "fixture", model: "bedrock:arn" },
-    ]);
-    expect(result.totals.totalTokens).toBe(60);
-    expect(result.totals.totalCost).toBeCloseTo(0.06);
 
     TEST_RUNTIME_CONFIG = { ...TEST_RUNTIME_CONFIG };
     const partialEntry = { ...entry, usageFamilySessionIds: ["current", "old"] };
@@ -880,14 +822,11 @@ describe("sessions.usage", () => {
       ),
       cacheStatus: { status: "partial", cachedFiles: 1, pendingFiles: 1, staleFiles: 0 },
     }));
-    const partial = readResult(
-      await runSessionsUsage({
-        ...BASE_USAGE_RANGE,
-        key: storeKey,
-        groupBy: "family",
-        includeHistorical: true,
-      }),
-    );
+    const partial = await readSessionsUsage({
+      key: storeKey,
+      groupBy: "family",
+      includeHistorical: true,
+    });
     expect(partial.sessions).toMatchObject([
       { key: storeKey, computing: true, usage: { totalTokens: 20 } },
     ]);
@@ -910,10 +849,9 @@ describe("sessions.usage", () => {
         ["agent:other:main", "other"],
       ],
     );
-    expect(
-      readResult(await runSessionsUsage({ ...BASE_USAGE_RANGE, key: "agent:opus:run-dup" }))
-        .sessions,
-    ).toMatchObject([{ key: preferredKey }]);
+    expect((await readSessionsUsage({ key: "agent:opus:run-dup" })).sessions).toMatchObject([
+      { key: preferredKey },
+    ]);
     expect(loadSessionCostSummariesFromCache).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "opus",

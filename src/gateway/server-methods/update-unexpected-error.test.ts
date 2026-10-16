@@ -103,11 +103,7 @@ describe("update.run unexpected-error diagnostics", () => {
     expect(response.result).toMatchObject({
       status: "error",
       reason: "unexpected-error",
-      steps: [
-        expect.objectContaining({
-          failureFacts: [expect.objectContaining({ code: "EACCES", errorName: "TypeError" })],
-        }),
-      ],
+      steps: [{ failureFacts: [{ code: "EACCES", errorName: "TypeError" }] }],
     });
     expect(JSON.stringify(response.result)).not.toContain("history lookup failed");
     expect(getUpdateRun(response.runId)?.status).toBe("failed");
@@ -283,7 +279,7 @@ describe("update.run unexpected-error diagnostics", () => {
         mode: "git",
         reason: "unexpected-error",
         before: { version: "1.0.0" },
-        steps: [expect.objectContaining({ name: phase, exitCode: 1, failureFacts })],
+        steps: [{ name: phase, exitCode: 1, failureFacts }],
       });
       expect(response.result.root).toBe(source === "campaign adoption" ? root : undefined);
       expect(adoptUpdateCampaignMock).toHaveBeenCalledTimes(source === "campaign adoption" ? 1 : 0);

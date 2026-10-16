@@ -1,14 +1,10 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
-import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 
 vi.mock("../../infra/session-cost-usage.js", async () => ({
   ...(await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
@@ -24,16 +20,10 @@ import {
 } from "../../infra/session-cost-usage.js";
 import { resolveDateRange } from "./usage-date-range.js";
 import { loadCostUsageSummaryCached } from "./usage-result-cache.js";
-import { usageHandlers } from "./usage.js";
+import { invokeUsage, usageReply, usageTotals } from "./usage.test-support.js";
 
 function costSummary(totalTokens: number, totalCost: number) {
-  const totals = {
-    ...createEmptyCostUsageTotals(),
-    input: totalTokens,
-    totalTokens,
-    totalCost,
-    inputCost: totalCost,
-  };
+  const totals = usageTotals(totalTokens, totalCost);
   return { updatedAt: Date.now(), days: 1, daily: [{ date: "2026-02-01", ...totals }], totals };
 }
 const dates = { startDate: "2026-02-01", endDate: "2026-02-02" };
@@ -43,19 +33,7 @@ async function request(
   config: OpenClawConfig = {},
   respond = vi.fn(),
 ) {
-  const handler = expectDefined(usageHandlers[method], "usage handler");
-  const projection = createSessionRowProjectionFixture({ cfg: config, store: {} });
-  try {
-    await handler({
-      respond,
-      params,
-      context: bindSessionRowProjection({ getRuntimeConfig: () => config }, () => projection),
-    } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
-  } finally {
-    projection.dispose();
-  }
-  expect(respond).toHaveBeenCalledOnce();
-  return expectDefined(respond.mock.calls[0], "usage response");
+  return usageReply(await invokeUsage(method, params, config, { respond }));
 }
 function range(params: Parameters<typeof resolveDateRange>[0]) {
   const result = resolveDateRange(params);
