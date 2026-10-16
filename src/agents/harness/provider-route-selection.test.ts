@@ -95,45 +95,42 @@ describe("registered provider route selection", () => {
     ["legacy-only fallback", ["legacy"], "Model", "openclaw"],
     ["literal legacy selection", ["exact", "legacy"], "custom/Model", "openclaw"],
     ["same-spelling duplicates", ["exact", "duplicate"], "Model", "custom-responses"],
-  ] as const)(
-    "uses the selected model transport for %s",
-    (_label, selectedRows, modelId, harness) => {
-      registerHarness("custom-responses", ({ modelProvider }) =>
-        modelProvider?.api === "openai-responses" &&
-        modelProvider.baseUrl === "https://responses.example/v1" &&
-        modelProvider.requestTransportOverrides === "none"
-          ? { supported: true, priority: 100 }
-          : { supported: false, reason: "Selected transport is not supported" },
-      );
-      const exact: ModelDefinitionConfig = {
-        id: "Model",
-        name: "Configured model",
-        api: "openai-responses",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 64_000,
-        maxTokens: 1024,
-      };
-      const rows: Record<"exact" | "legacy" | "duplicate", ModelDefinitionConfig> = {
-        exact,
-        legacy: {
-          ...exact,
-          id: "custom/Model",
-          api: "openai-completions",
-          baseUrl: "https://legacy.example/v1",
-          headers: { "x-model-route": "legacy" },
-        },
-        duplicate: { ...exact, api: "openai-completions" },
-      };
-      const cfg = providerConfig("custom", {
-        api: "openai-responses",
-        baseUrl: "https://responses.example/v1",
-        models: selectedRows.map((row) => rows[row]),
-      });
-      expect(selectAgentHarness(selection(cfg, modelId, "custom")).id).toBe(harness);
-    },
-  );
+  ] as const)("uses the selected model transport for %s", (_label, ids, modelId, harness) => {
+    registerHarness("custom-responses", ({ modelProvider }) =>
+      modelProvider?.api === "openai-responses" &&
+      modelProvider.baseUrl === "https://responses.example/v1" &&
+      modelProvider.requestTransportOverrides === "none"
+        ? { supported: true, priority: 100 }
+        : { supported: false, reason: "Selected transport is not supported" },
+    );
+    const exact: ModelDefinitionConfig = {
+      id: "Model",
+      name: "Configured model",
+      api: "openai-responses",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 64_000,
+      maxTokens: 1024,
+    };
+    const rows: Record<"exact" | "legacy" | "duplicate", ModelDefinitionConfig> = {
+      exact,
+      legacy: {
+        ...exact,
+        id: "custom/Model",
+        api: "openai-completions",
+        baseUrl: "https://legacy.example/v1",
+        headers: { "x-model-route": "legacy" },
+      },
+      duplicate: { ...exact, api: "openai-completions" },
+    };
+    const cfg = providerConfig("custom", {
+      api: "openai-responses",
+      baseUrl: "https://responses.example/v1",
+      models: ids.map((row) => rows[row]),
+    });
+    expect(selectAgentHarness(selection(cfg, modelId, "custom")).id).toBe(harness);
+  });
 
   it.each([
     ["Codex primary", true, true, "gpt-5.5", "codex", "openai:chatgpt", "subscription"],
