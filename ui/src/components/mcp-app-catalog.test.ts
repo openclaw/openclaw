@@ -63,7 +63,11 @@ function discoveryContext(request: ReturnType<typeof vi.fn>, scopes = ["operator
         },
       },
       agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
-      sessions: { describe: async () => ({ session: { key: "agent:main:one" } }) },
+      sessions: {
+        describe: async () => ({
+          session: { key: "agent:main:one", kind: "direct" as const, updatedAt: 1 },
+        }),
+      },
     },
   };
 }
@@ -104,10 +108,16 @@ describe("app launch catalog", () => {
       hello: gatewayHelloForMethods(["mcp.app.discover"]),
     });
     // SAFETY: This mounted page fixture supplies the discovery and launch capabilities it uses.
-    const context = { ...discoveryContext(request).context, gateway } as ApplicationContext;
+    const context: Pick<ApplicationContext, "gateway"> & {
+      agentSelection: {
+        state: Pick<ApplicationContext["agentSelection"]["state"], "selectedId">;
+        subscribe: ApplicationContext["agentSelection"]["subscribe"];
+      };
+      sessions: Pick<ApplicationContext["sessions"], "describe">;
+    } = { ...discoveryContext(request).context, gateway };
     const { container, unmount } = mountSolid(
       () => createComponent(AppsPage, { appSearch: "?server=parts&tool=library" }),
-      { wrapper: createSolidApplicationContextProvider(context).wrapper },
+      { wrapper: createSolidApplicationContextProvider(context as ApplicationContext).wrapper },
     );
     try {
       await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
