@@ -155,7 +155,6 @@ afterEach(() => {
 });
 
 it("settles replaced-endpoint inputs durably so the second restart is silent", async () => {
-  vi.useRealTimers();
   const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
   const { openOpenClawAgentDatabase } = await import("../state/openclaw-agent-db.js");
   const { writeSessionEntry } =
