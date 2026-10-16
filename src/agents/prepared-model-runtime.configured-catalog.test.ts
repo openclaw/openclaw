@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
@@ -18,19 +19,39 @@ import { materializePreparedModelCatalog } from "./prepared-model-runtime.full-c
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
+const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+function model(id: string, overrides: Partial<ModelDefinitionConfig> = {}): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    contextWindow: 32_000,
+    maxTokens: 4096,
+    cost,
+    reasoning: false,
+    input: ["text"],
+    ...overrides,
+  };
+}
+function captureCatalog(
+  config: OpenClawConfig,
+  metadataSnapshot: Parameters<
+    typeof prepareCapturedRuntimeFacts
+  >[0]["workspaceFacts"]["pluginMetadataSnapshot"],
+  registry: ModelRegistry,
+) {
+  return prepareCapturedRuntimeFacts({
+    agentFacts: { input: { config }, configuredModelRefs: [] },
+    workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot, inlineProviderModels: [] },
+    templateModelRegistry: registry,
+    configuredRuntimeModels: [],
+  });
+}
+
 describe("configured catalog registry composition", () => {
   it.each([true, false])(
     "keeps startup and refresh order consistent (manifest=%s)",
     async (manifest) => {
-      const models = ["z-strong", "m-current", "a-small"].map((id) => ({
-        id,
-        name: id,
-        contextWindow: 32_000,
-        maxTokens: 4096,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        reasoning: false,
-        input: ["text" as const],
-      }));
+      const models = ["z-strong", "m-current", "a-small"].map((id) => model(id));
       const provider = {
         api: "openai-responses" as const,
         baseUrl: "https://fixture.invalid/v1",
@@ -61,12 +82,7 @@ describe("configured catalog registry composition", () => {
           providers: { fixture: provider },
         }),
       });
-      const { modelCatalog } = prepareCapturedRuntimeFacts({
-        agentFacts: { input: { config }, configuredModelRefs: [] },
-        workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot, inlineProviderModels: [] },
-        templateModelRegistry: registry,
-        configuredRuntimeModels: [],
-      });
+      const { modelCatalog } = captureCatalog(config, metadataSnapshot, registry);
       const refreshed = await buildPreparedModelCatalogSnapshot({
         config,
         agentDir: "captured:agent",
@@ -89,17 +105,7 @@ describe("configured catalog registry composition", () => {
     const provider = {
       api: "openai-responses" as const,
       baseUrl: "https://fixture.invalid/v1",
-      models: [
-        {
-          id: "static-model",
-          name: "Static model",
-          contextWindow: 32_000,
-          maxTokens: 4096,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          reasoning: false,
-          input: ["text" as const],
-        },
-      ],
+      models: [model("static-model", { name: "Static model" })],
     };
     const config: OpenClawConfig = {};
     const metadataSnapshot = createPluginMetadataSnapshotFixture({
@@ -134,12 +140,7 @@ describe("configured catalog registry composition", () => {
       pluginMetadataSnapshot: metadataSnapshot,
       staticProviderConfigs,
     });
-    const { modelCatalog } = prepareCapturedRuntimeFacts({
-      agentFacts: { input: { config }, configuredModelRefs: [] },
-      workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot, inlineProviderModels: [] },
-      templateModelRegistry: registry,
-      configuredRuntimeModels: [],
-    });
+    const { modelCatalog } = captureCatalog(config, metadataSnapshot, registry);
 
     // The producer answers the alias too; the startup publication folds it into the canonical row.
     expect(Object.keys(staticProviderConfigs).toSorted()).toEqual(["fixture", "fixture-alias"]);
@@ -165,14 +166,9 @@ describe("configured catalog registry composition", () => {
                 api: "openai-responses",
                 baseUrl: "https://fixture.invalid/v1",
                 models: Array.from({ length: rowCount }, (_, index) =>
-                  ["legacy", "first", "second"].map((prefix) => ({
-                    id: `${prefix}-${index}`,
-                    name: `${prefix}-${index}`,
-                    contextWindow: 32_000,
-                    maxTokens: 4096,
-                    reasoning: false,
-                    input: ["text"],
-                  })),
+                  ["legacy", "first", "second"].map((prefix) =>
+                    model(`${prefix}-${index}`, { cost: undefined }),
+                  ),
                 ).flat(),
               },
             },
@@ -181,12 +177,7 @@ describe("configured catalog registry composition", () => {
         loadPolicy.mockClear().mockReturnValue({
           normalizeModelCatalogId: ({ modelId }) => modelId.replace(/^legacy-/, `${scope}-`),
         });
-        const { modelCatalog } = prepareCapturedRuntimeFacts({
-          agentFacts: { input: { config }, configuredModelRefs: [] },
-          workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot, inlineProviderModels: [] },
-          templateModelRegistry: registry,
-          configuredRuntimeModels: [],
-        });
+        const { modelCatalog } = captureCatalog(config, metadataSnapshot, registry);
         expect(modelCatalog.entries.map(({ id }) => id)).toEqual(
           Array.from({ length: rowCount }, (_, index) => [
             `legacy-${index}`,
@@ -208,10 +199,7 @@ describe("configured catalog registry composition", () => {
   it.each<{
     name: string;
     mode?: "merge" | "replace";
-    capturedBaseUrl?: string;
-    modelApi?: ModelCatalogEntry["api"];
     modelBaseUrl?: string;
-    expectedBaseUrl?: string;
     expectedIds?: string[];
     inheritsChoices: boolean;
   }>([
@@ -224,13 +212,11 @@ describe("configured catalog registry composition", () => {
     {
       name: "replace with a different captured endpoint",
       mode: "replace",
-      capturedBaseUrl: "http://127.0.0.1:9/v1",
       expectedIds: ["selected"],
       inheritsChoices: false,
     },
     {
       name: "model endpoint pin",
-      capturedBaseUrl: "http://127.0.0.1:9/v1",
       modelBaseUrl: "https://fixture.invalid/v1",
       inheritsChoices: true,
     },
@@ -255,10 +241,7 @@ describe("configured catalog registry composition", () => {
     "keeps configured rows and same-route choices: $name",
     ({
       mode = "merge",
-      capturedBaseUrl = "https://fixture.invalid/v1",
-      modelApi,
       modelBaseUrl,
-      expectedBaseUrl = "https://fixture.invalid/v1",
       expectedIds = ["selected", "retained-only"],
       inheritsChoices,
     }) => {
@@ -266,7 +249,7 @@ describe("configured catalog registry composition", () => {
         provider: "donor-fixture",
         id: "selected",
         name: "Configured selected",
-        api: modelApi ?? "openai-completions",
+        api: "openai-completions",
         baseUrl: "https://fixture.invalid/v1",
         contextWindow: 32_000,
         reasoning: true,
@@ -282,17 +265,11 @@ describe("configured catalog registry composition", () => {
               api: "openai-completions",
               baseUrl: "https://fixture.invalid/v1",
               models: [
-                {
-                  id: "selected",
+                model("selected", {
                   name: "Configured selected",
-                  contextWindow: 32_000,
-                  maxTokens: 4096,
                   reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  ...(modelApi ? { api: modelApi } : {}),
                   ...(modelBaseUrl ? { baseUrl: modelBaseUrl } : {}),
-                },
+                }),
               ],
             },
           },
@@ -306,24 +283,20 @@ describe("configured catalog registry composition", () => {
           providers: {
             "donor-fixture": {
               api: "openai-completions",
-              baseUrl: capturedBaseUrl,
+              baseUrl: "http://127.0.0.1:9/v1",
               models: [
-                {
-                  id: "selected",
+                model("selected", {
                   name: "Earlier selected",
                   contextWindow: 64_000,
-                  maxTokens: 4096,
-                  reasoning: false,
                   input: ["text", "image"],
-                },
-                {
-                  id: "retained-only",
+                  cost: undefined,
+                }),
+                model("retained-only", {
                   name: "Retained authored row",
                   contextWindow: 48_000,
-                  maxTokens: 4096,
-                  reasoning: false,
                   input: ["text", "image"],
-                },
+                  cost: undefined,
+                }),
               ],
             },
           },
@@ -349,16 +322,12 @@ describe("configured catalog registry composition", () => {
           provider: configured.provider,
           modelId: configured.id,
           model: {
-            id: configured.id,
-            name: configured.name,
+            ...model(configured.id, { name: configured.name, reasoning: true }),
             provider: configured.provider,
             api: "openai-completions",
             baseUrl: "https://fixture.invalid/v1",
-            reasoning: true,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 32000,
-            maxTokens: 4096,
+            input: ["text"],
             contextWindows: [option],
             contextWindowDefault: option.id,
           },
@@ -368,7 +337,6 @@ describe("configured catalog registry composition", () => {
       expect(modelCatalog.entries.map((entry) => entry.id)).toEqual(expectedIds);
       const expectedEntry = {
         ...configured,
-        baseUrl: expectedBaseUrl,
         ...(inheritsChoices
           ? {
               contextWindows: [{ id: "32k", label: "32K", contextWindow: 32000 }],
@@ -376,11 +344,12 @@ describe("configured catalog registry composition", () => {
             }
           : {}),
       };
-      expect(modelCatalog.entries[0]).toMatchObject(expectedEntry);
-      expect(modelCatalog.entries[0]?.contextWindows).toEqual(expectedEntry.contextWindows);
-      expect(modelCatalog.entries[0]?.contextWindowDefault).toBe(
-        expectedEntry.contextWindowDefault,
-      );
+      const expectEntry = (entry: ModelCatalogEntry | undefined) => {
+        expect(entry).toMatchObject(expectedEntry);
+        expect(entry?.contextWindows).toEqual(expectedEntry.contextWindows);
+        expect(entry?.contextWindowDefault).toBe(expectedEntry.contextWindowDefault);
+      };
+      expectEntry(modelCatalog.entries[0]);
       expect(modelCatalog.routeVariants).toEqual(modelCatalog.entries);
       const policy = createModelVisibilityPolicy({
         cfg: config,
@@ -389,11 +358,7 @@ describe("configured catalog registry composition", () => {
         defaultModel: configured.id,
         manifestPlugins: metadataSnapshot,
       });
-      expect(policy.configuredCatalog[0]).toMatchObject(expectedEntry);
-      expect(policy.configuredCatalog[0]?.contextWindows).toEqual(expectedEntry.contextWindows);
-      expect(policy.configuredCatalog[0]?.contextWindowDefault).toBe(
-        expectedEntry.contextWindowDefault,
-      );
+      expectEntry(policy.configuredCatalog[0]);
     },
   );
 });
@@ -423,28 +388,41 @@ describe("synthetic configured context publication", () => {
     providerAuthLabels: new Map(),
     credentials: { fixture: { type: "api_key" as const, key: account } },
   });
-  function budget(
-    entries: ModelCatalogEntry[] = [discovered],
-    staticEntry: ModelCatalogEntry = fallback,
-    config: OpenClawConfig = {},
+  function publish(
+    snapshot: Parameters<typeof prepareModelCatalogPublication>[0],
+    previous?: Parameters<typeof prepareModelCatalogPublication>[2],
+    account = "account-a",
   ) {
-    const publication = prepareModelCatalogPublication(
-      {
-        entries,
-        routeVariants: entries,
-        providerOutcomes: [{ provider: "fixture", status: "ready" }],
-      },
+    return prepareModelCatalogPublication(
+      snapshot,
       new Map(),
-      undefined,
-      auth("account-a"),
+      previous,
+      auth(account),
       (provider) => provider,
     );
-    const catalog = materializePreparedModelCatalog(
+  }
+  function materialize(
+    publication: ReturnType<typeof publish>,
+    staticEntry: ModelCatalogEntry = fallback,
+  ) {
+    return materializePreparedModelCatalog(
       publication.catalog,
       [],
       [staticEntry],
       new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
     );
+  }
+  function budget(
+    entries: ModelCatalogEntry[] = [discovered],
+    staticEntry: ModelCatalogEntry = fallback,
+    config: OpenClawConfig = {},
+  ) {
+    const publication = publish({
+      entries,
+      routeVariants: entries,
+      providerOutcomes: [{ provider: "fixture", status: "ready" }],
+    });
+    const catalog = materialize(publication, staticEntry);
     const selected =
       catalog.staticEntries?.find(
         (entry) => entry.provider === "fixture" && entry.id === "new-model",
@@ -457,14 +435,10 @@ describe("synthetic configured context publication", () => {
       modelId: "new-model",
       nativeModelOwned: false,
       runtimeModel: {
-        id: "new-model",
-        name: "New model",
+        ...model("new-model", { name: "New model" }),
         api: "openai-responses",
         provider: "fixture",
         baseUrl: discovered.baseUrl,
-        reasoning: false,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        maxTokens: 4096,
         ...selected,
         input: ["text"],
       },
@@ -487,12 +461,10 @@ describe("synthetic configured context publication", () => {
             provider: "fixture",
             modelId: "new-model",
             model: {
+              ...model("new-model"),
               ...fallback,
               baseUrl: discovered.baseUrl,
-              reasoning: false,
               input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 4096,
             },
           },
         ],
@@ -529,35 +501,17 @@ describe("synthetic configured context publication", () => {
     ["different physical endpoint", { ...discovered, baseUrl: "https://other.example/v1" }, true],
   ] as const)("replaces only the %s synthetic fallback", (_name, physical, retained) => {
     const logical = { ...discovered, api: "openai-completions" as const };
-    const publication = prepareModelCatalogPublication(
-      {
-        entries: [logical],
-        routeVariants: [logical, physical],
-        providerOutcomes: [{ provider: "fixture", status: "ready" }],
-      },
-      new Map(),
-      undefined,
-      auth("account-a"),
-      (provider) => provider,
-    );
-    const catalog = materializePreparedModelCatalog(
-      publication.catalog,
-      [],
-      [{ ...fallback, baseUrl: discovered.baseUrl }],
-      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
-    );
+    const publication = publish({
+      entries: [logical],
+      routeVariants: [logical, physical],
+      providerOutcomes: [{ provider: "fixture", status: "ready" }],
+    });
+    const catalog = materialize(publication, { ...fallback, baseUrl: discovered.baseUrl });
     expect(catalog.entries[0]?.api).toBe("openai-completions");
     expect(catalog.routeVariants).toContainEqual(physical);
     expect(catalog.staticEntries?.some((entry) => entry.contextWindowSource === "synthetic")).toBe(
       retained,
     );
-  });
-  it.each([
-    ["curated static", { ...fallback, contextWindowSource: undefined }],
-    ["other API", { ...fallback, api: "openai-completions" as const }],
-    ["other endpoint", { ...fallback, baseUrl: "https://other.example/v1" }],
-  ])("preserves %s limits", (_name, row) => {
-    expect(budget([discovered], row)).toBe(128_000);
   });
   it("preserves explicit authored prompt and native-window caps", () => {
     for (const limits of [{ contextTokens: 64_000 }, { contextWindow: 64_000 }]) {
@@ -567,16 +521,11 @@ describe("synthetic configured context publication", () => {
             fixture: {
               baseUrl: discovered.baseUrl,
               models: [
-                {
-                  id: "new-model",
+                model("new-model", {
                   name: "New model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: discovered.contextWindow,
-                  maxTokens: 4096,
                   ...limits,
-                },
+                }),
               ],
             },
           },
@@ -590,59 +539,35 @@ describe("synthetic configured context publication", () => {
     expect(budget([{ ...discovered, provider: "other" }])).toBe(128_000);
   });
   it("does not promote a static starter after first-load discovery failure", () => {
-    const publication = prepareModelCatalogPublication(
-      {
-        entries: [],
-        routeVariants: [],
-        staticEntries: [discovered],
-        providerOutcomes: [{ provider: "fixture", status: "unavailable" }],
-      },
-      new Map(),
-      undefined,
-      auth("account-a"),
-      (provider) => provider,
-    );
-    const catalog = materializePreparedModelCatalog(
-      publication.catalog,
-      [],
-      [fallback],
-      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
-    );
+    const publication = publish({
+      entries: [],
+      routeVariants: [],
+      staticEntries: [discovered],
+      providerOutcomes: [{ provider: "fixture", status: "unavailable" }],
+    });
+    const catalog = materialize(publication);
     expect(publication.discoveryOrigins).toEqual([]);
     expect(catalog.staticEntries).toContainEqual(fallback);
     expect(catalog.entries).toContainEqual(expect.objectContaining(discovered));
   });
 
   it("retains only same-account inventory after failure", () => {
-    const accepted = prepareModelCatalogPublication(
-      {
-        entries: [discovered],
-        routeVariants: [],
-        providerOutcomes: [{ provider: "fixture", status: "ready", profileId: "a" }],
-      },
-      new Map(),
-      undefined,
-      auth("account-a"),
-      (provider) => provider,
-    );
+    const accepted = publish({
+      entries: [discovered],
+      routeVariants: [],
+      providerOutcomes: [{ provider: "fixture", status: "ready", profileId: "a" }],
+    });
     for (const account of ["account-a", "account-b"]) {
-      const failed = prepareModelCatalogPublication(
+      const failed = publish(
         {
           entries: [],
           routeVariants: [],
           providerOutcomes: [{ provider: "fixture", status: "unavailable", profileId: "a" }],
         },
-        new Map(),
         { ...accepted, providers: new Map() },
-        auth(account),
-        (provider) => provider,
+        account,
       );
-      const catalog = materializePreparedModelCatalog(
-        failed.catalog,
-        [],
-        [fallback],
-        new Set(failed.discoveryOrigins.map(({ provider }) => provider)),
-      );
+      const catalog = materialize(failed);
       if (account === "account-a") {
         expect(catalog.entries).toContainEqual(discovered);
         expect(catalog.staticEntries).not.toContainEqual(fallback);
