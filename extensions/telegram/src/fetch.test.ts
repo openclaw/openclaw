@@ -154,13 +154,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function resolveTelegramFetchOrThrow(
-  proxyFetch?: typeof fetch,
-  options?: { network?: { autoSelectFamily?: boolean; dnsResultOrder?: "ipv4first" | "verbatim" } },
-) {
-  return resolveTelegramFetch(proxyFetch, options);
-}
-
 function getDispatcherFromUndiciCall(nth: number) {
   const call = undiciFetch.mock.calls[nth - 1] as [RequestInfo | URL, RequestInit?] | undefined;
   if (!call) {
@@ -223,7 +216,7 @@ async function runDefaultStickyIpv4FallbackProbe(code = "EHOSTUNREACH"): Promise
     .mockResolvedValueOnce({ ok: true } as Response)
     .mockResolvedValueOnce({ ok: true } as Response);
 
-  const resolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+  const resolved = resolveTelegramFetch(undefined, STICKY_IPV4_FALLBACK_NETWORK);
   await resolved("https://api.telegram.org/botx/getMe");
   await resolved("https://api.telegram.org/botx/sendChatAction");
 }
@@ -236,21 +229,11 @@ function primeStickyFallbackRetry(code = "EHOSTUNREACH", successCount = 2): void
 }
 
 function expectStickyAutoSelectDispatcher(
-  dispatcher:
-    | {
-        options?: {
-          allowH2?: boolean;
-          connect?: Record<string, unknown>;
-          proxyTls?: Record<string, unknown>;
-          requestTls?: Record<string, unknown>;
-        };
-      }
-    | undefined,
+  dispatcher: ReturnType<typeof getDispatcherFromUndiciCall> | undefined,
   field: "connect" | "proxyTls" | "requestTls" = "connect",
 ): void {
   const options = dispatcher?.options?.[field];
-  expect(options?.autoSelectFamily).toBe(true);
-  expect(options?.autoSelectFamilyAttemptTimeout).toBe(300);
+  expect(options).toMatchObject({ autoSelectFamily: true, autoSelectFamilyAttemptTimeout: 300 });
 }
 
 function expectPinnedIpv4ConnectDispatcher(args: {
@@ -259,8 +242,7 @@ function expectPinnedIpv4ConnectDispatcher(args: {
   followupCall?: number;
 }): void {
   const pinnedDispatcher = getDispatcherFromUndiciCall(args.pinnedCall);
-  expect(pinnedDispatcher?.options?.connect?.family).toBe(4);
-  expect(pinnedDispatcher?.options?.connect?.autoSelectFamily).toBe(false);
+  expect(pinnedDispatcher.options?.connect).toMatchObject({ family: 4, autoSelectFamily: false });
   if (args.firstCall) {
     expect(getDispatcherFromUndiciCall(args.firstCall)).not.toBe(pinnedDispatcher);
   }
@@ -293,7 +275,7 @@ function expectNoLoggerMessageContaining(logger: ReturnType<typeof vi.fn>, fragm
 }
 
 async function expectNoStickyRetryWithSameDispatcher(params: {
-  resolved: ReturnType<typeof resolveTelegramFetchOrThrow>;
+  resolved: ReturnType<typeof resolveTelegramFetch>;
   expectedAgentCtor: typeof ProxyAgentCtor | typeof EnvHttpProxyAgentCtor;
   field: "connect" | "proxyTls" | "requestTls";
 }) {
@@ -428,7 +410,7 @@ describe("resolveTelegramFetch", () => {
     ProxyAgentCtor.mockClear();
     primeStickyFallbackRetry("EHOSTUNREACH", 1);
 
-    const resolved = resolveTelegramFetchOrThrow(proxyFetch, {
+    const resolved = resolveTelegramFetch(proxyFetch, {
       network: {
         autoSelectFamily: true,
         dnsResultOrder: "ipv4first",
@@ -485,7 +467,7 @@ describe("resolveTelegramFetch", () => {
     });
 
     expect(() =>
-      resolveTelegramFetchOrThrow(proxyFetch, {
+      resolveTelegramFetch(proxyFetch, {
         network: {
           autoSelectFamily: true,
           dnsResultOrder: "ipv4first",
@@ -567,7 +549,7 @@ describe("resolveTelegramFetch", () => {
   it("cools down a repeatedly failing sticky fallback and probes earlier attempts", async () => {
     undiciFetch.mockRejectedValue(buildFetchFallbackError("ENETUNREACH"));
 
-    const resolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+    const resolved = resolveTelegramFetch(undefined, STICKY_IPV4_FALLBACK_NETWORK);
 
     await expect(resolved("https://api.telegram.org/botx/deleteWebhook")).rejects.toThrow(
       "fetch failed",
@@ -603,7 +585,7 @@ describe("resolveTelegramFetch", () => {
         undiciFetch.mockRejectedValueOnce(buildFetchFallbackError("ENETUNREACH"));
       }
 
-      const resolved = resolveTelegramFetchOrThrow(undefined, {
+      const resolved = resolveTelegramFetch(undefined, {
         network: {
           autoSelectFamily: true,
           dnsResultOrder: "ipv4first",
@@ -664,7 +646,7 @@ describe("resolveTelegramFetch", () => {
   it("does not arm sticky fallback from caller-provided dispatcher failures", async () => {
     primeStickyFallbackRetry();
 
-    const resolved = resolveTelegramFetchOrThrow(undefined, {
+    const resolved = resolveTelegramFetch(undefined, {
       network: {
         autoSelectFamily: true,
       },

@@ -79,8 +79,8 @@ The supported PostgreSQL families are:
 - **Shared state:** runtime storage, bidirectional database ports, and
   matched backups. The provider covers the selected `state/openclaw.sqlite` and
   retained Voice Call state roots, including explicitly configured store paths
-  and disabled plugin entries. Matrix account/token roots are excluded from this
-  provider; their discovery and custody belong to the Matrix account-root lane.
+  and disabled plugin entries. Matrix account/token roots also belong to this
+  family, with one local anchor and PostgreSQL namespace per root.
 - **Agent databases:** fresh agent stores, including shared-main auth and explicit
   agent directories, use the selected engine through the existing agent workers.
   Transcript payloads are stored as plain JSON on PostgreSQL. Transcript text search
@@ -108,6 +108,19 @@ The supported PostgreSQL families are:
   bidirectional database ports; and matched backups. Collected activity is
   session-local scratch and is not exported or backed up.
 
+| Additional state store              | Engine selection                | Port and backup coverage                                                                                       |
+| ----------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Matrix account and token-hash roots | Effective `state` family engine | Declared `matrix` resources, including retained and disabled accounts; separate anchor and namespace per root. |
+
+Matrix uses the existing shared-state keyed-store API for sync, account metadata,
+recovery keys, and serialized crypto IndexedDB state. The SDK's in-memory
+IndexedDB snapshot is persisted in that same root; it does not create another
+persistent IndexedDB file. Changing the `state` engine requires porting every
+retained root. An unsupported or unreadable database inside the declared resource
+refuses the operation; preserve it and use the named repair or compatible version
+before retrying. Doctor lists each root's physical engine and reports a mismatch
+with the effective state-family engine.
+
 A supported store never silently falls back to SQLite when its PostgreSQL
 connection or admission fails.
 
@@ -127,9 +140,8 @@ configuration or data migration.
 
 Existing SQLite shared state and agent databases refuse a PostgreSQL selection and name
 `openclaw database port` as the migration path. The port command handles
-current-schema shared state, Workboard, Logbook, and Team Reports. Upgrade older
+current-schema shared state, agent databases, Workboard, Logbook, and Team Reports. Upgrade older
 shared state with `openclaw doctor --fix` using a compatible binary before porting.
-Agent porting is not available yet; keep existing agent stores on SQLite.
 Do not remove existing data to switch engines.
 
 ### Mixed engines (experimental)
@@ -139,7 +151,8 @@ families share one `database.postgres` connection and schema prefix; per-family
 connection and prefix options are not supported. The default still applies when
 an override is omitted.
 
-Keep agents and plugins on SQLite while fresh shared state uses PostgreSQL:
+Keep agents and standalone plugin stores on SQLite while fresh shared state,
+including Matrix account roots, uses PostgreSQL:
 
 ```json5
 {
@@ -179,7 +192,7 @@ override. A PostgreSQL agent combined with any SQLite family refuses with
 `DATABASE_AGENT_MIXED_POSTGRES_UNSUPPORTED` until mixed-pair conformance lands
 in PR3. The PostgreSQL default includes agent databases.
 Quarantine, managed-update, and package-activation safety journals stay local
-SQLite. Daemon runtime pins and Matrix-root do not acquire engine overrides;
+SQLite. Daemon runtime pins do not acquire engine overrides;
 incognito remains memory-only.
 
 An override applies to the whole family: all shared-state fragments together,
@@ -333,8 +346,8 @@ openclaw database port --to postgres
 Port, backup, restore, and fingerprint operations share one database-family
 provider registry. Each provider resolves its stores and supplies the generated
 schema descriptor and expected PostgreSQL catalog. **Shared state, Workboard,
-Logbook, and Team Reports are registered families.** Agent and Matrix-root
-support are not enabled by this registry yet. An unrecognized PostgreSQL anchor
+Logbook, and Team Reports are registered families.** Matrix account roots are
+state-family resources. Agent support is not enabled by this registry yet. An unrecognized PostgreSQL anchor
 refuses the operation and names the supported families.
 For separately installed plugins such as Team Reports, operations load the
 selected installed plugin's schema and admission API. Keep the matching plugin

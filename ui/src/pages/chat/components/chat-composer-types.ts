@@ -43,8 +43,8 @@ import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.typ
 import type { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
 import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.tsx";
 import type { ChatComposerCapabilityMenuProps } from "./chat-composer-plus-menu.types.ts";
-import type { SkillMenuState } from "./chat-composer-skill-menu.tsx";
-import type { SlashMenuState } from "./chat-composer-slash-menu.tsx";
+import type { SkillMenu } from "./chat-composer-skill-menu.tsx";
+import type { SlashMenu } from "./chat-composer-slash-menu.tsx";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
 
 type ChatQueuedEditProps = {
@@ -207,35 +207,37 @@ type ScopedComposerDraft = {
   value: string;
 };
 
-export type ChatComposerState = SkillMenuState &
-  SlashMenuState & {
-    goalPending: Signal<ChatGoalDraftMode | null>;
-    composerComposing: boolean;
-    editRevision: number;
-    mentionMenu: HumanMentionMenu;
-    emojiMenu: ComposerEmojiMenu;
-    mentionInput?: HumanMentionInput;
-    composerInputIntentKey: string | null;
-    pendingClearedSubmittedDraft: ScopedComposerDraft | null;
-    presentation: {
-      dictationError: string | null;
-      goalExpandedId: string | null;
-      activeQuestionKey: string | null;
-      gatewayQuestionIds: Set<string>;
-      asyncQuestionIds: Set<string>;
-      questionCollapsed: boolean;
-    };
-    updatePresentation: StoreSetter<ChatComposerState["presentation"]>;
-    questionTakeoverActive: boolean;
-    restoreComposerFocus: boolean;
-    composerInput: HTMLElement | null;
-    composerTextarea: HTMLTextAreaElement | null;
-    microphonePicker: ComposerMicrophonePicker | null;
-    // Stable Lit refs: inline arrows would change identity per render and force
-    // layout observers to detach and reconnect on every chat update.
-    composerInputRef: ((element?: Element) => void) | null;
-    textareaRef: ((element?: Element) => void) | null;
-    dictation: ComposerDictationController | null;
-    composerDraftScope: { key: string } | null;
-    dictationSelection: { start: number; end: number; value: string } | null;
+export type ChatComposerState = {
+  skillMenu: SkillMenu;
+  slashMenu: SlashMenu;
+  slashCommandDispatchConnected: boolean;
+  goalPending: Signal<ChatGoalDraftMode | null>;
+  composerComposing: boolean;
+  editRevision: number;
+  mentionMenu: HumanMentionMenu;
+  emojiMenu: ComposerEmojiMenu;
+  mentionInput?: HumanMentionInput;
+  composerInputIntentKey: string | null;
+  pendingClearedSubmittedDraft: ScopedComposerDraft | null;
+  presentation: {
+    dictationError: string | null;
+    goalExpandedId: string | null;
+    activeQuestionKey: string | null;
+    gatewayQuestionIds: Set<string>;
+    asyncQuestionIds: Set<string>;
+    questionCollapsed: boolean;
   };
+  updatePresentation: StoreSetter<ChatComposerState["presentation"]>;
+  questionTakeoverActive: boolean;
+  restoreComposerFocus: boolean;
+  composerInput: HTMLElement | null;
+  composerTextarea: HTMLTextAreaElement | null;
+  microphonePicker: ComposerMicrophonePicker | null;
+  // Stable Lit refs: inline arrows would change identity per render and force
+  // layout observers to detach and reconnect on every chat update.
+  composerInputRef: ((element?: Element) => void) | null;
+  textareaRef: ((element?: Element) => void) | null;
+  dictation: ComposerDictationController | null;
+  composerDraftScope: { key: string } | null;
+  dictationSelection: { start: number; end: number; value: string } | null;
+};

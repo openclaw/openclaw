@@ -112,9 +112,22 @@ export function ChatComposer(props: ChatComposerProps) {
     }
   });
   createEffect(
-    () => [context().mentionDirectory, context().emojiEnabled, context().draftKey] as const,
-    ([directory, emojiEnabled, draftKey], previous) => {
+    () =>
+      [
+        context().mentionDirectory,
+        context().emojiEnabled,
+        context().draftKey,
+        context().clearSlashMenu,
+        context().clearSkillMenu,
+      ] as const,
+    ([directory, emojiEnabled, draftKey, clearSlash, clearSkill], previous) => {
       state.mentionMenu.syncDirectory(directory);
+      if (clearSlash) {
+        state.slashMenu.reset();
+      }
+      if (clearSkill) {
+        state.skillMenu.reset();
+      }
       if (!emojiEnabled || draftKey !== previous?.[2]) {
         state.emojiMenu.close();
       }

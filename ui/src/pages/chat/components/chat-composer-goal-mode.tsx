@@ -7,8 +7,6 @@ import type { ChatGoalDraftMode } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
-import { resetSkillMenuState } from "./chat-composer-skill-menu.tsx";
-import { resetSlashMenuState } from "./chat-composer-slash-menu.tsx";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -56,8 +54,8 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
       ...(props.currentSessionId ? { sessionId: props.currentSessionId } : {}),
       ...(goal ? { action: "edit", goalId: goal.id, previousDraft } : { action: "start" }),
     });
-    resetSlashMenuState(state);
-    resetSkillMenuState(state);
+    state.slashMenu.reset();
+    state.skillMenu.reset();
     replaceDraft(goal?.objective ?? "");
     focus();
     return true;
@@ -92,12 +90,8 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
     },
     begin,
     activateDraft,
-    activateCommand: (command: SlashCommandDef) => {
-      if (
-        command.key !== "goal" ||
-        command.source !== "native" ||
-        state.slashMenuCompletion?.inline
-      ) {
+    activateCommand: (command: SlashCommandDef, inline: boolean) => {
+      if (command.key !== "goal" || command.source !== "native" || inline) {
         return false;
       }
       return begin();

@@ -5,10 +5,8 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import {
-  getSessionMcpRuntimeManagerForTesting,
-  setSessionMcpRuntimeScheduler,
-} from "../agents/agent-bundle-mcp-manager-api.js";
+import { setSessionMcpRuntimeScheduler } from "../agents/agent-bundle-mcp-manager-api.js";
+import { getSessionMcpRuntimeTestManager } from "../agents/agent-bundle-mcp-manager.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -541,7 +539,7 @@ it.for([
         expect(result.settledReceipt?.counts.block.failedAfterSend).toBe(1);
       }
     } finally {
-      const mcpManager = getSessionMcpRuntimeManagerForTesting();
+      const mcpManager = getSessionMcpRuntimeTestManager();
       for (const sessionId of mcpManager.listSessionIds()) {
         if (mcpManager.peekSession({ sessionId })?.workspaceDir === state.workspaceDir) {
           await mcpManager.disposeSession(sessionId);

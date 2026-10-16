@@ -11,7 +11,7 @@ final class CLIInstallPrompter {
     private(set) var isPrompting = false
     private(set) var installStatus: String?
 
-    func checkAndPromptIfNeeded(reason: String, userInitiated: Bool = false) {
+    func checkAndPromptIfNeeded(userInitiated: Bool = false) {
         guard !self.isPrompting else { return }
         self.isPrompting = true
         self.installStatus = nil
@@ -20,11 +20,11 @@ final class CLIInstallPrompter {
                 self.isPrompting = false
                 GatewayProcessManager.shared.refreshEnvironmentStatus(force: true)
             }
-            await self.checkAndPromptIfNeededAsync(reason: reason, userInitiated: userInitiated)
+            await self.checkAndPromptIfNeededAsync(userInitiated: userInitiated)
         }
     }
 
-    private func checkAndPromptIfNeededAsync(reason: String, userInitiated: Bool) async {
+    private func checkAndPromptIfNeededAsync(userInitiated: Bool) async {
         guard userInitiated || AppStateStore.shared.onboardingSeen else { return }
         let connectionMode = AppStateStore.shared.connectionMode
         guard connectionMode == .local else { return }
@@ -101,8 +101,6 @@ final class CLIInstallPrompter {
         } else if userInitiated {
             self.installStatus = String(localized: "Gateway setup cancelled. You can retry when ready.")
         }
-
-        self.logger.debug("cli install prompt handled reason=\(reason, privacy: .public)")
     }
 
     static func shouldPrompt(version: String, lastPrompt: String?, userInitiated: Bool) -> Bool {

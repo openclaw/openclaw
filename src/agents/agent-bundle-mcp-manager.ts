@@ -398,16 +398,6 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
     },
     totalActiveLeasesForSession: lifecycle.totalActiveLeasesForSessionId,
   };
-  Object.assign(manager, {
-    bookkeepingSizesForTest: () => ({
-      runtimes: store.runtimesBySessionId.size,
-      connectionMeta: store.connectionMetaByRuntimeKey.size,
-      runtimeWorkChains: store.runtimeWorkChains.size,
-      sessionKeys: store.sessionIdBySessionKey.size,
-      deferredRetirement: store.deferredRetirementSessionIds.size,
-      advertisedScopedCatalogs: store.advertisedScopedCatalogBySessionId.size,
-    }),
-  });
   return Object.assign(manager, {
     setScheduler: lifecycle.setScheduler,
     listSessionIdsForAgent(agentId: string) {

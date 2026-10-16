@@ -470,41 +470,51 @@ describe("VisitorAccessService", () => {
     expect(fixture.mutations()).toEqual([]);
   });
 
-  it("revokes the verified account and its person's recorded grants without trusting historical login labels", async () => {
-    const grants = ["first@example.com", "second@example.com"].map((email) =>
-      visitorGrant(email, { githubLogin: "old-label" }),
-    );
-    const account = visitorGrant(42, { githubLogin: "old-label" });
-    const unrelated = visitorGrant("other@example.com", { githubLogin: "visitor" });
-    const fixture = visitorFixture({
-      grants: [...grants, account, unrelated],
-      emails: [...grants.map((grant) => grant.email), unrelated.email, "manual@example.com"],
-      githubAccountIds: [42],
-      githubProfiles: [{ accountId: 42, profileId: "person" }],
-    });
-    fixture.setProfiles([
-      {
-        id: "person",
-        emails: [...grants.map((grant) => grant.email), "manual@example.com"],
-        githubIdentity: { login: "Visitor" },
-      },
-      { id: "other-person", emails: [unrelated.email], githubIdentity: { login: "someone-else" } },
-    ]);
+  it.each([undefined, "github.com"])(
+    "revokes only the public account and its grants across a login collision (host=%s)",
+    async (host) => {
+      const grants = ["first@example.com", "second@example.com"].map((email) =>
+        visitorGrant(email, { githubLogin: "old-label" }),
+      );
+      const account = visitorGrant(42, { githubLogin: "old-label" });
+      const unrelated = visitorGrant("other@example.com", { githubLogin: "visitor" });
+      const fixture = visitorFixture({
+        grants: [...grants, account, unrelated],
+        emails: [...grants.map((grant) => grant.email), unrelated.email, "manual@example.com"],
+        githubAccountIds: [42],
+        githubProfiles: [{ accountId: 42, profileId: "person" }],
+      });
+      fixture.setProfiles([
+        {
+          id: "person",
+          emails: [...grants.map((grant) => grant.email), "manual@example.com"],
+          githubIdentity: { ...(host ? { host } : {}), login: "Visitor" },
+        },
+        {
+          id: "enterprise-person",
+          emails: [unrelated.email],
+          githubIdentity: { host: "ghe.example.test", login: "Visitor" },
+        },
+      ]);
 
-    const result = await fixture.service.revoke(
-      { github: "Visitor" },
-      fixture.authority.assertCurrent,
-    );
+      const result = await fixture.service.revoke(
+        { github: "Visitor" },
+        fixture.authority.assertCurrent,
+      );
 
-    expect(fixture.targets()).toEqual([unrelated.email, "manual@example.com"]);
-    expect([...fixture.grants.values()]).toEqual([unrelated]);
-    expect(result.text).toContain("@visitor (GitHub account 42)");
-    expect(result.details).toMatchObject({
-      emails: grants.map((grant) => grant.email),
-      githubAccountIds: [42],
-    });
-    expect(fixture.resolveGitHubAccount).toHaveBeenCalledTimes(1);
-  });
+      expect(fixture.targets()).toEqual([unrelated.email, "manual@example.com"]);
+      expect([...fixture.grants.values()]).toEqual([unrelated]);
+      expect(result.text).toContain("@visitor (GitHub account 42)");
+      expect(result.details).toMatchObject({
+        emails: grants.map((grant) => grant.email),
+        githubAccountIds: [42],
+      });
+      expect(fixture.resolveGitHubAccount).toHaveBeenCalledTimes(1);
+      const list = await fixture.service.list(fixture.authority.assertCurrent);
+      expect(list.details.grants).toHaveLength(1);
+      expect(list.details.grants[0]).not.toHaveProperty("githubLogin");
+    },
+  );
 
   it("revokes only the pending numeric grant when its profile was merged", async () => {
     const grant = visitorGrant("visitor@example.com", { githubLogin: "visitor" });

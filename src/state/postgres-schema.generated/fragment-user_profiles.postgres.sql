@@ -13,6 +13,7 @@ CREATE TABLE "user_profile_identities" (
   "subject" text COLLATE "C" NOT NULL,
   "profile_id" text COLLATE "C" NOT NULL,
   "canonical_login" text COLLATE "C",
+  "verified_email_json" text COLLATE "C",
   "created_at" bigint NOT NULL,
   "authorization_id" text COLLATE "C",
   "authorization_basis_json" text COLLATE "C",

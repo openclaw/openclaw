@@ -141,14 +141,14 @@ it.each([false, true])(
   "retires idle MCP state while preserving a later lease=%s",
   async (laterLease) => {
     const state = await setupStop();
-    const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
+    const { getOrCreateSessionMcpRuntime, getSessionMcpRuntimeTestManager, unopenedMcpConfig } =
       await import("../../agents/agent-bundle-mcp-manager.test-support.js");
-    const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
+    const { setSessionMcpRuntimeScheduler } =
       await import("../../agents/agent-bundle-mcp-manager-api.js");
     const scheduler = createTestGatewayScheduler();
     onTestFinished(() => scheduler.stop());
     await setSessionMcpRuntimeScheduler(scheduler);
-    const manager = getSessionMcpRuntimeManagerForTesting();
+    const manager = getSessionMcpRuntimeTestManager();
     try {
       const runtime = await getOrCreateSessionMcpRuntime({
         sessionId: state.entry.sessionId,

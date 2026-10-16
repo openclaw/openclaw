@@ -1,6 +1,6 @@
 import { dynamic, type JSX } from "@solidjs/web";
 import { For, Show, createEffect, createMemo, onCleanup, refresh } from "solid-js";
-import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
+import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
   type PanelHostedTab,
@@ -37,8 +37,8 @@ defineSolidBridge<Props, Methods>(
   (props, host) => {
     const contentId = `chat-files-content-${++filesPanelSequence}`;
     let completeCommit = () => {};
-    const appUnmount = new McpAppUnmountGate<Props>(
-      { requestUpdate: () => void refresh(rendered) },
+    const appUnmount = createMcpAppUnmountGate<Props>(
+      () => void refresh(rendered),
       () =>
         new Promise<void>((resolve) => {
           completeCommit = resolve;

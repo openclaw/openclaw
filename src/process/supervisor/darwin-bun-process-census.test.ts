@@ -32,12 +32,16 @@ beforeEach(() => {
     }
     return pids.length * 4;
   });
-  native.info.mockReset().mockImplementation((pid, _flavor, _arg, buffer: Buffer) => {
-    buffer.writeUInt32LE(pid, 0);
-    buffer.writeUInt32LE(12, 4);
-    buffer.writeUInt32LE(123, 8);
-    buffer.writeUInt32LE(pid === 123 ? 2 : 5, 12);
-    buffer.writeUInt32LE(501, 36);
+  native.info.mockReset().mockImplementation((pid, flavor, _arg, buffer: Buffer) => {
+    const full = flavor === 3;
+    buffer.writeUInt32LE(pid, full ? 12 : 0);
+    buffer.writeUInt32LE(12, full ? 16 : 4);
+    buffer.writeUInt32LE(123, full ? 100 : 8);
+    buffer.writeUInt32LE(pid === 123 ? 2 : 5, full ? 4 : 12);
+    buffer.writeUInt32LE(501, full ? 20 : 36);
+    if (full) {
+      buffer.writeBigUInt64LE(123456n, 120);
+    }
     return buffer.length;
   });
 });
@@ -90,7 +94,7 @@ it.each(["PID", "state"])("rejects malformed native %s facts", (field) => {
 
 it("does not publish a census after native observation consumes its deadline", () => {
   let now = 0;
-  vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   native.info.mockImplementationOnce((_pid, _flavor, _arg, buffer: Buffer) => {
     now = 1000;
     buffer.writeUInt32LE(123, 0);
@@ -99,4 +103,12 @@ it("does not publish a census after native observation consumes its deadline", (
   });
   expect(() => [...readDarwinBunProcessCensus(1000)]).toThrow("exceeded its deadline");
   expect(native.close).toHaveBeenCalledOnce();
+});
+
+it("reads selected process identities without enumerating unrelated PIDs", () => {
+  expect([...readDarwinBunProcessCensus(1000, [456], true)]).toEqual([
+    { pid: 456, ppid: 12, pgid: 123, state: "Z", uid: 501, startedAt: "Fri Jan 2 10:17:36 1970" },
+  ]);
+  expect(native.list).not.toHaveBeenCalled();
+  expect(native.info).toHaveBeenCalledWith(456, 3, 0, expect.any(Buffer), 136);
 });

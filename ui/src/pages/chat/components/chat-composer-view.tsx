@@ -32,8 +32,8 @@ import type { ChatComposerPlusMenuView } from "./chat-composer-plus-menu.types.t
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
 import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
-import { resetSkillMenuState, SkillMenu } from "./chat-composer-skill-menu.tsx";
-import { SlashMenu, resetSlashMenuState } from "./chat-composer-slash-menu.tsx";
+import { SkillMenu } from "./chat-composer-skill-menu.tsx";
+import { SlashMenu } from "./chat-composer-slash-menu.tsx";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
@@ -287,11 +287,10 @@ export function renderChatComposerView(
               class={`agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar ${props.offline ? "agent-chat__input--offline" : ""}${context().dictation?.active ? " agent-chat__input--dictating" : ""}${!context().canCompose ? " agent-chat__input--disabled" : ""}`}
               aria-busy={props.disabledReasonBusy ? "true" : "false"}
               onOpenclaw-composer-dismiss-invocations={() => {
-                resetSlashMenuState(context().state);
-                resetSkillMenuState(context().state);
+                context().state.slashMenu.reset();
+                context().state.skillMenu.reset();
                 context().state.mentionMenu.close();
                 context().state.emojiMenu.dismiss(context().state.composerTextarea);
-                context().requestUpdate();
               }}
               onClick={(event: MouseEvent) => focusComposerFromChrome(event, context().canCompose)}
               onPointerDown={(event: PointerEvent) =>
@@ -301,18 +300,13 @@ export function renderChatComposerView(
             >
               {context().menus.slashMenuVisible ? (
                 <SlashMenu
-                  args={[
-                    context().state,
-                    context().slashMenuHost,
-                    context().visibleDraft,
-                    context().requestUpdate,
-                  ]}
+                  menu={context().state.slashMenu}
+                  host={context().slashMenuHost}
+                  draft={context().visibleDraft}
                 />
               ) : undefined}
               {context().menus.skillMenuVisible ? (
-                <SkillMenu
-                  args={[context().state, context().skillMenuHost, context().requestUpdate]}
-                />
+                <SkillMenu menu={context().state.skillMenu} host={context().skillMenuHost} />
               ) : undefined}
               <EmojiMenu
                 args={[context().state.emojiMenu, props.paneId, context().state.composerTextarea]}

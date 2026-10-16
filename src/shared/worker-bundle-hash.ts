@@ -10,6 +10,7 @@ export const WORKER_BUNDLE_FILE_TOOL_READ_PATH = "file-tool-read.worker.mjs";
 export const WORKER_BUNDLE_RSYNC_RECEIVER_PATH = "workspace-rsync-receiver.mjs";
 export const WORKER_BUNDLE_SQLITE_SOURCE_REVISION_PATH = "sqlite-source-revision.worker.mjs";
 export const WORKER_BUNDLE_SQLITE_STORE_PATH = "sqlite-store.worker.mjs";
+export const WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH = "windows-security-helper.exe";
 export const WORKER_BUNDLE_ARTIFACT_PATHS = [
   "code-mode-node.worker.mjs",
   "openclaw-state-read.worker.mjs",
@@ -24,6 +25,7 @@ export const WORKER_BUNDLE_ARTIFACT_PATHS = [
   WORKER_BUNDLE_SQLITE_SOURCE_REVISION_PATH,
   WORKER_BUNDLE_SQLITE_STORE_PATH,
   WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 ] as const;
 

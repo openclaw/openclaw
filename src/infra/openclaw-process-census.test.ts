@@ -65,6 +65,7 @@ const self = process.pid;
 const launcher = self + 1;
 const peer = self + 2;
 const getuidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
+const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
 type Process = {
   ppid: number;
   argv: string[];
@@ -78,6 +79,8 @@ type Process = {
 let rows: Map<number, Process>;
 
 beforeEach(() => {
+  // This synthetic kernel exercises the Node ps contract, including on Bun hosts.
+  Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
   Object.defineProperty(process, "getuid", { configurable: true, value: () => 1000 });
   mockProcessPlatform("linux");
   rows = new Map([
@@ -312,6 +315,11 @@ it.each([
 
 afterEach(() => {
   vi.restoreAllMocks();
+  if (bunDescriptor) {
+    Object.defineProperty(process.versions, "bun", bunDescriptor);
+  } else {
+    Reflect.deleteProperty(process.versions, "bun");
+  }
   if (getuidDescriptor) {
     Object.defineProperty(process, "getuid", getuidDescriptor);
   } else {

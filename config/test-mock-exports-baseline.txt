@@ -618,7 +618,6 @@
 ["extensions/feishu/src/reply-dispatcher.test.ts","./client.js","1ef1822660b3259a2d31c19e3ca6d53513f3f6b1bd63e18696dbd168545ea2cd",1]
 ["extensions/feishu/src/reply-dispatcher.test.ts","./media.js","faf93ac75c0fbd09ffac4a5d2b6c0c55c51123980717ad31b2cf7550b51fbe55",1]
 ["extensions/feishu/src/reply-dispatcher.test.ts","./runtime.js","a09dd67f10e583f6a92cc8bbd10be410a1b97060406d65fef6f1af7d1422fd9f",1]
-["extensions/feishu/src/reply-dispatcher.test.ts","./streaming-card.js","94939145b055f64298910f4275a8cf9d771f0dd148d0d35ac953d75ddcbb789d",1]
 ["extensions/feishu/src/reply-dispatcher.test.ts","./typing.js","a2022367c9a191b1ca61c6ea5c6414e3df513722bb8b9b9ee489da1cca6ab467",1]
 ["extensions/feishu/src/send-target.test.ts","./accounts.js","9904bc6395611ec314fbc80addf688c91d50295ef1a16bed01d0f0c592a4b5ff",1]
 ["extensions/feishu/src/send-target.test.ts","./client.js","a766f99084fc866bc01bc95c92ea86833c7054111e419c674ca435a652c9f1e0",1]

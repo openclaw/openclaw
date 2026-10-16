@@ -40,20 +40,8 @@ import {
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
 import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.types.ts";
 import { SelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.tsx";
-import {
-  handleSkillMenuKeydown,
-  SkillMenu,
-  resetSkillMenuState,
-  updateSkillMenu,
-  type SkillMenuHost,
-} from "../chat/components/chat-composer-skill-menu.tsx";
-import {
-  handleSlashMenuKeydown,
-  SlashMenu,
-  resetSlashMenuState,
-  type SlashMenuHost,
-  updateSlashMenu,
-} from "../chat/components/chat-composer-slash-menu.tsx";
+import { SkillMenu, type SkillMenuHost } from "../chat/components/chat-composer-skill-menu.tsx";
+import { SlashMenu, type SlashMenuHost } from "../chat/components/chat-composer-slash-menu.tsx";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import {
@@ -111,8 +99,8 @@ export type NewSessionComposerOptions = {
 function submitNewSession(options: NewSessionComposerOptions) {
   options.textareaController.emojiMenu.close();
   options.textareaController.mentionMenu.close();
-  resetSkillMenuState(options.textareaController.skillMenuState);
-  resetSlashMenuState(options.textareaController.slashMenuState);
+  options.textareaController.skillMenu.reset();
+  options.textareaController.slashMenu.reset();
   options.onSubmit();
 }
 
@@ -123,7 +111,9 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
   const gateway = context?.gateway;
   const commandClient = options.nativeTerminal ? null : (gateway?.snapshot.client ?? null);
   const mentionDirectory = resolveNewSessionMentionDirectory(options);
-  const { skillMenuState, slashMenuState, mentionMenu, emojiMenu } = textareaController;
+  const { skillMenu, slashMenu, mentionMenu, emojiMenu } = textareaController;
+  const skillMenuState = skillMenu.state;
+  const slashMenuState = slashMenu.state;
   const composerLocked =
     options.submitting || options.messageLocked === true || options.dictationActive === true;
   const skillMenuHost: SkillMenuHost = {
@@ -172,18 +162,8 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
     if (
       options.textareaController.emojiMenu.handleKeydown(event, "new-session") ||
       options.textareaController.mentionMenu.handleKeydown(event, mentionMenuHost) ||
-      handleSkillMenuKeydown(
-        event,
-        options.textareaController.skillMenuState,
-        skillMenuHost,
-        options.onChange,
-      ) ||
-      handleSlashMenuKeydown(
-        event,
-        options.textareaController.slashMenuState,
-        slashMenuHost,
-        options.onChange,
-      )
+      skillMenu.handleKeydown(event, skillMenuHost) ||
+      slashMenu.handleKeydown(event, slashMenuHost)
     ) {
       return;
     }
@@ -206,8 +186,8 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
     if (options.canSubmit || options.submitDisabledReason !== undefined) {
       event.preventDefault();
       if (background) {
-        resetSkillMenuState(options.textareaController.skillMenuState);
-        resetSlashMenuState(options.textareaController.slashMenuState);
+        options.textareaController.skillMenu.reset();
+        options.textareaController.slashMenu.reset();
         options.textareaController.mentionMenu.close();
         options.onBackgroundSubmit?.();
       } else {
@@ -215,14 +195,16 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
       }
     }
   };
-  const updateEmojiMenu = (target: HTMLTextAreaElement) => {
+  const updateEmojiMenu = (
+    target: HTMLTextAreaElement,
+    commandsOpen = skillMenuState.skillMenuOpen || slashMenuState.slashMenuOpen,
+  ) => {
     emojiMenu.update(
       target,
       !composerLocked &&
         !options.nativeTerminal &&
         !options.textareaController.composing &&
-        !skillMenuState.skillMenuOpen &&
-        !slashMenuState.slashMenuOpen &&
+        !commandsOpen &&
         !mentionMenu.open,
     );
   };
@@ -231,14 +213,8 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
       emojiMenu.close();
       return;
     }
-    updateSlashMenu(target.value, slashMenuState, slashMenuHost, options.onChange);
-    updateSkillMenu(
-      target.value,
-      target.selectionStart,
-      skillMenuState,
-      skillMenuHost,
-      options.onChange,
-    );
+    const slashOpen = slashMenu.update(target.value, slashMenuHost);
+    const skillOpen = skillMenu.update(target.value, target.selectionStart, skillMenuHost);
     if (event?.inputType === "insertFromPaste" || event?.inputType === "insertFromDrop") {
       mentionMenu.close();
     } else {
@@ -251,7 +227,7 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
             : "input",
       );
     }
-    updateEmojiMenu(target);
+    updateEmojiMenu(target, slashOpen || skillOpen);
   };
   const handleSelect = (event: Event) => {
     const target = event.currentTarget;
@@ -459,10 +435,9 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
         options().draftOwnerKey,
         frame().mentionDirectory,
         frame().composerLocked || options().nativeTerminal || textarea.composing,
-        options().onChange,
       ] as const,
-    ([client, agentId, draftOwnerKey, directory, locked, onChange]) => {
-      textarea.syncSkillCommandOwner(client, agentId, draftOwnerKey, onChange);
+    ([client, agentId, draftOwnerKey, directory, locked]) => {
+      textarea.syncSkillCommandOwner(client, agentId, draftOwnerKey);
       textarea.mentionMenu.syncDirectory(directory);
       if (locked) {
         textarea.emojiMenu.close();
@@ -552,18 +527,13 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
           <div class="agent-chat__composer-combobox">
             <Show when={frame().slashMenuVisible}>
               <SlashMenu
-                args={[
-                  textarea.slashMenuState,
-                  frame().slashMenuHost,
-                  options().message,
-                  options().onChange,
-                ]}
+                menu={textarea.slashMenu}
+                host={frame().slashMenuHost}
+                draft={frame().visibleMessage}
               />
             </Show>
             <Show when={frame().skillMenuVisible}>
-              <SkillMenu
-                args={[textarea.skillMenuState, frame().skillMenuHost, options().onChange]}
-              />
+              <SkillMenu menu={textarea.skillMenu} host={frame().skillMenuHost} />
             </Show>
             <textarea
               ref={(element) => {

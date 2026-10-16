@@ -1,5 +1,4 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import type { SolidControllerHost } from "../lib/reactive/solid-controller-host.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { SidebarEmptyGroupsMode } from "./app-sidebar-session-types.ts";
 
@@ -15,19 +14,15 @@ type PreferenceContext = {
 };
 
 /** Personal presentation only: filter transitions never persist an effective value. */
-export class SidebarEmptyGroupsController {
+export class SidebarEmptyGroupsPreference {
   mode: SidebarEmptyGroupsMode = "filtering";
   private storageKey: string | null = null;
   private connectionKey: string | null = null;
 
-  constructor(
-    private readonly host: SolidControllerHost,
-    private readonly getContext: () => PreferenceContext | undefined,
-  ) {}
+  constructor(private readonly getContext: () => PreferenceContext | undefined) {}
 
   set(mode: SidebarEmptyGroupsMode): void {
     if (this.reconcile()) {
-      this.host.requestUpdate();
       return;
     }
     this.mode = mode;
@@ -38,7 +33,6 @@ export class SidebarEmptyGroupsController {
     } catch {
       // A blocked browser store must not prevent changing the current view.
     }
-    this.host.requestUpdate();
   }
 
   /** Called before the sidebar caches its rendered sections, not after rendering. */

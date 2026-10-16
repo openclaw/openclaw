@@ -5,8 +5,8 @@ import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runti
 import {
   ChannelType,
   type Client,
-  MessageReactionAddListener,
-  MessageReactionRemoveListener,
+  GatewayDispatchEvents,
+  type ListenerDataByEvent,
   type User,
 } from "../internal/discord.js";
 import {
@@ -25,7 +25,7 @@ import { runDiscordListenerWithSlowLog, type DiscordListenerLogger } from "./lis
 import type { DiscordLivePolicyReader } from "./live-policy.js";
 import { resolveFetchedDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
 
-type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
+type DiscordReactionEvent = ListenerDataByEvent[GatewayDispatchEvents.MessageReactionAdd];
 
 type DiscordReactionListenerParams = {
   readPolicy?: DiscordLivePolicyReader;
@@ -52,10 +52,9 @@ type DiscordReactionRoutingParams = {
 type DiscordReactionMode = "off" | "own" | "all" | "allowlist";
 type DiscordFetchedReactionMessage = { author?: User | null } | null;
 
-export class DiscordReactionListener extends MessageReactionAddListener {
-  constructor(private params: DiscordReactionListenerParams) {
-    super();
-  }
+export class DiscordReactionListener {
+  readonly type = GatewayDispatchEvents.MessageReactionAdd;
+  constructor(private params: DiscordReactionListenerParams) {}
 
   async handle(data: DiscordReactionEvent, client: Client) {
     this.params.onEvent?.();
@@ -70,10 +69,9 @@ export class DiscordReactionListener extends MessageReactionAddListener {
   }
 }
 
-export class DiscordReactionRemoveListener extends MessageReactionRemoveListener {
-  constructor(private params: DiscordReactionListenerParams) {
-    super();
-  }
+export class DiscordReactionRemoveListener {
+  readonly type = GatewayDispatchEvents.MessageReactionRemove;
+  constructor(private params: DiscordReactionListenerParams) {}
 
   async handle(data: DiscordReactionEvent, client: Client) {
     this.params.onEvent?.();

@@ -81,8 +81,8 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
-vi.mock("./streaming-card.js", async () => {
-  const { mergeStreamingText } = await import("./card-test-helpers.js");
+vi.mock("./streaming-card.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./streaming-card.js")>();
   class FeishuStreamingFinalizationError extends Error {
     result: { visibleReplySent: boolean; content?: string; messageId?: string };
     constructor(
@@ -94,7 +94,7 @@ vi.mock("./streaming-card.js", async () => {
     }
   }
   return {
-    mergeStreamingText,
+    ...actual,
     FeishuStreamingFinalizationError,
     FeishuStreamingSession: class {
       active = false;

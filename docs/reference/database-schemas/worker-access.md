@@ -660,6 +660,12 @@ committed tail retains at most 128 events and 512 KiB; selected anchors retain a
 most 128 entries and 128 KiB of estimated memory. These bounded facts share the
 actor's eviction and write-receipt invalidation lifecycle.
 
+The history worker retains visible marker positions for recently read sessions.
+Repeated pages reuse that projection, and ordinary appends extend it from new
+navigation rows without rereading old markers or message bodies. Branch changes,
+reset, and rewritten markers rebuild the projection. Page payloads retain their
+existing byte and event bounds; model-context selection is unchanged.
+
 Covered prompt-metadata rewrites that preserve admission and navigation can
 update retained windows from their receipt rows. Cold or evicted facts,
 unsupported paths or boundary projections, admissions outside retained coverage,

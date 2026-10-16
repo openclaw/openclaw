@@ -13,8 +13,7 @@ export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams & { client: Client },
 ): DiscordMessageHandlerWithLifecycle {
   const dispatcher = createDiscordMessageDispatcher(params);
-  const createIngressMonitor = params.testing?.createIngressMonitor ?? createDiscordIngressMonitor;
-  const ingress = createIngressMonitor({
+  const ingress = createDiscordIngressMonitor({
     ...params,
     dispatch: (event, lifecycle) =>
       dispatcher(event, params.client, {

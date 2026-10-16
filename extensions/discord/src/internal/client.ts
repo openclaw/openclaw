@@ -12,12 +12,9 @@ import type { GatewayPluginContract, VoicePluginContract } from "./plugin-contra
 import { RequestClient, type RequestClientOptions } from "./rest.js";
 import type { Guild, GuildMember, User } from "./structures.js";
 
-export abstract class Plugin {
-  abstract readonly id: string;
+export type RegisteredPlugin = (GatewayPluginContract | VoicePluginContract) & {
   registerClient?(client: Client): Promise<void> | void;
-}
-
-export type RegisteredPlugin = Plugin & (GatewayPluginContract | VoicePluginContract);
+};
 
 type AnyListener = {
   type: string;
