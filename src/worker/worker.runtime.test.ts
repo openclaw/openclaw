@@ -938,17 +938,17 @@ function managedCommand() {
     command,
     settled,
     scopeKey,
-    send(launch: WorkerLaunchDescriptor, idleRetention = false) {
+    send(this: void, launch: WorkerLaunchDescriptor, idleRetention = false) {
       input.write(`${JSON.stringify(buildWorkerProcessTurn(launch, idleRetention))}\n`);
       return launch.assignment.turnId;
     },
-    cancel(turnId: string) {
+    cancel(this: void, turnId: string) {
       input.write(`${JSON.stringify({ type: "cancel", turnId })}\n`);
     },
-    waitResults(count: number) {
+    waitResults(this: void, count: number) {
       return waitForFast(() => expect(results).toHaveLength(count), { timeout: 30_000 });
     },
-    async close() {
+    async close(this: void) {
       input.end();
       try {
         await command;
@@ -1185,7 +1185,10 @@ it.each(["error", "cancelled"] as const)(
       isError: false,
       content: expect.arrayContaining([expect.objectContaining({ type: "image" })]),
     });
-    const image = screenshot?.content.find((part) => part.type === "image");
+    if (screenshot?.role !== "toolResult") {
+      throw new Error("Expected computer tool result");
+    }
+    const image = screenshot.content.find((part) => part.type === "image");
     expect(image?.type === "image" && image.data.length).toBeGreaterThan(64 * 1024);
     expect(gateway.inferenceRequests[1]?.context.messages).toContainEqual(screenshot);
     const computer = gateway.inferenceRequests[0]?.context.tools?.find(

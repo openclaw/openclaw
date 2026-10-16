@@ -298,7 +298,7 @@ describe("memory reindex state", () => {
     expect(
       resolveMemoryIndexIdentityState({
         ...params,
-        meta: { ...params.meta, providerKey: "provider-key-arbitrary" },
+        meta: createMeta({ provider: "local", ...alias, providerKey: "provider-key-arbitrary" }),
       }),
     ).toEqual({
       status: "mismatched",

@@ -395,7 +395,7 @@ describe("sessions.patch", () => {
         const patched = vi.fn(async () => {});
         registerInternalHook("session:patch", patched);
         setActiveEmbeddedRun(sessionId, handle, sessionKey);
-        const responses = [vi.fn(), vi.fn()];
+        const responses = [vi.fn(), vi.fn()] as const;
         const patch = (permissionMode: "full" | "read-only", index: number) =>
           mutate(
             "sessions.patch",
@@ -568,7 +568,7 @@ describe("sessions.patch", () => {
       const member = {
         sessions: { others: "none" as const },
         agents: "*" as const,
-        scopes: ["operator.write"],
+        scopes: ["operator.write" as const],
       };
       const cfg: OpenClawConfig = {
         gateway: { roles: { default: "member", definitions: { member } } },

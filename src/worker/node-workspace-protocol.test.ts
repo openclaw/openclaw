@@ -94,6 +94,7 @@ it("preserves admitted host results but rejects malformed or inherited fields", 
     Object.create(completedResult),
     Object.assign(Object.create({ process: undefined }), completedResult),
     Object.assign([], completedResult),
+    Object.assign(Buffer.from("bytes"), completedResult),
   ]) {
     expect(parseNodeWorkerWorkspaceExecResult(invalid)).toBeNull();
   }
@@ -113,10 +114,11 @@ it.each<{
     valid: [seededDownload, upload].map((transfer) => ({ transfer })),
     invalid: [
       { ...seededDownload, seedKey: "../outside" },
+      { ...seededDownload, seedKey: "A".repeat(64) },
       { ...seededDownload, attachments: true },
       { ...upload, seedKey: key },
-      ...[undefined, "../outside"].map((referenceManifestRef) =>
-        Object.assign({}, upload, { referenceManifestRef }),
+      ...[undefined, null, "", "../outside", `sha256:${"B".repeat(64)}`].map(
+        (referenceManifestRef) => Object.assign({}, upload, { referenceManifestRef }),
       ),
     ].map((transfer) => ({ transfer })),
     reason: "workspace transfer is invalid",
@@ -131,6 +133,7 @@ it.each<{
     invalid: [
       ...[
         { ...seed, key: "../outside" },
+        { ...seed, key: "A".repeat(64) },
         { action: "remove", key },
         { ...seed, maxAgeMs: 0 },
         { ...storedSeed, extra: true },

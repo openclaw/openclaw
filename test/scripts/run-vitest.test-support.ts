@@ -40,7 +40,7 @@ export function captureOutput(...streams: Readable[]) {
   let text = "";
   for (const stream of streams) {
     stream.on("data", (chunk: string | Buffer) => {
-      text += chunk;
+      text += String(chunk);
     });
   }
   return {

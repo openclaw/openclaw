@@ -666,7 +666,8 @@ for (let index = 0; index < args.length; index++) {
           OPENCLAW_INSTALL_SMOKE_UPDATE_HOST: "127.0.0.1",
         },
       });
-      expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
       const served = readFileSync(receipts, "utf8")
         .trim()
         .split("\n")
@@ -2227,7 +2228,8 @@ setInterval(() => {}, 1000);`;
       { timeout: 5000 },
     );
 
-    expect(result).toMatchObject({ error: undefined, status: 1 });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
     expect(result.stderr).toContain(`command timed out after 50ms: ${testNodeExecPath}`);
   });
 });

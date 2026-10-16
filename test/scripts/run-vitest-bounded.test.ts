@@ -154,7 +154,8 @@ registerHooks({load(url, context, nextLoad) {
             NODE_OPTIONS: `--import=${files.path("preload.mjs")}`,
           },
         );
-        expect(result, result.stderr).toMatchObject({ error: undefined, status: code });
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(code);
         if (!settled) {
           expect(result.stderr).toContain(`owned ${failure} loader dependency`);
         }
@@ -251,7 +252,8 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
         const code =
           outcome === "signal" ? 143 : outcome === "failure" || outcome === "startup" ? 1 : 0;
         const failed = code !== 0;
-        expect(result, output.text).toMatchObject({ error: undefined, status: code });
+        expect(result.error, output.text).toBeUndefined();
+        expect(result.status, output.text).toBe(code);
         const trailer = `[${tool}] FAILED (exit ${code})`;
         expect(output.text.match(/^\[.*\] FAILED \(exit \d+\)$/gmu) ?? [], output.text).toEqual(
           failed ? [trailer] : [],
@@ -340,7 +342,8 @@ syncBuiltinESMExports();
         // This preload replaces only I/O; it does not install a TypeScript loader.
         fixtureEnv({ NODE_OPTIONS: `--import=${preload}` }),
       );
-      expect(result, result.stderr).toMatchObject({ error: undefined, signal: null, status: 2 });
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result, result.stderr).toMatchObject({ signal: null, status: 2 });
       expect(result.stderr).toContain("fixture runtime identity inspected");
       expect(result.stderr).not.toContain("fixture reader or UI build admitted");
     },
