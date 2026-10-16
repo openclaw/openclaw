@@ -97,6 +97,20 @@ function sseResponse(body: BodyInit): Response {
   return new Response(body, { headers: { "content-type": "text/event-stream" } });
 }
 
+function sseStream(start: UnderlyingDefaultSource<Uint8Array>["start"]) {
+  return sseResponse(new ReadableStream<Uint8Array>({ start }));
+}
+
+function createStreamable(
+  options: NonNullable<ConstructorParameters<typeof OpenClawStreamableHTTPClientTransport>[1]>,
+  url = new URL("http://mcp.invalid/mcp"),
+) {
+  return {
+    transport: new OpenClawStreamableHTTPClientTransport(url, options),
+    client: new Client({ name: "test", version: "1" }),
+  };
+}
+
 function createSseReconnectFixture(buildGetResponse: (getCount: number) => Response) {
   let getCount = 0;
   const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -138,6 +152,27 @@ async function expectSseSessionReplaced(fixture: SseReconnectFixture): Promise<v
   expect(fixture.postTargets()).toHaveLength(0);
 }
 
+function listen(server: ReturnType<typeof createServer>) {
+  return new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+}
+
+function tcpAddress(server: ReturnType<typeof createServer>) {
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected TCP server address");
+  }
+  return address;
+}
+
+function closeServer(server: ReturnType<typeof createServer>) {
+  return new Promise<void>((resolve) => {
+    server.close(() => resolve());
+    server.closeAllConnections();
+  });
+}
+
 describe("OpenClaw MCP HTTP lifecycle adapters", () => {
   it.each([
     "Streamable HTTP error: Error POSTing to endpoint: bearer=body-secret",
@@ -163,10 +198,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
         );
       },
     });
-    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
-      fetch: fetchMock,
-    });
-    const client = new Client({ name: "test", version: "1" });
+    const { transport, client } = createStreamable({ fetch: fetchMock });
 
     try {
       await client.connect(transport);
@@ -213,13 +245,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
           });
         },
       });
-      const transport = new OpenClawStreamableHTTPClientTransport(
-        new URL("http://mcp.invalid/mcp"),
-        {
-          fetch: fetchMock,
-        },
-      );
-      const client = new Client({ name: "test", version: "1" });
+      const { transport, client } = createStreamable({ fetch: fetchMock });
       const onerror = vi.fn();
       // MCP clients expose callback properties rather than EventTarget listeners.
       // oxlint-disable-next-line unicorn/prefer-add-event-listener
@@ -280,24 +306,12 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
   it("keeps a legacy SSE stream open beyond the cumulative message limit", async () => {
     const encoder = new TextEncoder();
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if ((init?.method ?? "GET") !== "GET") {
-        return new Response(null, { status: 202 });
-      }
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            streamController = controller;
-            controller.enqueue(encoder.encode("event: endpoint\ndata: /messages\n\n"));
-          },
-        }),
-        { headers: { "content-type": "text/event-stream" } },
-      );
-    });
-    const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
-      fetch: fetchMock,
-      eventSourceInit: { fetch: fetchMock },
-    });
+    const { transport } = createSseReconnectFixture(() =>
+      sseStream((controller) => {
+        streamController = controller;
+        controller.enqueue(encoder.encode("event: endpoint\ndata: /messages\n\n"));
+      }),
+    );
     let messageCount = 0;
     let lastMessage: unknown;
     // MCP transports expose callback properties rather than EventTarget listeners.
@@ -333,31 +347,13 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
   it("closes legacy SSE after an oversized event without reconnecting", async () => {
     const encoder = new TextEncoder();
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
-    let getCount = 0;
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if ((init?.method ?? "GET") !== "GET") {
-        return new Response(null, { status: 202 });
-      }
-      getCount += 1;
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            streamController = controller;
-            controller.enqueue(encoder.encode("retry: 1\n\nevent: endpoint\ndata: /messages\n\n"));
-          },
-        }),
-        { headers: { "content-type": "text/event-stream" } },
-      );
-    });
-    const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
-      fetch: fetchMock,
-      eventSourceInit: { fetch: fetchMock },
-    });
-    const onclose = vi.fn();
+    const { transport, onclose, getCount } = createSseReconnectFixture(() =>
+      sseStream((controller) => {
+        streamController = controller;
+        controller.enqueue(encoder.encode("retry: 1\n\nevent: endpoint\ndata: /messages\n\n"));
+      }),
+    );
     const onerror = vi.fn();
-    // MCP transports expose callback properties rather than EventTarget listeners.
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener
-    transport.onclose = onclose;
     // oxlint-disable-next-line unicorn/prefer-add-event-listener
     transport.onerror = onerror;
 
@@ -372,7 +368,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       expect(onerror).toHaveBeenCalledWith(
         expect.objectContaining({ message: expect.stringContaining("SSE event exceeds 10485760") }),
       );
-      expect(getCount).toBe(1);
+      expect(getCount()).toBe(1);
     } finally {
       await transport.close();
     }
@@ -396,34 +392,15 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
   it("closes an established legacy SSE transport after a terminal reconnect response", async () => {
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
     const encoder = new TextEncoder();
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const method = init?.method ?? "GET";
-      if (method !== "GET") {
-        return new Response(null, { status: 202 });
-      }
+    const { transport, onclose, postTargets } = createSseReconnectFixture(() => {
       if (!streamController) {
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              streamController = controller;
-              controller.enqueue(
-                encoder.encode("retry: 1\n\nevent: endpoint\ndata: /messages\n\n"),
-              );
-            },
-          }),
-          { headers: { "content-type": "text/event-stream" } },
-        );
+        return sseStream((controller) => {
+          streamController = controller;
+          controller.enqueue(encoder.encode("retry: 1\n\nevent: endpoint\ndata: /messages\n\n"));
+        });
       }
       return new Response(null, { status: 503, statusText: "Unavailable" });
     });
-    const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
-      fetch: fetchMock,
-      eventSourceInit: { fetch: fetchMock },
-    });
-    const onclose = vi.fn();
-    // MCP transports expose callback properties rather than EventTarget listeners.
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener
-    transport.onclose = onclose;
 
     try {
       await transport.start();
@@ -433,7 +410,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       await expect(transport.send({ jsonrpc: "2.0", id: 1, method: "tools/list" })).rejects.toThrow(
         "closed",
       );
-      expect(fetchMock.mock.calls.filter((call) => call[1]?.method === "POST")).toHaveLength(0);
+      expect(postTargets()).toHaveLength(0);
     } finally {
       await transport.close();
     }
@@ -482,16 +459,12 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
     const encoder = new TextEncoder();
     const fixture = createSseReconnectFixture(() =>
-      sseResponse(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            streamController = controller;
-            controller.enqueue(
-              encoder.encode("retry: 1\n\nevent: endpoint\ndata: /messages?session_id=1\n\n"),
-            );
-          },
-        }),
-      ),
+      sseStream((controller) => {
+        streamController = controller;
+        controller.enqueue(
+          encoder.encode("retry: 1\n\nevent: endpoint\ndata: /messages?session_id=1\n\n"),
+        );
+      }),
     );
 
     try {
@@ -519,17 +492,13 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     const encoder = new TextEncoder();
     const fixture = createSseReconnectFixture((getCount) => {
       const head = `retry: 1\r\nevent: endpoint\rdata: /messages?session_id=${getCount}\r`;
-      return sseResponse(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            for (const byte of encoder.encode(head)) {
-              controller.enqueue(Uint8Array.of(byte));
-            }
-            controller.enqueue(encoder.encode("\n\r\n"));
-            controller.close();
-          },
-        }),
-      );
+      return sseStream((controller) => {
+        for (const byte of encoder.encode(head)) {
+          controller.enqueue(Uint8Array.of(byte));
+        }
+        controller.enqueue(encoder.encode("\n\r\n"));
+        controller.close();
+      });
     });
 
     try {
@@ -550,14 +519,10 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
         getCount === 1
           ? `retry: 1\r\r${keepAlives}event: endpoint\rdata: /messages?session_id=1\r\r: ping\r`
           : `retry: 1\r\revent: endpoint\rdata: /messages?session_id=2\r\r: ping\r`;
-      return sseResponse(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            streamController = controller;
-            controller.enqueue(encoder.encode(payload));
-          },
-        }),
-      );
+      return sseStream((controller) => {
+        streamController = controller;
+        controller.enqueue(encoder.encode(payload));
+      });
     });
 
     try {
@@ -607,7 +572,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
           : new Response(null, { status: 503, statusText: "Unavailable" });
       },
     });
-    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
+    const { transport, client } = createStreamable({
       fetch: fetchMock,
       reconnectionOptions: {
         initialReconnectionDelay: 1,
@@ -616,7 +581,6 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
         maxRetries: 2,
       },
     });
-    const client = new Client({ name: "test", version: "1" });
     const onclose = vi.fn();
     // MCP clients expose callback properties rather than EventTarget listeners.
     // oxlint-disable-next-line unicorn/prefer-add-event-listener
@@ -631,10 +595,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     const fetchMock = initializedFetch({
       onGet: () => new Response("Session not found", { status: 404, statusText: "Not Found" }),
     });
-    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
-      fetch: fetchMock,
-    });
-    const client = new Client({ name: "test", version: "1" });
+    const { transport, client } = createStreamable({ fetch: fetchMock });
     const onclose = vi.fn();
     // MCP clients expose callback properties rather than EventTarget listeners.
     // oxlint-disable-next-line unicorn/prefer-add-event-listener
@@ -676,13 +637,8 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
           socket.once("close", () => sockets.delete(socket));
         });
         server.on("clientError", (_err, socket) => socket.destroy());
-        await new Promise<void>((resolve) => {
-          server.listen(0, "127.0.0.1", resolve);
-        });
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("expected loopback TCP address");
-        }
+        await listen(server);
+        const address = tcpAddress(server);
         const baseUrl = new URL(`http://127.0.0.1:${address.port}/mcp`);
 
         // Replace only cancellation after the real DELETE has completed.
@@ -712,10 +668,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
           );
         };
 
-        const transport = new OpenClawStreamableHTTPClientTransport(baseUrl, {
-          fetch: cleanupFetch,
-        });
-        const client = new Client({ name: "test", version: "1" });
+        const { transport, client } = createStreamable({ fetch: cleanupFetch }, baseUrl);
 
         await expect(client.connect(transport)).rejects.toThrow("initialize failed");
         expect(transport.sessionId).toBe("hang-cancel-session");
@@ -733,10 +686,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
         for (const socket of sockets) {
           socket.destroy();
         }
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-          server.closeAllConnections();
-        });
+        await closeServer(server);
       }
     },
   );
@@ -776,18 +726,13 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       }
       response.writeHead(405).end();
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    await listen(server);
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected loopback TCP address");
-      }
-      const transport = new OpenClawStreamableHTTPClientTransport(
+      const address = tcpAddress(server);
+      const { transport, client } = createStreamable(
+        {},
         new URL(`http://127.0.0.1:${address.port}/mcp`),
       );
-      const client = new Client({ name: "test", version: "1" });
       await client.connect(transport);
 
       await expect(transport.terminateSession()).resolves.toBeUndefined();
@@ -797,10 +742,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
         disposeMcpClient({ client, transport, transportType: "streamable-http" }),
       ).resolves.toBe("closed");
     } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-        server.closeAllConnections();
-      });
+      await closeServer(server);
     }
   });
 
@@ -810,10 +752,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       onGet: () => new Response(null, { status: 405 }),
       onDelete,
     });
-    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
-      fetch: fetchMock,
-    });
-    const client = new Client({ name: "test", version: "1" });
+    const { transport, client } = createStreamable({ fetch: fetchMock });
     await client.connect(transport);
     await expect(transport.terminateSession()).rejects.toThrow(
       "Failed to terminate session: Rejected",
@@ -837,7 +776,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
         });
       },
     });
-    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
+    const { transport, client } = createStreamable({
       fetch: fetchMock,
       reconnectionOptions: {
         initialReconnectionDelay: 20,
@@ -846,7 +785,6 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
         maxRetries: 2,
       },
     });
-    const client = new Client({ name: "test", version: "1" });
     await client.connect(transport);
     await vi.waitFor(() => expect(getCount).toBe(1));
 
@@ -864,15 +802,10 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       response.writeHead(405, { "content-type": "application/json" });
       response.write(JSON.stringify({ error: "Method not allowed" }));
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    await listen(server);
     const client = new Client({ name: "test", version: "1" });
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected TCP server address");
-      }
+      const address = tcpAddress(server);
       const fetchMock = initializedFetch({
         onGet: () => fetch(`http://127.0.0.1:${address.port}/mcp`),
         onPost: (message) =>
@@ -889,10 +822,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       await expect(client.ping()).resolves.toEqual({});
     } finally {
       await client.close();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-        server.closeAllConnections();
-      });
+      await closeServer(server);
     }
   });
 
@@ -920,10 +850,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
         return new Response(null, { status: 202 });
       },
     });
-    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
-      fetch: fetchMock,
-    });
-    const client = new Client({ name: "test", version: "1" });
+    const { transport, client } = createStreamable({ fetch: fetchMock });
     await client.connect(transport);
     await expect(client.ping()).rejects.toThrow(/Streamable HTTP error/);
     await expect(settlesWithin(cancelPromise, 1_000)).resolves.toBe(true);

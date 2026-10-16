@@ -8,6 +8,16 @@ const limits = {
   maxBytes: 1_024,
 };
 
+type PageOptions = Parameters<typeof collectMcpPaginatedItems<string>>[0];
+function collect(itemLabel: string, options: Pick<PageOptions, "loadPage"> & Partial<PageOptions>) {
+  return collectMcpPaginatedItems({
+    label: `MCP ${itemLabel.slice(0, -1)} listing`,
+    itemLabel,
+    ...limits,
+    ...options,
+  });
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -15,10 +25,7 @@ afterEach(() => {
 describe("collectMcpPaginatedItems", () => {
   it("preserves ordering and treats an empty cursor as present", async () => {
     const cursors: Array<string | undefined> = [];
-    const result = await collectMcpPaginatedItems({
-      label: "MCP tool listing",
-      itemLabel: "tools",
-      ...limits,
+    const result = await collect("tools", {
       loadPage: async ({ cursor }) => {
         cursors.push(cursor);
         return cursor === undefined
@@ -33,10 +40,7 @@ describe("collectMcpPaginatedItems", () => {
 
   it("rejects repeated and cyclic cursors", async () => {
     await expect(
-      collectMcpPaginatedItems({
-        label: "MCP tool listing",
-        itemLabel: "tools",
-        ...limits,
+      collect("tools", {
         loadPage: async ({ cursor }) => ({
           items: [cursor ?? "first"],
           nextCursor: cursor === undefined ? "a" : cursor === "a" ? "b" : "a",
@@ -47,10 +51,7 @@ describe("collectMcpPaginatedItems", () => {
 
   it("bounds endless pages, retained items, and aggregate serialized bytes", async () => {
     await expect(
-      collectMcpPaginatedItems({
-        label: "MCP tool listing",
-        itemLabel: "tools",
-        ...limits,
+      collect("tools", {
         maxPages: 2,
         loadPage: async ({ cursor }) => ({
           items: [cursor ?? "first"],
@@ -60,20 +61,14 @@ describe("collectMcpPaginatedItems", () => {
     ).rejects.toThrow("exceeded 2 pages");
 
     await expect(
-      collectMcpPaginatedItems({
-        label: "MCP resource listing",
-        itemLabel: "resources",
-        ...limits,
+      collect("resources", {
         maxItems: 2,
         loadPage: async () => ({ items: ["one", "two", "three"] }),
       }),
     ).rejects.toThrow("exceeded 2 resources");
 
     await expect(
-      collectMcpPaginatedItems({
-        label: "MCP prompt listing",
-        itemLabel: "prompts",
-        ...limits,
+      collect("prompts", {
         maxBytes: 64,
         loadPage: async () => ({
           items: ["prompt"],
@@ -88,10 +83,7 @@ describe("collectMcpPaginatedItems", () => {
     vi.setSystemTime(1_000);
     const requestTimeouts: number[] = [];
     let page = 0;
-    const listing = collectMcpPaginatedItems({
-      label: "MCP tool listing",
-      itemLabel: "tools",
-      ...limits,
+    const listing = collect("tools", {
       timeoutMs: 50,
       loadPage: async ({ requestTimeoutMs }) => {
         requestTimeouts.push(requestTimeoutMs);
@@ -111,10 +103,7 @@ describe("collectMcpPaginatedItems", () => {
 
   it("reports the collector deadline before a nested request timeout", async () => {
     vi.useFakeTimers();
-    const listing = collectMcpPaginatedItems({
-      label: "MCP resource listing",
-      itemLabel: "resources",
-      ...limits,
+    const listing = collect("resources", {
       timeoutMs: 50,
       loadPage: async ({ requestTimeoutMs }) =>
         await new Promise<never>((_resolve, reject) => {
@@ -131,10 +120,7 @@ describe("collectMcpPaginatedItems", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     let measuredPages = 0;
-    const listing = collectMcpPaginatedItems({
-      label: "MCP resource listing",
-      itemLabel: "resources",
-      ...limits,
+    const listing = collect("resources", {
       timeoutMs: 50,
       loadPage: async () => ({
         items: ["resource"],
@@ -156,10 +142,7 @@ describe("collectMcpPaginatedItems", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     let page = 0;
-    const items = await collectMcpPaginatedItems({
-      label: "MCP tool listing",
-      itemLabel: "tools",
-      ...limits,
+    const items = await collect("tools", {
       timeoutMs: 50,
       loadPage: async () => {
         page += 1;
@@ -179,10 +162,7 @@ describe("collectMcpPaginatedItems", () => {
     vi.useFakeTimers();
     const controller = new AbortController();
     let accessedItems = 0;
-    const listing = collectMcpPaginatedItems({
-      label: "MCP prompt listing",
-      itemLabel: "prompts",
-      ...limits,
+    const listing = collect("prompts", {
       signal: controller.signal,
       loadPage: async () => {
         controller.abort("runtime disposed");
@@ -204,10 +184,7 @@ describe("collectMcpPaginatedItems", () => {
 
   it("aborts an in-flight page through the caller signal", async () => {
     const controller = new AbortController();
-    const listing = collectMcpPaginatedItems({
-      label: "MCP prompt listing",
-      itemLabel: "prompts",
-      ...limits,
+    const listing = collect("prompts", {
       signal: controller.signal,
       loadPage: async ({ signal }) =>
         await new Promise<never>((_resolve, reject) => {
