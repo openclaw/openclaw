@@ -8,6 +8,7 @@ import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
+import type { ContextualSidebar } from "./sidebar-context-state.ts";
 
 setupSidebarTest();
 
@@ -41,7 +42,7 @@ it("restores destination offsets and updates fades after content commits", async
   await sidebar.updateComplete;
   expect(scroller.scrollTop).toBe(140);
 
-  const machines = {
+  const machines: ContextualSidebar = {
     key: "systems",
     data: undefined,
     loaderPending: false,
