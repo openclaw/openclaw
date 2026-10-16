@@ -6599,8 +6599,6 @@
 ["src/gateway/channel-avatar-http.test.ts","./http-utils.js","b4339777ba629d92731ec883979138d0bc1ec82e7136ee40bf7e4a09e00e0f15",1]
 ["src/gateway/chat-attachments.test.ts","../media/media-probe.js","1776924cc9cbc8eee8b248dfbfdf44aafd3b29657018390e08a38efe5992fc8e",1]
 ["src/gateway/chat-display-projection.cold-imports.test.ts","../../packages/markdown-core/src/image-spans.js","011cd80f4c0a2988affed6565c7856e55533b725f8fdfdacadc1f0074ff28987",1]
-["src/gateway/client-bootstrap.test.ts","../infra/tls/gateway.js","0a95ca9bc4dbce3d896fe57ea75306bd26fd5f96358a4148d2a076078f5f8b06",1]
-["src/gateway/client-bootstrap.test.ts","./credentials-secret-inputs.js","49073cf501a1947875755a60e718445564bc76e090da577730592ca6c8181abd",1]
 ["src/gateway/client.ssh.test.ts","../infra/device-auth-store.js","98f7b020084b62495ac0c819a0c413e32284cfa0d6ae090e520f0cdeb31cf99b",1]
 ["src/gateway/client.ssh.test.ts","../infra/net/proxy/proxy-lifecycle.js","c4992d26af80d2ebc041160e5398f743d56f88e4eabf45ff2efd5440eb39c09e",1]
 ["src/gateway/client.ssh.test.ts","../infra/ssh-tunnel.js","66147410d1f3ae48bb9c38de06b01908baf8b47c9639a5e7f0024d7c57cad22e",1]

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { IDBFactory } from "fake-indexeddb";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { outboxStorageScope as scopeFor } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import {

@@ -12,7 +12,7 @@ type ComposerProps = Parameters<typeof renderChatComposerNotices>[0];
 type TopbarProps = Parameters<typeof renderChatTopbarNotices>[0];
 
 function publishedNotices<P extends object>(Notices: (props: P) => JSX.Element, initial: P) {
-  const [props, publish] = createSignal(initial);
+  const [props, publish] = createSignal<P>(() => initial);
   return { ...mountSolid(() => <Notices {...props()} />), publish };
 }
 const publishedComposer = (initial: Omit<ComposerProps, "messages">) =>
