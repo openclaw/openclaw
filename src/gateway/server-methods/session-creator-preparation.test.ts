@@ -9,6 +9,7 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.native.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -49,8 +50,7 @@ afterEach(() => vi.restoreAllMocks());
 // Both observers pass through; distinguish alias work from unrelated store-path resolution.
 function observeAliasRootProbes(stateDir: string) {
   let inAliasRead = false;
-  let aliasRootProbes = 0;
-  let allRootProbes = 0;
+  const probes = { aliasRootProbes: 0, otherRootProbes: 0 };
   const readAliases = profileAliases.readUserProfileAliases;
   const exists = fs.existsSync;
   const aliasSpy = vi
@@ -65,10 +65,7 @@ function observeAliasRootProbes(stateDir: string) {
     });
   const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
     if (candidate === stateDir) {
-      allRootProbes += 1;
-      if (inAliasRead) {
-        aliasRootProbes += 1;
-      }
+      probes[inAliasRead ? "aliasRootProbes" : "otherRootProbes"] += 1;
     }
     return exists(candidate);
   });
@@ -76,7 +73,7 @@ function observeAliasRootProbes(stateDir: string) {
     finish() {
       existsSpy.mockRestore();
       aliasSpy.mockRestore();
-      return { aliasRootProbes, otherRootProbes: allRootProbes - aliasRootProbes };
+      return probes;
     },
   };
 }
@@ -162,26 +159,38 @@ function eventClients(profileId: string) {
   });
 }
 
-async function prepareEventAccess(cfg: OpenClawConfig) {
+async function prepareEventAccess(cfg: OpenClawConfig, eventConfig = () => cfg) {
   const context = requestContext(cfg);
   await initializeSessionReadContext(context);
   const projection = getSessionRowProjection(context)!;
   await projection.prepareMembership();
   return {
     projection,
-    forClient(client: GatewayWsClient) {
-      return {
-        sharing: prepareProjectedSessionSharing({
-          cfg,
-          client,
-          isMember: (target, identity) =>
-            projection.hasMembership(target.storePath, target.storeKey, identity),
-        }),
-        target: (key: string, owner?: string) => {
-          const scope = resolveSessionEventAgentScope(cfg, key, owner);
-          return scope?.[1] ? projection.sharingTarget({ key, agentId: scope[1] }) : null;
+    receive(
+      ...[client, sessionKeys, agentId, event, payload]: Parameters<
+        NonNullable<Parameters<typeof createGatewayBroadcaster>[0]["canReceiveSessionEvent"]>
+      >
+    ) {
+      return canReceiveSessionEvent({
+        cfg: eventConfig(),
+        client,
+        sessionKeys,
+        agentId,
+        event,
+        payload,
+        prepared: {
+          sharing: prepareProjectedSessionSharing({
+            cfg,
+            client,
+            isMember: (target, identity) =>
+              projection.hasMembership(target.storePath, target.storeKey, identity),
+          }),
+          target: (key, owner) => {
+            const scope = resolveSessionEventAgentScope(cfg, key, owner);
+            return scope?.[1] ? projection.sharingTarget({ key, agentId: scope[1] }) : null;
+          },
         },
-      };
+      });
     },
   };
 }
@@ -245,20 +254,12 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       profileAliases.readUserProfileAliases(callerId);
       const sessionKeys = ["prepared-0", keys[0]!].toSorted();
       const recipients = eventClients(callerId);
-      const access = await prepareEventAccess({});
+      const access = await prepareEventAccess({}, () => ({}));
       const { broadcast } = createGatewayBroadcaster({
         clients: new GatewayClientRegistry(recipients.map(({ client }) => client)),
         canReceiveSessionEvent: (client, eventKeys, agentId, event, payload) => {
           const observer = observeAliasRootProbes(stateDir);
-          const allowed = canReceiveSessionEvent({
-            cfg: {},
-            client,
-            sessionKeys: eventKeys,
-            agentId,
-            event,
-            payload,
-            prepared: access.forClient(client),
-          });
+          const allowed = access.receive(client, eventKeys, agentId, event, payload);
           const probes = observer.finish();
           expect.soft(probes.aliasRootProbes).toBe(0);
           expect.soft(probes.otherRootProbes).toBeLessThanOrEqual(7);
@@ -283,7 +284,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       await upsertSessionEntryCore({ agentId: "main", sessionKey }, { visibility: "draft" });
       profileAliases.readUserProfileAliases(callerId);
       const recipients = eventClients(callerId);
-      const access = await prepareEventAccess({});
+      const access = await prepareEventAccess({}, () => ({}));
       const subscribers = createSessionMessageSubscriberRegistry();
       for (const { client } of recipients) {
         subscribers.subscribe(client.connId, sessionKey);
@@ -294,15 +295,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
         sessionMessageSubscribers: subscribers,
         canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) => {
           const observer = observeAliasRootProbes(stateDir);
-          const allowed = canReceiveSessionEvent({
-            cfg: {},
-            client,
-            sessionKeys,
-            agentId,
-            event,
-            payload,
-            prepared: access.forClient(client),
-          });
+          const allowed = access.receive(client, sessionKeys, agentId, event, payload);
           const probes = observer.finish();
           expect.soft(probes.otherRootProbes).toBe(0);
           expect(allowed).toBe(visible);
@@ -465,15 +458,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       const workKey = "agent:work:prepared-work";
       const client = eventClients(creatorId)[0]!.client;
       const receive = (sessionKeys: string[], agentId?: string) =>
-        canReceiveSessionEvent({
-          cfg,
-          client,
-          sessionKeys,
-          agentId,
-          event: "session.suggestion",
-          payload: suggestion,
-          prepared: access.forClient(client),
-        });
+        access.receive(client, sessionKeys, agentId, "session.suggestion", suggestion);
       await writeSession(workKey, callerId, {}, "work");
       const workScope = { agentId: "work", sessionKey: workKey };
       addSessionMember(workScope, { identityId: creatorId, addedBy: callerId });
@@ -517,19 +502,13 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
   it("refreshes preview aliases across yields", async () => {
     await withCreatorRows(async ({ callerId, keys }) => {
       const respond = vi.fn();
+      const reader: GatewayOperatorRoleDefinition = {
+        sessions: { others: "none" },
+        agents: "*",
+        scopes: ["operator.read"],
+      };
       const context = requestContext({
-        gateway: {
-          roles: {
-            default: "reader",
-            definitions: {
-              reader: {
-                sessions: { others: "none" },
-                agents: "*",
-                scopes: ["operator.read"],
-              },
-            },
-          },
-        },
+        gateway: { roles: { default: "reader", definitions: { reader } } },
       });
       await initializeSessionReadContext(context);
       const pending = sessionReadHandlers["sessions.preview"]?.({

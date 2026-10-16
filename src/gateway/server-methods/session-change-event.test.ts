@@ -406,18 +406,15 @@ describe("sessions.changed coalescing", () => {
     const sessionKey = "agent:main:ready";
     try {
       await emitAndSettleLeading(context, { reason: "patch", sessionKey });
-      expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-        "sessions.changed",
-        expect.objectContaining({
-          session: expect.objectContaining({
-            key: sessionKey,
-            sessionId: `${sessionKey}-id`,
-            label: "first",
-          }),
-        }),
-        new Set(["conn-1"]),
-        expect.objectContaining({ sessionKeys: [sessionKey] }),
-      );
+      expect(broadcasts(context)).toMatchObject([
+        [
+          "sessions.changed",
+          { session: { key: sessionKey, sessionId: `${sessionKey}-id`, label: "first" } },
+          new Set(["conn-1"]),
+          { sessionKeys: [sessionKey] },
+        ],
+      ]);
+      expect(broadcasts(context)[0]?.[2]).toEqual(new Set(["conn-1"]));
       expect(bulk).toHaveBeenCalledOnce();
     } finally {
       unrelated.resolve();

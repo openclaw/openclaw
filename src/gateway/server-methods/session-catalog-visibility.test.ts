@@ -27,7 +27,6 @@ type TestClient = {
 
 const hoisted = vi.hoisted(() => ({
   activeRegistry: {} as TestPluginRegistry,
-  profileRole: vi.fn((): string | null => null),
   hasMultipleSessionSharingIdentities: vi.fn(() => false),
   resolveSessionSharingRole: vi.fn<
     typeof import("../session-sharing-policy.js").resolveSessionSharingRole
@@ -54,7 +53,7 @@ vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
   readResidentUserProfileId: (id: string) => id,
   readResidentUserProfileIdentity: (id: string) => ({
     profileId: id,
-    role: hoisted.profileRole(),
+    role: null,
   }),
 }));
 vi.mock("../session-sharing.js", async (importOriginal) => ({
@@ -65,12 +64,11 @@ vi.mock("../session-sharing.js", async (importOriginal) => ({
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
 let sessionEntries: Array<{ sessionKey: string; entry: Partial<SessionEntry> }> = [];
+let config: Record<string, unknown>;
 const projections = new Set<ReturnType<typeof createSessionRowProjectionFixture>>();
 
 afterEach(() => {
-  for (const projection of projections) {
-    projection.dispose();
-  }
+  projections.forEach((projection) => projection.dispose());
   projections.clear();
   clearRuntimeConfigSnapshot();
 });
@@ -81,10 +79,6 @@ function client(profileId: string, scopes = ["operator.read", "operator.write"])
     authenticatedUserProfile: { profileId },
     preparedSessionProfile: { profileId, aliases: new Set([profileId]), role: null },
   };
-}
-
-function unprofiledClient(scopes = ["operator.read", "operator.write"]): TestClient {
-  return { connect: { scopes } };
 }
 
 function session(threadId: string, sessionKey?: string) {
@@ -177,18 +171,16 @@ function expectNoDispatch(catalog: Partial<ReturnType<typeof mutationProvider>>)
 }
 
 const mutations = [
-  ["sessions.catalog.read", {}],
-  ["sessions.catalog.import", {}],
-  ["sessions.catalog.continue", {}],
-  ["sessions.catalog.archive", { confirmNoOtherRunner: true }],
+  ["read", {}],
+  ["import", {}],
+  ["continue", {}],
+  ["archive", { confirmNoOtherRunner: true }],
 ] as const;
 
 async function call(
-  method: keyof typeof sessionCatalogHandlers,
-  params: Record<string, unknown>,
-  requestClient: TestClient,
-  config: Record<string, unknown> = {},
-  contextOverrides: Record<string, unknown> = {},
+  method: "list" | "read" | "import" | "continue" | "archive",
+  params: Record<string, unknown> = {},
+  requestClient = client("profile-owner"),
 ) {
   const respond = vi.fn();
   setRuntimeConfigSnapshot(config);
@@ -202,14 +194,11 @@ async function call(
     ),
   });
   projections.add(projection);
-  await sessionCatalogHandlers[method]?.({
+  await sessionCatalogHandlers[`sessions.catalog.${method}`]?.({
     params,
     respond,
     client: requestClient,
-    context: bindSessionRowProjection(
-      { getRuntimeConfig: () => config, ...contextOverrides },
-      () => projection,
-    ),
+    context: bindSessionRowProjection({ getRuntimeConfig: () => config }, () => projection),
   } as never);
   return respond;
 }
@@ -225,20 +214,12 @@ function setActors(entries: Array<[sessionKey: string, profileId: string]>) {
 }
 
 function roleConfig(others: "none" | "view" | "suggest" | "write", agents: "*" | string[] = "*") {
-  return {
-    gateway: {
-      roles: {
-        default: "guest",
-        definitions: {
-          guest: {
-            sessions: { others },
-            agents,
-            scopes: ["operator.read", "operator.write"],
-          },
-        },
-      },
-    },
+  const guest = {
+    sessions: { others },
+    agents,
+    scopes: ["operator.read", "operator.write"],
   };
+  return { gateway: { roles: { default: "guest", definitions: { guest } } } };
 }
 
 describe("session catalog caller visibility", () => {
@@ -246,8 +227,8 @@ describe("session catalog caller visibility", () => {
     hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
     markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
     hoisted.hasMultipleSessionSharingIdentities.mockReset().mockReturnValue(false);
-    hoisted.profileRole.mockReset().mockReturnValue(null);
     sessionEntries = [];
+    config = {};
     hoisted.resolveSessionSharingRole.mockReset().mockReturnValue("viewer");
     hoisted.resolveSessionSharingTargetAsync.mockReset().mockResolvedValue(null);
   });
@@ -276,20 +257,20 @@ describe("session catalog caller visibility", () => {
         ? { read: vi.fn(async () => page("target", "private host history")) }
         : mutationProvider("target");
       install(catalog, [session("target", "agent:main:target")]);
-      const cfg = collision ? roleConfig("none") : {};
+      config = collision ? roleConfig("none") : {};
       if (collision) {
         for (let pass = 0; pass < 2; pass++) {
-          const listed = await call("sessions.catalog.list", {}, client(caller), cfg);
+          const listed = await call("list", {}, client(caller));
           expect(listed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([]);
         }
       }
       const operations = gatewayOwner
         ? mutations.slice(0, 1)
         : collision
-          ? mutations.filter(([method]) => method !== "sessions.catalog.import")
+          ? mutations.filter(([method]) => method !== "import")
           : mutations;
       for (const [method, extra] of operations) {
-        const result = await call(method, locator("target", extra), client(caller), cfg);
+        const result = await call(method, locator("target", extra), client(caller));
         expectForbidden(
           result,
           collision ? undefined : "session catalog thread is not visible to this caller",
@@ -319,11 +300,11 @@ describe("session catalog caller visibility", () => {
         }),
       },
     ];
-    const operator = unprofiledClient(["operator.read"]);
+    const operator: TestClient = { connect: { scopes: ["operator.read"] } };
 
-    const listed = await call("sessions.catalog.list", {}, operator);
+    const listed = await call("list", {}, operator);
     const transcript = await call(
-      "sessions.catalog.read",
+      "read",
       { catalogId: "beam", hostId: "gateway:local", threadId: "shared-snapshot" },
       operator,
     );
@@ -354,12 +335,8 @@ describe("session catalog caller visibility", () => {
     });
     const requestClient = client("profile-owner", ["operator.read"]);
 
-    const listed = await call("sessions.catalog.list", {}, requestClient);
-    const transcript = await call(
-      "sessions.catalog.read",
-      locator("unadopted-thread"),
-      requestClient,
-    );
+    const listed = await call("list", {}, requestClient);
+    const transcript = await call("read", locator("unadopted-thread"), requestClient);
 
     expectCatalog(listed, listedHost);
     expect(transcript).toHaveBeenCalledWith(true, readResult);
@@ -373,12 +350,10 @@ describe("session catalog caller visibility", () => {
       return [listedHost];
     });
     install({ list });
-    const requestClient = unprofiledClient();
-    const config = {};
-
-    const before = call("sessions.catalog.list", {}, requestClient, config);
+    const requestClient: TestClient = { connect: { scopes: ["operator.read", "operator.write"] } };
+    const before = call("list", {}, requestClient);
     requestClient.authenticatedUserProfile = { profileId: GATEWAY_OWNER_PROFILE_ID };
-    const after = call("sessions.catalog.list", {}, requestClient, config);
+    const after = call("list", {}, requestClient);
     release.resolve();
 
     for (const respond of await Promise.all([before, after])) {
@@ -401,11 +376,7 @@ describe("session catalog caller visibility", () => {
     const readResult = page("owned-thread");
     install({ list: list as never, read: vi.fn(async () => readResult) });
 
-    const transcript = await call(
-      "sessions.catalog.read",
-      locator("owned-thread"),
-      client("profile-owner"),
-    );
+    const transcript = await call("read", locator("owned-thread"));
 
     expect(transcript).toHaveBeenCalledWith(true, readResult);
     expect(list).toHaveBeenCalledTimes(2);
@@ -424,15 +395,9 @@ describe("session catalog caller visibility", () => {
       session("owned-thread", "agent:main:owned"),
       session("other-thread", "agent:main:other"),
     ]);
-    const config = roleConfig("none");
-
-    const listed = await call("sessions.catalog.list", {}, client("profile-owner"), config);
-    const foreign = await call(
-      "sessions.catalog.read",
-      locator("other-thread"),
-      client("profile-owner"),
-      config,
-    );
+    config = roleConfig("none");
+    const listed = await call("list");
+    const foreign = await call("read", locator("other-thread"));
 
     expect(listed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([
       expect.objectContaining({ threadId: "owned-thread" }),
@@ -445,15 +410,10 @@ describe("session catalog caller visibility", () => {
     setActors([["agent:main:other", "profile-other"]]);
     const catalog = mutationProvider("other");
     install(catalog, [session("other-thread", "agent:main:other")]);
-    const config = roleConfig("view");
+    config = roleConfig("view");
 
     for (const [method, extra] of mutations.slice(2)) {
-      const respond = await call(
-        method,
-        locator("other-thread", extra),
-        client("profile-owner"),
-        config,
-      );
+      const respond = await call(method, locator("other-thread", extra));
       expectForbidden(respond);
     }
     expectNoDispatch(catalog);
@@ -488,12 +448,8 @@ describe("session catalog caller visibility", () => {
       archive,
     });
 
-    const respond = await call(
-      "sessions.catalog.archive",
-      locator("other-thread", { confirmNoOtherRunner: true }),
-      client("profile-owner"),
-      roleConfig("view"),
-    );
+    config = roleConfig("view");
+    const respond = await call("archive", locator("other-thread", { confirmNoOtherRunner: true }));
 
     expect(archive).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith(true, { ok: true });
@@ -504,12 +460,8 @@ describe("session catalog caller visibility", () => {
     const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:owned" }));
     install({ continueSession }, [session("owned-thread", "agent:main:owned")]);
 
-    const respond = await call(
-      "sessions.catalog.continue",
-      locator("owned-thread"),
-      client("profile-owner"),
-      roleConfig("write", ["research"]),
-    );
+    config = roleConfig("write", ["research"]);
+    const respond = await call("continue", locator("owned-thread"));
 
     expect(continueSession).not.toHaveBeenCalled();
     expectForbidden(respond, expect.stringContaining('cannot create sessions for agent "main"'));
@@ -520,12 +472,8 @@ describe("session catalog caller visibility", () => {
     const listedHost = host([session("unadopted-thread")]);
     install({ list: vi.fn(async () => [listedHost]) });
 
-    const listed = await call(
-      "sessions.catalog.list",
-      {},
-      client("profile-owner", ["operator.admin"]),
-      roleConfig("none"),
-    );
+    config = roleConfig("none");
+    const listed = await call("list", {}, client("profile-owner", ["operator.admin"]));
 
     expectCatalog(listed, listedHost);
   });

@@ -178,8 +178,6 @@ it.each(["ready", "preparation"] as const)(
           vi.spyOn(projection, "withPreparedExactRows").mockRejectedValueOnce(
             new Error("synthetic preparation failure"),
           );
-        }
-        if (failure !== "ready") {
           vi.useFakeTimers();
         }
         emitSessionsChanged(context, {
@@ -248,36 +246,21 @@ it.each(["ready", "preparation"] as const)(
   },
 );
 
-const ownerCases: {
-  name: string;
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  canonicalKey: string;
-}[] = [
-  {
-    name: "configured main alias",
-    cfg: { session: { mainKey: "inbox" }, agents: { entries: { ops: {} } } },
-    sessionKey: "main",
-    canonicalKey: "agent:ops:inbox",
-  },
-  {
-    name: "fixed-store global owner",
-    cfg: {
-      session: { scope: "global", store: "/stores/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    },
-    sessionKey: "global",
-    canonicalKey: "global",
-  },
-];
-
-it.each(ownerCases)(
-  "keeps fallback plugin notices bound to the $name",
-  async ({ cfg, sessionKey, canonicalKey }) => {
+it.each(["main", "global"])(
+  "keeps fallback plugin notices bound to the configured %s owner",
+  async (sessionKey) => {
+    const canonicalKey = sessionKey === "main" ? "agent:ops:inbox" : "global";
+    const cfg: OpenClawConfig =
+      sessionKey === "main"
+        ? { session: { mainKey: "inbox" }, agents: { entries: { ops: {} } } }
+        : {
+            session: { scope: "global", store: "/stores/shared.sqlite" },
+            agents: {
+              ownership: "explicit",
+              defaults: { sessionStore: { agentId: "ops" } },
+              entries: { ops: {}, research: {} },
+            },
+          };
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const projection = createSessionRowProjectionFixture({ cfg, agentId: "ops", store: {} });
       vi.spyOn(projection, "withPreparedExactRows").mockRejectedValue(
