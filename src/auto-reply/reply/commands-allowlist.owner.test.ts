@@ -9,7 +9,7 @@ import {
   rollbackStagedPluginRegistry,
   stageActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
@@ -23,13 +23,45 @@ import { handleAllowlistCommand } from "./commands-allowlist.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const beforeConfigEdit = vi.fn(async () => {});
+type AdminFixture = Parameters<Parameters<typeof withAdminIngress>[0]>[0];
+
+function withCommandIngress(run: (fixture: AdminFixture) => Promise<void>) {
+  return withAdminIngress(async (fixture) => {
+    fixture.cfg.commands = { ...fixture.cfg.commands, text: true, config: true };
+    await run(fixture);
+  });
+}
+
+async function commandParams(fixture: AdminFixture, body: string) {
+  return buildCommandTestParams(
+    body,
+    fixture.cfg,
+    await fixture.context(fixture.admins[0]!.identity.senderId),
+  );
+}
+
+const addEntry = (entry: string, accountId?: string) =>
+  pairingStore.addChannelAllowFromStoreEntry({ channel: "discord", accountId, entry });
+const readStore = (accountId?: string) =>
+  pairingStore.readChannelAllowFromStore("discord", process.env, accountId);
+
+function startCommand(params: Awaited<ReturnType<typeof commandParams>>) {
+  return handleAllowlistCommand(params, true).then(
+    (result) => ({ result, error: undefined }),
+    (error: unknown) => ({ result: undefined, error }),
+  );
+}
+
+async function expectPaused(signal: Deferred, pending: ReturnType<typeof startCommand>) {
+  expect(
+    await Promise.race([signal.promise.then(() => "paused"), pending.then(() => "finished")]),
+  ).toBe("paused");
+}
 
 beforeEach(({ onTestFinished }) => {
   beforeConfigEdit.mockReset();
   const previous = captureActivePluginRegistrySnapshot();
-  onTestFinished(() => {
-    rollbackStagedPluginRegistry(previous);
-  });
+  onTestFinished(() => rollbackStagedPluginRegistry(previous));
   const allowlist = buildLegacyDmAccountAllowlistAdapter({
     channelId: "discord",
     resolveAccount: ({ cfg, accountId }) =>
@@ -73,46 +105,30 @@ const mutations = [
 ] as const;
 
 it.each(
-  mutations.flatMap(({ action, target, revocation }) =>
-    (action === "add" && target === "--store" ? [true] : [false, true]).map((revoke) => ({
-      action,
-      target,
-      revocation,
-      revoke,
-    })),
+  mutations.flatMap((mutation) =>
+    (mutation.action === "add" && mutation.target === "--store" ? [true] : [false, true]).map(
+      (revoke) => Object.assign({ revoke }, mutation),
+    ),
   ),
 )(
   "rechecks $action $target pairing writes after $revocation during preparation (revoke=$revoke)",
   async ({ action, target, revocation, revoke }) => {
-    await withAdminIngress(async ({ cfg, admins, context, state }) => {
-      cfg.commands = { ...cfg.commands, text: true, config: true };
+    await withCommandIngress(async (fixture) => {
+      const { cfg, admins, state } = fixture;
       if (!target) {
         cfg.channels!.discord!.accounts!.team!.allowFrom = ["*", "200"];
       }
       await state.writeConfig(cfg);
       const originalConfig = await readFile(state.configPath, "utf8");
-      await pairingStore.addChannelAllowFromStoreEntry({
-        channel: "discord",
-        accountId: "team",
-        entry: "300",
-      });
+      await addEntry("300", "team");
       if (action === "remove") {
-        await pairingStore.addChannelAllowFromStoreEntry({
-          channel: "discord",
-          accountId: "team",
-          entry: "200",
-        });
+        await addEntry("200", "team");
       }
-      const originalStore = await pairingStore.readChannelAllowFromStore(
-        "discord",
-        process.env,
-        "team",
-      );
+      const originalStore = await readStore("team");
       const admin = admins[0]!;
-      const params = buildCommandTestParams(
+      const params = await commandParams(
+        fixture,
         `/allowlist ${action} dm ${target} --account team 200`,
-        cfg,
-        await context(admin.identity.senderId),
       );
       expect(params.command.senderIsOwner).toBe(true);
       expect(params.command.assertOwnerCurrent).toBeTypeOf("function");
@@ -134,17 +150,9 @@ it.each(
       if (!target) {
         beforeConfigEdit.mockImplementation(pause);
       }
-      const pending = handleAllowlistCommand(params, true).then(
-        (result) => ({ result, error: undefined }),
-        (error: unknown) => ({ result: undefined, error }),
-      );
+      const pending = startCommand(params);
       try {
-        expect(
-          await Promise.race([
-            preparing.promise.then(() => "preparing"),
-            pending.then(() => "finished"),
-          ]),
-        ).toBe("preparing");
+        await expectPaused(preparing, pending);
         if (revoke) {
           if (revocation === "demote") {
             setUserProfileRole(admin.profile.id, "member");
@@ -158,11 +166,7 @@ it.each(
         }
         finish.resolve();
         const outcome = await pending;
-        const persisted = await pairingStore.readChannelAllowFromStore(
-          "discord",
-          process.env,
-          "team",
-        );
+        const persisted = await readStore("team");
         expect(await readFile(state.configPath, "utf8")).toBe(originalConfig);
         if (revoke) {
           expect(outcome.error).toMatchObject({
@@ -189,18 +193,13 @@ it.each(
 it.each([false, true])(
   "rechecks default-account cleanup after an accepted removal (revoke=%s)",
   async (revoke) => {
-    await withAdminIngress(async ({ cfg, admins, context }) => {
-      cfg.commands = { ...cfg.commands, text: true, config: true };
-      await pairingStore.addChannelAllowFromStoreEntry({
-        channel: "discord",
-        accountId: "default",
-        entry: "200",
-      });
+    await withCommandIngress(async (fixture) => {
+      const { admins } = fixture;
+      await addEntry("200", "default");
       const admin = admins[0]!;
-      const params = buildCommandTestParams(
+      const params = await commandParams(
+        fixture,
         "/allowlist remove dm --store --account default 200",
-        cfg,
-        await context(admin.identity.senderId),
       );
       const removed = createDeferredCore();
       const finish = createDeferredCore();
@@ -216,28 +215,18 @@ it.each([false, true])(
           }
           return result;
         });
-      const pending = handleAllowlistCommand(params, true).then(
-        (result) => ({ result, error: undefined }),
-        (error: unknown) => ({ result: undefined, error }),
-      );
+      const pending = startCommand(params);
       try {
-        expect(
-          await Promise.race([
-            removed.promise.then(() => "removed"),
-            pending.then(() => "finished"),
-          ]),
-        ).toBe("removed");
-        expect(await pairingStore.readChannelAllowFromStore("discord")).toEqual([]);
-        await pairingStore.addChannelAllowFromStoreEntry({ channel: "discord", entry: "200" });
+        await expectPaused(removed, pending);
+        expect(await readStore()).toEqual([]);
+        await addEntry("200");
         if (revoke) {
           unlinkUserChannelIdentity(admin.profile.id, admin.identity);
           params.command.assertOwnerCurrent = () => {};
         }
         finish.resolve();
         const outcome = await pending;
-        expect(await pairingStore.readChannelAllowFromStore("discord")).toEqual(
-          revoke ? ["200"] : [],
-        );
+        expect(await readStore()).toEqual(revoke ? ["200"] : []);
         if (revoke) {
           expect(outcome.error).toMatchObject({
             message: expect.stringContaining("authority changed"),
@@ -256,14 +245,10 @@ it.each([false, true])(
 );
 
 it("settles a committed pairing addition after the original admin is demoted", async () => {
-  await withAdminIngress(async ({ cfg, admins, context }) => {
-    cfg.commands = { ...cfg.commands, text: true, config: true };
+  await withCommandIngress(async (fixture) => {
+    const { admins } = fixture;
     const admin = admins[0]!;
-    const params = buildCommandTestParams(
-      "/allowlist add dm --store --account team 200",
-      cfg,
-      await context(admin.identity.senderId),
-    );
+    const params = await commandParams(fixture, "/allowlist add dm --store --account team 200");
     const add = pairingStore.addChannelAllowFromStoreEntry;
     const writer = vi
       .spyOn(pairingStore, "addChannelAllowFromStoreEntry")
@@ -275,9 +260,7 @@ it("settles a committed pairing addition after the original admin is demoted", a
     try {
       const result = await handleAllowlistCommand(params, true);
       expect(result?.reply?.text).toContain("allowlist added");
-      expect(await pairingStore.readChannelAllowFromStore("discord", process.env, "team")).toEqual([
-        "200",
-      ]);
+      expect(await readStore("team")).toEqual(["200"]);
       expect(params.command.assertOwnerCurrent).toThrow("authority changed");
     } finally {
       writer.mockRestore();
