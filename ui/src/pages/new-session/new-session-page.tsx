@@ -1,8 +1,8 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
-import { renderLazyViewError } from "../../components/lazy-view-error.ts";
 import { renderSessionBackground } from "../../components/session-background-view.ts";
+import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -14,7 +14,6 @@ import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { LitContent } from "../../lit/solid-content.tsx";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
-import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationStatus, NewSessionDictationView } from "./composer-dictation-view.tsx";
@@ -240,6 +239,10 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
     };
   };
   const panel = () => page().attachmentPanel;
+  const panelError = () => {
+    const state = page().attachmentPanelLoader.visibleState;
+    return state?.status === "error" ? state : undefined;
+  };
   const lightbox = () => page().imageLightbox;
   const panelContent = () => {
     const attachment = panel();
@@ -323,26 +326,21 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
       <Show when={panel()}>
         <aside class="new-session-attachment-panel">
           <Show
-            when={page().attachmentPanelLoader.visibleState?.status === "error"}
+            when={panelError()}
             fallback={
               <Show when={page().attachmentPanelLoader.visibleState}>
                 <div role="status">{t("common.loading")}</div>
               </Show>
             }
           >
-            <LitContent
-              value={(() => {
-                const state = page().attachmentPanelLoader.visibleState;
-                return state?.status === "error"
-                  ? renderLazyViewError({
-                      error: state.error,
-                      stale: state.stale,
-                      onRetry: () => owner.attachmentPanelLoader.retry(),
-                      onClose: owner.closeAttachmentPanel,
-                    })
-                  : undefined;
-              })()}
-            />
+            {(state) => (
+              <LazyViewError
+                error={state().error}
+                stale={state().stale}
+                onRetry={() => owner.attachmentPanelLoader.retry()}
+                onClose={owner.closeAttachmentPanel}
+              />
+            )}
           </Show>
           <openclaw-chat-detail-panel
             prop:content={panelContent()}
@@ -376,17 +374,11 @@ defineSolidBridge<
   },
 });
 
-// These hosts remain custom elements so the detail panel keeps its lazy registration.
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-new-session-page": HTMLAttributes<PageHost> & {
         "prop:data"?: NewSessionRouteData | undefined;
-      };
-      "openclaw-chat-detail-panel": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-chat-detail-panel"]
-      > & {
-        "prop:content"?: SidebarContent | null;
       };
     }
   }

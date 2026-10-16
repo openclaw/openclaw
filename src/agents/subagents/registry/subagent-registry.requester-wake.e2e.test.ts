@@ -959,6 +959,7 @@ describe("requester settle wake product flow", () => {
       expect(getAgentCalls()).toHaveLength(0);
 
       await vi.advanceTimersByTimeAsync(retiredAfterMs);
+      await flushOwnedWork();
       await registry.testing.sweepOnceForTests();
       await flushOwnedWork();
       expect(registry.getSubagentRunByRunId(child.runId)).toBeUndefined();

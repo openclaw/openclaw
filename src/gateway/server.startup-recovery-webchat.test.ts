@@ -17,6 +17,7 @@ import {
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
 } from "../agents/subagents/registry/subagent-registry-persistence.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { isSameSubagentRun } from "../agents/subagents/registry/subagent-run-generation.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
@@ -540,7 +541,10 @@ it(
       expect(subagentRuns.get(batchChild.runId)?.requesterSettleWake).toBeUndefined();
 
       batchChild = await reloadSavedBatch({
-        ...expectDefined(subagentRuns.get(batchChild.runId), "settled batch child"),
+        ...expectDefined(
+          loadSubagentRegistryFromSqlite().get(batchChild.runId),
+          "settled batch child",
+        ),
         requesterSettleWake: {
           status: "pending",
           attemptCount: 0,

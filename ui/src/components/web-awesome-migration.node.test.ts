@@ -38,7 +38,6 @@ describe("shared control ownership", () => {
     expect(
       matchingFiles(/<[a-z][^>]*\srole=["'](?:menu|menubar|menuitem|tab|tablist)["']/u, [
         "components/menu-surface.ts",
-        "components/web-awesome.ts",
         "components/panel-tab-strip-solid.ts",
         "components/solid/menu.ts",
         "components/solid/tabs.ts",

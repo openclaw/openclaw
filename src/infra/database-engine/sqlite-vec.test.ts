@@ -1,7 +1,9 @@
 // Memory Host SDK tests cover sqlite vec behavior.
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+
+const platformPackage = `sqlite-vec-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`;
 
 function mockMissingSqliteVecPackage(): void {
   vi.doMock("sqlite-vec", () => {
@@ -22,9 +24,25 @@ function mockFailingSqliteVecPackage(): void {
 function mockPlatformVariantResolver(
   value: { pkg: string; extensionPath: string } | undefined,
 ): void {
-  vi.doMock("./sqlite-vec-platform-variant.js", () => ({
-    resolveSqliteVecPlatformVariant: () => value,
-  }));
+  vi.doMock("node:module", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("node:module")>();
+    return {
+      createRequire: (filename: Parameters<typeof actual.createRequire>[0]) => {
+        const require = actual.createRequire(filename);
+        const resolve = require.resolve;
+        require.resolve = Object.assign((id: string, options?: { paths?: string[] }) => {
+          if (!id.startsWith("sqlite-vec-")) {
+            return resolve(id, options);
+          }
+          if (!value) {
+            throw new Error("native package absent");
+          }
+          return value.extensionPath;
+        }, resolve);
+        return require;
+      },
+    };
+  });
 }
 
 async function importLoader() {
@@ -53,7 +71,7 @@ function createDbMock(params?: { readonly healthError?: Error }) {
 
 afterEach(() => {
   vi.doUnmock("sqlite-vec");
-  vi.doUnmock("./sqlite-vec-platform-variant.js");
+  vi.doUnmock("node:module");
   vi.resetModules();
 });
 
@@ -125,8 +143,8 @@ describe("loadSqliteVecExtension", () => {
   it("falls back to the platform variant when bundled sqlite-vec load fails", async () => {
     mockFailingSqliteVecPackage();
     mockPlatformVariantResolver({
-      pkg: "sqlite-vec-linux-x64",
-      extensionPath: "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
+      pkg: platformPackage,
+      extensionPath: `/install/node_modules/${platformPackage}/vec0.so`,
     });
     const { loadSqliteVecExtension } = await importLoader();
     const { db, prepare } = createDbMock();
@@ -135,10 +153,10 @@ describe("loadSqliteVecExtension", () => {
 
     expect(result).toEqual({
       ok: true,
-      extensionPath: "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
+      extensionPath: `/install/node_modules/${platformPackage}/vec0.so`,
     });
     expect(db.loadExtension).toHaveBeenCalledWith(
-      "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
+      `/install/node_modules/${platformPackage}/vec0.so`,
     );
     expect(prepare).toHaveBeenCalledWith("SELECT vec_version() AS version");
   });
@@ -146,8 +164,8 @@ describe("loadSqliteVecExtension", () => {
   it("rejects a platform variant when sqlite-vec functions are unavailable", async () => {
     mockMissingSqliteVecPackage();
     mockPlatformVariantResolver({
-      pkg: "sqlite-vec-linux-x64",
-      extensionPath: "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
+      pkg: platformPackage,
+      extensionPath: `/install/node_modules/${platformPackage}/vec0.so`,
     });
     const { loadSqliteVecExtension } = await importLoader();
     const { db } = createDbMock({ healthError: new Error("no such function: vec_version") });
@@ -156,16 +174,15 @@ describe("loadSqliteVecExtension", () => {
 
     expect(result).toEqual({
       ok: false,
-      error:
-        "sqlite-vec platform variant sqlite-vec-linux-x64 failed to load from /install/node_modules/sqlite-vec-linux-x64/vec0.so. Set memory.search.store.vector.extensionPath, or an agent-specific memory.search.store.vector.extensionPath, to a sqlite-vec loadable extension path. Original error: sqlite-vec health check failed after loading /install/node_modules/sqlite-vec-linux-x64/vec0.so | no such function: vec_version",
+      error: `sqlite-vec platform variant ${platformPackage} failed to load from /install/node_modules/${platformPackage}/vec0.so. Set memory.search.store.vector.extensionPath, or an agent-specific memory.search.store.vector.extensionPath, to a sqlite-vec loadable extension path. Original error: sqlite-vec health check failed after loading /install/node_modules/${platformPackage}/vec0.so | no such function: vec_version`,
     });
   });
 
   it("preserves bundled sqlite-vec and platform variant errors when both fail", async () => {
     mockFailingSqliteVecPackage();
     mockPlatformVariantResolver({
-      pkg: "sqlite-vec-linux-x64",
-      extensionPath: "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
+      pkg: platformPackage,
+      extensionPath: `/install/node_modules/${platformPackage}/vec0.so`,
     });
     const { loadSqliteVecExtension } = await importLoader();
     const { db } = createDbMock();
@@ -177,8 +194,7 @@ describe("loadSqliteVecExtension", () => {
 
     expect(result).toEqual({
       ok: false,
-      error:
-        "sqlite-vec package failed to load, and platform variant sqlite-vec-linux-x64 failed to load from /install/node_modules/sqlite-vec-linux-x64/vec0.so. Set memory.search.store.vector.extensionPath, or an agent-specific memory.search.store.vector.extensionPath, to a sqlite-vec loadable extension path. Package error: bundled sqlite-vec load failed. Variant error: platform variant failed",
+      error: `sqlite-vec package failed to load, and platform variant ${platformPackage} failed to load from /install/node_modules/${platformPackage}/vec0.so. Set memory.search.store.vector.extensionPath, or an agent-specific memory.search.store.vector.extensionPath, to a sqlite-vec loadable extension path. Package error: bundled sqlite-vec load failed. Variant error: platform variant failed`,
     });
   });
 });

@@ -53,7 +53,11 @@ import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.t
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   private readonly headerSessionDataMemo = new ChatPaneHeaderMemo<SessionMenuData>();
   protected resolveHeaderSessionTitle(row: GatewaySessionRow | undefined): string {
-    return chatSessionPresentationTitle(this.state, row, this.sessionKey);
+    return chatSessionPresentationTitle(
+      this.state,
+      row ?? this.transcriptSessionProps(row).transcriptMetadata,
+      this.sessionKey,
+    );
   }
 
   protected canArchiveHeaderSession(row: GatewaySessionRow): boolean {

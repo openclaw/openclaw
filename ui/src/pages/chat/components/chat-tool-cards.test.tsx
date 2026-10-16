@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render as renderLit } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { projectAgentActivityItem } from "../../../../../src/agents/agent-activity-presentation.js";
@@ -21,40 +20,19 @@ import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderActivityGroup } from "./chat-message-group.test-support.ts";
 import { createMessageEntry, createToolGroup } from "./chat-message.test-support.ts";
-import {
-  renderToolCard,
-  renderToolFixture as render,
-  settleToolBridges,
-} from "./chat-tool-render.test-support.ts";
-import { renderToolPreview } from "./widget-card.ts";
+import { mountCard, mountPreview } from "./chat-tool-cards.test-support.tsx";
+import { renderToolFixture as render, settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 const canvas = { kind: "canvas", surface: "assistant_message", render: "url" } as const;
 
 const textOf = (root: ParentNode, selector: string) => root.querySelector(selector)?.textContent;
-
-async function mountCard(
-  card: ToolCard,
-  options: Partial<Parameters<typeof renderToolCard>[1]> = {},
-  container = document.createElement("div"),
-) {
-  await render(
-    renderToolCard(card, {
-      messageKey: "test-message",
-      expanded: true,
-      onToggleExpanded: vi.fn(),
-      ...options,
-    }),
-    container,
-  );
-  return container;
-}
 
 describe("tool-cards", () => {
   it("routes MCP App previews through the dedicated double-iframe host", async () => {
     const container = document.createElement("div");
     const preview = { ...canvas, viewId: "cv_app", mcpApp: { viewId: "cv_app" } } as const;
     const options = { sessionKey: "agent:main:main" };
-    renderLit(renderToolPreview(preview, "chat_message", options), container);
+    mountPreview(preview, "chat_message", options, container);
 
     const view = container.querySelector("mcp-app-view");
     expect(view?.getAttribute("src")).toBeNull();
@@ -63,7 +41,7 @@ describe("tool-cards", () => {
     expect(view).toMatchObject({ sessionKey: "agent:main:main", viewId: "cv_app" });
 
     const toolContainer = document.createElement("div");
-    renderLit(renderToolPreview(preview, "chat_tool", options), toolContainer);
+    mountPreview(preview, "chat_tool", options, toolContainer);
     expect(toolContainer.querySelector("mcp-app-view")).toBeNull();
   });
 
@@ -817,7 +795,6 @@ describe("tool-card source highlighting", () => {
     const container = await mountCard(card);
     onTestFinished(async () => {
       await vi.dynamicImportSettled();
-      await render(null, container);
     });
     await vi.dynamicImportSettled();
     return container;
@@ -893,17 +870,10 @@ describe("tool-card source highlighting", () => {
 function renderWidgetPreviewFrame(url: string, allowExternalEmbedUrls = false) {
   const container = document.createElement("div");
   document.body.append(container);
-  renderLit(
-    renderToolPreview(
-      {
-        kind: "canvas",
-        surface: "assistant_message",
-        render: "url",
-        url,
-      },
-      "chat_message",
-      allowExternalEmbedUrls ? { allowExternalEmbedUrls } : {},
-    ),
+  mountPreview(
+    { kind: "canvas", surface: "assistant_message", render: "url", url },
+    "chat_message",
+    allowExternalEmbedUrls ? { allowExternalEmbedUrls } : {},
     container,
   );
   const frame = container.querySelector("iframe");

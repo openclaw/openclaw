@@ -677,14 +677,13 @@ cleanup pass. Normal result settlement still removes its own refs immediately.
 `openclaw_gc_duration_seconds` records elapsed garbage collection (GC) duration
 reported by Node.js for the main isolate and instrumented workers. `kind` is
 `scavenge` (minor), `mark_sweep_compact` (major), `incremental`, or
-`weak_processing`, taken from the native entry's `detail.kind`. `thread` is `main`
+`weak_processing`, taken from the native GC profile's collection type. `thread` is `main`
 or an allowlisted worker script basename; unknown worker scripts use `other`.
-The `reason` label maps Node's `detail.flags` to `none`, `forced`,
-`synchronous_phantom_processing`, `all_available_garbage`, `all_external_memory`,
-`schedule_idle`, or `construct_retained`. Combined flags, unknown flags, and
-SDK producers without flags use `other`. These are Node GC callback flags,
-not V8's complete internal reason for starting a collection; `none` means no
-callback flags were set, not that no collection occurred.
+Native sampling reports `reason="other"`: `GCProfiler` does not expose callback
+flags. SDK producers may still supply the bounded callback-flag labels `none`,
+`forced`, `synchronous_phantom_processing`, `all_available_garbage`,
+`all_external_memory`, `schedule_idle`, or `construct_retained`. These flags are
+not V8's complete internal reason for starting a collection.
 
 Code Mode Node workers also carry a reusable `slot` label from 1 through 64.
 The worker registry holds a slot until native worker exit, including pending
@@ -715,8 +714,10 @@ exports are suppressed in the meantime.
 The histogram is absent until the first observation, so absence does not prove
 zero GC. Queue drops, the series cap, observation gaps and process restarts limit
 coverage. Diagnostics disable/re-enable preserves the exporter's existing
-counters; restarting the exporter resets them as usual. No extra timer, GC
-trigger, trace attribution or application payload is collected. Worker GC batches
+counters; restarting the exporter resets them as usual. One shared native profiler
+per isolate drains on an unreferenced one-second timer instead of scheduling
+JavaScript after each GC. Sampling does not force GC or collect application payloads.
+Worker GC batches
 reuse the memory telemetry port; port closure stops its observer. Workers without
 that port, nested workers outside this registry, and runtimes without native GC
 entries are not covered. Worker exit can lose a final undelivered batch.

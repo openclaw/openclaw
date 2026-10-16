@@ -10,7 +10,6 @@ import {
   executeCronStateCommand,
   isCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
-import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-read.worker.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -144,9 +143,6 @@ export function executeSharedStateCommand(
   }
   if (command.type === "githubPublication.deleteSessionReceipts") {
     return deletePersonalGitHubSessionReceiptsInDatabase(database, command.input);
-  }
-  if (command.type === "githubRepository.personalPending") {
-    return readPendingRepositoryGitHubPublicationInDatabase(database.db, command.input);
   }
   switch (command.type) {
     case "transcripts.canonicalSessionRow":

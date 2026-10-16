@@ -1,15 +1,19 @@
-import { nothing, render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { renderMessageImages } from "../pages/chat/components/chat-message-images.ts";
-import { renderMessageMarkdown } from "../pages/chat/components/chat-message-text.test-support.ts";
+import { MessageImages } from "../pages/chat/components/chat-message-images-solid.tsx";
+import {
+  MessageMarkdown,
+  type MessageMarkdownProps,
+} from "../pages/chat/components/chat-message-text-view.tsx";
 import { exportWidget } from "../pages/chat/components/widget-export.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "../pages/chat/components/browser-tab-card.tsx";
-import { renderCopyAsMarkdownButton } from "./copy-button.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import "./markdown-mermaid.tsx";
 import { handleMarkdownTableInteraction, releaseMarkdownTables } from "./markdown-tables.ts";
+import { CopyButton } from "./solid/copy-button.tsx";
 
 const owners: HTMLElement[] = [];
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
@@ -37,9 +41,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const owner of owners.splice(0)) {
+  for (const owner of owners) {
     releaseMarkdownTables(owner);
-    render(nothing, owner);
+  }
+  cleanupSolid();
+  for (const owner of owners.splice(0)) {
     owner.remove();
   }
   vi.restoreAllMocks();
@@ -64,31 +70,21 @@ async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
   const owner = document.body.appendChild(document.createElement("section"));
   owners.push(owner);
   owner.className = "chat-text";
+  const [markdown, setMarkdown] = createSignal<MessageMarkdownProps>({
+    markdown: surface === "code" ? "```ts\nconst answer = 42;" : "| Name |\n| --- |\n| Alpha",
+    messageKey: "stream",
+    options: { role: "assistant", isStreaming: true },
+    markdownOptions: surface === "table" ? { tableInteractions: "enabled" } : {},
+  });
   let button: HTMLButtonElement | null;
-  if (surface === "code") {
-    render(
-      renderMessageMarkdown(
-        "```ts\nconst answer = 42;",
-        "stream",
-        { role: "assistant", isStreaming: true },
-        {},
-      ),
-      owner,
+  if (surface === "code" || surface === "table") {
+    mountSolid(() => <MessageMarkdown {...markdown()} />, { container: owner });
+    flush();
+    owner.addEventListener(
+      "click",
+      surface === "code" ? handleMarkdownCodeBlockClick : handleMarkdownTableInteraction,
     );
-    owner.addEventListener("click", handleMarkdownCodeBlockClick);
-    button = owner.querySelector(".code-block-copy");
-  } else if (surface === "table") {
-    render(
-      renderMessageMarkdown(
-        "| Name |\n| --- |\n| Alpha",
-        "stream",
-        { role: "assistant", isStreaming: true },
-        { tableInteractions: "enabled" },
-      ),
-      owner,
-    );
-    owner.addEventListener("click", handleMarkdownTableInteraction);
-    button = owner.querySelector(".markdown-table__copy");
+    button = owner.querySelector(surface === "code" ? ".code-block-copy" : ".markdown-table__copy");
   } else if (surface === "mermaid") {
     const diagram = document.createElement("openclaw-mermaid");
     diagram.source = "flowchart LR\nA --> B";
@@ -97,13 +93,14 @@ async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
     await waitForDiagram(diagram);
     button = diagram.querySelector(".copy-button");
   } else {
-    render(renderCopyAsMarkdownButton("Current message"), owner);
+    mountSolid(() => <CopyButton text="Current message" bare />, { container: owner });
+    flush();
     button = owner.querySelector("button");
   }
   if (!button) {
     throw new Error(`Missing ${surface} copy control`);
   }
-  return { owner, button };
+  return { owner, button, setMarkdown };
 }
 
 function delayFirstWrite() {
@@ -179,14 +176,18 @@ describe("Markdown clipboard operation lifetime", () => {
         });
         const owner = document.body.appendChild(document.createElement("section"));
         owners.push(owner);
-        render(
-          renderMessageImages([
-            {
-              url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
-              alt: "Synthetic image",
-            },
-          ]),
-          owner,
+        mountSolid(
+          () => (
+            <MessageImages
+              images={[
+                {
+                  url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
+                  alt: "Synthetic image",
+                },
+              ]}
+            />
+          ),
+          { container: owner },
         );
         await waitForSolid(() => expect(owner.querySelector(".chat-image-action")).not.toBeNull());
         owner.querySelector<HTMLButtonElement>(".chat-image-action")!.click();
@@ -313,20 +314,19 @@ describe("Markdown clipboard operation lifetime", () => {
     "retires stale $surface copying after pending write settlement: $settlement",
     async ({ surface, settlement }) => {
       const pending = delayFirstWrite();
-      const { owner, button } = await mountCopy(surface);
+      const { owner, button, setMarkdown } = await mountCopy(surface);
       const idleLabel = button.getAttribute("aria-label");
       button.click();
-      render(
-        renderMessageMarkdown(
+      setMarkdown({
+        markdown:
           surface === "code"
             ? "```ts\nconst answer = 42;\nconst next = 43;"
             : "| Name |\n| --- |\n| Alpha continued |",
-          "stream",
-          { role: "assistant", isStreaming: true },
-          { tableInteractions: "enabled" },
-        ),
-        owner,
-      );
+        messageKey: "stream",
+        options: { role: "assistant", isStreaming: true },
+        markdownOptions: { tableInteractions: "enabled" },
+      });
+      flush();
       expect(
         owner.querySelector(surface === "code" ? ".code-block-copy" : ".markdown-table__copy"),
       ).toBe(button);
@@ -350,10 +350,13 @@ describe("Markdown clipboard operation lifetime", () => {
     const pending = delayFirstWrite();
     const older = await mountCopy("code");
     const newer = await mountCopy("code");
-    render(
-      renderMessageMarkdown("```ts\n```", "empty", { role: "assistant", isStreaming: false }, {}),
-      newer.owner,
-    );
+    newer.setMarkdown({
+      markdown: "```ts\n```",
+      messageKey: "empty",
+      options: { role: "assistant", isStreaming: false },
+      markdownOptions: {},
+    });
+    flush();
     older.button.click();
     newer.owner.querySelector<HTMLButtonElement>(".code-block-copy")!.click();
     expect(writeText).toHaveBeenCalledOnce();

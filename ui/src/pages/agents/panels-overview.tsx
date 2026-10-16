@@ -10,15 +10,13 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
-import {
-  renderDecisionModelPicker,
-  type DecisionModelEntry,
-} from "../../components/decision-model-picker.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
-import { renderModelPicker } from "../../components/model-picker.ts";
+import type { DecisionModelEntry } from "../../components/model-picker-options.ts";
 import { MultiSelect } from "../../components/multi-select.tsx";
 import "../../components/tooltip.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
+import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import {
@@ -130,6 +128,33 @@ export function AgentOverview(
   );
   const effectivePrimary = createMemo(() => entryPrimary() ?? defaultPrimary() ?? null);
   const selectedPrimary = createMemo(() => (isDefault() ? effectivePrimary() : entryPrimary()));
+  const primaryModelOptions = createMemo(() => {
+    const inherited = defaultPrimary();
+    return [
+      {
+        value: "",
+        label: isDefault()
+          ? t("agents.overview.notSet")
+          : inherited
+            ? t("agents.overview.inheritDefaultModel", { model: inherited })
+            : t("agents.overview.inheritDefault"),
+      },
+      ...buildModelOptions(
+        configForm(),
+        effectivePrimary() ?? undefined,
+        params.modelCatalog,
+        params.agent.id,
+      ),
+    ];
+  });
+  const decisionModel = createMemo(() => {
+    const value = config().entry?.decisionModel;
+    return typeof value === "string" ? value : undefined;
+  });
+  const inheritedDecisionModel = createMemo(() => {
+    const value = config().defaults?.decisionModel;
+    return typeof value === "string" ? value : undefined;
+  });
   const modelFallbacks = createMemo(
     () =>
       resolveEffectiveModelFallbacks(config().entry?.model, config().defaults?.model) ??
@@ -381,35 +406,13 @@ export function AgentOverview(
         <SettingsRow
           title={primaryModelLabel()}
           control={
-            <LitContent
-              render={() => {
-                const inherited = defaultPrimary();
-                return renderModelPicker({
-                  label: primaryModelLabel(),
-                  value: selectedPrimary() ?? "",
-                  options: [
-                    {
-                      value: "",
-                      label: isDefault()
-                        ? t("agents.overview.notSet")
-                        : inherited
-                          ? t("agents.overview.inheritDefaultModel", {
-                              model: inherited,
-                            })
-                          : t("agents.overview.inheritDefault"),
-                    },
-                    ...buildModelOptions(
-                      configForm(),
-                      effectivePrimary() ?? undefined,
-                      params.modelCatalog,
-                      params.agent.id,
-                    ),
-                  ],
-                  disabled: disabled(),
-                  onChange: (value) => params.onModelChange(params.agent.id, value || null),
-                  onOpen: params.onModelCatalogOpen,
-                });
-              }}
+            <ModelPicker
+              label={primaryModelLabel()}
+              value={selectedPrimary() ?? ""}
+              options={primaryModelOptions()}
+              disabled={disabled()}
+              onChange={(value) => params.onModelChange(params.agent.id, value || null)}
+              onOpen={params.onModelCatalogOpen}
             />
           }
         />
@@ -417,26 +420,14 @@ export function AgentOverview(
           title={t("chat.modelControls.decisionLabel")}
           description={t("chat.modelControls.decisionAgentHelp")}
           control={
-            <LitContent
-              render={() => {
-                const agentConfig = config();
-                const decisionModel = agentConfig.entry?.decisionModel;
-                const inheritedDecisionModel = agentConfig.defaults?.decisionModel;
-                return renderDecisionModelPicker({
-                  id: "agent-decision-model",
-                  models: params.decisionModels,
-                  value: typeof decisionModel === "string" ? decisionModel : undefined,
-                  inherit: {
-                    model:
-                      typeof inheritedDecisionModel === "string"
-                        ? inheritedDecisionModel
-                        : undefined,
-                  },
-                  disabled: disabled(),
-                  onChange: (value) => params.onDecisionModelChange(params.agent.id, value),
-                  onOpen: params.onModelCatalogOpen,
-                });
-              }}
+            <DecisionModelPicker
+              id="agent-decision-model"
+              models={params.decisionModels}
+              value={decisionModel()}
+              inherit={{ model: inheritedDecisionModel() }}
+              disabled={disabled()}
+              onChange={(value) => params.onDecisionModelChange(params.agent.id, value)}
+              onOpen={params.onModelCatalogOpen}
             />
           }
         />

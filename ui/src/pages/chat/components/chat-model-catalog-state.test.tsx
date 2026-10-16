@@ -5,7 +5,6 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { openDetails } from "../../../test-helpers/web-awesome.ts";
 import { ChatModelCatalogRefresh, ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
 import { ChatModelPicker } from "./chat-model-picker.tsx";
 
@@ -135,7 +134,10 @@ describe("model catalog refresh presentation", () => {
     flush();
     update(pending);
     await Promise.resolve();
-    await openDetails(container.querySelector("details")!);
+    const pickerDetails = container.querySelector("details")!;
+    pickerDetails.open = true;
+    pickerDetails.dispatchEvent(new Event("toggle"));
+    await Promise.resolve();
     const input = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
     const refresh = container.querySelector<HTMLButtonElement>("[data-chat-model-refresh] button");
     if (!input || !refresh) {

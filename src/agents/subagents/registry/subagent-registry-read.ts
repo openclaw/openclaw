@@ -5,6 +5,7 @@ import { listSwarmRunReservationIds } from "../swarm/swarm-scheduler.js";
 import {
   getSubagentRunsForChildSession,
   getSubagentSessionReadLookup,
+  immutableSubagentRunSessionList,
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import {
@@ -29,6 +30,7 @@ import {
   withSubagentRunReadSnapshot,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 import { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 export { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
@@ -69,8 +71,15 @@ export function buildSubagentSessionListReadIndex(
   return buildSubagentRunReadIndexFromRuns({
     runs,
     inMemoryRuns: sessionKeys
-      ? [...runs.keys()].flatMap((runId) => subagentRuns.get(runId) ?? [])
-      : subagentRuns.values(),
+      ? [...runs.keys()].flatMap((runId) => {
+          const entry = subagentRuns.get(runId);
+          return entry
+            ? [copySubagentRunRuntimeOwner(entry, immutableSubagentRunSessionList(entry))]
+            : [];
+        })
+      : Array.from(subagentRuns.values(), (entry) =>
+          copySubagentRunRuntimeOwner(entry, immutableSubagentRunSessionList(entry)),
+        ),
     now,
   });
 }

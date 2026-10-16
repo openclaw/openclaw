@@ -1,10 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mcpAppWidgetNameForViewId, type BoardProvider } from "../../../lib/board/provider.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
-import { renderToolPreview } from "./widget-card.ts";
+import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { ToolPreview } from "./widget-card.ts";
 
 const canvasPreview = {
   kind: "canvas",
@@ -12,13 +15,48 @@ const canvasPreview = {
   render: "url",
 } as const;
 const widgetPorts: MessagePort[] = [];
+type PreviewState = {
+  preview: Parameters<typeof ToolPreview>[0]["preview"];
+  options: Parameters<typeof ToolPreview>[0]["options"];
+};
+const widgets = new Map<
+  HTMLElement,
+  { update: (state: PreviewState) => void; unmount: () => void }
+>();
+
+function unmountWidget(host: HTMLElement) {
+  widgets.get(host)?.unmount();
+  widgets.delete(host);
+}
 
 function mountWidget(
-  preview: Parameters<typeof renderToolPreview>[0],
-  options?: Parameters<typeof renderToolPreview>[2],
+  preview: PreviewState["preview"],
+  options?: PreviewState["options"],
   host = document.createElement("div"),
 ) {
-  render(renderToolPreview(preview, "chat_message", options), host);
+  const state = { preview, options };
+  const mounted = widgets.get(host);
+  if (mounted) {
+    mounted.update(state);
+  } else {
+    let update!: (state: PreviewState) => void;
+    const root = mountSolid(
+      () => {
+        const [current, setCurrent] = createSignal(state);
+        update = setCurrent;
+        return (
+          <ToolPreview
+            preview={current().preview}
+            surface="chat_message"
+            options={current().options}
+          />
+        );
+      },
+      { container: host },
+    );
+    widgets.set(host, { update, unmount: root.unmount });
+  }
+  flush();
   return host;
 }
 
@@ -41,6 +79,9 @@ afterEach(async () => {
   await vi.dynamicImportSettled();
   for (const port of widgetPorts.splice(0)) {
     port.close();
+  }
+  for (const host of widgets.keys()) {
+    unmountWidget(host);
   }
   document.body.replaceChildren();
 });
@@ -76,7 +117,7 @@ describe("widget-card", () => {
     expect(host.querySelector("iframe")).toBe(originalFrame);
     expect(host.querySelector("iframe")?.getAttribute("src")).toBe(originalSrc);
 
-    render(nothing, host);
+    unmountWidget(host);
     mountWidget(
       firstPreview,
       {
@@ -436,6 +477,58 @@ describe("widget-card", () => {
 });
 
 describe("widget-card presentation", () => {
+  it("releases placement observation while a retained widget is hidden", () => {
+    const observers: ResizeObserverStub[] = [];
+    class ResizeObserverStub {
+      observe = vi.fn();
+      disconnect = vi.fn();
+      constructor() {
+        observers.push(this);
+      }
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+    const frames: FrameRequestCallback[] = [];
+    const request = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const cancel = vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation(() => {});
+    const [presented, setPresented] = createSignal(true);
+    const root = mountSolid(() => (
+      <SolidContentPresentation value={presented}>
+        <div class="chat-thread">
+          <ToolPreview
+            preview={{ ...canvasPreview, url: "about:blank", sandbox: "strict" }}
+            surface="chat_message"
+            options={{ rawText: "Widget details" }}
+          />
+        </div>
+      </SolidContentPresentation>
+    ));
+    onTestFinished(() => {
+      root.unmount();
+      request.mockRestore();
+      cancel.mockRestore();
+      vi.unstubAllGlobals();
+    });
+    flush();
+    frames.shift()?.(0);
+    expect(observers).toHaveLength(1);
+    expect(observers[0]?.observe).toHaveBeenCalledTimes(2);
+    const frame = root.container.querySelector("iframe");
+
+    setPresented(false);
+    flush();
+    expect(observers[0]?.disconnect).toHaveBeenCalledOnce();
+    expect(root.container.querySelector("iframe")).toBe(frame);
+
+    setPresented(true);
+    flush();
+    frames.shift()?.(0);
+    expect(observers).toHaveLength(2);
+    expect(root.container.querySelector("iframe")).toBe(frame);
+  });
+
   const preview = {
     ...canvasPreview,
     title: "Clock",

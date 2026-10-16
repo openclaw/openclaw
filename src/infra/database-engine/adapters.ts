@@ -17,6 +17,7 @@ import {
   readPostgresSchema,
   verifyPostgresSchema,
 } from "./postgres-schema.js";
+import { bindStoreSearch, type SearchSchema, type SearchStore } from "./search.js";
 import type { DatabaseEngineInput } from "./types.js";
 
 function classifyError(error: unknown): DatabaseErrorKind {
@@ -40,8 +41,10 @@ function classifyError(error: unknown): DatabaseErrorKind {
 }
 
 export const databaseEngineAdapters: {
-  readonly sqlite: DatabaseEngineAdapter<DatabaseSync>;
-  readonly postgres: DatabaseEngineAdapter<PostgresSyncConnection>;
+  readonly sqlite: DatabaseEngineAdapter<DatabaseSync> & { search: typeof bindStoreSearch };
+  readonly postgres: DatabaseEngineAdapter<PostgresSyncConnection> & {
+    search: typeof bindStoreSearch;
+  };
 } = {
   sqlite: {
     id: "sqlite",
@@ -52,6 +55,7 @@ export const databaseEngineAdapters: {
       read: runSqliteDeferredTransactionSync,
     },
     capabilities: { fullText: "fts5", vector: "sqlite-vec" },
+    search: bindStoreSearch,
     schema: {
       // The store's existing SQLite schema/migration owner runs unchanged at open.
       bootstrap: (store) => store.openSqlite(),
@@ -97,6 +101,7 @@ export const databaseEngineAdapters: {
     kysely: getNodeSqliteKysely,
     transactions: { write: runSqliteImmediateTransactionSync, read: runSqliteReadSnapshotSync },
     capabilities: { fullText: "tsvector", vector: null },
+    search: bindStoreSearch,
     schema: {
       bootstrap: (store, db) => {
         if (!store.schema.postgres) {
@@ -150,6 +155,13 @@ export const databaseEngineAdapters: {
     classifyError,
   },
 };
+
+/** @experimental Select the admitted engine once and bind its declared search indexes. */
+export function admitStoreSearch(store: SearchStore, schema: SearchSchema) {
+  const postgres =
+    "databasePath" in store ? store.input !== undefined : isPostgresSqlConnection(store);
+  return databaseEngineAdapters[postgres ? "postgres" : "sqlite"].search(store, schema);
+}
 
 /** Worker envelopes need a transaction only on PostgreSQL; native SQLite statements stay identical. */
 export function runEngineWorkerWrite<T>(
