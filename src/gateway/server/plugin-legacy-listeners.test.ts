@@ -44,6 +44,13 @@ describe("legacy channel webhook ports", () => {
   const cleanups: Array<() => void> = [];
   const warn = vi.fn();
   const endpoint = (offset: number) => ({ port: claim.port + offset, host: "127.0.0.1" });
+  const start = () =>
+    startPluginLegacyListeners({ gatewayServer, httpServers, getRegistry: () => registry, warn });
+  const close = (server: Server) =>
+    new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  const restrictedTimeouts = { headersTimeout: 15_000, requestTimeout: 30_000, timeout: 30_000 };
 
   beforeAll(async () => {
     claim = await acquireTestPortBlock({ offsets: [0, 1, 2] });
@@ -66,12 +73,7 @@ describe("legacy channel webhook ports", () => {
     gatewayServer.listen(claim.port, "127.0.0.1");
     await once(gatewayServer, "listening");
     httpServers.push(gatewayServer);
-    stop = startPluginLegacyListeners({
-      gatewayServer,
-      httpServers,
-      getRegistry: () => registry,
-      warn,
-    });
+    stop = start();
   });
 
   afterEach(async () => {
@@ -89,9 +91,7 @@ describe("legacy channel webhook ports", () => {
   afterAll(async () => {
     stop();
     gatewayServer.closeAllConnections();
-    await new Promise<void>((resolve) => {
-      gatewayServer.close(() => resolve());
-    });
+    await close(gatewayServer);
     await claim.release();
   });
 
@@ -225,20 +225,12 @@ describe("legacy channel webhook ports", () => {
     withPluginHttpRouteRegistry(registry, () => register({ legacyListener }), lease);
     const removeSibling = register({
       path: "/sibling",
-      legacyListener: {
-        ...endpoint(1),
-        health: { path: "/healthz" },
-        timeouts: { headers: 15_000, request: 30_000, socket: 30_000 },
-      },
+      legacyListener: structuredClone(legacyListener),
       throwOnFailure: true,
     });
     await listening();
     const server = httpServers[1]!;
-    expect(server).toMatchObject({
-      headersTimeout: 15_000,
-      requestTimeout: 30_000,
-      timeout: 30_000,
-    });
+    expect(server).toMatchObject(restrictedTimeouts);
     expect(registry.httpRoutes).toHaveLength(2);
     for (const path of ["/webhook", "/sibling"]) {
       expect(await send(1, path)).toMatchObject({ status: 200, body: "accepted" });
@@ -263,11 +255,7 @@ describe("legacy channel webhook ports", () => {
     await listening();
     expect(registry.httpRoutes).toHaveLength(2);
     expect(httpServers.slice(1)).toEqual([server]);
-    expect(server).toMatchObject({
-      headersTimeout: 15_000,
-      requestTimeout: 30_000,
-      timeout: 30_000,
-    });
+    expect(server).toMatchObject(restrictedTimeouts);
     expect(await send(1, "/healthz")).toMatchObject({ status: 200, body: "ok" });
     expect((await send(1, "/healthz")).headers["content-type"]).toBeUndefined();
 
@@ -297,11 +285,7 @@ describe("legacy channel webhook ports", () => {
     removeSuccessor();
     await listening();
     expect(httpServers.slice(1)).toEqual([server]);
-    expect(server).toMatchObject({
-      headersTimeout: 15_000,
-      requestTimeout: 30_000,
-      timeout: 30_000,
-    });
+    expect(server).toMatchObject(restrictedTimeouts);
     expect(await send(1, "/healthz")).toMatchObject({ status: 200, body: "ok" });
     expect((await send(1, "/healthz")).headers["content-type"]).toBeUndefined();
     expect(await send(1, "/webhook")).toMatchObject({ status: 503 });
@@ -316,13 +300,6 @@ describe("legacy channel webhook ports", () => {
     register({
       path,
       legacyListener: endpoint(1),
-      handler: (req, res) => {
-        if (req.url !== path) {
-          res.writeHead(404).end();
-          return;
-        }
-        res.end("accepted");
-      },
     });
     await listening();
     expect(await send(1, path, { method: "POST" })).toMatchObject({
@@ -411,14 +388,12 @@ describe("legacy channel webhook ports", () => {
     }
     expect(tryBeginGatewaySuspendAdmission(() => {})?.commit()).toBe(true);
     expect(
-      (
-        await send(1, "/webhook", {
-          method: "POST",
-          body,
-          headers: { "x-webhook-secret": "synthetic-secret" },
-        })
-      ).status,
-    ).toBe(503);
+      await send(1, "/webhook", {
+        method: "POST",
+        body,
+        headers: { "x-webhook-secret": "synthetic-secret" },
+      }),
+    ).toMatchObject({ status: 503 });
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -548,9 +523,11 @@ describe("legacy channel webhook ports", () => {
     const expectParkedEndpoint = async () => {
       const before = handled;
       const response = await send(1);
-      expect(response.status).toBe(503);
-      expect(response.headers["retry-after"]).toBe("1");
-      expect(response.body).toBe("plugin route is restarting; retry");
+      expect(response).toMatchObject({
+        status: 503,
+        headers: { "retry-after": "1" },
+        body: "plugin route is restarting; retry",
+      });
       expect(handled).toBe(before);
     };
     await expectParkedEndpoint();
@@ -607,17 +584,13 @@ describe("legacy channel webhook ports", () => {
       );
       expect(await send(0, "/webhook")).toMatchObject({ status: 200, body: "accepted" });
 
-      await new Promise<void>((resolve) => {
-        blocker.close(() => resolve());
-      });
+      await close(blocker);
       removeTrigger();
       await listening();
       expect(await send(1, "/webhook")).toMatchObject({ status: 200, body: "accepted" });
     } finally {
       blocker.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        blocker.close(() => resolve());
-      });
+      await close(blocker);
     }
   });
 
@@ -695,12 +668,7 @@ describe("legacy channel webhook ports", () => {
       await Promise.all(closed);
       await Promise.all(callbacks.map(({ finished }) => finished.promise));
       await Promise.all(responses);
-      stop = startPluginLegacyListeners({
-        gatewayServer,
-        httpServers,
-        getRegistry: () => registry,
-        warn,
-      });
+      stop = start();
     }
   });
 });

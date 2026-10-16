@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { createServer, type IncomingMessage } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -11,6 +11,7 @@ import {
 } from "../../infra/gateway-suspend-coordinator.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { dispatchGatewayMethod } from "../../plugin-sdk/gateway-method-runtime.js";
+import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { registerPluginHttpRoute } from "../../plugins/http-registry.js";
 import {
   createEmptyPluginRegistry,
@@ -706,28 +707,17 @@ describe("plugin HTTP routing", () => {
         },
       }),
     ]);
-    const server = createServer((req, res) => void handler(req, res));
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("server did not bind to a TCP port");
-    }
-    try {
-      await expect(
-        fetch(`http://127.0.0.1:${address.port}/hook`, { signal: AbortSignal.timeout(1_000) }).then(
-          (res) => res.text(),
-        ),
-      ).rejects.toMatchObject({ name: "TypeError" });
-      expect(log.warn).toHaveBeenCalledWith("plugin http route failed (route): Error: boom");
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
+    await withServer(
+      (req, res) => void handler(req, res),
+      async (baseUrl) => {
+        await expect(
+          fetch(`${baseUrl}/hook`, { signal: AbortSignal.timeout(1_000) }).then((res) =>
+            res.text(),
+          ),
+        ).rejects.toMatchObject({ name: "TypeError" });
+        expect(log.warn).toHaveBeenCalledWith("plugin http route failed (route): Error: boom");
+      },
+    );
   });
 
   it("does not end a response the plugin already destroyed before throwing", async () => {

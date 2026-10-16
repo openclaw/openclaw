@@ -125,16 +125,20 @@ async function connectProfile(port: number, email: string, identityPath: string)
       platform: "test",
       mode: GATEWAY_CLIENT_MODES.WEBCHAT,
     };
+    const claims = {
+      clientId: client.id,
+      clientMode: client.mode,
+      role: "operator",
+      scopes,
+      platform: client.platform,
+    };
+    const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
     // Same test-only pre-pairing contract as server.auth.presence-audience.test.ts.
     // Approval is scoped to this disposable state, not a production sign-in.
     const pairing = await requestDevicePairing({
       deviceId: identity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-      role: "operator",
-      scopes,
-      clientId: client.id,
-      clientMode: client.mode,
-      platform: client.platform,
+      publicKey,
+      ...claims,
       browserOrigin: "https://control.example.test",
       silent: false,
     });
@@ -144,25 +148,21 @@ async function connectProfile(port: number, email: string, identityPath: string)
     const signedAtMs = Date.now();
     const payload = buildDeviceAuthPayloadV3({
       deviceId: identity.deviceId,
-      clientId: client.id,
-      clientMode: client.mode,
-      role: "operator",
-      scopes,
+      ...claims,
       signedAtMs,
       token: null,
       nonce,
-      platform: client.platform,
     });
     await rpc(ws, "connect", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
       client,
-      role: "operator",
+      role: claims.role,
       scopes,
       caps: [],
       device: {
         id: identity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        publicKey,
         signature: signDevicePayload(identity.privateKeyPem, payload),
         signedAt: signedAtMs,
         nonce,
@@ -172,6 +172,27 @@ async function connectProfile(port: number, email: string, identityPath: string)
 }
 
 type PlannedCall = { id: string; name: string; args: Record<string, unknown> };
+const readCall = (
+  id: string,
+  resource: string,
+  range: { offset?: number; limit?: number } = {},
+): PlannedCall => ({
+  id,
+  name: "read",
+  args: { path: resource, ...range },
+});
+const instructionFile = (receipt: SkillsLibraryReceipt) =>
+  path.join(skillLibraryRevisionDir(receipt.entry.skillId, receipt.entry.revision), "SKILL.md");
+async function saveLibrary(ws: WebSocket, slug: string, previous?: SkillsLibraryReceipt) {
+  const revision = (text: string) => (previous ? text.replaceAll("R1", "R2") : text);
+  return (await rpc(ws, "skills.library.save", {
+    slug,
+    content: revision(instructions),
+    files: supporting.map((file) => ({ ...file, content: revision(file.content) })),
+    expectedRevision: previous?.entry.revision ?? null,
+    ...(previous ? { skillId: previous.entry.skillId } : {}),
+  })) as SkillsLibraryReceipt;
+}
 type ProviderRequest = {
   input?: Array<{
     type?: string;
@@ -371,12 +392,7 @@ describe("Gateway pinned manual library read", () => {
               state.path("bob-device.sqlite"),
             );
             sockets.push(bob);
-            const saved = (await rpc(alice, "skills.library.save", {
-              slug: "manual-guide",
-              content: instructions,
-              files: supporting,
-              expectedRevision: null,
-            })) as SkillsLibraryReceipt;
+            const saved = await saveLibrary(alice, "manual-guide");
             expect(saved.entry.ownerProfileId).toBe(aliceProfile.id);
             const created = (await rpc(alice, "sessions.create", {
               agentId: "main",
@@ -395,22 +411,8 @@ describe("Gateway pinned manual library read", () => {
                 revision: saved.entry.revision,
               }),
             );
-            const newer = (await rpc(alice, "skills.library.save", {
-              slug: "manual-guide",
-              skillId: saved.entry.skillId,
-              expectedRevision: saved.entry.revision,
-              content: instructions.replaceAll("R1", "R2"),
-              files: supporting.map((file) => ({
-                ...file,
-                content: file.content.replaceAll("R1", "R2"),
-              })),
-            })) as SkillsLibraryReceipt;
-            const other = (await rpc(bob, "skills.library.save", {
-              slug: "other-guide",
-              content: instructions,
-              files: supporting,
-              expectedRevision: null,
-            })) as SkillsLibraryReceipt;
+            const newer = await saveLibrary(alice, "manual-guide", saved);
+            const other = await saveLibrary(bob, "other-guide");
             await expect(
               rpc(bob, "skills.library.read", { skillId: saved.entry.skillId }),
             ).rejects.toThrow(/SKILL_LIBRARY_NOT_FOUND/);
@@ -419,37 +421,13 @@ describe("Gateway pinned manual library read", () => {
             const outside = state.path("unrelated.txt");
             await fs.writeFile(outside, "UNRELATED_PRIVATE_SENTINEL");
             plan = [
-              {
-                id: "instructions",
-                name: "read",
-                args: { path: instructionPath, offset: 3, limit: 1 },
-              },
-              ...supporting.map((file, index) => ({
-                id: `support_${index}`,
-                name: "read",
-                args: { path: path.join(skillRoot, file.path) },
-              })),
-              {
-                id: "other_profile",
-                name: "read",
-                args: {
-                  path: path.join(
-                    skillLibraryRevisionDir(other.entry.skillId, other.entry.revision),
-                    "SKILL.md",
-                  ),
-                },
-              },
-              {
-                id: "unselected_revision",
-                name: "read",
-                args: {
-                  path: path.join(
-                    skillLibraryRevisionDir(newer.entry.skillId, newer.entry.revision),
-                    "SKILL.md",
-                  ),
-                },
-              },
-              { id: "unrelated", name: "read", args: { path: outside } },
+              readCall("instructions", instructionPath, { offset: 3, limit: 1 }),
+              ...supporting.map((file, index) =>
+                readCall(`support_${index}`, path.join(skillRoot, file.path)),
+              ),
+              readCall("other_profile", instructionFile(other)),
+              readCall("unselected_revision", instructionFile(newer)),
+              readCall("unrelated", outside),
               { id: "list", name: "ls", args: { path: skillRoot } },
               { id: "write", name: "write", args: { path: instructionPath, content: "REPLACED" } },
               {
@@ -514,10 +492,7 @@ describe("Gateway pinned manual library read", () => {
                 ).toBe(instructions);
                 await expect(
                   read.execute("compaction-unselected", {
-                    path: path.join(
-                      skillLibraryRevisionDir(newer.entry.skillId, newer.entry.revision),
-                      "SKILL.md",
-                    ),
+                    path: instructionFile(newer),
                   }),
                 ).rejects.toThrow(/Path escapes sandbox root/i);
               } finally {
