@@ -35,6 +35,7 @@ import {
   writePlugin,
   writePluginMetadata,
 } from "./loader.test-fixtures.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { withPluginRegistryPreparationScope } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
@@ -56,26 +57,16 @@ it("keeps effective enablement separate from reason-only CLI activation", async 
     body: `require("node:fs").writeFileSync(${JSON.stringify(imported)}, "imported");
 module.exports = { id: "admission-contract", register() {} };`,
   });
-  const config: OpenClawConfig = {
-    plugins: { enabled: true, slots: { memory: "none" } },
-  };
-  const options = {
-    config,
+  const registry = await loadOpenClawPluginCliRegistry({
+    config: { plugins: { enabled: true, slots: { memory: "none" } } },
     manifestRegistry: {
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: plugin.id,
-          origin: "bundled" as const,
           rootDir: plugin.dir,
           source: plugin.file,
-          manifestPath: path.join(plugin.dir, "openclaw.plugin.json"),
-          channels: [],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
           configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
+        }),
       ],
       diagnostics: [],
     },
@@ -84,8 +75,7 @@ module.exports = { id: "admission-contract", register() {} };`,
     activate: false,
     cache: false,
     autoEnabledReasons: { [plugin.id]: ["reason without effective enablement"] },
-  };
-  const registry = await loadOpenClawPluginCliRegistry(options);
+  });
   expectOnlyPlugin(registry, {
     id: plugin.id,
     enabled: false,
@@ -132,10 +122,7 @@ module.exports = { plugin: channel };`,
     packageJson: {
       name: "@example/admission-setup",
       version: "1.0.0",
-      openclaw: {
-        extensions: ["./index.cjs"],
-        setupEntry: "./setup.cjs",
-      },
+      openclaw: { extensions: ["./index.cjs"], setupEntry: "./setup.cjs" },
     },
   });
   const registry = loadOpenClawPlugins({
@@ -151,8 +138,7 @@ module.exports = { plugin: channel };`,
     "admission-channel",
   ]);
   expect(registry.channels).toHaveLength(0);
-  expect(fs.existsSync(setupMarker)).toBe(true);
-  expect(fs.existsSync(fullMarker)).toBe(false);
+  expect([fs.existsSync(setupMarker), fs.existsSync(fullMarker)]).toEqual([true, false]);
 });
 
 it("keeps system routing bound to the replacement lifecycle owner", async () => {
@@ -190,9 +176,7 @@ it("keeps system routing bound to the replacement lifecycle owner", async () => 
   const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   writeJson(manifestPath, { ...manifest, contracts: { tools: ["preparation_probe"] } });
-  const config = {
-    plugins: { allow: [plugin.id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
-  };
+  const config = pluginConfig(plugin);
   setRuntimeConfigSnapshot(config, config);
   const previous = createEmptyPluginRegistry();
   setActivePluginRegistry(previous);
@@ -207,17 +191,13 @@ it("keeps system routing bound to the replacement lifecycle owner", async () => 
   const start = () => startPluginServices({ registry, config });
   const services = await withPluginRegistryPreparationScope(registry, start);
   try {
-    const observed = await late.promise;
-    expect(observed).toEqual([
-      { phase: "registration", ok: false },
-      { phase: "service", ok: false },
-      { phase: "late", ok: false },
-    ]);
+    expect(await late.promise).toEqual(
+      ["registration", "service", "late"].map((phase) => ({ phase, ok: false })),
+    );
     expect(drainSystemEvents(queueKey)).toEqual([]);
     expect(getActivePluginRegistry()).toBe(previous);
     activatePluginRegistry(registry, null, "gateway-bindable", undefined, previous);
-    const tool = requireTool(registry, config);
-    await tool.execute("published", {});
+    await requireTool(registry, config).execute("published", {});
     expect(drainSystemEvents(queueKey)).toEqual(["published"]);
   } finally {
     await services.stop();
@@ -295,9 +275,7 @@ describe("registry load modes", () => {
       id: "cached-load-mode",
       registration: 'api.registerProvider({ id: "mode-provider", label: "Mode", auth: [] });',
     });
-    const options = {
-      config: pluginConfig(plugin),
-    };
+    const options = { config: pluginConfig(plugin) };
     const validation = loadPluginRegistryHandle({ ...options, mode: "validate" });
     const full = loadPluginRegistryHandle(options);
 

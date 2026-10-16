@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   loadAuthProfileStoreForRuntime,
@@ -8,7 +8,6 @@ import {
 } from "../agents/auth-profiles/store-runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import {
   registryContainsRuntimePluginIds,
   resolveCompatibleRuntimePluginRegistry,
@@ -58,18 +57,17 @@ const families = [
 const contextSymbol = Symbol.for("fixture.capability-context");
 const providerRequest = { cfg: {}, providerConfig: {}, timeoutMs: 1000 };
 
-function forbidBroadRuntime(message: string) {
+function unavailable() {
+  throw new Error("registration invoked a host operation");
+}
+
+function forbidBroadRuntime() {
   return vi
     .spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics")
-    .mockImplementation(() => {
-      throw new Error(message);
-    });
+    .mockImplementation(unavailable);
 }
 
 function createContext(): PluginCapabilityCatalogHostContext {
-  const unavailable = () => {
-    throw new Error("registration invoked a host operation");
-  };
   return {
     isProviderApiKeyConfigured: unavailable,
     isProviderApiKeyConfiguredAsync: unavailable,
@@ -94,12 +92,15 @@ function createContext(): PluginCapabilityCatalogHostContext {
   };
 }
 
-async function withFactoryPlugin(
-  register: string,
-  run: (options: PluginLoadOptions, root: string) => Promise<void> | void,
-  manifest?: Record<string, unknown>,
-) {
-  const root = fs.realpathSync(makePluginLoaderTempDir());
+let root: string;
+beforeEach(() => {
+  root = fs.realpathSync(makePluginLoaderTempDir());
+  for (const [key, value] of Object.entries(isolatedLoaderEnv(root))) {
+    vi.stubEnv(key, value);
+  }
+});
+
+function factoryPlugin(register: string, manifest?: Record<string, unknown>): PluginLoadOptions {
   const plugin = writePlugin({
     id: "factory-owner",
     dir: path.join(root, "plugin"),
@@ -113,9 +114,7 @@ async function withFactoryPlugin(
       ...manifest,
     });
   }
-  await withEnvAsync(isolatedLoaderEnv(root), async () =>
-    run({ config: pluginConfig(plugin), pluginSdkResolution: "src", activate: false }, root),
-  );
+  return { config: pluginConfig(plugin), pluginSdkResolution: "src", activate: false };
 }
 
 const registerFactories = `
@@ -144,6 +143,7 @@ const registerFactories = `
 `;
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
   closeOpenClawAgentDatabasesForTest();
@@ -176,111 +176,99 @@ it("retains the creating cache generation when broad services initialize later",
   expect(createPluginRuntime).toHaveBeenCalledTimes(1);
 });
 
-describe("capability factory registration", () => {
-  it("composes native capability factories with a restricted runtime", async () => {
-    await withFactoryPlugin(registerFactories, (options) => {
-      const resolveRuntime = forbidBroadRuntime(
-        "restricted registration must not load the broad runtime",
-      );
-      const registry = loadOpenClawPluginsWithInternalOverrides(
-        { ...options, cache: false },
-        {
-          runtime: {
-            config: {
-              current: () => options.config ?? {},
-              mutateConfigFile: async () => {
-                throw new Error("restricted registration cannot mutate config");
-              },
-              replaceConfigFile: async () => {
-                throw new Error("restricted registration cannot replace config");
-              },
-            },
-          },
-          moduleLoader: { installNativeSdkResolver: false, loaderFilename: import.meta.url },
+it("composes native capability factories with a restricted runtime", () => {
+  const options = factoryPlugin(registerFactories);
+  const resolveRuntime = forbidBroadRuntime();
+  const registry = loadOpenClawPluginsWithInternalOverrides(
+    { ...options, cache: false },
+    {
+      runtime: {
+        config: {
+          current: () => options.config ?? {},
+          mutateConfigFile: async () => unavailable(),
+          replaceConfigFile: async () => unavailable(),
         },
-      );
-      expectPlugin(registry, { id: "factory-owner", status: "loaded" });
-      expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(true);
-      expect(registry.services.map((entry) => entry.service.id)).toEqual(["factory-lifecycle"]);
-      for (const family of families) {
-        expect(registry[family]).toHaveLength(1);
-      }
-      const runtime = getPluginRegistryRuntime(registry)!;
-      for (const facet of ["modelAuth", "modelConfig"] as const) {
-        expect(Object.getOwnPropertyDescriptor(runtime, facet)).toEqual({
-          configurable: true,
-          enumerable: true,
-          get: expect.any(Function),
-          set: undefined,
-        });
-      }
-      expect(registry.speechProviders[0]!.provider.isConfigured(providerRequest)).toBe(true);
-      expect(resolveRuntime).not.toHaveBeenCalled();
-    });
-  });
-
-  it("agrees on raw authored options during load, cache reuse, and active lookup", async () => {
-    await withFactoryPlugin(
-      'api.logger.info("inside registration");' + registerFactories,
-      (options, root) => {
-        let inFlightAtRegistration: boolean | undefined;
-        let registrations = 0;
-        const authored: PluginLoadOptions = Object.freeze({
-          ...options,
-          activate: true,
-          runtimeOptions: Object.freeze({}),
-          logger: {
-            info: (message) => {
-              if (message.includes("inside registration")) {
-                registrations += 1;
-                inFlightAtRegistration = isPluginRegistryLoadInFlight(authored);
-              }
-            },
-            warn() {},
-            error() {},
-            debug() {},
-          },
-        });
-        const cacheKey = resolvePluginRegistryLoadCacheKey(authored);
-        const registry = loadOpenClawPlugins(authored);
-        expect(inFlightAtRegistration).toBe(true);
-        expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(true);
-        expect(isPluginRegistryLoadInFlight(authored)).toBe(false);
-        expect(resolvePluginRegistryLoadCacheKey(authored)).toBe(cacheKey);
-        expect(getPluginLoaderCacheState().get(cacheKey)).toBe(registry);
-        expect(resolveCompatibleRuntimePluginRegistry(authored)).toBe(registry);
-        const bound = getPluginRuntimeLoadContext(registry)!;
-        const prepared = { ...authored, manifestRegistry: bound.manifestRegistry };
-        expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBe(registry);
-        expect(loadOpenClawPlugins(prepared)).toBe(registry);
-        expect(loadOpenClawPlugins(authored)).toBe(registry);
-        expect(registrations).toBe(1);
-        const changedManifest = {
-          ...bound.manifestRegistry!,
-          plugins: bound.manifestRegistry!.plugins.map((plugin) =>
-            Object.assign({}, plugin, { source: path.join(root, "different-source.cjs") }),
-          ),
-        };
-        const changedSelection = { ...prepared, manifestRegistry: changedManifest };
-        expect(resolveCompatibleRuntimePluginRegistry(changedSelection)).toBeUndefined();
-        setPluginRuntimeLoadContext(registry, { ...bound, manifestRegistry: changedManifest });
-        expect(resolveCompatibleRuntimePluginRegistry(changedSelection)).toBeUndefined();
-        expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBe(registry);
-        try {
-          setActivePluginRegistry(registry, `${cacheKey}-different`);
-          expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBeUndefined();
-        } finally {
-          setActivePluginRegistry(registry, cacheKey);
-          setPluginRuntimeLoadContext(registry, bound);
-        }
-        expect(authored).not.toHaveProperty("capabilityCatalogContext");
-        expect(authored.runtimeOptions).toEqual({});
       },
-    );
-  }, 120_000);
+      moduleLoader: { installNativeSdkResolver: false, loaderFilename: import.meta.url },
+    },
+  );
+  expectPlugin(registry, { id: "factory-owner", status: "loaded" });
+  expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(true);
+  expect(registry.services.map((entry) => entry.service.id)).toEqual(["factory-lifecycle"]);
+  for (const family of families) {
+    expect(registry[family]).toHaveLength(1);
+  }
+  const runtime = getPluginRegistryRuntime(registry)!;
+  for (const facet of ["modelAuth", "modelConfig"] as const) {
+    expect(Object.getOwnPropertyDescriptor(runtime, facet)).toEqual({
+      configurable: true,
+      enumerable: true,
+      get: expect.any(Function),
+      set: undefined,
+    });
+  }
+  expect(registry.speechProviders[0]!.provider.isConfigured(providerRequest)).toBe(true);
+  expect(resolveRuntime).not.toHaveBeenCalled();
+});
 
-  it("cold-loads a synchronous external-auth and capability-factory hybrid", async () => {
-    const register = `
+it("agrees on raw authored options during load, cache reuse, and active lookup", () => {
+  const options = factoryPlugin('api.logger.info("inside registration");' + registerFactories);
+  let inFlightAtRegistration: boolean | undefined;
+  let registrations = 0;
+  const authored: PluginLoadOptions = Object.freeze({
+    ...options,
+    activate: true,
+    runtimeOptions: Object.freeze({}),
+    logger: {
+      info: (message) => {
+        if (message.includes("inside registration")) {
+          registrations += 1;
+          inFlightAtRegistration = isPluginRegistryLoadInFlight(authored);
+        }
+      },
+      warn() {},
+      error() {},
+      debug() {},
+    },
+  });
+  const cacheKey = resolvePluginRegistryLoadCacheKey(authored);
+  const registry = loadOpenClawPlugins(authored);
+  expect(inFlightAtRegistration).toBe(true);
+  expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(true);
+  expect(isPluginRegistryLoadInFlight(authored)).toBe(false);
+  expect(resolvePluginRegistryLoadCacheKey(authored)).toBe(cacheKey);
+  expect(getPluginLoaderCacheState().get(cacheKey)).toBe(registry);
+  expect(resolveCompatibleRuntimePluginRegistry(authored)).toBe(registry);
+  const bound = getPluginRuntimeLoadContext(registry)!;
+  const prepared = { ...authored, manifestRegistry: bound.manifestRegistry };
+  expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBe(registry);
+  expect(loadOpenClawPlugins(prepared)).toBe(registry);
+  expect(loadOpenClawPlugins(authored)).toBe(registry);
+  expect(registrations).toBe(1);
+  const changedManifest = {
+    ...bound.manifestRegistry!,
+    plugins: bound.manifestRegistry!.plugins.map((plugin) =>
+      Object.assign({}, plugin, { source: path.join(root, "different-source.cjs") }),
+    ),
+  };
+  const changedSelection = { ...prepared, manifestRegistry: changedManifest };
+  expect(resolveCompatibleRuntimePluginRegistry(changedSelection)).toBeUndefined();
+  setPluginRuntimeLoadContext(registry, { ...bound, manifestRegistry: changedManifest });
+  expect(resolveCompatibleRuntimePluginRegistry(changedSelection)).toBeUndefined();
+  expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBe(registry);
+  try {
+    setActivePluginRegistry(registry, `${cacheKey}-different`);
+    expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBeUndefined();
+  } finally {
+    setActivePluginRegistry(registry, cacheKey);
+    setPluginRuntimeLoadContext(registry, bound);
+  }
+  expect(authored).not.toHaveProperty("capabilityCatalogContext");
+  expect(authored.runtimeOptions).toEqual({});
+}, 120_000);
+
+it("cold-loads a synchronous external-auth and capability-factory hybrid", () => {
+  const register = `
       let host;
       api.registerSpeechProvider((context) => {
         host = context;
@@ -303,114 +291,107 @@ describe("capability factory registration", () => {
         },
       });
     `;
-    await withFactoryPlugin(
-      register,
-      (options, root) => {
-        const resolveRuntime = forbidBroadRuntime(
-          "cold external auth must use native factory composition",
-        );
-        const agentDir = path.join(root, "state", "agents", "main", "agent");
-        const store = loadAuthProfileStoreForRuntime(agentDir, {
-          config: options.config,
-          readOnly: true,
-          syncExternalCli: false,
-          externalCli: { mode: "none", config: options.config },
-        });
-        expect(store.profiles["factory-provider:external"]).toMatchObject({
-          type: "oauth",
-          provider: "factory-provider",
-          access: "hybrid-ready",
-        });
-        expect(store.runtimeExternalProfileIds).toContain("factory-provider:external");
-        expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles).toEqual({});
-        expect(resolveRuntime).not.toHaveBeenCalled();
-      },
-      {
-        providers: ["factory-provider"],
-        contracts: { externalAuthProviders: ["factory-provider"] },
-      },
-    );
-  }, 120_000);
-
-  it("partitions registry reuse by native context identity", async () => {
-    await withFactoryPlugin(registerFactories, async (options) => {
-      const firstContext = createContext();
-      const firstOptions = { ...options, capabilityCatalogContext: firstContext };
-      const first = loadOpenClawPlugins(firstOptions);
-      expect(first.speechProviders).toHaveLength(1);
-      expect(loadOpenClawPlugins(firstOptions)).toBe(first);
-      const secondContext = createContext();
-      const second = loadOpenClawPlugins({ ...options, capabilityCatalogContext: secondContext });
-      expect(second).not.toBe(first);
-      const firstHost = Reflect.get(
-        first.speechProviders[0]!.provider,
-        contextSymbol,
-      ) as PluginCapabilityCatalogContext;
-      const secondHost = Reflect.get(
-        second.speechProviders[0]!.provider,
-        contextSymbol,
-      ) as PluginCapabilityCatalogContext;
-      firstHost.formatErrorMessage(new Error("first"));
-      expect(firstContext.formatErrorMessage).toHaveBeenCalledOnce();
-      expect(secondContext.formatErrorMessage).not.toHaveBeenCalled();
-      secondHost.formatErrorMessage(new Error("second"));
-      expect(secondContext.formatErrorMessage).toHaveBeenCalledOnce();
-      const firstRuntime = getPluginRegistryRuntime(first)!;
-      const secondRuntime = getPluginRegistryRuntime(second)!;
-      firstRuntime.modelAuth.resolveProviderIdForAuth = () => "first-only";
-      expect(firstRuntime.modelAuth.resolveProviderIdForAuth("fixture")).toBe("first-only");
-      expect(
-        secondRuntime.modelAuth.resolveProviderIdForAuth(" Fixture ", {
-          metadataSnapshot: { plugins: [] },
-        }),
-      ).toBe("fixture");
-      await disposePluginRegistryInstances(first);
-      expect(() => firstHost.formatErrorMessage(new Error("retired"))).toThrow(/reloaded|disabled/);
-      expect(firstContext.formatErrorMessage).toHaveBeenCalledOnce();
-      expect(secondHost.formatErrorMessage(new Error("still live"))).toBe("ready");
-      expect(secondContext.formatErrorMessage).toHaveBeenCalledTimes(2);
-    });
+  const options = factoryPlugin(register, {
+    providers: ["factory-provider"],
+    contracts: { externalAuthProviders: ["factory-provider"] },
   });
+  const resolveRuntime = forbidBroadRuntime();
+  const agentDir = path.join(root, "state", "agents", "main", "agent");
+  const store = loadAuthProfileStoreForRuntime(agentDir, {
+    config: options.config,
+    readOnly: true,
+    syncExternalCli: false,
+    externalCli: { mode: "none", config: options.config },
+  });
+  expect(store.profiles["factory-provider:external"]).toMatchObject({
+    type: "oauth",
+    provider: "factory-provider",
+    access: "hybrid-ready",
+  });
+  expect(store.runtimeExternalProfileIds).toContain("factory-provider:external");
+  expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles).toEqual({});
+  expect(resolveRuntime).not.toHaveBeenCalled();
+}, 120_000);
 
-  it("rolls back a rejected factory without an unhandled rejection", async () => {
-    await withFactoryPlugin(
-      `api.registerSpeechProvider({
+it("partitions registry reuse by native context identity", async () => {
+  const options = factoryPlugin(registerFactories);
+  const firstContext = createContext();
+  const firstOptions = { ...options, capabilityCatalogContext: firstContext };
+  const first = loadOpenClawPlugins(firstOptions);
+  expect(first.speechProviders).toHaveLength(1);
+  expect(loadOpenClawPlugins(firstOptions)).toBe(first);
+  const secondContext = createContext();
+  const second = loadOpenClawPlugins({ ...options, capabilityCatalogContext: secondContext });
+  expect(second).not.toBe(first);
+  const firstHost: PluginCapabilityCatalogContext = Reflect.get(
+    first.speechProviders[0]!.provider,
+    contextSymbol,
+  );
+  const secondHost: PluginCapabilityCatalogContext = Reflect.get(
+    second.speechProviders[0]!.provider,
+    contextSymbol,
+  );
+  firstHost.formatErrorMessage(new Error("first"));
+  expect(firstContext.formatErrorMessage).toHaveBeenCalledOnce();
+  expect(secondContext.formatErrorMessage).not.toHaveBeenCalled();
+  secondHost.formatErrorMessage(new Error("second"));
+  expect(secondContext.formatErrorMessage).toHaveBeenCalledOnce();
+  const firstRuntime = getPluginRegistryRuntime(first)!;
+  const secondRuntime = getPluginRegistryRuntime(second)!;
+  firstRuntime.modelAuth.resolveProviderIdForAuth = () => "first-only";
+  expect(firstRuntime.modelAuth.resolveProviderIdForAuth("fixture")).toBe("first-only");
+  expect(
+    secondRuntime.modelAuth.resolveProviderIdForAuth(" Fixture ", {
+      metadataSnapshot: { plugins: [] },
+    }),
+  ).toBe("fixture");
+  await disposePluginRegistryInstances(first);
+  expect(() => firstHost.formatErrorMessage(new Error("retired"))).toThrow(/reloaded|disabled/);
+  expect(firstContext.formatErrorMessage).toHaveBeenCalledOnce();
+  expect(secondHost.formatErrorMessage(new Error("still live"))).toBe("ready");
+  expect(secondContext.formatErrorMessage).toHaveBeenCalledTimes(2);
+});
+
+it("rolls back a rejected factory without an unhandled rejection", async () => {
+  const options = factoryPlugin(
+    `api.registerSpeechProvider({
         id: "before-failure", label: "Before failure", isConfigured: () => true,
         synthesize: async () => { throw new Error("not synthesis"); }
       });
       api.registerRealtimeVoiceProvider(() => Promise.reject(new Error("factory rejected")));`,
-      async (options) => {
-        const registry = loadOpenClawPlugins({
-          ...options,
-          capabilityCatalogContext: createContext(),
-        });
-        expectPlugin(registry, {
-          id: "factory-owner",
-          status: "error",
-          error: expect.stringContaining("must be synchronous"),
-        });
-        for (const family of families) {
-          expect(registry[family]).toEqual([]);
-        }
-        expect(registry.modelCatalogProviders).toEqual([]);
-        expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(false);
-        // Assimilated rejected promises/thenables must settle inside the host rejection handler.
-        await Promise.resolve();
-        await Promise.resolve();
-      },
-    );
+  );
+  const registry = loadOpenClawPlugins({
+    ...options,
+    capabilityCatalogContext: createContext(),
   });
+  expectPlugin(registry, {
+    id: "factory-owner",
+    status: "error",
+    error: expect.stringContaining("must be synchronous"),
+  });
+  for (const family of families) {
+    expect(registry[family]).toEqual([]);
+  }
+  expect(registry.modelCatalogProviders).toEqual([]);
+  expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(false);
+  // Assimilated rejected promises/thenables must settle inside the host rejection handler.
+  await Promise.resolve();
+  await Promise.resolve();
 });
 
 it.each([false, true])(
   "owns failed catalog initialization without revoking an earlier success (prior success: %s)",
   async (priorSuccess) => {
-    await withFactoryPlugin(
+    const options = factoryPlugin(
       'throw new Error("catalog inspection must not load full runtime");',
-      async (options, root) => {
-        fs.writeFileSync(
-          path.join(root, "plugin", "catalog.cjs"),
-          `const { createPluginRuntimeStore } = require("openclaw/plugin-sdk/runtime-store");
+      {
+        capabilityCatalogEntry: "./catalog.cjs",
+        contracts: { speechProviders: ["factory-owner"] },
+      },
+    );
+    fs.writeFileSync(
+      path.join(root, "plugin", "catalog.cjs"),
+      `const { createPluginRuntimeStore } = require("openclaw/plugin-sdk/runtime-store");
           const store = createPluginRuntimeStore("catalog scope missing");
           let attempts = 0;
           module.exports = () => {
@@ -427,53 +408,45 @@ it.each([false, true])(
               }),
             }]; } };
           };`,
-        );
-        const cache = createPluginCache();
-        const load = () =>
-          withPluginCache(cache, () =>
-            loadOpenClawPlugins({
-              ...options,
-              cache: false,
-              capabilityCatalog: { family: "speechProviders", context: createContext() },
-            }),
-          );
-        const context = providerRequest;
-        try {
-          const retained = priorSuccess ? load().speechProviders[0]?.provider : undefined;
-          const stream = await retained?.streamSynthesize?.({
-            ...context,
-            text: "synthetic",
-            target: "audio-file",
-          });
-          const release = stream?.release;
-          if (priorSuccess) {
-            expect(retained?.isConfigured(context)).toBe(true);
-            expect(release).toEqual(expect.any(Function));
-            await release?.();
-          }
-          expect(load).toThrow(/capabilityCatalogEntry failed.*catalog construction failed/);
-          const retried = priorSuccess ? load().speechProviders[0]?.provider : undefined;
-          if (priorSuccess) {
-            expect(retained?.isConfigured(context)).toBe(true);
-            expect(retried?.isConfigured(context)).toBe(true);
-          } else {
-            // Failed initialization discards its loader; the next attempt starts fresh.
-            expect(load).toThrow(/capabilityCatalogEntry failed.*catalog construction failed/);
-          }
-          await retirePluginCache(cache);
-          if (priorSuccess) {
-            expect(() => retained?.isConfigured(context)).toThrow(/reloaded|disabled|retir/);
-            expect(() => retried?.isConfigured(context)).toThrow(/reloaded|disabled|retir/);
-            expect(() => release?.()).toThrow(/reloaded|disabled|retir/);
-          }
-        } finally {
-          await retirePluginCache(cache);
-        }
-      },
-      {
-        capabilityCatalogEntry: "./catalog.cjs",
-        contracts: { speechProviders: ["factory-owner"] },
-      },
     );
+    const cache = createPluginCache();
+    const load = () =>
+      withPluginCache(cache, () =>
+        loadOpenClawPlugins({
+          ...options,
+          cache: false,
+          capabilityCatalog: { family: "speechProviders", context: createContext() },
+        }),
+      );
+    try {
+      if (!priorSuccess) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          expect(load).toThrow(/capabilityCatalogEntry failed.*catalog construction failed/);
+        }
+        return;
+      }
+      const retained = load().speechProviders[0]!.provider;
+      const stream = await retained.streamSynthesize!({
+        ...providerRequest,
+        text: "synthetic",
+        target: "audio-file",
+      });
+      const release = stream.release;
+      expect(retained.isConfigured(providerRequest)).toBe(true);
+      expect(release).toEqual(expect.any(Function));
+      await release?.();
+      expect(load).toThrow(/capabilityCatalogEntry failed.*catalog construction failed/);
+      const retried = load().speechProviders[0]!.provider;
+      for (const provider of [retained, retried]) {
+        expect(provider.isConfigured(providerRequest)).toBe(true);
+      }
+      await retirePluginCache(cache);
+      for (const provider of [retained, retried]) {
+        expect(() => provider.isConfigured(providerRequest)).toThrow(/reloaded|disabled|retir/);
+      }
+      expect(() => release?.()).toThrow(/reloaded|disabled|retir/);
+    } finally {
+      await retirePluginCache(cache);
+    }
   },
 );

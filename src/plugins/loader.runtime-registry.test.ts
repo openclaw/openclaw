@@ -25,6 +25,7 @@ import {
   loadOpenClawPluginCliRegistry,
   loadOpenClawPlugins,
   loadPluginRegistryHandle,
+  type PluginLoadOptions,
 } from "./loader.js";
 import {
   makePluginLoaderTempDir,
@@ -68,7 +69,20 @@ function replacementFixture(id: string, body: string) {
     id: "healthy-replacement",
     body: "module.exports = { register() {} };",
   });
-  return { broken, healthy, options: { config: pluginConfig(broken, healthy), cache: false } };
+  const options = { config: pluginConfig(broken, healthy), cache: false };
+  const replace = (
+    previousRegistry: ReturnType<typeof loadPluginRegistryHandle>,
+    plugin: typeof healthy,
+    config: PluginLoadOptions["config"] = options.config,
+  ) =>
+    loadPluginRegistryHandle({
+      ...options,
+      config,
+      previousRegistry,
+      replacePluginIds: [plugin.id],
+      throwOnLoadError: true,
+    });
+  return { broken, healthy, options, replace };
 }
 
 it("keeps host config/state/system/model policy ownership across broad runtime loading", async () => {
@@ -458,7 +472,7 @@ describe("cached plugin load failures", () => {
   });
 
   it("reports only newly failed replacements while retaining the complete diagnostic registry", () => {
-    const { broken, healthy, options } = replacementFixture(
+    const { broken, healthy, options, replace } = replacementFixture(
       "startup-broken",
       'throw new Error("retained startup failure");',
     );
@@ -471,12 +485,7 @@ describe("cached plugin load failures", () => {
     fs.writeFileSync(healthy.file, 'throw new Error("new replacement failure");');
     let failure: unknown;
     try {
-      loadPluginRegistryHandle({
-        ...options,
-        previousRegistry: previous,
-        replacePluginIds: [healthy.id],
-        throwOnLoadError: true,
-      });
+      replace(previous, healthy);
     } catch (error) {
       failure = error;
     }
@@ -495,7 +504,7 @@ describe("cached plugin load failures", () => {
   });
 
   it("does not reject an unrelated replacement for a re-evaluated startup quarantine", () => {
-    const { broken, healthy, options } = replacementFixture(
+    const { broken, healthy, options, replace } = replacementFixture(
       "startup-quarantined",
       'throw new Error("quarantined plugin must not execute");',
     );
@@ -516,17 +525,8 @@ describe("cached plugin load failures", () => {
     const previousError = previous.plugins.find((entry) => entry.id === broken.id)?.error;
     expect(previousError).toContain("missing-openclaw-peer-link");
 
-    const replacement = loadPluginRegistryHandle({
-      ...options,
-      config: {
-        plugins: {
-          ...options.config.plugins,
-          entries: { [broken.id]: { enabled: true } },
-        },
-      },
-      previousRegistry: previous,
-      replacePluginIds: [healthy.id],
-      throwOnLoadError: true,
+    const replacement = replace(previous, healthy, {
+      plugins: { ...options.config.plugins, entries: { [broken.id]: { enabled: true } } },
     });
     expect(replacement.plugins.find((entry) => entry.id === broken.id)).toMatchObject({
       status: "error",
@@ -535,14 +535,7 @@ describe("cached plugin load failures", () => {
     expect(replacement.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({
       status: "loaded",
     });
-    expect(() =>
-      loadPluginRegistryHandle({
-        ...options,
-        previousRegistry: previous,
-        replacePluginIds: [broken.id],
-        throwOnLoadError: true,
-      }),
-    ).toThrow(PluginLoadFailureError);
+    expect(() => replace(previous, broken)).toThrow(PluginLoadFailureError);
   });
 });
 

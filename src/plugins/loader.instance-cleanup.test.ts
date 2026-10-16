@@ -55,12 +55,16 @@ function writeToolPlugin(params: Parameters<typeof writePlugin>[0] & { tool: str
 }
 
 function loadFixture(
-  plugin: ReturnType<typeof writePlugin>,
+  plugin: ReturnType<typeof writePlugin> | ReturnType<typeof writePlugin>[],
   options: PluginLoadOptions = {},
   cache?: PluginCache,
 ) {
   const load = () =>
-    loadOpenClawPlugins({ config: pluginConfig(plugin), activate: false, ...options });
+    loadOpenClawPlugins({
+      config: pluginConfig(...(Array.isArray(plugin) ? plugin : [plugin])),
+      activate: false,
+      ...options,
+    });
   return cache ? withPluginCache(cache, load) : load();
 }
 
@@ -144,7 +148,6 @@ it.each([true, false])(
       expect(registry.plugins[0]?.status).toBe("loaded");
       const expected = (phase: string) => ({
         phase,
-        // Admitted registration and callbacks can share scratch state without global activation.
         set: true,
         value: { phase },
         event: activate
@@ -194,17 +197,13 @@ it.each([true, false])(
       };`,
     });
     const cache = createPluginCache();
-    const options = {
-      config: pluginConfig(plugin),
-      cache: cached,
-      activate: false,
-    };
-    const registry = withPluginCache(cache, () => loadOpenClawPlugins(options));
+    const options = { cache: cached, config: pluginConfig(plugin) };
+    const registry = loadFixture(plugin, options, cache);
     try {
       expect(registry.plugins[0]?.status).toBe("loaded");
       expect(process.listenerCount(event)).toBe(before + 1);
       if (cached) {
-        expect(withPluginCache(cache, () => loadOpenClawPlugins(options))).toBe(registry);
+        expect(loadFixture(plugin, options, cache)).toBe(registry);
       }
       withPluginCache(cache, clearPluginRegistryLoadCache);
       expect(process.listenerCount(event)).toBe(before + 1);
@@ -243,7 +242,7 @@ it("preserves an adopted published instance across cache retirement", async () =
   });
   const helper = path.join(plugin.dir, "lazy.mjs");
   writeFileSync(helper, 'export const value = "captured";');
-  const cache = createPluginCache();
+  await using cache = createPluginCache();
   const registry = loadFixture(plugin, {}, cache);
   try {
     const tool = requireTool(registry);
@@ -262,13 +261,11 @@ it("preserves an adopted published instance across cache retirement", async () =
     ).rejects.toThrow("reloaded or disabled");
   } finally {
     await clearActivePluginRegistry();
-    await retirePluginCache(cache);
   }
 });
 
 it("keeps a module-scope resource open for the republished instance after the old one retires", async () => {
   const id = "module-resource-republish";
-  // Canonical external-plugin pattern: open a resource at import, close it in onDispose.
   const plugin = writeToolPlugin({
     id,
     tool: "resource_probe",
@@ -284,7 +281,6 @@ it("keeps a module-scope resource open for the republished instance after the ol
         });
       } };`,
   });
-  // A republish loads the unchanged plugin through a fresh inventory, then retires the old one.
   const load = (cache: PluginCache) => loadFixture(plugin, { cache: false }, cache);
   const previousCache = createPluginCache();
   const nextCache = createPluginCache();
@@ -411,23 +407,12 @@ it("retires every unpublished instance when a nonactivating builder throws", asy
     }),
     writePlugin({ id: "abandoned-z", body: 'throw new Error("later plugin failed");' }),
   ];
-  const cache = createPluginCache();
-  try {
-    expect(() =>
-      withPluginCache(cache, () =>
-        loadOpenClawPlugins({
-          config: pluginConfig(...plugins),
-          cache: false,
-          activate: false,
-          throwOnLoadError: true,
-        }),
-      ),
-    ).toThrow("later plugin failed");
-    await retirePluginCache(cache);
-    expect(process.listenerCount(event)).toBe(before);
-  } finally {
-    await retirePluginCache(cache);
-  }
+  await using cache = createPluginCache();
+  expect(() => loadFixture(plugins, { cache: false, throwOnLoadError: true }, cache)).toThrow(
+    "later plugin failed",
+  );
+  await retirePluginCache(cache);
+  expect(process.listenerCount(event)).toBe(before);
 });
 
 it("joins failed registration cleanup through cache retirement and preserves both failures", async () => {
@@ -458,14 +443,10 @@ it("joins failed registration cleanup through cache retirement and preserves bot
     await entered.promise;
     let settled = false;
     retirement = retirePluginCache(cache);
-    void retirement.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const markSettled = () => {
+      settled = true;
+    };
+    void retirement.then(markSettled, markSettled);
     await nextTurn();
     expect.soft(settled).toBe(false);
     release!();
