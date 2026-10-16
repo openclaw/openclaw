@@ -240,7 +240,10 @@ suite.define(() => {
       await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await page.getByRole("button", { name: "Device offline" }).waitFor();
-      const continueAction = page.getByText("Continue on Gateway…", { exact: true });
+      const continueAction = page.getByRole("menuitem", {
+        name: "Continue on Gateway…",
+        exact: true,
+      });
       if (!(await continueAction.isVisible())) {
         await page.getByRole("button", { name: "Device offline" }).click();
       }
@@ -359,7 +362,10 @@ suite.define(() => {
 
       await gateway.deferNext("sessions.move");
       await panes.last().getByRole("button", { name: "Device offline" }).click();
-      await panes.last().getByText("Continue on Gateway…", { exact: true }).click();
+      await panes
+        .last()
+        .getByRole("menuitem", { name: "Continue on Gateway…", exact: true })
+        .click();
       await page.getByRole("button", { name: "Continue on Gateway", exact: true }).click();
       const move = await gateway.waitForRequest("sessions.move");
       expect(move.params).toEqual({
@@ -825,7 +831,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await page.getByRole("button", { name: "Move failed" }).click();
       await page.getByText("Destination device is offline.", { exact: true }).waitFor();
-      await page.getByText("Retry move", { exact: true }).waitFor();
+      await page.getByRole("menuitem", { name: "Retry move", exact: true }).waitFor();
       await capture(page, "05-error.png");
     } finally {
       await suite.closeBrowserContext(context);
