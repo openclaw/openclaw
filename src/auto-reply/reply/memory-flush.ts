@@ -34,7 +34,7 @@ export function resolveProjectedPromptTokens(
   transcript: TranscriptTokenEstimate | undefined,
 ): number {
   const project = (promptTokens: number | undefined, outputTokens: number | undefined) =>
-    typeof promptTokens === "number"
+    promptTokens !== undefined
       ? resolveEffectivePromptTokens(promptTokens, outputTokens, promptTokenEstimate)
       : 0;
   return Math.max(
@@ -52,8 +52,7 @@ export function estimatePromptTokensForMemoryFlush(prompt?: string): number | un
     return undefined;
   }
   const message: AgentMessage = { role: "user", content: trimmed, timestamp: Date.now() };
-  const tokens = asPositiveFiniteNumber(estimateMessagesTokens([message]));
-  return tokens === undefined ? undefined : Math.ceil(tokens);
+  return Math.ceil(estimateMessagesTokens([message]));
 }
 
 export function resolveCompactionThreshold(params: {
@@ -163,12 +162,7 @@ export function shouldRunPreflightCompaction(params: {
     projectedTokens === undefined
       ? resolveFreshSessionTotalTokens(params.entry)
       : Math.floor(projectedTokens);
-  return (
-    typeof totalTokens === "number" &&
-    totalTokens > 0 &&
-    params.threshold > 0 &&
-    totalTokens >= params.threshold
-  );
+  return totalTokens !== undefined && params.threshold > 0 && totalTokens >= params.threshold;
 }
 
 /** One flush per compaction cycle, regardless of token or transcript-size trigger. */
@@ -176,6 +170,5 @@ export function hasAlreadyFlushedForCurrentCompaction(
   entry: Pick<SessionEntry, "compactionCount" | "memoryFlush">,
 ): boolean {
   const compactionCount = entry.compactionCount ?? 0;
-  const lastFlushAt = entry.memoryFlush?.compactionCount;
-  return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
+  return entry.memoryFlush?.compactionCount === compactionCount;
 }

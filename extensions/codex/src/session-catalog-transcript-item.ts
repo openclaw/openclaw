@@ -20,7 +20,7 @@ export function toGenericTranscriptItem(item: CodexThreadItem): SessionCatalogTr
   } else if (CODEX_TOOL_TYPES.has(item.type)) {
     type = item.result !== undefined || item.aggregatedOutput ? "toolResult" : "toolCall";
   }
-  const fallback = item.title ?? item.name ?? item.tool ?? item.command ?? item.query ?? undefined;
+  const fallback = item.title ?? item.name ?? item.tool ?? item.command ?? item.query;
   const resultText =
     item.aggregatedOutput ||
     (item.result === undefined ? undefined : JSON.stringify(item.result, null, 2));

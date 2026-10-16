@@ -73,10 +73,6 @@ export class PaletteSessionDraft {
     );
   }
 
-  get initialized(): boolean {
-    return this.draft !== undefined;
-  }
-
   get message(): string {
     return this.draft?.submission.message ?? "";
   }

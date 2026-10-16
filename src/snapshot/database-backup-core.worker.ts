@@ -166,10 +166,7 @@ export async function restorePostgresBackup(params: {
     using anchor = openNodeSqliteDatabase(params.anchorPath);
     anchor.prepare("UPDATE openclaw_engine_anchor SET schema = ?").run(namespace);
   }
-  return {
-    ...(await artifact(params.anchorPath)),
-    namespace,
-  };
+  return { namespace };
 }
 
 export async function fingerprintPostgresDatabase(params: {
