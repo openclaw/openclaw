@@ -36,9 +36,14 @@ import {
 
 vi.unmock("./agent-scope-config.js");
 
+function fleet(agents: NonNullable<OpenClawConfig["agents"]>): OpenClawConfig {
+  return { agents };
+}
+const twoAgents = () => fleet({ entries: { main: {}, ops: {} } });
+
 describe("agent roster resolution", () => {
   it("rejects unknown configured-agent selections with canonical CLI guidance", () => {
-    const cfg = { agents: { entries: { main: {}, ops: {} } } };
+    const cfg = twoAgents();
 
     expect(resolveConfiguredAgentId(cfg, "ops")).toBe("ops");
     expect(() => resolveConfiguredAgentId(cfg, "nope-zzz")).toThrow(
@@ -47,20 +52,14 @@ describe("agent roster resolution", () => {
   });
 
   it("keeps the guidance runnable under a profile", () => {
-    const cfg = { agents: { entries: { main: {}, ops: {} } } };
-    const previous = process.env.OPENCLAW_PROFILE;
-    process.env.OPENCLAW_PROFILE = "testprof";
+    const cfg = twoAgents();
+    vi.stubEnv("OPENCLAW_PROFILE", "testprof");
     try {
-      // A hint the operator cannot paste back is worse than none, so the profile must survive.
       expect(() => resolveConfiguredAgentId(cfg, "nope-zzz")).toThrow(
         "Run openclaw --profile testprof agents list to see configured agents.",
       );
     } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_PROFILE;
-      } else {
-        process.env.OPENCLAW_PROFILE = previous;
-      }
+      vi.unstubAllEnvs();
     }
   });
 
@@ -165,28 +164,21 @@ describe("agent roster resolution", () => {
     retainLegacyDefaultAgentId(ownerlessFleet, "ops");
     expect(tryResolveAmbientOwnerAgentId(ownerlessFleet)).toBeUndefined();
     expect(() => resolveAmbientOwnerAgentId(ownerlessFleet)).toThrow(AgentSelectionRequiredError);
-    expect(() =>
+    const resolveWithContext = () =>
       resolveAmbientOwnerAgentId(ownerlessFleet, undefined, {
         surface: "Talk relay ownership",
         hint: "Set talk.agentId.",
-      }),
-    ).toThrow("Talk relay ownership");
-    expect(() =>
-      resolveAmbientOwnerAgentId(ownerlessFleet, undefined, {
-        surface: "Talk relay ownership",
-        hint: "Set talk.agentId.",
-      }),
-    ).toThrow("Set talk.agentId.");
+      });
+    expect(resolveWithContext).toThrow("Talk relay ownership");
+    expect(resolveWithContext).toThrow("Set talk.agentId.");
   });
 
   it("resolves the default agent directory through the ambient owner", () => {
-    const config = {
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "beta" } },
-        entries: { alpha: {}, beta: { agentDir: "/tmp/openclaw-beta-agent" } },
-      },
-    } satisfies OpenClawConfig;
+    const config = fleet({
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "beta" } },
+      entries: { alpha: {}, beta: { agentDir: "/tmp/openclaw-beta-agent" } },
+    });
 
     expect(resolveDefaultAgentDir(config)).toBe(path.resolve("/tmp/openclaw-beta-agent"));
   });
@@ -266,7 +258,7 @@ describe("agent roster resolution", () => {
     expect(unrelatedEntryReads).toBe(0);
   });
 
-  it.each(["published"])("prepares one %s fleet roster per generation", (kind) => {
+  it("prepares one published fleet roster per generation", () => {
     const previous = getRuntimeConfigSnapshot();
     const source = {
       agents: {
@@ -277,40 +269,33 @@ describe("agent roster resolution", () => {
         ),
       },
     };
-    const config = kind === "captured" ? captureRuntimeConfig(source) : source;
-    if (kind === "published") {
-      setRuntimeConfigSnapshot(config);
-    }
+    setRuntimeConfigSnapshot(source);
     const entries = vi.spyOn(agentRoster, "listAgentEntriesWithSource");
     const ids = vi.spyOn(agentRoster, "listAgentIds");
     try {
       for (let index = 0; index < 200; index += 1) {
-        withAgentRosterFactsBatch(config, () => {
-          expect(resolveAgentConfig(config, `agent-${index}`)?.name).toBe(`${index}`);
-          expect(tryResolveLegacyCompatibilityAgentId(config)).toBe("agent-0");
+        withAgentRosterFactsBatch(source, () => {
+          expect(resolveAgentConfig(source, `agent-${index}`)?.name).toBe(`${index}`);
+          expect(tryResolveLegacyCompatibilityAgentId(source)).toBe("agent-0");
         });
       }
       // One point-lookup index and one configured-owner membership projection.
       expect(entries.mock.calls.length + ids.mock.calls.length).toBeLessThanOrEqual(2);
-      if (kind === "published") {
-        source.agents.entries["agent-0"]!.name = "Replacement";
-        source.agents.defaults.systemAgent.agentId = "agent-199";
-        setRuntimeConfigSnapshot(source);
-        expect(resolveAgentConfig(source, "agent-0")?.name).toBe("Replacement");
-        expect(tryResolveLegacyCompatibilityAgentId(source)).toBe("agent-199");
-        clearRuntimeConfigSnapshot();
-        source.agents.entries["agent-0"]!.name = "Unbound";
-        expect(resolveAgentConfig(source, "agent-0")?.name).toBe("Unbound");
-      }
+      source.agents.entries["agent-0"]!.name = "Replacement";
+      source.agents.defaults.systemAgent.agentId = "agent-199";
+      setRuntimeConfigSnapshot(source);
+      expect(resolveAgentConfig(source, "agent-0")?.name).toBe("Replacement");
+      expect(tryResolveLegacyCompatibilityAgentId(source)).toBe("agent-199");
+      clearRuntimeConfigSnapshot();
+      source.agents.entries["agent-0"]!.name = "Unbound";
+      expect(resolveAgentConfig(source, "agent-0")?.name).toBe("Unbound");
     } finally {
       entries.mockRestore();
       ids.mockRestore();
-      if (kind === "published") {
-        if (previous) {
-          setRuntimeConfigSnapshot(previous);
-        } else {
-          clearRuntimeConfigSnapshot();
-        }
+      if (previous) {
+        setRuntimeConfigSnapshot(previous);
+      } else {
+        clearRuntimeConfigSnapshot();
       }
     }
   });
@@ -366,12 +351,10 @@ describe("agent roster resolution", () => {
 
 describe("resolveAgentConfig model policy", () => {
   it("returns an explicit per-agent allowlist override", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { modelPolicy: { allow: ["openai/gpt-5.5"] } },
-        entries: { main: { modelPolicy: { allow: ["openai/gpt-5.6-sol"] } } },
-      },
-    };
+    const cfg = fleet({
+      defaults: { modelPolicy: { allow: ["openai/gpt-5.5"] } },
+      entries: { main: { modelPolicy: { allow: ["openai/gpt-5.6-sol"] } } },
+    });
 
     expect(resolveAgentConfig(cfg, "main")?.modelPolicy).toEqual({
       allow: ["openai/gpt-5.6-sol"],

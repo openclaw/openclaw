@@ -1,8 +1,4 @@
-/**
- * Unit coverage for adapting runtime and client-hosted tools.
- * Exercises result coercion, error wrapping, client delegation, and conflict
- * detection at the ToolDefinition boundary.
- */
+/** Runtime/client tool coercion, delegation, and conflicts at the definition boundary. */
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -28,13 +24,46 @@ type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
 const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
-async function executeTool(tool: AgentTool, callId: string) {
-  const defs = toToolDefinitions([tool]);
-  const def = defs[0];
-  if (!def) {
-    throw new Error("missing tool definition");
-  }
-  return await def.execute(callId, {}, undefined, undefined, extensionContext);
+function executeDefinition(
+  def: ReturnType<typeof toToolDefinitions>[number] | undefined,
+  callId: string,
+  params: unknown = {},
+) {
+  return expectDefined(def, "tool definition").execute(
+    callId,
+    params,
+    undefined,
+    undefined,
+    extensionContext,
+  );
+}
+
+function executeTool(tool: AgentTool, callId: string, params: unknown = {}) {
+  return executeDefinition(toToolDefinitions([tool])[0], callId, params);
+}
+function toolFixture(
+  name: string,
+  execute: AgentTool["execute"],
+  parameters = Type.Object({}),
+): AgentTool {
+  return { name, label: name, description: name, parameters, execute };
+}
+function executeExec(
+  options: Parameters<typeof createExecTool>[0],
+  callId: string,
+  params: unknown = {},
+) {
+  return executeTool(createExecTool(options), callId, params);
+}
+
+function sandboxOptions(validateWorkdir: (workdir: string) => Promise<string>) {
+  return {
+    containerName: "remote-sandbox-workdir-test",
+    workspaceDir: process.cwd(),
+    containerWorkdir: "/remote/workspace",
+    workdirValidation: "backend" as const,
+    validateWorkdir,
+  };
 }
 
 describe("agent tool definition adapter", () => {
@@ -50,15 +79,9 @@ describe("agent tool definition adapter", () => {
       "Accessibility and Screen Recording required. Do not retry until the user confirms.";
     const cause = Object.assign(new Error(message), { details: { permissionMissing } });
     const result = await executeTool(
-      {
-        name: "nodes",
-        label: "Nodes",
-        description: "Node commands",
-        parameters: Type.Object({}),
-        execute: async () => {
-          throw new Error(message, { cause });
-        },
-      },
+      toolFixture("nodes", async () => {
+        throw new Error(message, { cause });
+      }),
       "permission-call",
     );
     expect(result.details).toEqual({
@@ -84,15 +107,7 @@ describe("agent tool definition adapter", () => {
         return result;
       });
       const [definition] = toToolDefinitions(
-        [
-          {
-            name: "receipt",
-            label: "Receipt",
-            description: "Receipt",
-            parameters: Type.Object({}),
-            execute,
-          },
-        ],
+        [toolFixture("receipt", execute)],
         undefined,
         route === "composed" ? run.signal : undefined,
       );
@@ -141,29 +156,16 @@ describe("agent tool definition adapter", () => {
       security: "deny",
       ask: "off",
     });
-    const [definition] = toToolDefinitions([tool]);
     const missingWorkdir = path.join(os.tmpdir(), `openclaw-missing-denied-cwd-${Date.now()}`);
-
-    const existing = await expectDefined(definition, "definition test invariant").execute(
-      "call-denied-existing-cwd",
-      {
-        command: "echo denied",
-        workdir: process.cwd(),
-      },
-      undefined,
-      undefined,
-      extensionContext,
-    );
-    const missing = await expectDefined(definition, "definition test invariant").execute(
-      "call-denied-missing-cwd",
-      {
-        command: "echo denied",
-        workdir: missingWorkdir,
-      },
-      undefined,
-      undefined,
-      extensionContext,
-    );
+    const [definition] = toToolDefinitions([tool]);
+    const existing = await executeDefinition(definition, "call-denied-existing-cwd", {
+      command: "echo denied",
+      workdir: process.cwd(),
+    });
+    const missing = await executeDefinition(definition, "call-denied-missing-cwd", {
+      command: "echo denied",
+      workdir: missingWorkdir,
+    });
 
     const expected = {
       status: "error",
@@ -176,29 +178,18 @@ describe("agent tool definition adapter", () => {
 
   it("does not validate backend sandbox workdirs before exec deny", async () => {
     const validateWorkdir = vi.fn(async (workdir: string) => workdir);
-    const tool = createExecTool({
-      host: "sandbox",
-      security: "deny",
-      ask: "off",
-      sandbox: {
-        containerName: "remote-sandbox-workdir-test",
-        workspaceDir: process.cwd(),
-        containerWorkdir: "/remote/workspace",
-        workdirValidation: "backend",
-        validateWorkdir,
+    const result = await executeExec(
+      {
+        host: "sandbox",
+        security: "deny",
+        ask: "off",
+        sandbox: sandboxOptions(validateWorkdir),
       },
-    });
-    const [definition] = toToolDefinitions([tool]);
-
-    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-denied-backend-cwd",
       {
         command: "echo denied",
         workdir: "/remote/workspace/generated",
       },
-      undefined,
-      undefined,
-      extensionContext,
     );
 
     expect(result.details).toMatchObject({
@@ -220,15 +211,8 @@ describe("agent tool definition adapter", () => {
         return { content: [], details: {} };
       },
     };
-    const [definition] = toToolDefinitions([tool]);
     const args = { command: "cat bad.py | python", workdir: process.cwd() };
-    const result = await expectDefined(definition, "exec definition").execute(
-      "call-preflight-refused",
-      args,
-      undefined,
-      undefined,
-      extensionContext,
-    );
+    const result = await executeTool(tool, "call-preflight-refused", args);
 
     expect(result.details).toMatchObject({
       status: "error",
@@ -248,18 +232,10 @@ describe("agent tool definition adapter", () => {
   });
 
   it("does not throw WeakMap errors when preparing malformed exec params", async () => {
-    const tool = createExecTool({
-      security: "full",
-      ask: "off",
-    });
-    const [definition] = toToolDefinitions([tool]);
-
-    const result = await expectDefined(definition, "definition test invariant").execute(
+    const result = await executeExec(
+      { security: "full", ask: "off" },
       "call-malformed-exec-params",
       "not-an-object",
-      undefined,
-      undefined,
-      extensionContext,
     );
 
     expect(result.details).toMatchObject({
@@ -269,19 +245,13 @@ describe("agent tool definition adapter", () => {
   });
 
   it("reports malformed exec params when elevated logging is enabled", async () => {
-    const tool = createExecTool({
-      security: "full",
-      ask: "off",
-      elevated: { enabled: true, allowed: true, defaultLevel: "on" },
-    });
-    const [definition] = toToolDefinitions([tool]);
-
-    const result = await expectDefined(definition, "definition test invariant").execute(
+    const result = await executeExec(
+      {
+        security: "full",
+        ask: "off",
+        elevated: { enabled: true, allowed: true, defaultLevel: "on" },
+      },
       "call-malformed-elevated-exec-params",
-      {},
-      undefined,
-      undefined,
-      extensionContext,
     );
 
     expect(result.details).toMatchObject({
@@ -292,28 +262,17 @@ describe("agent tool definition adapter", () => {
 
   it("does not validate backend sandbox workdirs before malformed exec params fail", async () => {
     const validateWorkdir = vi.fn(async (workdir: string) => workdir);
-    const tool = createExecTool({
-      host: "sandbox",
-      security: "full",
-      ask: "off",
-      sandbox: {
-        containerName: "remote-sandbox-workdir-test",
-        workspaceDir: process.cwd(),
-        containerWorkdir: "/remote/workspace",
-        workdirValidation: "backend",
-        validateWorkdir,
+    const result = await executeExec(
+      {
+        host: "sandbox",
+        security: "full",
+        ask: "off",
+        sandbox: sandboxOptions(validateWorkdir),
       },
-    });
-    const [definition] = toToolDefinitions([tool]);
-
-    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-malformed-backend-sandbox-exec-params",
       {
         workdir: "/remote/workspace/generated",
       },
-      undefined,
-      undefined,
-      extensionContext,
     );
 
     expect(result.details).toMatchObject({
@@ -324,17 +283,11 @@ describe("agent tool definition adapter", () => {
   });
 
   it("coerces details-only tool results to include content", async () => {
-    const tool = {
-      name: "memory_query",
-      label: "Memory Query",
-      description: "returns details only",
-      parameters: Type.Object({}),
-      execute: (async () => ({
-        details: {
-          hits: [{ id: "a1", score: 0.9 }],
-        },
-      })) as unknown as AgentTool["execute"],
-    } satisfies AgentTool;
+    const tool = toolFixture("memory_query", (async () => ({
+      details: {
+        hits: [{ id: "a1", score: 0.9 }],
+      },
+    })) as unknown as AgentTool["execute"]);
 
     const result = await executeTool(tool, "call3");
     expect(result.details).toEqual({
@@ -345,16 +298,10 @@ describe("agent tool definition adapter", () => {
   });
 
   it("coerces non-standard object results to include content", async () => {
-    const tool = {
-      name: "memory_query_raw",
-      label: "Memory Query Raw",
-      description: "returns plain object",
-      parameters: Type.Object({}),
-      execute: (async () => ({
-        count: 2,
-        ids: ["m1", "m2"],
-      })) as unknown as AgentTool["execute"],
-    } satisfies AgentTool;
+    const tool = toolFixture("memory_query_raw", (async () => ({
+      count: 2,
+      ids: ["m1", "m2"],
+    })) as unknown as AgentTool["execute"]);
 
     const result = await executeTool(tool, "call4");
     expect(result.details).toEqual({
@@ -383,21 +330,12 @@ describe("agent tool definition adapter", () => {
     };
     const hookContext = { agentId: "agent-main", sessionId: "session-wrapped-tool" };
     const wrappedTool = wrapToolWithBeforeToolCallHook(tool, hookContext);
-    const [definition] = toToolDefinitions([wrappedTool], hookContext);
-    if (!definition) {
-      throw new Error("missing wrapped tool definition");
-    }
-
-    await definition.execute("call-wrapped", {}, undefined, undefined, extensionContext);
+    await executeDefinition(toToolDefinitions([wrappedTool], hookContext)[0], "call-wrapped");
 
     expect(prepareBeforeToolCallParams).toHaveBeenCalledOnce();
     expect(execute).toHaveBeenCalledOnce();
   });
 });
-
-// ---------------------------------------------------------------------------
-// toClientToolDefinitions – streaming tool-call argument coercion (#57009)
-// ---------------------------------------------------------------------------
 
 function makeClientTool(name: string): ClientToolDefinition {
   return {
@@ -418,10 +356,7 @@ async function executeClientTool(params: unknown): Promise<{
   const [def] = toClientToolDefinitions([makeClientTool("search")], (_name, p) => {
     captured = p;
   });
-  if (!def) {
-    throw new Error("missing client tool definition");
-  }
-  const result = await def.execute("call-c1", params, undefined, undefined, extensionContext);
+  const result = await executeDefinition(def, "call-c1", params);
   return { calledWith: captured, result };
 }
 
@@ -458,13 +393,7 @@ describe("toClientToolDefinitions – param coercion", () => {
       const complete = vi.fn();
       const discard = vi.fn();
       const [definition] = toClientToolDefinitions([clientTool], { reserve, complete, discard });
-      const result = await expectDefined(definition, "client tool definition").execute(
-        "call-required-client-args",
-        params,
-        undefined,
-        undefined,
-        extensionContext,
-      );
+      const result = await executeDefinition(definition, "call-required-client-args", params);
 
       expect(result.details).toMatchObject({
         status: "error",

@@ -1,6 +1,7 @@
 /** Tests agent compaction settings and small-context auto-compaction guards. */
 import { describe, expect, it, vi } from "vitest";
 import { shouldCompact } from "../../packages/agent-core/src/harness/compaction/compaction.js";
+import type { AgentCompactionConfig } from "../config/types.agent-defaults.js";
 import {
   applyAgentAutoCompactionGuard,
   applyAgentCompactionSettingsFromConfig,
@@ -10,17 +11,21 @@ import {
 } from "./agent-settings.js";
 import { SettingsManager } from "./sessions/settings-manager.js";
 
+function compactionConfig(compaction: AgentCompactionConfig) {
+  return { agents: { defaults: { compaction } } };
+}
+const settingsWithReserve = (reserveTokens: number, enabled?: boolean) =>
+  SettingsManager.inMemory({
+    compaction: { reserveTokens, ...(enabled === undefined ? {} : { enabled }) },
+  });
+
 describe("applyAgentCompactionSettingsFromConfig", () => {
   it.each([false, true])(
     "applies and preserves compaction.enabled=%s across a settings reload",
     async (configuredEnabled) => {
-      const settingsManager = SettingsManager.inMemory({
-        compaction: { enabled: !configuredEnabled, reserveTokens: 20_000 },
-      });
+      const settingsManager = settingsWithReserve(20_000, !configuredEnabled);
       const setCompactionEnabled = vi.spyOn(settingsManager, "setCompactionEnabled");
-      const cfg = {
-        agents: { defaults: { compaction: { enabled: configuredEnabled } } },
-      };
+      const cfg = compactionConfig({ enabled: configuredEnabled });
 
       applyAgentCompactionSettingsFromConfig({ settingsManager, cfg });
       await settingsManager.reload();
@@ -54,13 +59,11 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
   it.each(forcedDisableCases)(
     "keeps the %s safety guard authoritative over explicit enabled=true",
     (_label, guardParams) => {
-      const settingsManager = SettingsManager.inMemory({
-        compaction: { enabled: false, reserveTokens: 20_000 },
-      });
+      const settingsManager = settingsWithReserve(20_000, false);
 
       applyAgentCompactionSettingsFromConfig({
         settingsManager,
-        cfg: { agents: { defaults: { compaction: { enabled: true } } } },
+        cfg: compactionConfig({ enabled: true }),
       });
       applyAgentAutoCompactionGuard({ settingsManager, ...guardParams });
       expect(settingsManager.getCompactionEnabled()).toBe(false);
@@ -133,20 +136,12 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
   });
 
   it("applies keepRecentTokens when explicitly configured", () => {
-    const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 20_000 } });
+    const settingsManager = settingsWithReserve(20_000);
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
     applyAgentCompactionSettingsFromConfig({
       settingsManager,
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: {
-              keepRecentTokens: 15_000,
-            },
-          },
-        },
-      },
+      cfg: compactionConfig({ keepRecentTokens: 15_000 }),
     });
 
     expect(settingsManager.getCompactionKeepRecentTokens()).toBe(15_000);
@@ -231,7 +226,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
   });
 
   it("does not cap floor when context window is large enough", () => {
-    const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 16_384 } });
+    const settingsManager = settingsWithReserve(16_384);
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
     // The large-window default keeps its existing 20,000-token reserve.
@@ -250,37 +245,17 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
 });
 
 describe("resolveEffectiveCompactionMode", () => {
-  it("defaults to default compaction mode", () => {
-    expect(resolveEffectiveCompactionMode()).toBe("default");
-    expect(resolveEffectiveCompactionMode({ agents: { defaults: { compaction: {} } } })).toBe(
-      "default",
+  it.each<[AgentCompactionConfig | undefined, "default" | "safeguard"]>([
+    [undefined, "default"],
+    [{}, "default"],
+    [{ mode: "default" }, "default"],
+    [{ mode: "safeguard" }, "safeguard"],
+    [{ provider: "deepseek" }, "safeguard"],
+    [{ mode: "default", provider: "deepseek" }, "safeguard"],
+  ])("resolves %j to %s", (compaction, expected) => {
+    expect(resolveEffectiveCompactionMode(compaction && compactionConfig(compaction))).toBe(
+      expected,
     );
-    expect(
-      resolveEffectiveCompactionMode({
-        agents: { defaults: { compaction: { mode: "default" } } },
-      }),
-    ).toBe("default");
-  });
-
-  it("returns safeguard for explicit safeguard mode", () => {
-    expect(
-      resolveEffectiveCompactionMode({
-        agents: { defaults: { compaction: { mode: "safeguard" } } },
-      }),
-    ).toBe("safeguard");
-  });
-
-  it("returns safeguard when a compaction provider is configured", () => {
-    expect(
-      resolveEffectiveCompactionMode({
-        agents: { defaults: { compaction: { provider: "deepseek" } } },
-      }),
-    ).toBe("safeguard");
-    expect(
-      resolveEffectiveCompactionMode({
-        agents: { defaults: { compaction: { mode: "default", provider: "deepseek" } } },
-      }),
-    ).toBe("safeguard");
   });
 });
 
@@ -311,14 +286,7 @@ describe("isSilentOverflowProneModel", () => {
     ).toBe(true);
   });
 
-  // openclaw#75799 reporter's setup: an OpenAI-compatible in-house gateway
-  // exposing Zhipu's GLM family directly (model id `glm-5.1`, no `z-ai/`
-  // qualifier, custom baseUrl that is not api.z.ai). Catch the bare GLM
-  // family name so direct gateway deployments hit the guard regardless of
-  // what `provider` field the user picked — gateways relabel the upstream
-  // identity, so `provider` here can be anything from `openai` to a custom
-  // string. False positives only disable OpenClaw runtime's secondary compaction path;
-  // OpenClaw's preemptive compaction continues to handle real overflow.
+  // #75799: gateways relabel bare GLM models; the secondary compaction guard must survive.
   it("flags bare glm- model ids without a namespace prefix, regardless of provider", () => {
     expect(isSilentOverflowProneModel({ provider: "custom", modelId: "glm-5.1" })).toBe(true);
     expect(isSilentOverflowProneModel({ provider: "custom", modelId: "glm-4.7" })).toBe(true);

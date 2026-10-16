@@ -40,6 +40,36 @@ function spawnTool(signal?: AbortSignal) {
 function reader() {
   return createAgentsWaitTool({ config, agentSessionKey: "agent:main:main", agentId: "main" });
 }
+function catalogFixture() {
+  const catalogConfig = {
+    ...config,
+    tools: { toolSearch: { enabled: true, mode: "tools" as const } },
+  };
+  const catalogRef = createToolSearchCatalogRef();
+  const controls = createToolSearchTools({ config: catalogConfig, catalogRef });
+  return { config: catalogConfig, catalogRef, controls };
+}
+function expectHiddenCollection(tool: { parameters: unknown; description: unknown }) {
+  expect(tool.parameters).toHaveProperty("properties.fastMode");
+  for (const field of ["collect", "outputSchema", "groupId"]) {
+    expect(tool.parameters).not.toHaveProperty(`properties.${field}`);
+  }
+  expect(tool.description).not.toContain("collect=true");
+}
+async function expectCollectionDenied(
+  tool: ReturnType<typeof spawnTool>,
+  id = "denied",
+  extra = {},
+) {
+  await expect(tool.execute(id, { task: "inspect", collect: true, ...extra })).rejects.toThrow(
+    "Collector results are unavailable",
+  );
+  expect(spawn).not.toHaveBeenCalled();
+}
+function expectNormalizedCollector(tool: { parameters: unknown }) {
+  expect(tool.parameters).toHaveProperty("properties.outputSchema.type", "object");
+  expect(tool.parameters).not.toHaveProperty("properties.outputSchema.patternProperties");
+}
 
 beforeEach(() => {
   spawn.mockReset().mockResolvedValue({
@@ -94,12 +124,7 @@ describe("execution allowlist availability", () => {
   });
 
   it("reads current execution caps when restricting and rebuilding a catalog", async () => {
-    const catalogConfig = {
-      ...config,
-      tools: { toolSearch: { enabled: true, mode: "tools" as const } },
-    };
-    const catalogRef = createToolSearchCatalogRef();
-    const controls = createToolSearchTools({ config: catalogConfig, catalogRef });
+    const { config: catalogConfig, catalogRef, controls } = catalogFixture();
     const tool = spawnTool();
     const params = {
       tools: [...controls, tool, reader()],
@@ -108,11 +133,8 @@ describe("execution allowlist availability", () => {
       toolExecutionAllow: ["sessions_spawn", "agents_wait"],
     };
     const expectUnavailable = async () => {
-      await expect(tool.execute("denied", { task: "inspect", collect: true })).rejects.toThrow(
-        "Collector results are unavailable",
-      );
+      await expectCollectionDenied(tool);
       expect(tool.parameters).not.toHaveProperty("properties.collect");
-      expect(spawn).not.toHaveBeenCalled();
     };
     try {
       applyToolSearchCatalog(params);
@@ -152,10 +174,7 @@ describe("collector tool availability", () => {
 
     finalizeAgentToolAvailability([first]);
     expect(first.parameters).not.toHaveProperty("properties.collect");
-    await expect(first.execute("denied", { task: "inspect", collect: true })).rejects.toThrow(
-      "Collector results are unavailable",
-    );
-    expect(spawn).not.toHaveBeenCalled();
+    await expectCollectionDenied(first);
     await second.execute("allowed", { task: "inspect", collect: true });
     expect(spawn).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ collect: true }),
@@ -170,15 +189,13 @@ describe("collector tool availability", () => {
     const normalized = normalizeToolParameters(source, { modelProvider: "google" });
 
     finalizeAgentToolAvailability([normalized, wait]);
-    expect(normalized.parameters).toHaveProperty("properties.outputSchema.type", "object");
-    expect(normalized.parameters).not.toHaveProperty("properties.outputSchema.patternProperties");
+    expectNormalizedCollector(normalized);
 
     finalizeAgentToolAvailability([normalized]);
     expect(normalized.parameters).not.toHaveProperty("properties.outputSchema");
     const wrapped = wrapToolWithBeforeToolCallHook(normalized);
     finalizeAgentToolAvailability([wrapped, wait]);
-    expect(wrapped.parameters).toHaveProperty("properties.outputSchema.type", "object");
-    expect(wrapped.parameters).not.toHaveProperty("properties.outputSchema.patternProperties");
+    expectNormalizedCollector(wrapped);
   });
 
   it.each(["missing", "lookalike", "quarantined", "denied", "execution-denied"] as const)(
@@ -197,19 +214,10 @@ describe("collector tool availability", () => {
         [tool, ...(kind === "missing" ? [] : [candidate])],
         kind === "denied" ? { toolExecutionAllow: ["sessions_spawn"] } : undefined,
       );
-      expect(tool.parameters).toHaveProperty("properties.fastMode");
-      expect(tool.description).not.toContain("collect=true");
-      for (const field of ["collect", "outputSchema", "groupId"]) {
-        expect(tool.parameters).not.toHaveProperty(`properties.${field}`);
-      }
-      await expect(
-        tool.execute("collect", {
-          task: "inspect",
-          collect: true,
-          [SWARM_CODE_MODE_IDEMPOTENCY_KEY]: "copied",
-        }),
-      ).rejects.toThrow("Collector results are unavailable");
-      expect(spawn).not.toHaveBeenCalled();
+      expectHiddenCollection(tool);
+      await expectCollectionDenied(tool, "collect", {
+        [SWARM_CODE_MODE_IDEMPOTENCY_KEY]: "copied",
+      });
       await tool.execute("ordinary", { task: "inspect", fastMode: "auto" });
       expect(spawn).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
@@ -230,12 +238,7 @@ describe("collector tool availability", () => {
   ] as const)(
     "revokes collection after $boundary with a $readerState reader and unchanged descriptors",
     async ({ boundary, readerState }) => {
-      const catalogConfig = {
-        ...config,
-        tools: { toolSearch: { enabled: true, mode: "tools" as const } },
-      };
-      const catalogRef = createToolSearchCatalogRef();
-      const controls = createToolSearchTools({ config: catalogConfig, catalogRef });
+      const { config: catalogConfig, catalogRef, controls } = catalogFixture();
       const tool = spawnTool();
       const wait = wrapToolWithBeforeToolCallHook(reader());
       const compact = (currentReader: typeof wait) =>
@@ -277,22 +280,13 @@ describe("collector tool availability", () => {
         }
 
         // Exercise the real spawn guard before schema assertions can hide an admitted child.
-        await expect(
-          tool.execute("collect-after-revocation", { task: "inspect", collect: true }),
-        ).rejects.toThrow("Collector results are unavailable");
-        expect(spawn).not.toHaveBeenCalled();
+        await expectCollectionDenied(tool, "collect-after-revocation");
         expect(
           firstEntries.find((item) => item.name === "sessions_spawn")?.parameters,
         ).toHaveProperty("properties.collect");
         const entry = catalogRef.current?.entries.find((item) => item.name === "sessions_spawn");
-        for (const schema of [tool.parameters, entry?.parameters]) {
-          expect(schema).toHaveProperty("properties.fastMode");
-          for (const field of ["collect", "outputSchema", "groupId"]) {
-            expect(schema).not.toHaveProperty(`properties.${field}`);
-          }
-        }
-        expect(tool.description).not.toContain("collect=true");
-        expect(entry?.description).not.toContain("collect=true");
+        expectHiddenCollection(tool);
+        expectHiddenCollection({ parameters: entry?.parameters, description: entry?.description });
       } finally {
         clearToolSearchCatalog({ catalogRef });
       }

@@ -41,6 +41,31 @@ vi.mock("../gateway/call.js", () => ({ callGateway: callGatewayMock }));
 
 const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 let state: OpenClawTestState;
+const emptyStore = () => ({ version: 1 as const, profiles: {} });
+const fallbackStore = () => ({
+  version: 1 as const,
+  profiles: {
+    "ollama:fallback": { type: "api_key" as const, provider: "ollama", key: "profile-fixture-key" },
+  },
+});
+function providerAuth(
+  cfg: OpenClawConfig,
+  overrides: Partial<Parameters<typeof resolveApiKeyForProviderCore>[0]> = {},
+) {
+  return resolveApiKeyForProviderCore({
+    provider: "ollama",
+    cfg,
+    agentDir: state.agentDir(),
+    ...overrides,
+  });
+}
+function pinOfflineConfig(config: OpenClawConfig) {
+  setRuntimeConfigSnapshot(config, config);
+  vi.spyOn(configIo, "readConfigFileSnapshotForWrite").mockRejectedValue(
+    new Error("fixture has no source file"),
+  );
+  callGatewayMock.mockRejectedValue(new Error("fixture gateway offline"));
+}
 
 function providerConfig(): OpenClawConfig {
   return {
@@ -69,7 +94,7 @@ async function activateProviderConfig(config = providerConfig()) {
     config,
     env: { TEST_HEALTHY_PROVIDER_KEY: "prepared-fixture-key", TEST_COLD_PROVIDER_KEY: undefined },
     agentDirs: [state.agentDir()],
-    loadAuthStore: () => ({ version: 1, profiles: {} }),
+    loadAuthStore: emptyStore,
     allowUnavailableSecretOwners: true,
   });
   expect(snapshot.degradedOwners).toEqual(
@@ -168,30 +193,13 @@ describe("agent execution respects prepared secret owners", () => {
     expect(resolveRef).not.toHaveBeenCalled();
     expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(revision);
     await expect(
-      resolveApiKeyForProviderCore({
-        provider: "healthy",
-        cfg: config,
-        store: { version: 1, profiles: {} },
-        agentDir: state.agentDir(),
-      }),
+      providerAuth(config, { provider: "healthy", store: emptyStore() }),
     ).resolves.toMatchObject({ apiKey: "prepared-fixture-key" });
     vi.stubEnv("OLLAMA_API_KEY", "ambient-fixture-key");
     await expect(
-      resolveApiKeyForProviderCore({
-        provider: "ollama",
-        cfg: config,
+      providerAuth(config, {
         profileId: "ollama:fallback",
-        agentDir: state.agentDir(),
-        store: {
-          version: 1,
-          profiles: {
-            "ollama:fallback": {
-              type: "api_key",
-              provider: "ollama",
-              key: "profile-fixture-key",
-            },
-          },
-        },
+        store: fallbackStore(),
       }),
     ).rejects.toMatchObject({
       code: "SECRET_SURFACE_UNAVAILABLE",
@@ -219,21 +227,9 @@ describe("agent execution respects prepared secret owners", () => {
       await resolveAgentRuntimeConfig(runtime),
     ]) {
       await expect(
-        resolveApiKeyForProviderCore({
-          provider: "ollama",
-          cfg: config,
+        providerAuth(config, {
           credentialPrecedence: "env-first",
-          agentDir: state.agentDir(),
-          store: {
-            version: 1,
-            profiles: {
-              "ollama:fallback": {
-                type: "api_key",
-                provider: "ollama",
-                key: "profile-fixture-key",
-              },
-            },
-          },
+          store: fallbackStore(),
         }),
       ).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE", ownerId: "ollama" });
     }
@@ -247,13 +243,9 @@ describe("agent execution respects prepared secret owners", () => {
     const config = await resolveQueuedReplyExecutionConfig(input);
     expect(config).toEqual(snapshot.config);
     expect(callGatewayMock).not.toHaveBeenCalled();
-    await expect(
-      resolveApiKeyForProviderCore({
-        provider: "ollama",
-        cfg: config,
-        agentDir: state.agentDir(),
-      }),
-    ).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
+    await expect(providerAuth(config)).rejects.toMatchObject({
+      code: "SECRET_SURFACE_UNAVAILABLE",
+    });
   });
 
   it.each(["provider-auth refresh", "config refresh with auth graft"] as const)(
@@ -284,13 +276,9 @@ describe("agent execution respects prepared secret owners", () => {
         await resolveAgentRuntimeConfig(runtime),
       ]) {
         expect(config.skills).toEqual(source.skills);
-        await expect(
-          resolveApiKeyForProviderCore({
-            provider: "ollama",
-            cfg: config,
-            agentDir: state.agentDir(),
-          }),
-        ).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
+        await expect(providerAuth(config)).rejects.toMatchObject({
+          code: "SECRET_SURFACE_UNAVAILABLE",
+        });
       }
       expect(callGatewayMock).not.toHaveBeenCalled();
     },
@@ -325,7 +313,7 @@ describe("agent execution respects prepared secret owners", () => {
       config: source,
       includeConfigRefs: false,
       agentDirs: [state.agentDir()],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
+      loadAuthStore: emptyStore,
     });
     activateSecretsRuntimeSnapshotState({
       snapshot,
@@ -355,11 +343,7 @@ describe("agent execution respects prepared secret owners", () => {
 
   it("keeps unprepared agent config strict even if the generic runtime config is pinned", async () => {
     const config = providerConfig();
-    setRuntimeConfigSnapshot(config, config);
-    vi.spyOn(configIo, "readConfigFileSnapshotForWrite").mockRejectedValue(
-      new Error("fixture has no source file"),
-    );
-    callGatewayMock.mockRejectedValue(new Error("fixture gateway offline"));
+    pinOfflineConfig(config);
     vi.stubEnv("TEST_HEALTHY_PROVIDER_KEY", "local-fixture-key");
     vi.stubEnv("OLLAMA_API_KEY", "ambient-fixture-key");
     await expect(resolveAgentRuntimeConfig(runtime)).rejects.toThrow("failed to resolve secrets");
@@ -431,11 +415,7 @@ describe("agent execution respects prepared secret owners", () => {
     ];
     const ref = { source: "env", provider: "default", id: "TEST_TTS_PERSONA_ONLY_KEY" } as const;
     setPathCreateStrict(config, keyPath, ref);
-    setRuntimeConfigSnapshot(config, config);
-    vi.spyOn(configIo, "readConfigFileSnapshotForWrite").mockRejectedValue(
-      new Error("fixture has no source file"),
-    );
-    callGatewayMock.mockRejectedValue(new Error("fixture gateway offline"));
+    pinOfflineConfig(config);
     vi.stubEnv("TEST_TTS_PERSONA_ONLY_KEY", "persona-only-fixture-key");
 
     const resolved = await resolveAgentRuntimeConfig(runtime);
@@ -461,11 +441,7 @@ describe("agent execution respects prepared secret owners", () => {
         },
       },
     };
-    setRuntimeConfigSnapshot(config, config);
-    vi.spyOn(configIo, "readConfigFileSnapshotForWrite").mockRejectedValue(
-      new Error("fixture has no source file"),
-    );
-    callGatewayMock.mockRejectedValue(new Error("fixture gateway offline"));
+    pinOfflineConfig(config);
     vi.stubEnv("TEST_HEALTHY_PROVIDER_KEY", "local-fixture-key");
     const resolveRef = vi.spyOn(secretResolver, "resolveSecretRefValue");
     const result = await resolveAgentRuntimeConfig(runtime);
