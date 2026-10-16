@@ -38,6 +38,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 vi.mock("../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
+    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
   }),
 }));
 

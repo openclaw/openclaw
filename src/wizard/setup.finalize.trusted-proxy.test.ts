@@ -7,7 +7,9 @@ import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-type DefaultModelAuthStatus = ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>;
+type DefaultModelAuthStatus = Awaited<
+  ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
+>;
 type DefaultModelCatalogFacts = ReturnType<
   typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
 >;
@@ -60,7 +62,11 @@ const healthCommand = vi.hoisted(() =>
   vi.fn<typeof import("../commands/health.js").healthCommandNonExiting>(async () => {}),
 );
 const resolveDefaultModelAuthStatus = vi.hoisted(() =>
-  vi.fn<() => DefaultModelAuthStatus>(() => ({
+  vi.fn<
+    (
+      ...args: Parameters<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
+    ) => DefaultModelAuthStatus
+  >(() => ({
     provider: "anthropic",
     model: "test-model",
     status: "ready",
@@ -255,7 +261,9 @@ vi.mock("../tui/tui.js", () => ({ runTui }));
 vi.mock("../commands/auth-choice.js", () => ({
   applyAuthChoice: vi.fn(),
   resolveDefaultModelCatalogFacts,
-  resolveDefaultModelAuthStatus,
+  resolveDefaultModelAuthStatus: async (
+    ...args: Parameters<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
+  ) => resolveDefaultModelAuthStatus(...args),
   resolvePreferredProviderForAuthChoice: vi.fn(),
   warnIfModelConfigLooksOff: vi.fn(),
 }));

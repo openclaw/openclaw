@@ -19,8 +19,8 @@ import {
 import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../../agents/auth-profiles/store-runtime.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
@@ -370,13 +370,13 @@ export async function modelsStatusCommand(
       // status select the same OpenAI subscription profile without scanning
       // unrelated external CLIs or prompting the keychain.
       const store = textUsesOpenAI
-        ? ensureAuthProfileStore(agentDir, {
+        ? await ensureAuthProfileStoreAsync(agentDir, {
             allowKeychainPrompt: false,
             config: cfg,
             externalCliProviderIds: [OPENAI_PROVIDER_ID],
             readOnly: true,
           })
-        : ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
+        : await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
       const providersFromStore = new Set(
         Object.values(store.profiles)
           .map((profile) => normalizeProviderId(profile.provider))

@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayProgramArguments: vi.fn(),
 }));
 vi.mock("./daemon-install-auth-profiles-source.runtime.js", () => ({
-  hasAnyAuthProfileStoreSource: () => false,
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
 }));
 vi.mock("../daemon/runtime-paths.js", () => ({
   resolvePreferredNodePath: async () => "/opt/node",

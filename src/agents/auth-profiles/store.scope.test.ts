@@ -46,6 +46,7 @@ it("waits for shared facts and reads fresh credentials for each bounded scope", 
   const runtime = createAuthProfileStoreRuntime({
     listRuntimeExternalAuthProfiles: () => [],
     overlayExternalAuthProfiles: (store) => store,
+    withPreparedExternalAuthProfiles: async (_params, run) => run(),
   });
   const run = vi.fn(() => runtime.loadAuthProfileStoreForRuntime().profiles.shared);
   const first = withAuthProfileStoreAgentDir(owner.agentDir, owner.stateDir, run);

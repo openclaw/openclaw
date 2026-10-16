@@ -1,6 +1,6 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   externalCliDiscoveryForProviderAuth,
   resolveAuthProfileDisplayLabel,
   resolveAuthStatePathForDisplay,
@@ -116,7 +116,7 @@ export async function modelsAuthListCommand(
   const cfg = await loadModelsConfig({ commandName: "models auth list", runtime });
   const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, { kind: "read" });
   const provider = opts.provider?.trim() ? resolveProviderIdForAuth(opts.provider) : undefined;
-  const store = ensureAuthProfileStore(
+  const store = await ensureAuthProfileStoreAsync(
     agentDir,
     provider
       ? {

@@ -159,6 +159,26 @@ async function readConfigPreflightSnapshot(
   });
 }
 
+/** Select storage from a core-only read before observation or plugin discovery can open it. */
+export async function readConfigSnapshotForEngineSelection(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ConfigFileSnapshot> {
+  const snapshot = await readConfigFileSnapshot({
+    observe: false,
+    isolateEnv: true,
+    pluginValidation: "core-only",
+  });
+  if (
+    !isConfigReadFailure(snapshot) &&
+    !snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+  ) {
+    installDatabaseEngineSelection(
+      getDatabaseEngineSelection() ?? (await resolveDatabaseEngineSelection(snapshot.config, env)),
+    );
+  }
+  return snapshot;
+}
+
 /** Admit the same config and state before the lease and again before persistent writes. */
 export async function readAdmittedConfigSnapshot(params: {
   env: NodeJS.ProcessEnv;
@@ -174,11 +194,7 @@ export async function readAdmittedConfigSnapshot(params: {
     );
     try {
       const selected = await measureDoctorConfigPreflightStep("admission.core-config", () =>
-        readConfigFileSnapshot({
-          observe: false,
-          isolateEnv: true,
-          pluginValidation: "core-only",
-        }),
+        readConfigSnapshotForEngineSelection(params.env),
       );
       // Retain definitive source failures before storage admission. Provisional
       // plugin migration issues still need the full snapshot's validation below.

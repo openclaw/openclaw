@@ -700,7 +700,7 @@ export async function finalizeSetupWizard(
         })
       : undefined;
     const modelAuthStatus = modelCatalogFacts
-      ? resolveDefaultModelAuthStatus(nextConfig, {
+      ? await resolveDefaultModelAuthStatus(nextConfig, {
           agentDir,
           ...(modelCatalogFacts.observedRoutes
             ? { observedRoutes: modelCatalogFacts.observedRoutes }

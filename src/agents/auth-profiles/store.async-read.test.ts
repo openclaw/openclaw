@@ -67,6 +67,7 @@ function createRuntime(overlayExternalAuthProfiles = (store: AuthProfileStore) =
   return createAuthProfileStoreRuntime({
     listRuntimeExternalAuthProfiles: () => [],
     overlayExternalAuthProfiles,
+    withPreparedExternalAuthProfiles: async (_params, run) => run(),
   });
 }
 

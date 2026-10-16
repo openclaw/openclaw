@@ -25,6 +25,7 @@ const { resolveExternalAuthProfilesWithPluginsMock } = vi.hoisted(() => ({
 vi.mock("../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
+    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
   }),
 }));
 afterEach(() => vi.clearAllMocks());

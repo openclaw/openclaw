@@ -77,7 +77,12 @@ const credential = (key: string): AuthProfileCredential => ({
   key,
 });
 const store = (key: string) => ({ version: 1, profiles: { [profileId]: credential(key) } });
-const nativeRuntime = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
+const nativeRuntime = createAuthProfileStoreRuntime(
+  createExternalAuthRuntime(
+    () => [],
+    async (_params, run) => run(),
+  ),
+);
 const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
 const sdkWriters = ["saveAuthProfileStore", "upsertAuthProfile"] as const;
 const metadata = () => ({

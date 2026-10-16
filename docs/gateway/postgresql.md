@@ -136,6 +136,11 @@ The host resolves the connection before passing it to workers. Restart after
 changing the connection, prefix, or engine map; these are fixed for the process.
 An all-SQLite configuration does not resolve an unused PostgreSQL connection.
 
+Offline model credential commands, including `models auth paste-api-key`, use the
+configured engine before the Gateway starts. Supply the same DSN SecretRef to
+these commands. With PostgreSQL selected, credentials are stored on the server;
+the local database path contains an anchor rather than SQLite application state.
+
 TLS options are DSN query parameters handled by the PostgreSQL driver, not
 additional `database.postgres` config keys. For example, the **secret value**
 could have this shape (the password is a placeholder):

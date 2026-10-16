@@ -171,6 +171,9 @@ async function tryRunGatewayRunFastPath(
 }
 
 async function resolveBareRootLaunchTarget(): Promise<BareRootLaunchTarget> {
+  const { readConfigSnapshotForEngineSelection } =
+    await import("../commands/config-preflight-snapshot.js");
+  await readConfigSnapshotForEngineSelection();
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (await shouldStartLocalOnboarding(snapshot)) {

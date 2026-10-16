@@ -1,6 +1,14 @@
 /** Resolves external auth overlays through metadata and synchronous provider hooks. */
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import type { WithPreparedExternalAuthProfiles } from "../agents/auth-profiles/external-auth.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  withPluginMetadataSnapshotScope,
+} from "./current-plugin-metadata-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
+import {
+  resolvePluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync,
+} from "./plugin-metadata-snapshot.js";
 import type {
   ProviderExternalAuthProfile,
   ProviderExternalAuthProfileResolver,
@@ -13,6 +21,19 @@ export function createProviderExternalAuthResolver(
   hooks: Pick<ReturnType<typeof createProviderHookRuntime>, "resolveProviderPluginsForHooks">,
 ) {
   const { resolveProviderPluginsForHooks } = hooks;
+
+  const withPreparedExternalAuthProfiles: WithPreparedExternalAuthProfiles = async (
+    params,
+    run,
+  ) => {
+    const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
+    const env = params.env ?? process.env;
+    const config = params.config ?? {};
+    const assertPrepared = await preparePluginMetadataMachineStateAsync({ env });
+    const snapshot = await resolvePluginMetadataSnapshotAsync({ config, workspaceDir, env });
+    assertPrepared();
+    return withPluginMetadataSnapshotScope(snapshot, run, { config, workspaceDir, env });
+  };
 
   function resolveExternalAuthProfilesWithPlugins(
     params: Parameters<ProviderExternalAuthProfileResolver>[0],
@@ -56,5 +77,5 @@ export function createProviderExternalAuthResolver(
     return matches;
   }
 
-  return { resolveExternalAuthProfilesWithPlugins };
+  return { resolveExternalAuthProfilesWithPlugins, withPreparedExternalAuthProfiles };
 }

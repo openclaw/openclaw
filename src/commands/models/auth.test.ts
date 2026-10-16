@@ -96,7 +96,8 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
 
 vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
-  loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync: async (agentDir?: string) =>
+    mocks.loadAuthProfileStoreWithoutExternalProfiles(agentDir),
 }));
 
 vi.mock("../../plugins/provider-auth-persistence.js", () => ({
@@ -452,12 +453,12 @@ describe("modelsAuthLoginCommand", () => {
     }));
     mocks.updateConfig.mockImplementation(
       async (
-        mutator: (cfg: OpenClawConfig) => OpenClawConfig,
+        mutator: (cfg: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>,
         _selectModelRefs: unknown,
         beforeCommit?: ConfigWriteOptions["beforeCommit"],
         writeOptions?: ConfigWriteOptions,
       ) => {
-        const nextConfig = mutator(currentConfig);
+        const nextConfig = await mutator(currentConfig);
         await beforeCommit?.();
         writeOptions?.assertCurrent?.();
         lastUpdatedConfig = nextConfig;

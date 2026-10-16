@@ -128,7 +128,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
     mode: "scoped",
     ...params,
   }),
-  ensureAuthProfileStore: (agentDir?: string) =>
+  ensureAuthProfileStoreAsync: async (agentDir?: string) =>
     agentDir === "/tmp/coder-agent" && mockAgentStore ? mockAgentStore : mockStore,
   listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
     Object.entries(store.profiles)

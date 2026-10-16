@@ -27,7 +27,10 @@ vi.mock("./cli-credentials.js", () => ({
   readMiniMaxCliCredentialsCached: () => null,
 }));
 vi.mock("../plugins/provider-external-auth-core.js", () => ({
-  createProviderExternalAuthResolver: () => ({ resolveExternalAuthProfilesWithPlugins: () => [] }),
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: () => [],
+    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
+  }),
 }));
 
 let tempRoot = "";

@@ -46,11 +46,12 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 }));
 
 vi.mock("./daemon-install-auth-profiles-source.runtime.js", () => ({
-  hasAnyAuthProfileStoreSource: mocks.hasAnyAuthProfileStoreSource,
+  hasAnyAuthProfileStoreSourceAsync: async () => mocks.hasAnyAuthProfileStoreSource(),
 }));
 
 vi.mock("./daemon-install-auth-profiles-store.runtime.js", () => ({
-  loadAuthProfileStoreForSecretsRuntime: mocks.loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreForSecretsRuntimeAsync: async () =>
+    mocks.loadAuthProfileStoreForSecretsRuntime(),
 }));
 
 vi.mock("../daemon/runtime-paths.js", async (importOriginal) => ({

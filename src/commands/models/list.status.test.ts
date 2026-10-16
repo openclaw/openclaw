@@ -147,8 +147,9 @@ vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => ({
 }));
 vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
-  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles: mocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: async (...args: unknown[]) => mocks.ensureAuthProfileStore(...args),
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: async (...args: unknown[]) =>
+    mocks.ensureAuthProfileStore(...args),
 }));
 vi.mock("../../agents/auth-profiles/usage.js", () => ({
   resolveProfileUnusableUntilForDisplay: mocks.resolveProfileUnusableUntilForDisplay,

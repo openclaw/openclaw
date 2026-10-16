@@ -171,6 +171,11 @@ export async function ensureConfigReady(params: {
       : isManagedNodeRuntime || commandName === "status" || isRestartController
         ? ({ observe: false } as const)
         : undefined;
+  if (!preflightResult && !isManagedNodeRuntime) {
+    const { readConfigSnapshotForEngineSelection } =
+      await import("../../commands/config-preflight-snapshot.js");
+    await readConfigSnapshotForEngineSelection();
+  }
   const snapshot =
     preflightResult?.snapshot ?? (await getConfigSnapshot(configSnapshotOptions, params.measure));
   const isBareGatewayForegroundRun =

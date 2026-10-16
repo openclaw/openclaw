@@ -13,7 +13,7 @@ import {
   type AuthProfileCredential as ProfileEntry,
   type AuthProfileEligibilityReasonCode,
   externalCliDiscoveryScoped,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileEligibility,
@@ -299,7 +299,7 @@ export async function buildProbeTargets(params: {
 }): Promise<{ targets: AuthProbeTarget[]; results: AuthProbeResult[] }> {
   const { cfg, agentDir, providers, modelCandidates, options, workspaceDir } = params;
   const authAliasLookupParams = { config: cfg, workspaceDir };
-  const store = ensureAuthProfileStore(agentDir, {
+  const store = await ensureAuthProfileStoreAsync(agentDir, {
     externalCli: externalCliDiscoveryScoped({
       config: cfg,
       allowKeychainPrompt: false,
