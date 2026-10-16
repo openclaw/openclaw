@@ -272,14 +272,15 @@ function runOwnerCommand(
   return handleAllowlistCommand(params, true);
 }
 
+const listAllowlist = (cfg: OpenClawConfig) =>
+  handleAllowlistCommand(buildAllowlistParams("/allowlist list dm", cfg), true);
+
 describe("handleAllowlistCommand", () => {
   it("lists config and store allowFrom entries", async () => {
     readChannelAllowFromStoreMock.mockResolvedValueOnce(["456"]);
 
-    const cfg = config({ telegram: { allowFrom: ["123", "@Alice"] } }, false);
-    const result = await handleAllowlistCommand(
-      buildAllowlistParams("/allowlist list dm", cfg),
-      true,
+    const result = await listAllowlist(
+      config({ telegram: { allowFrom: ["123", "@Alice"] } }, false),
     );
 
     expect(result?.shouldContinue).toBe(false);
@@ -291,11 +292,7 @@ describe("handleAllowlistCommand", () => {
   it("surfaces pairing-store read failures instead of an empty store list", async () => {
     readChannelAllowFromStoreMock.mockRejectedValueOnce(new Error("pairing db locked"));
 
-    const cfg = config({ telegram: { allowFrom: ["123"] } }, false);
-    const result = await handleAllowlistCommand(
-      buildAllowlistParams("/allowlist list dm", cfg),
-      true,
-    );
+    const result = await listAllowlist(config({ telegram: { allowFrom: ["123"] } }, false));
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain(
@@ -338,24 +335,19 @@ describe("handleAllowlistCommand", () => {
   });
 
   it("keeps group allowlist edits out of the DM pairing store", async () => {
-    await withTempConfigPath(
-      { channels: { telegram: { groupAllowFrom: ["123"] } } },
-      async (configPath) => {
-        const result = await runOwnerCommand(
-          "/allowlist add group 789",
-          config({ telegram: { groupAllowFrom: ["123"] } }),
-        );
+    const cfg = config({ telegram: { groupAllowFrom: ["123"] } });
+    await withTempConfigPath({ channels: cfg.channels }, async (configPath) => {
+      const result = await runOwnerCommand("/allowlist add group 789", cfg);
 
-        expect(result?.shouldContinue).toBe(false);
-        const written = await readJsonFile<OpenClawConfig>(configPath);
-        expect(written.channels?.telegram?.groupAllowFrom).toEqual(["123", "789"]);
-        expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
-        expect(result?.reply?.text).toContain(
-          "group allowlist added: channels.telegram.groupAllowFrom.",
-        );
-        expect(result?.reply?.text).not.toContain("pairing store");
-      },
-    );
+      expect(result?.shouldContinue).toBe(false);
+      const written = await readJsonFile<OpenClawConfig>(configPath);
+      expect(written.channels?.telegram?.groupAllowFrom).toEqual(["123", "789"]);
+      expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+      expect(result?.reply?.text).toContain(
+        "group allowlist added: channels.telegram.groupAllowFrom.",
+      );
+      expect(result?.reply?.text).not.toContain("pairing store");
+    });
   });
 
   it("uses the configured default account for omitted-account list", async () => {
@@ -367,10 +359,7 @@ describe("handleAllowlistCommand", () => {
     });
     readChannelAllowFromStoreMock.mockResolvedValueOnce([]);
 
-    const result = await handleAllowlistCommand(
-      buildAllowlistParams("/allowlist list dm", cfg),
-      true,
-    );
+    const result = await listAllowlist(cfg);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Channel: telegram (account work)");

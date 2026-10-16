@@ -1,29 +1,25 @@
-// Tests background side-question command routing and typing controller integration.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { runBtwSideQuestion } from "../../agents/btw.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { expectObjectFields, mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 import { resolveAgentDirMock } from "./commands-agent-scope.test-support.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 import { createMockTypingController } from "./test-helpers.js";
 
-const runBtwSideQuestionMock = vi.fn();
+const runBtwSideQuestionMock = vi.hoisted(() => vi.fn<typeof runBtwSideQuestion>());
 
 vi.mock("../../agents/btw.js", () => ({
-  runBtwSideQuestion: (...args: unknown[]) => runBtwSideQuestionMock(...args),
+  runBtwSideQuestion: runBtwSideQuestionMock,
 }));
 
 const { handleBtwCommand } = await import("./commands-btw.js");
 
 const session = (sessionId = "session-1") => ({ sessionId, updatedAt: Date.now() });
 function buildParams(commandBody = "/btw what changed?") {
-  const cfg = {
-    commands: { text: true },
-    channels: { whatsapp: { allowFrom: ["*"] } },
-  } as OpenClawConfig;
+  const cfg = { commands: { text: true }, channels: { whatsapp: { allowFrom: ["*"] } } };
   return buildCommandTestParams(commandBody, cfg, undefined, { workspaceDir: "/tmp/workspace" });
 }
 function activeParams(commandBody?: string): ReturnType<typeof buildParams> {
@@ -62,16 +58,13 @@ describe("handleBtwCommand", () => {
   it("requires an active session context", async () => {
     const params = buildParams();
     params.sessionEntry = undefined;
-
     expectReply(await run(params), "⚠️ /btw requires an active session with existing context.");
   });
 
   it("returns an actionable visible error before running a restricted side question", async () => {
     const params = activeParams();
     params.ctx.ConversationToolPolicy = { deny: ["exec"] };
-
-    const result = await run(params);
-    expect(result).toEqual({
+    expect(await run(params)).toEqual({
       shouldContinue: false,
       reply: {
         text: "⚠️ /btw cannot enforce this conversation's tool policy. Ask in the main conversation or switch this session to the embedded runtime.",
@@ -83,17 +76,15 @@ describe("handleBtwCommand", () => {
   });
 
   it.each(["image", "described image"] as const)(
-    "handleBtwCommand forwards only current undescribed images: %s",
+    "forwards current undescribed images: %s",
     async (attachment) => {
       const params = buildParams("/btw describe this");
       params.sessionEntry = session();
       const dir = tempDirs.make("openclaw-btw-images-");
-      const data = Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
-        "base64",
-      );
+      const data =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
       const file = path.join(dir, "photo.png");
-      await writeFile(file, data);
+      await writeFile(file, Buffer.from(data, "base64"));
       params.ctx.media = [
         { path: file, contentType: "image/png", kind: "image", workspaceDir: dir },
       ];
@@ -109,14 +100,11 @@ describe("handleBtwCommand", () => {
           },
         ];
       }
-
       await run(params);
       const args = runnerArgs();
       expect(args.question).toBe("describe this");
       expect(args.images).toEqual(
-        attachment === "image"
-          ? [{ type: "image", data: data.toString("base64"), mimeType: "image/png" }]
-          : undefined,
+        attachment === "image" ? [{ type: "image", data, mimeType: "image/png" }] : undefined,
       );
     },
   );
@@ -142,50 +130,45 @@ describe("handleBtwCommand", () => {
       parentSessionKey: "agent:main:parent",
     };
     let resolvedTurnContext: ReturnType<typeof resolveMessageActionTurnCapability> | undefined;
-    runBtwSideQuestionMock.mockImplementation(async (input: Record<string, unknown>) => {
+    runBtwSideQuestionMock.mockImplementation(async (input) => {
       resolvedTurnContext = resolveMessageActionTurnCapability({
-        token:
-          typeof input.messageActionTurnCapability === "string"
-            ? input.messageActionTurnCapability
-            : undefined,
+        token: input.messageActionTurnCapability,
         agentId: "main",
-        runId: typeof input.authorityRunId === "string" ? input.authorityRunId : undefined,
+        runId: input.authorityRunId,
         sessionKey: "agent:main:runtime-policy",
         sessionId: "session-1",
       });
       return { text: "nothing important" };
     });
-
     const result = await run(params);
-
     const args = runnerArgs();
     expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
-    expectObjectFields(args, {
+    expect(args).toMatchObject({
       question: "what changed?",
       agentId: params.agentId,
-      sessionEntry: params.sessionEntry,
+      agentDir: params.agentDir,
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "off",
       messageChannel: "whatsapp",
       messageProvider: "whatsapp",
       agentAccountId: "account-1",
-      sandboxSessionKey: "agent:main:runtime-policy",
       messageThreadId: "thread-1",
+      sandboxSessionKey: "agent:main:runtime-policy",
       groupId: "group-1",
       groupChannel: "#ops",
       groupSpace: "workspace-1",
       spawnedBy: "agent:main:parent",
+      senderIsOwner: true,
       senderId: "sender-1",
       senderName: "Rosita",
       senderUsername: "rosita",
       senderE164: "+15550001",
-      senderIsOwner: true,
-      agentDir: params.agentDir,
       messageActionTurnCapability: expect.any(String),
       authorityRunId: expect.any(String),
+      opts: { runId: expect.any(String) },
     });
+    expect(args.sessionEntry).toEqual(params.sessionEntry);
     expect(resolveAgentDirMock).not.toHaveBeenCalled();
-    expect(args.opts).toMatchObject({ runId: expect.any(String) });
     expect(args.authorityRunId).not.toBe((args.opts as { runId?: string } | undefined)?.runId);
     expect(resolvedTurnContext).toMatchObject({
       requesterAccountId: "account-1",
@@ -202,9 +185,7 @@ describe("handleBtwCommand", () => {
     params.ctx.ChatType = "channel";
     params.command.to = "slash:transport";
     runBtwSideQuestionMock.mockResolvedValue({ text: "source target" });
-
     await run(params);
-
     expectObjectFields(runnerArgs(), {
       chatId: "native:source",
       chatType: "channel",
@@ -221,9 +202,7 @@ describe("handleBtwCommand", () => {
     params.command.channel = "matrix";
     params.command.to = "!room:example.org";
     runBtwSideQuestionMock.mockResolvedValue({ text: "origin answer" });
-
     await run(params);
-
     expect(runnerArgs().messageActionTurnCapability).toBeUndefined();
   });
 
@@ -235,9 +214,7 @@ describe("handleBtwCommand", () => {
       "agent:worker-1:whatsapp:direct:12345": session("target-session"),
     };
     runBtwSideQuestionMock.mockResolvedValue({ text: "target context" });
-
     const result = await run(params);
-
     expectObjectFields(runnerArgs().sessionEntry, { sessionId: "target-session" });
     expectReply(result, "target context", "what changed?");
   });

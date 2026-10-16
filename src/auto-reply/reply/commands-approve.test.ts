@@ -38,31 +38,27 @@ function approvalResolverRequest(callIndex = 0) {
   return requireRecord(call[0], `approval resolver call ${callIndex} request`);
 }
 
-function expectApprovalResolverCall(params: {
-  callIndex?: number;
-  method: string;
-  id: string;
-  decision?: string;
-}) {
-  const request = approvalResolverRequest(params.callIndex ?? 0);
+function expectApprovalResolverCall(id: string, method = "exec", callIndex = 0) {
+  const request = approvalResolverRequest(callIndex);
   expect(request).toHaveProperty("cfg");
   const hasReviewer = Object.hasOwn(request, "channel");
   expect(Object.hasOwn(request, "accountId")).toBe(hasReviewer);
   expect(Object.hasOwn(request, "senderId")).toBe(hasReviewer);
-  expect(request.approvalId).toBe(params.id);
-  expect(request.decision).toBe(params.decision ?? "allow-once");
-  expect(request.resolveMethod).toBe(
-    params.method === "plugin.approval.resolve" ? "plugin" : "exec",
-  );
-  expect(request.clientDisplayName).toMatch(/^Chat approval \(.+\)$/);
+  expect(request).toMatchObject({
+    approvalId: id,
+    decision: "allow-once",
+    resolveMethod: method,
+    clientDisplayName: expect.stringMatching(/^Chat approval \(.+\)$/),
+  });
 }
 
-type ApprovalTestPolicy = Partial<
-  Record<
-    ChannelApprovalKind,
-    { authorizedSenders: readonly string[]; accountId?: string; reply?: string }
-  >
->;
+type ApprovalTestPolicy = {
+  [K in ChannelApprovalKind]?: {
+    authorizedSenders: readonly string[];
+    accountId?: string;
+    reply?: string;
+  };
+};
 
 const approvalPolicies = new WeakMap<OpenClawConfig, ApprovalTestPolicy>();
 
@@ -116,16 +112,6 @@ function setPlugins(...plugins: ChannelPlugin[]) {
   );
 }
 
-function setApprovePluginRegistry(): void {
-  setPlugins(
-    discordApproveTestPlugin,
-    slackApproveTestPlugin,
-    whatsappApproveTestPlugin,
-    signalApproveTestPlugin,
-    telegramApproveTestPlugin,
-  );
-}
-
 const channelConfig = (channel = "whatsapp", allowFrom = ["*"]): OpenClawConfig => ({
   commands: { text: true },
   channels: { [channel]: { allowFrom } },
@@ -135,14 +121,12 @@ const telegramContext = { Provider: "telegram", Surface: "telegram", SenderId: "
 function buildApproveParams(
   commandBodyNormalized: string,
   cfg: OpenClawConfig = channelConfig(),
-  ctxOverrides?: {
-    Provider?: string;
-    Surface?: string;
-    SenderId?: string;
-    GatewayClientScopes?: string[];
-    AccountId?: string;
-    GroupSpace?: string;
-  },
+  ctxOverrides?: Partial<
+    Pick<
+      HandleCommandsParams["ctx"],
+      "Provider" | "Surface" | "SenderId" | "GatewayClientScopes" | "AccountId" | "GroupSpace"
+    >
+  >,
 ): HandleCommandsParams {
   const provider = ctxOverrides?.Provider ?? "whatsapp";
   return {
@@ -173,27 +157,32 @@ describe("handleApproveCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     isPendingSystemAgentApprovalMock.mockResolvedValue(false);
-    setApprovePluginRegistry();
+    setPlugins(
+      discordApproveTestPlugin,
+      slackApproveTestPlugin,
+      whatsappApproveTestPlugin,
+      signalApproveTestPlugin,
+      telegramApproveTestPlugin,
+    );
   });
 
   function createTelegramApproveCfg(
-    execApprovals: {
-      enabled: boolean;
-      approvers: string[];
-      target: "dm";
-    } | null = { enabled: true, approvers: ["123"], target: "dm" },
+    enabled: boolean | null = true,
+    senders = ["123"],
+    accountId?: string,
   ): OpenClawConfig {
-    const approvers = { authorizedSenders: execApprovals?.approvers ?? [] };
+    const execApprovals = enabled === null ? null : { enabled, approvers: senders, target: "dm" };
+    const approvers = {
+      authorizedSenders: execApprovals?.approvers ?? [],
+      ...(accountId ? { accountId } : {}),
+    };
+    const account = execApprovals ? { execApprovals } : {};
+    const telegram = {
+      allowFrom: ["*"],
+      ...(accountId ? { defaultAccount: accountId, accounts: { [accountId]: account } } : account),
+    };
     return withApprovalPolicy(
-      {
-        commands: { text: true },
-        channels: {
-          telegram: {
-            allowFrom: ["*"],
-            ...(execApprovals ? { execApprovals } : {}),
-          },
-        },
-      } as OpenClawConfig,
+      { commands: { text: true }, channels: { telegram } } as OpenClawConfig,
       {
         exec: {
           ...approvers,
@@ -202,7 +191,7 @@ describe("handleApproveCommand", () => {
             : { reply: "❌ Telegram exec approvals are not enabled for this bot account." }),
         },
         plugin: approvers,
-        "system-agent": approvers,
+        ...(!accountId ? { "system-agent": approvers } : {}),
       },
     );
   }
@@ -222,31 +211,24 @@ describe("handleApproveCommand", () => {
   it("accepts forwarded Telegram plugin approvals from approvers when native delivery is disabled", async () => {
     const params = buildApproveParams(
       "/approve plugin:abc12345 allow-once",
-      createTelegramApproveCfg({ enabled: false, approvers: ["123"], target: "dm" }),
+      createTelegramApproveCfg(false),
       telegramContext,
     );
     params.command.isAuthorizedSender = false;
     resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
 
     expectReply(await approve(params), "Approval allow-once submitted");
-    expectApprovalResolverCall({ method: "plugin.approval.resolve", id: "plugin:abc12345" });
+    expectApprovalResolverCall("plugin:abc12345", "plugin");
   });
 
   it("passes workspace-qualified Slack plugin reviewers to Gateway without changing exec identity", async () => {
-    const slackPlugin = {
+    setPlugins({
       ...slackApproveTestPlugin,
       approvalCapability: {
         ...createApprovalCapability("Slack"),
-        resolveReviewerSenderId: ({
-          senderId,
-          spaceId,
-        }: {
-          senderId?: string | null;
-          spaceId?: string | null;
-        }) => `team:${spaceId}:user:${senderId}`,
+        resolveReviewerSenderId: ({ senderId, spaceId }) => `team:${spaceId}:user:${senderId}`,
       },
-    };
-    setPlugins(slackPlugin);
+    });
     const cfg = withApprovalPolicy(channelConfig("slack"), {
       plugin: { authorizedSenders: ["team:T11111111:user:U12345678"] },
       exec: { authorizedSenders: [] },
@@ -277,32 +259,13 @@ describe("handleApproveCommand", () => {
     resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
     const params = buildApproveParams(
       "/approve abc12345 allow-once",
-      withApprovalPolicy(
-        {
-          commands: { text: true },
-          channels: {
-            telegram: {
-              defaultAccount: "work",
-              allowFrom: ["*"],
-              accounts: {
-                work: {
-                  execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        {
-          exec: { authorizedSenders: ["123"], accountId: "work" },
-          plugin: { authorizedSenders: ["123"], accountId: "work" },
-        },
-      ),
+      createTelegramApproveCfg(true, ["123"], "work"),
       { ...telegramContext, AccountId: undefined },
     );
     params.command.isAuthorizedSender = false;
 
     expectReply(await approve(params), "Approval allow-once submitted");
-    expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc12345" });
+    expectApprovalResolverCall("abc12345");
     expect(approvalResolverRequest()).toMatchObject({ channel: "telegram", accountId: "work" });
   });
 
@@ -366,46 +329,34 @@ describe("handleApproveCommand", () => {
     expect(canonical.resolveMethod).toBeUndefined();
   });
 
-  describe("OpenClaw change approvals on channels without reviewer custody", () => {
-    const approveOnSlack = (owner: { senderIsOwner: boolean; assertOwnerCurrent?: () => void }) => {
-      const params = buildApproveParams(
-        "/approve system-agent:abc allow-once",
-        {},
-        { Provider: "slack", Surface: "slack", SenderId: "U123" },
-      );
-      Object.assign(params.command, owner);
-      return approve(params);
-    };
-    const expectNoCanonicalCalls = () =>
-      expect(
-        resolveApprovalOverGatewayMock.mock.calls.filter(
-          ([request]) => (request as { approvalKind?: string }).approvalKind === "system-agent",
-        ),
-      ).toHaveLength(0);
-
-    beforeEach(() => {
-      resolveApprovalOverGatewayMock.mockRejectedValue(new Error("unknown or expired approval id"));
-      isPendingSystemAgentApprovalMock.mockResolvedValue(true);
-    });
-
-    it("rejects a command-authorized non-owner before any canonical decision", async () => {
-      const result = await approveOnSlack({ senderIsOwner: false });
-
-      expect(result?.reply?.text).toContain("Only the owner can approve OpenClaw changes");
-      expectNoCanonicalCalls();
-    });
-
-    it("rejects an owner whose authority was revoked before the decision", async () => {
-      const result = await approveOnSlack({
-        senderIsOwner: true,
-        assertOwnerCurrent: () => {
-          throw new Error("owner revoked");
-        },
-      });
-
-      expect(result?.reply?.text).toContain("Check the request in the Control UI");
-      expectNoCanonicalCalls();
-    });
+  it.each([
+    ["command-authorized non-owner", false, "Only the owner can approve OpenClaw changes"],
+    ["owner revoked before decision", true, "Check the request in the Control UI"],
+  ] as const)("rejects %s without reviewer custody", async (_name, senderIsOwner, text) => {
+    resolveApprovalOverGatewayMock.mockRejectedValue(new Error("unknown or expired approval id"));
+    isPendingSystemAgentApprovalMock.mockResolvedValue(true);
+    const params = buildApproveParams(
+      "/approve system-agent:abc allow-once",
+      {},
+      {
+        Provider: "slack",
+        Surface: "slack",
+        SenderId: "U123",
+      },
+    );
+    params.command.senderIsOwner = senderIsOwner;
+    if (senderIsOwner) {
+      params.command.assertOwnerCurrent = () => {
+        throw new Error("owner revoked");
+      };
+    }
+    const result = await approve(params);
+    expect(result?.reply?.text).toContain(text);
+    expect(
+      resolveApprovalOverGatewayMock.mock.calls.filter(
+        ([request]) => (request as { approvalKind?: string }).approvalKind === "system-agent",
+      ),
+    ).toHaveLength(0);
   });
 
   it("rejects unauthorized or invalid Telegram /approve variants", async () => {
@@ -429,12 +380,7 @@ describe("handleApproveCommand", () => {
         "Telegram exec approvals are not enabled",
         0,
       ],
-      [
-        "non approver",
-        createTelegramApproveCfg({ enabled: true, approvers: ["999"], target: "dm" }),
-        "not authorized to approve",
-        0,
-      ],
+      ["non approver", createTelegramApproveCfg(true, ["999"]), "not authorized to approve", 0],
     ] as const) {
       resolveApprovalOverGatewayMock.mockReset();
       if (calls) {
@@ -452,9 +398,7 @@ describe("handleApproveCommand", () => {
   });
 
   it("enforces gateway approval scopes", async () => {
-    const cfg = {
-      commands: { text: true },
-    } as OpenClawConfig;
+    const cfg: OpenClawConfig = { commands: { text: true } };
     for (const [scope, expectedText, expectedResolverCalls] of [
       ["operator.write", "requires operator.approvals", 0],
       ["operator.approvals", "Approval allow-once submitted", 1],
@@ -474,14 +418,9 @@ describe("handleApproveCommand", () => {
       expect(result?.reply?.text, scope).toContain(expectedText);
       expect(resolveApprovalOverGatewayMock, scope).toHaveBeenCalledTimes(expectedResolverCalls);
       if (expectedResolverCalls > 0) {
-        expectApprovalResolverCall({
-          callIndex: resolveApprovalOverGatewayMock.mock.calls.length - 1,
-          method: "exec.approval.resolve",
-          id: "abc",
-        });
-        const request = approvalResolverRequest(
-          resolveApprovalOverGatewayMock.mock.calls.length - 1,
-        );
+        const callIndex = resolveApprovalOverGatewayMock.mock.calls.length - 1;
+        expectApprovalResolverCall("abc", "exec", callIndex);
+        const request = approvalResolverRequest(callIndex);
         expect(request).not.toHaveProperty("channel");
         expect(request).not.toHaveProperty("accountId");
         expect(request).not.toHaveProperty("senderId");
