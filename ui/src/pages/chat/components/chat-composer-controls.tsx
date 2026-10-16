@@ -4,6 +4,7 @@ import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Kbd } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -531,7 +532,10 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
     () => hasComposedContent() && props.canSend && !props.sending && !sendDisabledReason(),
   );
   const showShortcutTooltip = () =>
-    !props.preparingAttachments && sendStatus() == null && alternateAvailable();
+    !isMobileBrowserPlatform() &&
+    !props.preparingAttachments &&
+    sendStatus() == null &&
+    alternateAvailable();
   const SendAction = () => (
     <openclaw-tooltip
       prop:content={

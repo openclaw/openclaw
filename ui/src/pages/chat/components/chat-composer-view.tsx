@@ -2,6 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
 import { createMemo, createRenderEffect, onCleanup, Show, untrack } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import "../../../styles/chat/composer-surface.css";
 import "../../../components/mcp-app-catalog.tsx";
 import "../../../components/solid/mcp-app-context-strip.tsx";
@@ -604,7 +605,14 @@ function ComposerTextarea(view: {
       aria-describedby={`${view.announcementId}${
         composer.disabledReason ? ` ${view.disabledReasonId}` : ""
       }`}
-      aria-keyshortcuts={context.sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"}
+      enterkeyhint="enter"
+      aria-keyshortcuts={
+        isMobileBrowserPlatform()
+          ? undefined
+          : context.sendShortcut === "enter"
+            ? "Enter"
+            : "Control+Enter Meta+Enter"
+      }
       onKeyDown={(event) => context.handleKeyDown(event)}
       onBeforeInput={(event) => context.handleBeforeInput(event)}
       onInput={(event) => context.handleInput(event)}

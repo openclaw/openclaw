@@ -336,3 +336,23 @@ describe("chat composer suggestion accessibility", () => {
     textarea.value = "$queued";
   });
 });
+
+it("completes mobile local commands without executing them from the menu", async () => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
+  onTestFinished(() => vi.restoreAllMocks());
+  replaceSlashCommands([
+    { key: "reset", name: "reset", description: "Reset the session.", executeLocal: true },
+  ]);
+  const onSend = vi.fn();
+  const { container } = createReactiveDraftHarness({ onSend });
+  inputDraftAtEnd(container, "/res");
+  await waitForSolid(() => expect(container.querySelector(".slash-menu-item")).not.toBeNull());
+  const textarea = getComposerTextarea(container)!;
+  const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+  textarea.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(false);
+  expect(textarea.value).toBe("/res");
+  container.querySelector<HTMLElement>(".slash-menu-item")!.click();
+  await waitForSolid(() => expect(textarea.value).toBe("/reset"));
+  expect(onSend).not.toHaveBeenCalled();
+});

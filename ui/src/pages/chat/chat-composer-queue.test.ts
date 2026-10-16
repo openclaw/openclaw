@@ -523,3 +523,20 @@ describe("chat composer queue reordering", () => {
     expect(onQueueMove.mock.calls).toEqual([["c", "a"]]);
   });
 });
+
+it("leaves mobile queue editing to Return and saves only from its button", () => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
+  const onEditSubmit = vi.fn();
+  const container = renderQueue({
+    queue: [waiting("a", 1)],
+    queuedEdit: queueEdit({ editingId: "a", onEditSubmit }),
+    onQueueRemove: vi.fn(),
+  });
+  const textarea = container.querySelector("textarea")!;
+  const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+  textarea.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(false);
+  expect(onEditSubmit).not.toHaveBeenCalled();
+  container.querySelector<HTMLButtonElement>(".chat-queue__edit-submit")!.click();
+  expect(onEditSubmit).toHaveBeenCalledOnce();
+});

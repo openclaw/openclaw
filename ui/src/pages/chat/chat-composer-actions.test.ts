@@ -611,3 +611,41 @@ describe("renderChatComposer controls", () => {
     expect(view.container.querySelector(".chat-queue__remove")).toBeNull();
   });
 });
+
+describe("mobile composer submission", () => {
+  it.each(["iPhone", "Android"])(
+    "leaves Return to editing on %s and sends only from the button",
+    (userAgent) => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(userAgent);
+      const onSend = vi.fn();
+      const { container } = renderComposer({ draft: "Keep this draft", onSend });
+      for (const modifiers of [
+        {},
+        { ctrlKey: true },
+        { metaKey: true },
+        { shiftKey: true },
+        { ctrlKey: true, shiftKey: true },
+      ]) {
+        expect(pressComposerEnter(container, modifiers).defaultPrevented).toBe(false);
+        expect(onSend).not.toHaveBeenCalled();
+      }
+      const textarea = container.querySelector("textarea")!;
+      expect(textarea.getAttribute("enterkeyhint")).toBe("enter");
+      expect(textarea.hasAttribute("aria-keyshortcuts")).toBe(false);
+      primaryButton(container).click();
+      expect(onSend).toHaveBeenCalledOnce();
+    },
+  );
+});
+
+it("does not steer a queued message with mobile Return in an empty composer", () => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
+  const onQueueSteer = vi.fn();
+  const { container } = renderComposer({
+    canAbort: true,
+    onQueueSteer,
+    queue: [{ id: "queued", text: "Next", createdAt: 1, sendState: "waiting-idle" }],
+  });
+  expect(pressComposerEnter(container).defaultPrevented).toBe(false);
+  expect(onQueueSteer).not.toHaveBeenCalled();
+});

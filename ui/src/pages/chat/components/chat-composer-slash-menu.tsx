@@ -1,6 +1,7 @@
 import { For, Show, createMemo, createStore } from "solid-js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import {
   SLASH_COMMANDS,
   executesInlineImmediately,
@@ -273,8 +274,9 @@ export function createSlashMenu() {
     cmd: SlashCommandDef,
     state: SlashMenuState,
     host: SlashMenuHost,
-    completeOnly = false,
+    requestedCompleteOnly = false,
   ): void {
+    const completeOnly = requestedCompleteOnly || isMobileBrowserPlatform();
     const completion = state.slashMenuCompletion;
     if (host.activateComposerMode?.(cmd, completion?.inline === true)) {
       return;
@@ -338,8 +340,9 @@ export function createSlashMenu() {
     arg: string,
     state: SlashMenuState,
     host: SlashMenuHost,
-    run: boolean,
+    requestedRun: boolean,
   ): void {
+    const run = requestedRun && !isMobileBrowserPlatform();
     const { slashMenuCommand: command, slashMenuCompletion: completion } = state;
     if (
       command?.source !== "skill" &&

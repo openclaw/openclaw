@@ -261,3 +261,28 @@ describe("keyboard shortcut catalog presentation", () => {
     }
   });
 });
+
+it("shows mobile Return as newline and omits composer submission chords", () => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
+  try {
+    for (const preference of ["enter", "modifier-enter"] as const) {
+      const entries = resolveKeyboardShortcutSections(preference).flatMap(
+        (section) => section.entries,
+      );
+      expect(entries.find((entry) => entry.id === "newline")?.combos).toEqual([
+        KEYBOARD_SHORTCUT_COMBOS.sendMessage,
+      ]);
+      for (const id of [
+        "sendMessage",
+        "paletteStartSession",
+        "startNewSession",
+        "steerImmediately",
+        "saveQueuedMessage",
+      ]) {
+        expect(entries.find((entry) => entry.id === id)).toBeUndefined();
+      }
+    }
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
