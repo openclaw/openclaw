@@ -3,7 +3,7 @@ import {
   createPluginRuntimeMock,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createResearchTool } from "./tool.js";
+import { executePortableResearch } from "./portable-tool.js";
 
 function fixture() {
   const runtime = createPluginRuntimeMock();
@@ -49,12 +49,16 @@ function fixture() {
   });
   const api = { ...createCapturedPluginRegistration({ id: "deep-research" }).api, runtime };
   const current = vi.fn();
-  const tool = createResearchTool(api, {
+  const context = {
     sessionKey: "agent:main:research-fixture",
     sessionId: "generation-1",
     agentId: "main",
     assertInvocationCurrent: current,
-  });
+  };
+  const tool = {
+    execute: (_id: string, input: { question: string }) =>
+      executePortableResearch(api, context, input),
+  };
   return { tool, complete, request, current };
 }
 
@@ -62,7 +66,7 @@ describe("deep research tool", () => {
   it("uses direct completions and policy-checked tools in the originating session", async () => {
     const { tool, complete, request } = fixture();
     const output = await tool.execute("call-1", { question: "How long is the river?" });
-    expect(output.details).toMatchObject({
+    expect(output).toMatchObject({
       status: "completed",
       route: { model: "example/research-model", runtime: "direct-provider" },
     });

@@ -3,7 +3,8 @@
 Contract fixtures are deterministic regressions, not model-quality evaluations.
 The initial fixtures cover exact citations, missing/negating evidence, copied
 sources, numerical units/dates/derivations, inaccessible sources, and source
-instruction injection. None measures live support precision or research parity.
+instruction injection. Lifecycle and provider transport have separate fault
+injection tests. None measures live support precision or research parity.
 
 Before claiming broad quality, run a 40-task development pilot covering lookup,
 enumeration, comparison tables, current technical questions, conflicting

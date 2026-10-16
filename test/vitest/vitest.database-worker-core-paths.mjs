@@ -113,6 +113,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/dashboard-session-title.transport.test.ts",
   "src/gateway/server-methods/sessions-reactions.test.ts",
   "src/gateway/server-plugin-in-process-dispatch.commit-guards.test.ts",
+  "src/gateway/server-plugin-research.integration.test.ts",
+  "src/gateway/server-plugin-research-recovery.integration.test.ts",
   "src/gateway/session-row-transcript-backfill.test.ts",
   "src/gateway/user-background-http.test.ts",
   "src/gateway/user-background-http.authority.test.ts",

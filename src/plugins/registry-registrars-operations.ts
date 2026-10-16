@@ -38,6 +38,7 @@ import type {
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
   OpenClawPluginServiceV2,
+  OpenClawPluginServiceV3,
 } from "./types.js";
 
 function isOfficialCodexPluginRecord(
@@ -370,7 +371,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
 
   const registerService = (
     record: PluginRecord,
-    service: OpenClawPluginService | OpenClawPluginServiceV2,
+    service: OpenClawPluginService | OpenClawPluginServiceV2 | OpenClawPluginServiceV3,
   ) => {
     const id = resolveServiceRegistrationId(record, service, "service");
     if (!id) {

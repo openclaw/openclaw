@@ -6,6 +6,10 @@ import {
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  runWithPluginSessionWorkAuthority,
+  type PluginSessionWorkAuthority,
+} from "../../gateway/plugin-session-work-authority.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
@@ -220,6 +224,193 @@ beforeEach(() => {
 });
 
 describe("operator model policy on plugin completions", () => {
+  it.each(["foreground", "recovery"] as const)(
+    "binds each completion to the trusted %s target without granting overrides",
+    async (mode) => {
+      const llm = createRuntimeLlm({
+        getConfig: () => cfg,
+        authority: { allowComplete: true, allowAgentIdOverride: false },
+      });
+      const run = <T>(agentId: string, work: () => Promise<T>) =>
+        mode === "foreground"
+          ? withGatewayToolCallerIdentity(
+              { agentId, sessionKey: `agent:${agentId}:research`, operatorAuthority: operator() },
+              work,
+            )
+          : runWithPluginSessionWorkAuthority(
+              {
+                target: { agentId, sessionKey: `agent:${agentId}:research`, sessionId: "accepted" },
+                signal: new AbortController().signal,
+                assertCurrent: () => {},
+                assertToolAllowed: () => {},
+                pluginId: "deep-research",
+                context: createContext(),
+              },
+              () => asOperator(operator(), work, "direct-tool"),
+            );
+      for (const agentId of ["research", "main"]) {
+        const result = await run(agentId, () => llm.complete({ messages: [] }));
+        expect(result.agentId).toBe(agentId);
+        expect(result.audit.sessionKey).toBe(`agent:${agentId}:research`);
+        expect(mocks.acquire).toHaveBeenLastCalledWith(expect.objectContaining({ agentId }));
+      }
+      mocks.acquire.mockClear();
+      await expect(
+        run("research", () => llm.complete({ messages: [], agentId: "main" })),
+      ).rejects.toThrow(/cannot override the (active session|target) agent/);
+      expect(mocks.acquire).not.toHaveBeenCalled();
+      const conflicting = createRuntimeLlm({
+        getConfig: () => cfg,
+        authority: { allowComplete: true, agentId: "main" },
+      });
+      await expect(run("research", () => conflicting.complete({ messages: [] }))).rejects.toThrow(
+        "conflicts with the current invocation",
+      );
+      expect(mocks.acquire).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { mode: "foreground", permission: "none" },
+    { mode: "foreground", permission: "plugin" },
+    { mode: "foreground", permission: "host" },
+    { mode: "foreground", permission: "host-denied" },
+    { mode: "recovery", permission: "none" },
+    { mode: "recovery", permission: "plugin" },
+    { mode: "recovery", permission: "host" },
+    { mode: "recovery", permission: "host-denied" },
+  ] as const)(
+    "preserves $mode cross-agent permission from $permission",
+    async ({ mode, permission }) => {
+      const llm = createRuntimeLlm({
+        getConfig: () => ({
+          ...cfg,
+          plugins: {
+            entries: {
+              "test-plugin": {
+                llm: {
+                  allowAgentIdOverride: permission === "plugin" || permission === "host-denied",
+                },
+              },
+            },
+          },
+        }),
+        authority: {
+          caller: { kind: "plugin", id: "test-plugin" },
+          allowComplete: true,
+          ...(permission === "host" ? { allowAgentIdOverride: true } : {}),
+          ...(permission === "host-denied" ? { allowAgentIdOverride: false } : {}),
+        },
+      });
+      const run = <T>(work: () => Promise<T>) =>
+        mode === "foreground"
+          ? withGatewayToolCallerIdentity(
+              {
+                agentId: "research",
+                sessionKey: "agent:research:accepted",
+                operatorAuthority: operator(),
+              },
+              work,
+            )
+          : runWithPluginSessionWorkAuthority(
+              {
+                target: {
+                  agentId: "research",
+                  sessionKey: "agent:research:accepted",
+                  sessionId: "accepted",
+                },
+                signal: new AbortController().signal,
+                assertCurrent: () => {},
+                assertToolAllowed: () => {},
+                pluginId: "test-plugin",
+                context: createContext(),
+              },
+              () => asOperator(operator(), work, "direct-tool"),
+            );
+      const pending = withWork(() => run(() => llm.complete({ messages: [], agentId: "worker" })));
+      if (mode === "foreground" && (permission === "plugin" || permission === "host")) {
+        await expect(pending).resolves.toMatchObject({
+          agentId: "worker",
+          audit: { sessionKey: "agent:research:accepted" },
+        });
+        expect(mocks.acquire).toHaveBeenCalledWith(expect.objectContaining({ agentId: "worker" }));
+      } else {
+        await expect(pending).rejects.toMatchObject({ code: "LLM_COMPLETION_NOT_AUTHORIZED" });
+        expect(mocks.acquire).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("keeps original model restrictions on an authorized foreground agent override", async () => {
+    mocks.select.mockReturnValue({ ...selection, modelId: "blocked" });
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        ...cfg,
+        plugins: { entries: { "test-plugin": { llm: { allowAgentIdOverride: true } } } },
+      }),
+      authority: { caller: { kind: "plugin", id: "test-plugin" }, allowComplete: true },
+    });
+    await expect(
+      withWork(() =>
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "research",
+            sessionKey: "agent:research:accepted",
+            operatorAuthority: operator(),
+          },
+          () => llm.complete({ messages: [], agentId: "worker" }),
+        ),
+      ),
+    ).rejects.toThrow("cannot use this model");
+    expect(mocks.select).toHaveBeenCalledWith(expect.objectContaining({ agentId: "worker" }));
+    expect(mocks.acquire).not.toHaveBeenCalled();
+  });
+
+  it.each(["preparation", "provider"] as const)(
+    "retains the borrowed-work fence across %s awaits",
+    async (boundary) => {
+      let active = true;
+      const borrowed: PluginSessionWorkAuthority = {
+        target: {
+          agentId: "research",
+          sessionKey: "agent:research:accepted",
+          sessionId: "accepted",
+        },
+        signal: new AbortController().signal,
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("borrow ended");
+          }
+        },
+        assertToolAllowed: () => {},
+        pluginId: "deep-research",
+        context: createContext(),
+      };
+      if (boundary === "preparation") {
+        mocks.acquire.mockImplementation(async () => {
+          await Promise.resolve();
+          active = false;
+          return preparedModel();
+        });
+      } else {
+        const complete = mocks.complete.getMockImplementation()!;
+        mocks.complete.mockImplementation(async (...args) => {
+          const result = await complete(...args);
+          active = false;
+          return result;
+        });
+      }
+      await expect(
+        withWork(() =>
+          runWithPluginSessionWorkAuthority(borrowed, () =>
+            asOperator(operator(), () => completion().complete(request("direct")), "direct-tool"),
+          ),
+        ),
+      ).rejects.toThrow("borrow ended");
+      expect(mocks.complete).toHaveBeenCalledTimes(boundary === "provider" ? 1 : 0);
+    },
+  );
+
   it.each(["restricted model", "cancelled request", "replaced caller"] as const)(
     "preserves the original scoped requester during profile preparation: %s",
     async (scenario) => {

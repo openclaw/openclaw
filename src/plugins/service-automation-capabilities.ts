@@ -2,10 +2,15 @@ import type { GatewayContextResolver } from "../gateway/server-methods/types.js"
 import { createLazyRuntimeMethodBinder, createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import type { OpenClawPluginServiceContext } from "./plugin-registration.types.js";
+import type { PluginRegistry } from "./registry-types.js";
 import { createPluginServiceCronGetter, type PluginServiceCronHost } from "./service-cron.js";
+import type { PluginServiceSessionWorkV1 } from "./service-session-work.types.js";
 
 export function createPluginServiceAutomationCapabilities(params: {
   pluginId: string;
+  serviceId: string;
+  registry: PluginRegistry;
+  signal: AbortSignal;
   lease: PluginRuntimeCapabilityLease;
   isStopping: () => boolean;
   resolveGatewayContext?: GatewayContextResolver;
@@ -34,5 +39,24 @@ export function createPluginServiceAutomationCapabilities(params: {
       prepareSource: bind((service) => service.prepareSource),
     };
   }
-  return { getCron, mcpEvents };
+  const loadSessionWork = createLazyRuntimeSurface(
+    () => import("./service-session-work.js"),
+    (module) => module.createPluginServiceSessionWork(params),
+  );
+  const sessionWork: PluginServiceSessionWorkV1 = {
+    version: 1,
+    admit: async ({ id, agentId, sessionKey, toolName, delegatedTools }) => {
+      // Capture admission before lazy loading yields to the original caller.
+      const input = {
+        id,
+        agentId,
+        sessionKey,
+        toolName,
+        ...(delegatedTools ? { delegatedTools: [...delegatedTools] } : {}),
+      };
+      return (await loadSessionWork()).admit(input);
+    },
+    run: async (id, work) => (await loadSessionWork()).run(id, work),
+  };
+  return { getCron, mcpEvents, sessionWork };
 }

@@ -7,9 +7,9 @@ read_when:
 
 `openclaw/plugin-sdk/research-adapter-contract` defines version 1 request,
 descriptor, snapshot, and reply schemas, plus the typed `isResearchAdapterRequest`
-ingress check. The Google provider consumes this contract through `google.research.v1`.
-It is not a general adapter registry. The next stack layer connects the bundled
-research feature to this explicitly selected endpoint.
+ingress check. The bundled deep-research feature and
+Google provider consume this contract. It is not a general adapter registry.
+The feature currently binds explicitly to `google.research.v1`.
 
 The feature owns logical jobs, polling, cancellation intent, recovery, budgets,
 and stable result publication. A provider owns its endpoint, authentication,
@@ -65,5 +65,6 @@ response alone. A create without a recorded remote receipt or definitive not-sen
 outcome is indeterminate: there is no automatic submission retry without documented
 provider idempotency.
 
-The portable foundation is documented in the bundled deep-research README. No consumer OAuth, Codex managed-research RPC, or cross-auth-mode proof
+See [Deep Research](/tools/deep-research) for user-facing behavior and qualification
+limits. No consumer OAuth, Codex managed-research RPC, or cross-auth-mode proof
 is implied by this contract.

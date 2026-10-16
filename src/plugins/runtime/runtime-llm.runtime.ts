@@ -123,6 +123,7 @@ async function resolveAgentId(params: {
   cfg: OpenClawConfig;
   authority?: RuntimeLlmAuthority;
   allowAgentIdOverride: boolean;
+  defaultAgentId?: string;
 }): Promise<string> {
   const authorityAgentIdRaw = normalizeOptionalString(params.authority?.agentId);
   const requestedAgentIdRaw = normalizeOptionalString(params.request.agentId);
@@ -143,14 +144,20 @@ async function resolveAgentId(params: {
     }
     return authorityAgentId;
   }
+  const defaultAgentId = params.defaultAgentId
+    ? normalizeAgentId(params.defaultAgentId)
+    : undefined;
   if (requestedAgentId) {
-    if (!params.allowAgentIdOverride) {
+    if (requestedAgentId !== defaultAgentId && !params.allowAgentIdOverride) {
       throw completionError(
         "LLM_COMPLETION_NOT_AUTHORIZED",
         "Plugin LLM completion cannot override the target agent.",
       );
     }
     return requestedAgentId;
+  }
+  if (defaultAgentId) {
+    return defaultAgentId;
   }
   const { resolveAmbientOwnerAgentId } = await import("../../agents/agent-scope.js");
   return resolveAmbientOwnerAgentId(params.cfg);
@@ -365,15 +372,48 @@ function assertModelAllowed(params: {
   }
 }
 
+/** Recovery/explicit host targets are ceilings; foreground defaults preserve existing opt-ins. */
+function resolveInvocationAuthority(
+  authority: RuntimeLlmAuthority | undefined,
+  binding: { kind: "foreground" | "recovery"; agentId: string; sessionKey: string } | undefined,
+): RuntimeLlmAuthority | undefined {
+  if (!binding) {
+    return authority;
+  }
+  const agentId = normalizeOptionalString(authority?.agentId);
+  const sessionKey = normalizeOptionalString(authority?.sessionKey);
+  if (
+    (authority?.requiresBoundAgent && !agentId) ||
+    (agentId && normalizeAgentId(agentId) !== normalizeAgentId(binding.agentId)) ||
+    (sessionKey && sessionKey !== binding.sessionKey)
+  ) {
+    throw completionError(
+      "LLM_COMPLETION_NOT_AUTHORIZED",
+      "Plugin LLM completion binding conflicts with the current invocation.",
+    );
+  }
+  if (binding.kind === "foreground" && !agentId) {
+    return { ...authority, sessionKey: binding.sessionKey };
+  }
+  return {
+    ...authority,
+    agentId: binding.agentId,
+    sessionKey: binding.sessionKey,
+    requiresBoundAgent: true,
+    allowAgentIdOverride: false,
+  };
+}
+
 export function createRuntimeLlm(
   options: CreateRuntimeLlmOptions = {},
 ): Pick<PluginRuntimeCore["llm"], "complete"> {
   const logger = options.logger ?? toRuntimeLogger(defaultLogger);
   return {
     complete: bindLlmOperatorAuthority(options.authority?.caller, async (params, source) => {
-      const caller = resolveTrustedCaller(options.authority);
-      if (options.authority?.allowComplete === false) {
-        const reason = options.authority.denyReason ?? "capability denied";
+      const authority = resolveInvocationAuthority(options.authority, source.agentBinding);
+      const caller = resolveTrustedCaller(authority);
+      if (authority?.allowComplete === false) {
+        const reason = authority.denyReason ?? "capability denied";
         logger.warn("plugin llm completion denied", {
           caller,
           purpose: params.purpose,
@@ -402,13 +442,13 @@ export function createRuntimeLlm(
         Promise.resolve(resolveRuntimeConfig(options)),
       ]);
       const pluginPolicyId =
-        normalizeOptionalString(options.authority?.pluginIdForPolicy) ??
+        normalizeOptionalString(authority?.pluginIdForPolicy) ??
         (caller.kind === "plugin" ? normalizeOptionalString(caller.id) : undefined);
       const pluginLlmConfig = pluginPolicyId
         ? normalizePluginsConfig(cfg.plugins).entries[normalizePluginPolicyId(pluginPolicyId)]?.llm
         : undefined;
       const pluginPolicy = pluginLlmConfig ? buildPolicyFromEntry(pluginLlmConfig) : undefined;
-      const authorityPolicy = resolveAuthorityModelPolicy(options.authority);
+      const authorityPolicy = resolveAuthorityModelPolicy(authority);
       const policies = [
         { policy: authorityPolicy },
         { policy: pluginPolicy, policyOwnerPluginId: pluginPolicyId },
@@ -421,18 +461,20 @@ export function createRuntimeLlm(
           throw completionError("LLM_COMPLETION_NOT_AUTHORIZED", message);
         }
       };
-      const preferredProfile = normalizeOptionalString(options.authority?.preferredProfile);
+      const preferredProfile = normalizeOptionalString(authority?.preferredProfile);
       const audit = {
         caller,
         ...(params.purpose ? { purpose: params.purpose } : {}),
-        ...(options.authority?.sessionKey ? { sessionKey: options.authority.sessionKey } : {}),
+        ...(authority?.sessionKey ? { sessionKey: authority.sessionKey } : {}),
       };
       const agentId = await resolveAgentId({
         request: params,
         cfg,
-        authority: options.authority,
+        authority,
+        defaultAgentId:
+          source.agentBinding?.kind === "foreground" ? source.agentBinding.agentId : undefined,
         allowAgentIdOverride:
-          options.authority?.allowAgentIdOverride === false
+          authority?.allowAgentIdOverride === false
             ? false
             : authorityPolicy?.allowAgentIdOverride === true ||
               pluginPolicy?.allowAgentIdOverride === true,

@@ -4,12 +4,15 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
+import { readPluginSessionWorkAuthority } from "../../gateway/plugin-session-work-authority.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { createLlmOperatorAuthorizationError } from "./runtime-llm-error.js";
 import type { LlmCompleteCaller, LlmCompleteParams, LlmCompleteResult } from "./types-core.js";
 
 type CompletionOperatorSource = {
+  agentBinding?: { kind: "foreground" | "recovery"; agentId: string; sessionKey: string };
   operatorAuthority?: AdmittedRunOperatorAuthority;
   signal?: AbortSignal;
   assertCurrent: () => void;
@@ -48,6 +51,29 @@ export function bindLlmOperatorAuthority(
           bindModelExecution: () => undefined,
         });
       }
+      // Capture the trusted invocation target per call. Scheduled work deliberately
+      // has no foreground tool caller; its live host borrow owns this binding.
+      const borrowed = readPluginSessionWorkAuthority();
+      const caller = getGatewayToolCallerIdentity();
+      const target = borrowed?.target ?? caller;
+      const agentBinding = target
+        ? {
+            kind: borrowed ? ("recovery" as const) : ("foreground" as const),
+            agentId: target.agentId,
+            sessionKey: target.sessionKey,
+          }
+        : undefined;
+      withOperatorAuthorization(() => {
+        borrowed?.assertCurrent();
+        if (
+          borrowed &&
+          caller &&
+          (caller.agentId !== borrowed.target.agentId ||
+            caller.sessionKey !== borrowed.target.sessionKey)
+        ) {
+          throw new Error("Plugin LLM completion has conflicting invocation targets.");
+        }
+      });
       const capturedOperator = await captureAmbientGatewayOperatorAuthority({
         missingBindingError: () =>
           new Error("Plugin model completion requires its current Gateway binding."),
@@ -61,20 +87,21 @@ export function bindLlmOperatorAuthority(
       }
       onAcquired({ release: () => resources.disposeAsync() });
       const operatorAuthority = capturedOperator?.authority;
-      const signal = operatorAuthority?.signal
-        ? params.signal
-          ? AbortSignal.any([params.signal, operatorAuthority.signal])
-          : operatorAuthority.signal
-        : params.signal;
-      // Operator currency only: the caller's own abort settles through the provider result.
+      const signals = [params.signal, operatorAuthority?.signal, borrowed?.signal].filter(
+        (signal): signal is AbortSignal => signal !== undefined,
+      );
+      const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+      // Host/source currency: the caller's own abort settles through the provider result.
       const assertCurrent = () => {
         withOperatorAuthorization(() => {
+          borrowed?.assertCurrent();
           capturedOperator.assertInvocationCurrent?.();
           operatorAuthority?.assertCurrent();
         });
       };
       assertCurrent();
       return await complete(params, {
+        agentBinding,
         operatorAuthority,
         signal,
         assertCurrent,
