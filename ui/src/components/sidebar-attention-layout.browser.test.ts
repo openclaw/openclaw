@@ -30,8 +30,14 @@ import floatingCss from "../styles/sidebar-attention-floating.css?inline";
 function part<T extends HTMLElement = HTMLElement>(root: ParentNode, name: string) {
   return root.querySelector<T>(`.sidebar-issues-panel__${name}`)!;
 }
-const bounds = (element: Element | Range) => element.getBoundingClientRect();
-const style = (element: Element) => getComputedStyle(element);
+const bounds = (target: Element | Range) => target.getBoundingClientRect();
+const style = (target: Element) => getComputedStyle(target);
+function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, html = "") {
+  return Object.assign(document.createElement(tag), { className, innerHTML: html });
+}
+function shellFor(mobile = false) {
+  return document.body.appendChild(element("div", mobile ? "shell shell--mobile-nav" : "shell"));
+}
 const mountedPanels = new Map<Element, () => void>();
 function render(view: () => JSX.Element, container: Element) {
   mountedPanels.get(container)?.();
@@ -53,9 +59,6 @@ const authWarning: SidebarAttentionItem = {
   signature: "expired-profile",
 };
 
-function panel(params: SidebarAttentionPanelParams) {
-  return () => createComponent(SidebarAttentionPanel, params);
-}
 function inboxEntries(attention: SidebarAttentionItem[], mentions: MentionInboxItem[]) {
   return buildSidebarInboxEntries({
     approvals: [],
@@ -67,7 +70,7 @@ function inboxEntries(attention: SidebarAttentionItem[], mentions: MentionInboxI
 }
 function mountPanel(params: SidebarAttentionPanelParams) {
   const shell = document.body.appendChild(document.createElement("div"));
-  render(panel(params), shell);
+  render(() => createComponent(SidebarAttentionPanel, params), shell);
   return shell;
 }
 function panelParams(entries: readonly SidebarInboxEntry[]): SidebarAttentionPanelParams {
@@ -106,9 +109,7 @@ function panelParams(entries: readonly SidebarInboxEntry[]): SidebarAttentionPan
 }
 
 afterEach(() => {
-  for (const dispose of mountedPanels.values()) {
-    dispose();
-  }
+  mountedPanels.forEach((dispose) => dispose());
   mountedPanels.clear();
   document.body.replaceChildren();
   document.documentElement.classList.remove(
@@ -123,27 +124,24 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     const params = panelParams([authWarning]);
 
     for (const mobile of [false, true]) {
-      const shell = document.createElement("div");
-      shell.className = mobile ? "shell shell--mobile-nav" : "shell";
-      document.body.append(shell);
+      const shell = shellFor(mobile);
       const [selectedTab, setSelectedTab] = createSignal<"all" | "approvals">("all");
       render(
-        panel({
-          ...params,
-          get selectedTab() {
-            return selectedTab();
-          },
-        }),
+        () =>
+          createComponent(SidebarAttentionPanel, {
+            ...params,
+            get selectedTab() {
+              return selectedTab();
+            },
+          }),
         shell,
       );
       await waitForSolid(() => expect(part(shell, "tabs")).not.toBeNull());
       await shell.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
         "openclaw-tooltip",
       )?.updateComplete;
-      const populatedHeader = part(shell, "header");
-      const populatedTabs = part(shell, "tabs");
-      const headerHeight = bounds(populatedHeader).height;
-      const tabsTop = bounds(populatedTabs).top;
+      const headerHeight = bounds(part(shell, "header")).height;
+      const tabsTop = bounds(part(shell, "tabs")).top;
 
       setSelectedTab("approvals");
       flush();
@@ -151,8 +149,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       expect(placeholder.disabled).toBe(true);
       expect(placeholder.getAttribute("aria-hidden")).toBe("true");
       expect(style(placeholder).visibility).toBe("hidden");
-      expect(part(shell, "header").getBoundingClientRect().height).toBe(headerHeight);
-      expect(part(shell, "tabs").getBoundingClientRect().top).toBe(tabsTop);
+      expect(bounds(part(shell, "header")).height).toBe(headerHeight);
+      expect(bounds(part(shell, "tabs")).top).toBe(tabsTop);
       shell.remove();
     }
   });
@@ -175,16 +173,12 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       ).toEqual(selectedTab === "system" ? [] : ["mention-a", "mention-b"]);
       part<HTMLButtonElement>(shell, "dismiss-shown").click();
 
-      if (selectedTab === "system") {
-        expect(params.mentions.dismiss).not.toHaveBeenCalled();
-      } else {
-        expect(params.mentions.dismiss).toHaveBeenCalledExactlyOnceWith(["mention-a"]);
-      }
-      if (selectedTab === "mentions") {
-        expect(params.onDismiss).not.toHaveBeenCalled();
-      } else {
-        expect(params.onDismiss).toHaveBeenCalledExactlyOnceWith(authWarning.dismissal);
-      }
+      expect(vi.mocked(params.mentions.dismiss).mock.calls).toEqual(
+        selectedTab === "system" ? [] : [[["mention-a"]]],
+      );
+      expect(vi.mocked(params.onDismiss).mock.calls).toEqual(
+        selectedTab === "mentions" ? [] : [[authWarning.dismissal]],
+      );
     },
   );
 
@@ -208,36 +202,25 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
   it.each(["base-first", "base-last"])(
     "positions collapsed sidebar attention beyond chrome controls (%s)",
     async (order) => {
-      // Entry CSS and the lazy component may arrive in either order. Use both
-      // complete owners so this also catches resets introduced in the base sheet.
       const sheets = (
         order === "base-first" ? [layoutCss, floatingCss] : [floatingCss, layoutCss]
       ).map((css) => {
-        const sheet = document.createElement("style");
-        sheet.textContent = css;
+        const sheet = element("style", "", css);
         document.head.append(sheet);
         return sheet;
       });
       onTestFinished(() => sheets.forEach((sheet) => sheet.remove()));
-      const shell = document.createElement("div");
-      shell.className = "shell shell--nav-collapsed shell--home-control shell--floating-attention";
-      shell.innerHTML = `
-      <div class="shell-chrome-controls">
-        <button class="shell-chrome-controls__button"></button>
-        <button class="shell-chrome-controls__button"></button>
-        <button class="shell-chrome-controls__button"></button>
-        <button class="shell-chrome-controls__button shell-chrome-controls__home"></button>
-      </div>
+      const shell = element(
+        "div",
+        "shell shell--nav-collapsed shell--home-control shell--floating-attention",
+        `<div class="shell-chrome-controls">
+        ${'<button class="shell-chrome-controls__button"></button>'.repeat(3)}
+        <button class="shell-chrome-controls__button shell-chrome-controls__home"></button></div>
       <nav class="macos-titlebar-controls">
-        ${Array.from(
-          { length: 2 },
-          () => '<button class="topbar-icon-btn macos-titlebar-controls__button"></button>',
-        ).join("")}
-      </nav>
+        ${'<button class="topbar-icon-btn macos-titlebar-controls__button"></button>'.repeat(2)}</nav>
       <main class="content">
-        <openclaw-sidebar-attention class="sidebar-attention--floating"></openclaw-sidebar-attention>
-      </main>
-    `;
+        <openclaw-sidebar-attention class="sidebar-attention--floating"></openclaw-sidebar-attention></main>`,
+      );
       const provider = createApplicationContextProvider(panelParams([]).context);
       provider.append(shell);
       document.body.append(provider);
@@ -284,14 +267,17 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       document.documentElement.classList.add("openclaw-native-web-chrome");
       expect(bounds(attention).left).toBe(bounds(chrome).right + 8);
       expect(bounds(nativeChrome).left).toBeGreaterThanOrEqual(bounds(attention).right + 8);
-      expect(paint()).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)" });
-      expect(style(inbox).boxShadow).toBe("none");
-      expect(style(inbox).backdropFilter).toBe("none");
+      const expectTransparent = () =>
+        expect(style(inbox)).toMatchObject({
+          borderTopWidth: "0px",
+          backgroundColor: "rgba(0, 0, 0, 0)",
+          boxShadow: "none",
+          backdropFilter: "none",
+        });
+      expectTransparent();
       attention.classList.remove("sidebar-attention--floating");
       shell.classList.remove("shell--floating-attention");
-      expect(paint()).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)" });
-      expect(style(inbox).boxShadow).toBe("none");
-      expect(style(inbox).backdropFilter).toBe("none");
+      expectTransparent();
     },
   );
 
@@ -308,19 +294,15 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       const previousTextScale = rootStyle.getPropertyValue("--control-ui-text-scale");
       onTestFinished(() => rootStyle.setProperty("--control-ui-text-scale", previousTextScale));
       rootStyle.setProperty("--control-ui-text-scale", String(textScale));
-      const fixture = document.createElement("section");
-      fixture.className = "sidebar-issues-panel";
-      fixture.style.position = "static";
-      fixture.style.width = `${width}px`;
-      fixture.style.height = "220px";
-      const listWrap = document.createElement("div");
-      listWrap.className = "sidebar-issues-panel__list-wrap";
-      listWrap.innerHTML = `<div class="sidebar-issues-panel__list">${Array.from(
-        { length: 6 },
-        (_, index) => `<div data-attention-kind="cronFailed">
-          <div class="sidebar-issues-panel__summary">Inbox item ${index}</div>
-        </div>`,
-      ).join("")}</div>`;
+      const fixture = element("section", "sidebar-issues-panel");
+      Object.assign(fixture.style, { position: "static", width: `${width}px`, height: "220px" });
+      const row = `<div data-attention-kind="cronFailed">
+        <div class="sidebar-issues-panel__summary">Inbox item</div></div>`;
+      const listWrap = element(
+        "div",
+        "sidebar-issues-panel__list-wrap",
+        `<div class="sidebar-issues-panel__list">${row.repeat(6)}</div>`,
+      );
       render(
         () => [
           createComponent(HubTabs, {
@@ -341,32 +323,26 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         ],
         fixture,
       );
-      const shell = document.createElement("div");
-      shell.className = mobile ? "shell shell--mobile-nav" : "shell";
-      shell.append(fixture);
-      document.body.append(shell);
+      shellFor(mobile).append(fixture);
 
       await waitForSolid(() => expect(fixture.querySelector('[role="tab"]')).not.toBeNull());
       const group = part(fixture, "tabs");
-      const header = document.createElement("header");
-      header.className = "sidebar-issues-panel__header";
+      const header = element("header", "sidebar-issues-panel__header");
       fixture.prepend(header);
       const tabs = Array.from(fixture.querySelectorAll<HTMLElement>(".hub-tab"));
-      const badgeTab = tabs[1];
-      expect(group).not.toBeNull();
-      expect(badgeTab).not.toBeNull();
-      expect(group!.querySelector("[active]")?.getAttribute("data-tab-value")).toBe("tab-0");
-
-      const badge = badgeTab!.querySelector<HTMLElement>(".hub-tab__badge");
+      expect(group.querySelector("[active]")?.getAttribute("data-tab-value")).toBe("tab-0");
+      const badge = tabs[1]!.querySelector<HTMLElement>(".hub-tab__badge")!;
       const list = part(fixture, "list");
       const item = fixture.querySelector<HTMLElement>("[data-attention-kind]");
       const summary = part(fixture, "summary");
 
-      expect(bounds(group!).width).toBeLessThanOrEqual(fixture.clientWidth);
-      expect(style(group!).overflowX).toBe("auto");
-      expect(style(group!).backgroundColor).toBe(style(header).backgroundColor);
-      expect(style(group!).backgroundColor).not.toBe(style(list!).backgroundColor);
-      // The track hairline is the header/list separator; it must span the panel.
+      expect(bounds(group).width).toBeLessThanOrEqual(fixture.clientWidth);
+      expect(style(group)).toMatchObject({
+        overflowX: "auto",
+        backgroundColor: style(header).backgroundColor,
+        paddingBottom: "2px",
+      });
+      expect(style(group).backgroundColor).not.toBe(style(list!).backgroundColor);
       const colorProbe = document.createElement("span");
       colorProbe.style.cssText = "position: absolute; color: var(--track-color);";
       group.append(colorProbe);
@@ -377,7 +353,6 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       paint.fillRect(0, 0, 1, 1);
       expect(paint.getImageData(0, 0, 1, 1).data[3]).toBeGreaterThan(0);
       expect(style(group).boxShadow).toBe(`${separatorColor} 0px -2px 0px 0px inset`);
-      expect(style(group).paddingBottom).toBe("2px");
       if (width === 320) {
         expect(group.scrollWidth).toBeGreaterThan(group.clientWidth);
       }
@@ -390,9 +365,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         const labelBounds = bounds(range);
         const tabBounds = bounds(tab);
         if (index > 0) {
-          expect(tabBounds.left).toBeGreaterThanOrEqual(
-            tabs[index - 1]!.getBoundingClientRect().right - 1,
-          );
+          expect(tabBounds.left).toBeGreaterThanOrEqual(bounds(tabs[index - 1]!).right - 1);
         }
         expect(labelBounds.width).toBeGreaterThan(0);
         expect(labelBounds.left).toBeGreaterThanOrEqual(tabBounds.left - 1);
@@ -409,52 +382,33 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         ["End", tabs.at(-1)!],
         ["Home", tabs[0]!],
       ] as const) {
-        const openingTransform = style(fixture).transform;
         await userEvent.keyboard(`{${key}}`);
         expect(document.activeElement).toBe(tab);
         await expect
-          .poll(
-            () => {
-              const tabBounds = bounds(tab);
-              const viewport = bounds(group);
-              return Math.max(viewport.left - tabBounds.left, tabBounds.right - viewport.right);
-            },
-            {
-              message: `${key} keeps the focused tab inside its scrollport during ${openingTransform}`,
-            },
-          )
+          .poll(() => {
+            const tabBounds = bounds(tab);
+            const viewport = bounds(group);
+            return Math.max(viewport.left - tabBounds.left, tabBounds.right - viewport.right);
+          })
           .toBeLessThanOrEqual(1);
       }
-      // Count badges render as pills separated from the tab label.
-      expect(badge).not.toBeNull();
-      expect(style(badge!).borderRadius).not.toBe("0px");
+      expect(style(badge).borderRadius).not.toBe("0px");
       expect(style(summary!).paddingBlock).toBe("8px");
       expect(bounds(item!).right).toBeCloseTo(bounds(list!).right, 1);
     },
   );
 
   it("keeps mobile controls touch-sized and the sheet header visually continuous", () => {
-    const shell = document.createElement("div");
-    shell.className = "shell shell--mobile-nav";
-    shell.innerHTML = `
-      <section class="sidebar-issues-panel">
-        <div class="sidebar-issues-panel__grabber"></div>
-        <header class="sidebar-issues-panel__header">
-          <div class="sidebar-issues-panel__header-actions">
-            <button class="sidebar-issues-panel__dismiss-shown" type="button">Dismiss shown</button>
-            <button class="sidebar-brand__icon sidebar-issues-panel__mobile-close" type="button">
-              Close
-            </button>
-          </div>
-        </header>
-        <div class="sidebar-issues-panel__list-wrap"></div>
-        <div class="sidebar-issues-panel__summary">
-          <button class="sidebar-issues-panel__dismiss" type="button">Dismiss</button>
-        </div>
-      </section>
-    `;
-    document.body.append(shell);
-
+    const shell = shellFor(true);
+    shell.innerHTML = `<section class="sidebar-issues-panel">
+      <div class="sidebar-issues-panel__grabber"></div>
+      <header class="sidebar-issues-panel__header"><div class="sidebar-issues-panel__header-actions">
+        <button class="sidebar-issues-panel__dismiss-shown">Dismiss shown</button>
+        <button class="sidebar-brand__icon sidebar-issues-panel__mobile-close">Close</button>
+      </div></header>
+      <div class="sidebar-issues-panel__list-wrap"></div>
+      <div class="sidebar-issues-panel__summary"><button class="sidebar-issues-panel__dismiss">Dismiss</button></div>
+    </section>`;
     const dismiss = part(shell, "dismiss");
     const dismissShown = part(shell, "dismiss-shown");
     const close = part(shell, "mobile-close");

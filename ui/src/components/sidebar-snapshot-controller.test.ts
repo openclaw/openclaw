@@ -36,7 +36,15 @@ const model: SidebarSnapshotModel = {
   ownerId: "profile-a",
   involvingMe: true,
 };
-
+function roster(displayName?: string) {
+  return bootRosterSchema.parse({
+    agentId: "main",
+    result: sessionsResult([{ key: "agent:main:cedar", kind: "direct", displayName }], 1),
+    groups: [],
+    groupSettings: [],
+    sectionOrder: [],
+  });
+}
 function bootRecord(): BootRecord {
   return {
     version: 2,
@@ -66,8 +74,10 @@ function fixture(initialPageScopeId: string | null = null) {
   const restored = createDeferred();
   let saved = createDeferred();
   let settled = false;
-  let captured = model;
-  const capture = vi.fn(() => captured);
+  const capture = vi.fn(() => model);
+  const clear = () => {
+    host.sidebarSnapshot = null;
+  };
   const host: ConstructorParameters<typeof SidebarSnapshotController>[0] = {
     sidebarSnapshot: null,
     sessionDataContext: { gateway, agentSelection },
@@ -78,12 +88,8 @@ function fixture(initialPageScopeId: string | null = null) {
       host.sidebarSnapshot = value;
       restored.resolve();
     },
-    releaseSidebarSnapshot() {
-      host.sidebarSnapshot = null;
-    },
-    clearSidebarSnapshot() {
-      host.sidebarSnapshot = null;
-    },
+    releaseSidebarSnapshot: clear,
+    clearSidebarSnapshot: clear,
   };
   const controller = new SidebarSnapshotController(host);
   controller.subscribe(() => {
@@ -106,7 +112,7 @@ function fixture(initialPageScopeId: string | null = null) {
       controller.synchronize();
     },
     settle(value = model) {
-      captured = value;
+      capture.mockReturnValue(value);
       settled = true;
       saved = createDeferred();
       return saved.promise;
@@ -168,29 +174,14 @@ describe("sidebar snapshot lifecycle", () => {
   }
 
   it("shares one boot read with route rows and retires both displays on invalidation", async () => {
-    const roster = {
-      agentId: "main",
-      result: sessionsResult(
-        [{ key: "agent:main:cedar", kind: "direct", displayName: "Cedar" }],
-        1,
-      ),
-      groups: [],
-      groupSettings: [],
-      sectionOrder: [],
-    };
-    const saved: SidebarSnapshotModel = { ...model, roster: bootRosterSchema.parse(roster) };
+    const saved: SidebarSnapshotModel = { ...model, roster: roster("Cedar") };
     await saveSnapshot(saved);
     const read = vi.spyOn(SessionSnapshotStore.prototype, "readSidebar");
     const test = fixture();
     const sessions = createSessionCapability(
       test.gateway,
-      {
-        state: { selectedId: "main" },
-        subscribe: () => () => {},
-      },
-      {
-        bootRecord: bootRecord(),
-      },
+      { state: { selectedId: "main" }, subscribe: () => () => {} },
+      { bootRecord: bootRecord() },
     );
     disposers.push(
       () => sessions.dispose(),
@@ -198,7 +189,7 @@ describe("sidebar snapshot lifecycle", () => {
     );
     test.controller.connect();
     await Promise.all([test.restored, sessions.whenCachedRosterSettled()]);
-    expect(sessions.state.result?.sessions).toEqual(roster.result.sessions);
+    expect(sessions.state.result?.sessions).toEqual(saved.roster!.result.sessions);
     expect(sessions.state.resultCached).toBe(true);
     expect(test.host.sidebarSnapshot).toEqual(saved);
     expect(read).toHaveBeenCalledOnce();

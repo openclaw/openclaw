@@ -12,6 +12,8 @@ import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update-card.tsx";
 
 let originalWebkit: PropertyDescriptor | undefined;
+const checkFailure = "Could not check the latest update";
+const reconnectFailure = "Actions are unavailable while the Gateway reconnects.";
 async function settle() {
   await Promise.resolve();
   flush();
@@ -30,11 +32,34 @@ const gitUpdate: UpdateAvailable = {
   upstreamRef: "origin/main",
   commitsBehind: 7,
 };
+const freshGitUpdate = { ...gitUpdate, upstreamSha: "c".repeat(40), commitsBehind: 9 };
+const gitSchedule: UpdateScheduleState = {
+  channel: "dev",
+  autoEnabled: false,
+  target: {
+    kind: "git",
+    upstreamRef: "origin/main",
+    upstreamSha: "abc1234def",
+    commitsBehind: 246,
+  },
+};
 function packageSchedule(
-  campaign: NonNullable<UpdateScheduleState["campaign"]>,
+  campaign: Partial<NonNullable<UpdateScheduleState["campaign"]>>,
   version = "2.0.0",
 ): UpdateScheduleState {
-  return { channel: "stable", autoEnabled: true, target: { kind: "package", version }, campaign };
+  return {
+    channel: "stable",
+    autoEnabled: true,
+    target: { kind: "package", version },
+    campaign: {
+      id: "campaign-1",
+      state: "waiting-for-idle",
+      announcedAtMs: 0,
+      forceAtMs: 900_000,
+      updatedAtMs: 0,
+      ...campaign,
+    },
+  };
 }
 function succeededRun(patch: Parameters<typeof createUpdateRunFixture>[0] = {}) {
   return createUpdateRunFixture({ status: "succeeded", phase: "finished", ...patch });
@@ -54,39 +79,40 @@ function modalButton(modal: Element, label: string) {
   return match!;
 }
 async function mount(
-  update: UpdateAvailable | null,
-  schedule: UpdateScheduleState | null = null,
-  canUpdate = true,
-  canHoldUpdate = true,
+  update: UpdateAvailable | null = null,
+  initial: Partial<SidebarUpdateCardProps> = {},
 ) {
   const [props, set] = createSignal<Partial<SidebarUpdateCardProps>>({
     updateAvailable: update,
-    updateSchedule: schedule,
-    canUpdate,
-    canHoldUpdate,
+    canUpdate: true,
+    canHoldUpdate: true,
     captureUpdateTarget: () => () => true,
     canStartNativeUpdate: (): boolean => props().canNativeUpdate ?? false,
+    ...initial,
   });
   const { container: element, unmount: dispose } = mountSolid(() => (
     <SidebarUpdateCard {...props()} />
   ));
   await settle();
-  function find<K extends keyof HTMLElementTagNameMap>(
-    selector: K,
-  ): HTMLElementTagNameMap[K] | null;
-  function find<T extends Element = HTMLElement>(selector: string): T | null;
-  function find(selector: string) {
-    return element.querySelector(selector);
-  }
+  const find = element.querySelector.bind(element);
   const setProps = (value: Partial<SidebarUpdateCardProps>) =>
     set((previous) => ({ ...previous, ...value }));
   return {
     element,
+    text: () => element.textContent,
     find,
     props,
     setProps,
     dispose,
     action: () => find<HTMLButtonElement>(".sidebar-update-card__action"),
+    expand(open = true) {
+      const details = find("details")!;
+      const expanded = new Promise<void>((resolve) => {
+        details.addEventListener("toggle", () => resolve(), { once: true });
+      });
+      details.open = open;
+      return expanded.then(settle);
+    },
     async update(value: Partial<SidebarUpdateCardProps>) {
       setProps(value);
       await settle();
@@ -124,7 +150,6 @@ describe("SidebarUpdateCard", () => {
     const restoreDialog = installDialogPolyfill();
     const postMessage = native ? installNativeBridge() : vi.fn();
     const check = createDeferred<boolean>();
-    const fresh = { ...gitUpdate, upstreamSha: "c".repeat(40), commitsBehind: 9 };
     const element = await mount(gitUpdate);
     await element.update({
       compact: true,
@@ -143,7 +168,7 @@ describe("SidebarUpdateCard", () => {
       prepareRetry: vi.fn(async () =>
         (await check.promise)
           ? {
-              updateAvailable: native ? fresh : (element.props().updateAvailable ?? null),
+              updateAvailable: native ? freshGitUpdate : (element.props().updateAvailable ?? null),
               updateSchedule: native ? null : (element.props().updateSchedule ?? null),
             }
           : null,
@@ -169,7 +194,7 @@ describe("SidebarUpdateCard", () => {
         expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull();
         expect(element.props().onUpdate).not.toHaveBeenCalled();
         if (!native) {
-          await element.update({ updateAvailable: fresh });
+          await element.update({ updateAvailable: freshGitUpdate });
         }
         check.resolve(successful);
         await vi.dynamicImportSettled();
@@ -217,8 +242,8 @@ describe("SidebarUpdateCard", () => {
   });
 
   it("keeps native ownership separate from Gateway freshness and follows bridge availability", async () => {
-    const element = await mount(stableUpdate, null, false);
-    await element.update({
+    const element = await mount(stableUpdate, {
+      canUpdate: false,
       canNativeUpdate: true,
       compact: true,
       onCheckStatus: vi.fn(async () => false),
@@ -231,13 +256,7 @@ describe("SidebarUpdateCard", () => {
     await settle();
     expect(action().hasAttribute("aria-disabled")).toBe(false);
     expect(action().textContent).toContain("Update Mac app");
-    const details = element.find("details")!;
-    const expanded = new Promise<void>((resolve) => {
-      details.addEventListener("toggle", () => resolve(), { once: true });
-    });
-    details.open = true;
-    await expanded;
-    await settle();
+    await element.expand();
     expect(element.props().onCheckStatus).not.toHaveBeenCalled();
 
     await element.update({ canNativeUpdate: false });
@@ -253,9 +272,8 @@ describe("SidebarUpdateCard", () => {
     "checks expansion before enabling a %s action",
     async (mode) => {
       const history = mode === "history";
-      const element = await mount(history ? gitUpdate : stableUpdate);
       const check = createDeferred<boolean>();
-      await element.update({
+      const element = await mount(history ? gitUpdate : stableUpdate, {
         compact: true,
         onCheckStatus: vi.fn(() => check.promise),
         onUpdate: vi.fn(),
@@ -263,10 +281,7 @@ describe("SidebarUpdateCard", () => {
         updateRunAcknowledged: history,
       });
       const details = element.find("details")!;
-      const expanded = new Promise<void>((resolve) => {
-        details.addEventListener("toggle", () => resolve(), { once: true });
-      });
-      details.open = true;
+      const expanded = element.expand();
       if (!history) {
         // A click before the queued toggle starts discovery must not activate.
         expect(element.props().onCheckStatus).not.toHaveBeenCalled();
@@ -274,15 +289,12 @@ describe("SidebarUpdateCard", () => {
         expect(element.action()?.getAttribute("aria-busy")).toBe("true");
       }
       await expanded;
-      await settle();
       expect(element.props().onCheckStatus).toHaveBeenCalledOnce();
       expect(element.action()?.disabled).toBe(true);
       if (history) {
         expect(element.element.textContent).toContain("Checking for updates…");
         expect(element.find(".update-git-revisions")).toBeNull();
-        await element.update({
-          updateAvailable: { ...gitUpdate, upstreamSha: "c".repeat(40), commitsBehind: 9 },
-        });
+        await element.update({ updateAvailable: freshGitUpdate });
       }
       check.resolve(true);
       if (history) {
@@ -291,10 +303,7 @@ describe("SidebarUpdateCard", () => {
         );
         expect(element.element.textContent).toContain("9 commits behind");
         expect(element.props().onUpdate).not.toHaveBeenCalled();
-        details.open = false;
-        await new Promise<void>((resolve) => {
-          details.addEventListener("toggle", () => resolve(), { once: true });
-        });
+        await element.expand(false);
         details.open = true;
         await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledTimes(2));
       } else {
@@ -306,32 +315,30 @@ describe("SidebarUpdateCard", () => {
   );
 
   it("retries a failed fresh target check in the compact row", async () => {
-    const element = await mount(stableUpdate);
-    await element.update({ compact: true });
-    await element.update({ onCheckStatus: vi.fn(async () => false), onUpdate: vi.fn() });
+    const element = await mount(stableUpdate, {
+      compact: true,
+      onCheckStatus: vi.fn(async () => false),
+      onUpdate: vi.fn(),
+    });
     element.find("details")!.open = true;
-    await vi.waitFor(() =>
-      expect(element.element.textContent).toContain("Could not check the latest update"),
-    );
+    await vi.waitFor(() => expect(element.text()).toContain(checkFailure));
     const action = element.action()!;
     await vi.waitFor(() => expect(action.disabled).toBe(false));
     action.click();
     await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(action.disabled).toBe(false));
-    expect(element.element.textContent).toContain("Could not check the latest update");
+    expect(element.text()).toContain(checkFailure);
     expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(element.props().onUpdate).not.toHaveBeenCalled();
     // A later status read can clear the unavailable target without clearing its error.
-    element.setProps({ updateAvailable: null });
-    element.setProps({
-      updateRun: createUpdateRunFixture({ status: "succeeded", phase: "finished" }),
-    });
-    element.setProps({ updateRunAcknowledged: true });
     await element.update({
+      updateAvailable: null,
+      updateRun: succeededRun(),
+      updateRunAcknowledged: true,
       statusBanner: {
         tone: "warn",
         source: "read",
-        text: "Could not check the latest update",
+        text: checkFailure,
       },
     });
     const retry = [...element.element.querySelectorAll("button")].find((button) =>
@@ -369,15 +376,11 @@ describe("SidebarUpdateCard", () => {
     first.resolve(false);
     await settle();
     expect(action?.disabled).toBe(true);
-    expect(element.element.textContent).not.toContain(
-      "Actions are unavailable while the Gateway reconnects.",
-    );
+    expect(element.text()).not.toContain(reconnectFailure);
 
     second.resolve(false);
     await vi.waitFor(() => expect(action?.disabled).toBe(false));
-    expect(element.element.textContent).toContain(
-      "Actions are unavailable while the Gateway reconnects.",
-    );
+    expect(element.text()).toContain(reconnectFailure);
     action?.click();
     expect(onRefresh).toHaveBeenCalledTimes(3);
   });
@@ -385,8 +388,7 @@ describe("SidebarUpdateCard", () => {
   it.each([false, true])(
     "keeps live run controls focused until acknowledgement (compact: %s)",
     async (compact) => {
-      const element = await mount(null);
-      await element.update({ compact, updateRun: createUpdateRunFixture() });
+      const element = await mount(null, { compact, updateRun: createUpdateRunFixture() });
       expect(element.element.textContent).toContain("OpenClaw update in progress: staging");
       expect(element.element.textContent).toContain("phases complete");
       const action = element.action()!;
@@ -428,27 +430,16 @@ describe("SidebarUpdateCard", () => {
   it("renders an available update and narrates it after the Gateway drops its metadata", async () => {
     const element = await mount(
       {
-        currentVersion: "1.0.0",
-        latestVersion: "1.0.0",
-        channel: "dev",
+        ...gitUpdate,
         commitsBehind: 246,
         currentSha: "1234567890abcdef",
         upstreamSha: "abc1234def",
       },
       {
-        channel: "dev",
-        autoEnabled: false,
-        target: {
-          kind: "git",
-          upstreamRef: "origin/main",
-          upstreamSha: "abc1234def",
-          commitsBehind: 246,
-        },
+        updateSchedule: gitSchedule,
       },
     );
-    expect(element.find(".sidebar-update-card__action")?.textContent).toContain(
-      "246 commits behind",
-    );
+    expect(element.action()?.textContent).toContain("246 commits behind");
     expect(
       [...element.element.querySelectorAll(".update-git-revisions code")].map(
         (code) => code.textContent,
@@ -464,43 +455,30 @@ describe("SidebarUpdateCard", () => {
     expect(element.element.textContent).toContain("Updating Gateway…");
   });
 
-  it.each(["current"] as const)(
-    "retires stale git availability after a refreshed %s comparison",
-    async (status) => {
-      const element = await mount(
-        {
-          currentVersion: "2026.9.2",
-          latestVersion: "2026.9.3",
-          channel: "dev",
-          commitsBehind: 246,
+  it("retires stale git availability after a refreshed current comparison", async () => {
+    const element = await mount(
+      { ...gitUpdate, commitsBehind: 246 },
+      {
+        updateSchedule: {
+          ...gitSchedule,
+          install: { kind: "git", git: { status: "current" } },
         },
-        {
-          channel: "dev",
-          autoEnabled: false,
-          install: {
-            kind: "git",
-            git: { status },
-          },
-          target: {
-            kind: "git",
-            upstreamRef: "origin/main",
-            upstreamSha: "abc1234def",
-            commitsBehind: 246,
-          },
-        },
-      );
+      },
+    );
 
-      expect(element.find(".sidebar-update-card")).toBeNull();
-    },
-  );
+    expect(element.find(".sidebar-update-card")).toBeNull();
+  });
 
   it("keeps an available update actionable inside the compact Inbox row", async () => {
-    const element = await mount(stableUpdate);
-    await element.update({ compact: true, onDismiss: vi.fn(), onUpdate: vi.fn() });
+    const element = await mount(stableUpdate, {
+      compact: true,
+      onDismiss: vi.fn(),
+      onUpdate: vi.fn(),
+    });
 
     expect(element.find(".sidebar-issues-panel__entity")?.textContent).toBe("Update available");
     expect(element.find("summary time")).toBeNull();
-    expect(element.find(".sidebar-update-card__action")?.textContent).toContain("Update Gateway");
+    expect(element.action()?.textContent).toContain("Update Gateway");
     const dismiss = element.find<HTMLButtonElement>(".sidebar-issues-panel__dismiss")!;
     expect(dismiss.getAttribute("aria-label")).toBe("Dismiss Update available");
     expect(dismiss.querySelector("svg")).not.toBeNull();
@@ -518,34 +496,29 @@ describe("SidebarUpdateCard", () => {
     async ({ state, ageMinutes }) => {
       const now = Date.parse("2026-09-23T12:00:00Z");
       vi.useFakeTimers({ now });
-      const element = await mount(null);
-      element.setProps({ compact: true });
-      if (state === "campaign") {
-        element.setProps({
-          updateSchedule: packageSchedule(
-            {
-              id: "campaign-age",
-              state: "countdown",
-              announcedAtMs: now - 20 * 60_000,
-              updatedAtMs: now - 60_000,
-              applyAtMs: now + 10 * 60_000,
-              forceAtMs: now + 60 * 60_000,
-            },
-            "2026.9.2",
-          ),
-        });
-      } else {
-        element.setProps({
-          updateRun: createUpdateRunFixture({
-            status: "running",
-            phase: "staging",
-            createdAtMs: now - 30 * 60_000,
-            updatedAtMs: now - 60_000,
-            finishedAtMs: null,
-          }),
-        });
-      }
-      await settle();
+      const element = await mount(null, {
+        compact: true,
+        updateSchedule:
+          state === "campaign"
+            ? packageSchedule(
+                {
+                  state: "countdown",
+                  announcedAtMs: now - 20 * 60_000,
+                  updatedAtMs: now - 60_000,
+                  applyAtMs: now + 10 * 60_000,
+                  forceAtMs: now + 60 * 60_000,
+                },
+                "2026.9.2",
+              )
+            : undefined,
+        updateRun:
+          state === "running"
+            ? createUpdateRunFixture({
+                createdAtMs: now - 30 * 60_000,
+                updatedAtMs: now - 60_000,
+              })
+            : undefined,
+      });
       await element.find<HTMLElement & { updateComplete: Promise<boolean> }>(
         "openclaw-relative-time",
       )?.updateComplete;
@@ -567,8 +540,7 @@ describe("SidebarUpdateCard", () => {
     vi.useFakeTimers({ now });
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const timersBefore = vi.getTimerCount();
-    const element = await mount(null);
-    await element.update({
+    const element = await mount(null, {
       compact: true,
       updateRun: succeededRun({
         createdAtMs: now - 30 * 60_000,
@@ -594,9 +566,8 @@ describe("SidebarUpdateCard", () => {
   });
 
   it("keeps an unauthorized update discoverable without allowing activation", async () => {
-    const element = await mount(stableUpdate, null, false);
     const onUpdate = vi.fn();
-    await element.update({ onUpdate });
+    const element = await mount(stableUpdate, { canUpdate: false, onUpdate });
 
     const action = element.action();
     const tooltip = action?.closest("openclaw-tooltip") as
@@ -614,20 +585,14 @@ describe("SidebarUpdateCard", () => {
   });
 
   it("renders a quiet live countdown and stops ticking on disconnect", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
+    vi.useFakeTimers({ now: 1_000 });
     const clearInterval = vi.spyOn(globalThis, "clearInterval");
-    const element = await mount(
-      stableUpdate,
-      packageSchedule({
-        id: "campaign-1",
+    const element = await mount(stableUpdate, {
+      updateSchedule: packageSchedule({
         state: "countdown",
-        announcedAtMs: 0,
         applyAtMs: 55_000,
-        forceAtMs: 900_000,
-        updatedAtMs: 0,
       }),
-    );
+    });
 
     const card = element.find(".sidebar-update-card");
     const timer = element.find("[role='timer']");
@@ -650,20 +615,12 @@ describe("SidebarUpdateCard", () => {
   });
 
   it("keeps a consumed hold hidden across shared-state rerenders after expiry", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const element = await mount(
-      stableUpdate,
-      packageSchedule({
-        id: "campaign-1",
-        state: "waiting-for-idle",
-        announcedAtMs: 0,
-        forceAtMs: 900_000,
-        updatedAtMs: 0,
-      }),
-    );
+    vi.useFakeTimers({ now: 1_000 });
     const onHoldUpdate = vi.fn(async () => true);
-    await element.update({ onHoldUpdate });
+    const element = await mount(stableUpdate, {
+      updateSchedule: packageSchedule({}),
+      onHoldUpdate,
+    });
 
     element.find<HTMLButtonElement>(".sidebar-update-card__hold")?.click();
     await Promise.resolve();
@@ -672,44 +629,28 @@ describe("SidebarUpdateCard", () => {
     expect(onHoldUpdate).toHaveBeenCalledOnce();
     await element.update({
       heldUpdateCampaignId: "campaign-1",
-      updateSchedule: {
-        ...element.props().updateSchedule!,
-        campaign: { ...element.props().updateSchedule!.campaign!, holdUntilMs: 61_000 },
-      },
+      updateSchedule: packageSchedule({ holdUntilMs: 61_000 }),
     });
     expect(element.find(".sidebar-update-card__hold")).toBeNull();
 
     await element.update({
-      updateSchedule: {
-        ...element.props().updateSchedule!,
-        campaign: { ...element.props().updateSchedule!.campaign!, holdUntilMs: 500 },
-      },
+      updateSchedule: packageSchedule({ holdUntilMs: 500 }),
     });
     expect(element.find(".sidebar-update-card__hold")).toBeNull();
   });
 
   it("renders held timing and gates hold for active or unauthorized campaigns", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
+    vi.useFakeTimers({ now: 1_000 });
     const schedule: UpdateScheduleState = {
-      channel: "dev",
+      ...gitSchedule,
       autoEnabled: true,
-      target: {
-        kind: "git",
-        upstreamRef: "origin/main",
-        upstreamSha: "a".repeat(40),
-        commitsBehind: 2,
-      },
-      campaign: {
-        id: "campaign-1",
-        state: "waiting-for-idle",
-        announcedAtMs: 0,
+      campaign: packageSchedule({
         holdUntilMs: 61_000,
         forceAtMs: 961_000,
         updatedAtMs: 1_000,
-      },
+      }).campaign,
     };
-    const held = await mount(null, schedule);
+    const held = await mount(null, { updateSchedule: schedule });
     expect(held.element.textContent).toContain("Update held · resumes in 1:00");
     expect(held.element.querySelector(".sidebar-update-card__hold")).toBeNull();
 
@@ -717,10 +658,10 @@ describe("SidebarUpdateCard", () => {
       ...schedule,
       campaign: { ...schedule.campaign!, holdUntilMs: undefined },
     };
-    const unauthorized = await mount(null, unheldSchedule, false);
+    const unauthorized = await mount(null, { updateSchedule: unheldSchedule, canUpdate: false });
     expect(unauthorized.element.querySelector(".sidebar-update-card__hold")).toBeNull();
 
-    const unsupported = await mount(null, unheldSchedule, true, false);
+    const unsupported = await mount(null, { updateSchedule: unheldSchedule, canHoldUpdate: false });
     expect(unsupported.element.querySelector(".sidebar-update-card__hold")).toBeNull();
   });
 });
