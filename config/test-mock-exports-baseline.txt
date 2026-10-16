@@ -1074,7 +1074,6 @@
 ["extensions/msteams/src/directory-live.test.ts","./graph-users.js","0215b6a2e7b4bbd4ee7a4398b24c9581768b2ad0028f97458dd0e1ee85bbdfae",1]
 ["extensions/msteams/src/directory-live.test.ts","./graph.js","f097a090308d9c1aa80a46f5c7e860f054441a43668e3f35158933a39a6c7be0",1]
 ["extensions/msteams/src/feedback-reflection.test.ts","./messenger.js","6a9bd93daa90ee5adb4b89fb1e3e91607fd8347686620ba9d46c7fc0325a2ebd",1]
-["extensions/msteams/src/feedback-reflection.test.ts","./runtime.js","3ba4f32a6170c2a1e5076379bc2959a132403a079109f7802314d3dc6874e16b",1]
 ["extensions/msteams/src/feedback-reflection.test.ts","./sdk-proactive.js","eaa1c779fd64e7ac5dcefb66a73d4bdfeb254eaf69e946a65e70f534350a00b8",1]
 ["extensions/msteams/src/feedback-reflection.test.ts","openclaw/plugin-sdk/channel-inbound","b3ed2712fa6959f3301aad10f9a0a032b90d5b6407e8a4bb22ea35124bbb34d5",1]
 ["extensions/msteams/src/graph-group-management.test.ts","./conversation-store-state.js","e6235f6de8a6700cbd0ceab6355dcb681e754b6a12c8a7f935aa9d866d7a8fa7",1]
