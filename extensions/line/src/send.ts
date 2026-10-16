@@ -533,10 +533,14 @@ export async function pushTextMessageWithQuickReplies(
 }
 
 export function createQuickReplyItems(labels: string[]): QuickReply {
-  const items: QuickReplyItem[] = labels.slice(0, 13).map((label) => ({
-    type: "action",
-    action: messageAction(label, label),
-  }));
+  const items: QuickReplyItem[] = labels
+    .map((label) => label.trim())
+    .filter(Boolean)
+    .slice(0, 13)
+    .map((label) => ({
+      type: "action",
+      action: messageAction(label, label),
+    }));
   return { items };
 }
 
