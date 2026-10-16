@@ -221,7 +221,9 @@ describe("resolveAuthProfileOrder", () => {
         ],
         hasExplicitOrder: false,
       });
-      expect(store.usageStats?.["fixture-provider:expired"]).toMatchObject({
+      const { lastUsed, cooldownUntil, cooldownReason, errorCount } =
+        store.usageStats?.["fixture-provider:expired"] ?? {};
+      expect({ lastUsed, cooldownUntil, cooldownReason, errorCount }).toEqual({
         lastUsed: 20,
         cooldownUntil: readinessMode === "read-only" ? expiredAt : undefined,
         cooldownReason: readinessMode === "read-only" ? "timeout" : undefined,

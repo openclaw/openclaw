@@ -2,7 +2,7 @@ import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it as baseIt, vi } from "vitest";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import {
   SqliteWorkerError,
@@ -41,8 +41,6 @@ import { resolveApiKeyForProfile } from "./oauth.js";
 import { withPersonalAuthProfileStore } from "./personal-store.js";
 import type { OAuthCredential, ProfileUsageStats, UserModelAuthProfile } from "./types.js";
 import { reconcileWhamBlock } from "./usage-reduction.js";
-
-afterEach(() => vi.restoreAllMocks());
 
 const authorityUnavailable = "Personal model account authority is unavailable";
 function expectUnavailable(read: () => unknown) {
@@ -119,12 +117,27 @@ function fixture() {
   };
 }
 
-function personalCase<T extends unknown[]>(
-  run: (state: ReturnType<typeof fixture>, ...args: T) => Promise<void>,
-) {
-  return (...args: T) =>
-    withOpenClawTestState({ scenario: "minimal" }, () => run(fixture(), ...args));
-}
+type PersonalFixture = ReturnType<typeof fixture>;
+const it = baseIt.extend<
+  PersonalFixture & {
+    state: PersonalFixture;
+    readCurrent: Awaited<ReturnType<typeof prepareCredentialReader>>;
+  }
+>({
+  state: async ({ task: _task }, use) => {
+    try {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => use(fixture()));
+    } finally {
+      vi.restoreAllMocks();
+    }
+  },
+  owner: async ({ state }, use) => use(state.owner),
+  profileId: async ({ state }, use) => use(state.profileId),
+  credential: async ({ state }, use) => use(state.credential),
+  replacement: async ({ state }, use) => use(state.replacement),
+  replace: async ({ state }, use) => use(state.replace),
+  readCurrent: async ({ profileId }, use) => use(await prepareCredentialReader(profileId)),
+});
 
 function setProfile(profileId: string, fields: Partial<UserModelAuthProfile>) {
   updateUserModelAuthProfile(profileId, (profile) => {
@@ -201,43 +214,34 @@ async function expectPreparedFetchRevoked(
   expect(fetchImpl).not.toHaveBeenCalled();
 }
 
-it(
-  "keeps an unlinked pin database-free",
-  personalCase(async ({ owner, profileId, credential }) => {
-    const readCurrent = await prepareCredentialReader(profileId);
-    await clearUserProfileAuthLinkAsync({
-      profileId: owner.id,
-      provider: credential.provider,
+it("keeps an unlinked pin database-free", async ({ owner, credential, readCurrent }) => {
+  await clearUserProfileAuthLinkAsync({
+    profileId: owner.id,
+    provider: credential.provider,
+    assertCurrent() {},
+  });
+  await withoutDatabase(() => expect(readCurrent()).toEqual(credential));
+});
+
+it("revokes same-byte reconnects", async ({ owner, profileId, credential, readCurrent }) => {
+  await expectPreparedFetchRevoked(readCurrent, async () => {
+    const connected = await connectUserModelAccountAsync({
+      ownerProfileId: owner.id,
+      credential,
+      matchesCredential: () => true,
       assertCurrent() {},
     });
-    await withoutDatabase(() => expect(readCurrent()).toEqual(credential));
-  }),
-);
+    expect(connected.authProfileId).toBe(profileId);
+  });
+  expectUnavailable(readCurrent);
+  const readReconnected = await prepareCredentialReader(profileId);
+  expect(readReconnected()).toEqual(credential);
+  expectUnavailable(readCurrent);
+});
 
-it(
-  "revokes same-byte reconnects",
-  personalCase(async ({ owner, profileId, credential }) => {
-    const readCurrent = await prepareCredentialReader(profileId);
-    await expectPreparedFetchRevoked(readCurrent, async () => {
-      const connected = await connectUserModelAccountAsync({
-        ownerProfileId: owner.id,
-        credential,
-        matchesCredential: () => true,
-        assertCurrent() {},
-      });
-      expect(connected.authProfileId).toBe(profileId);
-    });
-    expectUnavailable(readCurrent);
-    const readReconnected = await prepareCredentialReader(profileId);
-    expect(readReconnected()).toEqual(credential);
-    expectUnavailable(readCurrent);
-  }),
-);
-
-it.each(["commit", "rollback"] as const)(
+it.for(["commit", "rollback"] as const)(
   "denies personal credential use during refresh and publishes only the %s outcome",
-  personalCase(async ({ profileId, credential, replacement }, outcome) => {
-    const readCurrent = await prepareCredentialReader(profileId);
+  async (outcome, { profileId, credential, replacement, readCurrent }) => {
     let admissions = 0;
     const refused = new Error("Synthetic final credential write refusal");
     const update = writeCredential(profileId, replacement, () => {
@@ -254,110 +258,97 @@ it.each(["commit", "rollback"] as const)(
     }
     expect(admissions).toBe(2);
     expect(readCurrent()).toEqual(outcome === "commit" ? replacement : credential);
-  }),
+  },
 );
 
-it(
-  "waits for all overlapping admissions",
-  personalCase(async ({ profileId, credential }) => {
-    const readCurrent = await prepareCredentialReader(profileId);
-    const context = captureOpenClawStateWorkerContext();
-    const createAdmission = withPersonalCredentialPublication(
-      createSqliteWorkerWriteAdmission(() => {}, [context.admission.databasePath]),
-      context,
-    );
-    const first = createDeferredCore<SqliteWorkerOperationSettlement>();
-    const second = createDeferredCore<SqliteWorkerOperationSettlement>();
-    const admissions = [
-      createAdmission({ settled: first.promise }).admission,
-      createAdmission({ settled: second.promise }).admission,
-    ];
-    try {
-      expectUnavailable(readCurrent);
-      first.resolve({ kind: "not-entered", error: new Error("Synthetic admission refusal") });
-      await first.promise;
-      expectUnavailable(readCurrent);
-      second.resolve({ kind: "completed" });
-      await second.promise;
-      expect(readCurrent()).toEqual(credential);
-    } finally {
-      first.resolve({ kind: "completed" });
-      second.resolve({ kind: "completed" });
-      for (const admission of admissions) {
-        admission.finish();
-      }
+it("waits for all overlapping admissions", async ({ credential, readCurrent }) => {
+  const context = captureOpenClawStateWorkerContext();
+  const createAdmission = withPersonalCredentialPublication(
+    createSqliteWorkerWriteAdmission(() => {}, [context.admission.databasePath]),
+    context,
+  );
+  const first = createDeferredCore<SqliteWorkerOperationSettlement>();
+  const second = createDeferredCore<SqliteWorkerOperationSettlement>();
+  const admissions = [
+    createAdmission({ settled: first.promise }).admission,
+    createAdmission({ settled: second.promise }).admission,
+  ];
+  try {
+    expectUnavailable(readCurrent);
+    first.resolve({ kind: "not-entered", error: new Error("Synthetic admission refusal") });
+    await first.promise;
+    expectUnavailable(readCurrent);
+    second.resolve({ kind: "completed" });
+    await second.promise;
+    expect(readCurrent()).toEqual(credential);
+  } finally {
+    first.resolve({ kind: "completed" });
+    second.resolve({ kind: "completed" });
+    for (const admission of admissions) {
+      admission.finish();
     }
-  }),
-);
+  }
+});
 
-it(
-  "revokes merged and aliased pins",
-  personalCase(async ({ owner, profileId, credential }) => {
-    const target = ensureProfileForEmail("personal-merge-target@example.test");
-    const successor = ensureProfileForEmail("personal-merge-successor@example.test");
-    const readSource = await prepareCredentialReader(profileId);
-    await expectPreparedFetchRevoked(readSource, () =>
-      mergeCanonicalUserProfiles(owner.id, target.id),
-    );
-    expectUnavailable(readSource);
-    const readTransferred = await prepareCredentialReader(profileId);
-    expect(readTransferred()).toEqual(credential);
-    await mergeCanonicalUserProfiles(target.id, successor.id);
-    expectUnavailable(readTransferred);
-    expect((await prepareCredentialReader(profileId))()).toEqual(credential);
-    expectUnavailable(readSource);
-  }),
-);
+it("revokes merged and aliased pins", async ({ owner, profileId, credential }) => {
+  const target = ensureProfileForEmail("personal-merge-target@example.test");
+  const successor = ensureProfileForEmail("personal-merge-successor@example.test");
+  const readSource = await prepareCredentialReader(profileId);
+  await expectPreparedFetchRevoked(readSource, () =>
+    mergeCanonicalUserProfiles(owner.id, target.id),
+  );
+  expectUnavailable(readSource);
+  const readTransferred = await prepareCredentialReader(profileId);
+  expect(readTransferred()).toEqual(credential);
+  await mergeCanonicalUserProfiles(target.id, successor.id);
+  expectUnavailable(readTransferred);
+  expect((await prepareCredentialReader(profileId))()).toEqual(credential);
+  expectUnavailable(readSource);
+});
 
-it(
-  "rejects a cold read retired by reconnect",
-  personalCase(async ({ owner, profileId, credential }) => {
-    let reconnect = true;
-    probe.command(workerStore, async (command, executeOptions, scope) => {
-      const result = await scope.execute(command, executeOptions);
-      if (command.type === "authProfiles.personal" && reconnect) {
-        reconnect = false;
-        await connectUserModelAccountAsync({
-          ownerProfileId: owner.id,
-          credential,
-          matchesCredential: () => true,
-          assertCurrent() {},
-        });
-      }
-      return result;
-    });
-    await expect(prepareCredentialReader(profileId)).rejects.toThrow(authorityUnavailable);
-    expect((await prepareCredentialReader(profileId))()).toEqual(credential);
-  }),
-);
+it("rejects a cold read retired by reconnect", async ({ owner, profileId, credential }) => {
+  let reconnect = true;
+  probe.command(workerStore, async (command, executeOptions, scope) => {
+    const result = await scope.execute(command, executeOptions);
+    if (command.type === "authProfiles.personal" && reconnect) {
+      reconnect = false;
+      await connectUserModelAccountAsync({
+        ownerProfileId: owner.id,
+        credential,
+        matchesCredential: () => true,
+        assertCurrent() {},
+      });
+    }
+    return result;
+  });
+  await expect(prepareCredentialReader(profileId)).rejects.toThrow(authorityUnavailable);
+  expect((await prepareCredentialReader(profileId))()).toEqual(credential);
+});
 
-it(
-  "withholds keys from canceled worker reads",
-  personalCase(async ({ profileId }) => {
-    setProfile(profileId, {
-      credential: { type: "api_key", provider: "synthetic", key: "synthetic-key" },
-    });
-    const controller = new AbortController();
-    const reason = new Error("Synthetic credential read cancellation");
-    probe.command(workerStore, (command, executeOptions, scope) => {
-      if (command.type === "authProfiles.personal") {
-        controller.abort(reason);
-      }
-      return scope.execute(command, executeOptions);
-    });
-    await expect(
-      resolveApiKeyForProfile({
-        profileId,
-        store: { version: 1, profiles: {} },
-        signal: controller.signal,
-      }),
-    ).rejects.toBe(reason);
-  }),
-);
+it("withholds keys from canceled worker reads", async ({ profileId }) => {
+  setProfile(profileId, {
+    credential: { type: "api_key", provider: "synthetic", key: "synthetic-key" },
+  });
+  const controller = new AbortController();
+  const reason = new Error("Synthetic credential read cancellation");
+  probe.command(workerStore, (command, executeOptions, scope) => {
+    if (command.type === "authProfiles.personal") {
+      controller.abort(reason);
+    }
+    return scope.execute(command, executeOptions);
+  });
+  await expect(
+    resolveApiKeyForProfile({
+      profileId,
+      store: { version: 1, profiles: {} },
+      signal: controller.signal,
+    }),
+  ).rejects.toBe(reason);
+});
 
-it.each([false, true])(
+it.for([false, true])(
   "persists a quota recheck with available=%s",
-  personalCase(async ({ profileId, credential }, available) => {
+  async (available, { profileId, credential }) => {
     const now = 1_800_000_000_000;
     const blocked: ProfileUsageStats = {
       blockedUntil: now + 86_400_000,
@@ -373,16 +364,10 @@ it.each([false, true])(
       });
       return owner.update((store) => {
         const stats = expectDefined(store.usageStats?.[profileId], "claimed quota");
-        Object.assign(
-          stats,
-          reconcileWhamBlock(
-            stats,
-            available
-              ? { available: true, cooldownMs: 0 }
-              : { blockedUntil: blocked.blockedUntil, cooldownMs: 0 },
-            now,
-          ),
-        );
+        const quota = available
+          ? { available: true, cooldownMs: 0 }
+          : { blockedUntil: blocked.blockedUntil, cooldownMs: 0 };
+        Object.assign(stats, reconcileWhamBlock(stats, quota, now));
         return true;
       });
     });
@@ -392,12 +377,12 @@ it.each([false, true])(
     };
     expect(readUserModelAuthProfile(profileId)).toStrictEqual(expected);
     expect(result?.usageStats?.[profileId]).toStrictEqual(expected.usageStats);
-  }),
+  },
 );
 
-it.each(["capability", "format"] as const)(
+it.for(["capability", "format"] as const)(
   "rejects stale credentials across awaited provider %s preparation",
-  personalCase(async ({ profileId, credential, replacement, replace }, stage) => {
+  async (stage, { profileId, credential, replacement, replace }) => {
     const refreshCredential = vi.fn(async () => replacement);
     let changed = false;
     const manager = managerWith({
@@ -427,85 +412,79 @@ it.each(["capability", "format"] as const)(
     }
     expect(refreshCredential).not.toHaveBeenCalled();
     expect(readUserModelAuthProfile(profileId)?.credential).toEqual(replacement);
-  }),
+  },
 );
 
-it(
-  "normalizes refreshed optionals once",
-  personalCase(async ({ profileId, credential, replacement }) => {
-    const refreshCredential = vi.fn(async () => ({ ...replacement, displayName: undefined }));
-    const buildApiKey = vi.fn(
-      async (_provider: string, current: OAuthCredential) => current.access,
-    );
-    const manager = managerWith({ refreshCredential, buildApiKey });
-    const result = await resolve(manager, profileId, credential);
-    expect(result).toStrictEqual({ apiKey: replacement.access, credential: replacement });
-    expect(readUserModelAuthProfile(profileId)?.credential).toStrictEqual(replacement);
-    expect(refreshCredential).toHaveBeenCalledTimes(1);
-    expect(buildApiKey).toHaveBeenCalledTimes(1);
-  }),
-);
+it("normalizes refreshed optionals once", async ({ profileId, credential, replacement }) => {
+  const refreshCredential = vi.fn(async () => ({ ...replacement, displayName: undefined }));
+  const buildApiKey = vi.fn(async (_provider: string, current: OAuthCredential) => current.access);
+  const manager = managerWith({ refreshCredential, buildApiKey });
+  const result = await resolve(manager, profileId, credential);
+  expect(result).toStrictEqual({ apiKey: replacement.access, credential: replacement });
+  expect(readUserModelAuthProfile(profileId)?.credential).toStrictEqual(replacement);
+  expect(refreshCredential).toHaveBeenCalledTimes(1);
+  expect(buildApiKey).toHaveBeenCalledTimes(1);
+});
 
-it(
-  "rechecks live pins after refresh",
-  personalCase(async ({ owner, profileId, credential, replacement }) => {
-    const successor = ensureProfileForEmail("personal-successor@example.test");
-    const pin = await prepareUserModelAccountAuthority({
-      profileId: owner.id,
-      authProfileId: profileId,
-    });
-    expect(pin).toBeDefined();
-    const manager = managerWith({
-      refreshCredential: async () => {
-        linkEmail("personal-race@example.test", successor.id);
-        return replacement;
+it("rechecks live pins after refresh", async ({ owner, profileId, credential, replacement }) => {
+  const successor = ensureProfileForEmail("personal-successor@example.test");
+  const pin = await prepareUserModelAccountAuthority({
+    profileId: owner.id,
+    authProfileId: profileId,
+  });
+  expect(pin).toBeDefined();
+  const manager = managerWith({
+    refreshCredential: async () => {
+      linkEmail("personal-race@example.test", successor.id);
+      return replacement;
+    },
+  });
+  await expect(
+    resolve(manager, profileId, credential, {
+      validateCredential() {
+        if (!pin?.isCurrent()) {
+          throw new Error("Synthetic pin revoked");
+        }
       },
-    });
-    await expect(
-      resolve(manager, profileId, credential, {
-        validateCredential() {
-          if (!pin?.isCurrent()) {
-            throw new Error("Synthetic pin revoked");
-          }
-        },
-      }),
-    ).rejects.toThrow("Synthetic pin revoked");
-    expect(readUserModelAuthProfile(profileId)?.credential).not.toEqual(replacement);
-  }),
-);
+    }),
+  ).rejects.toThrow("Synthetic pin revoked");
+  expect(readUserModelAuthProfile(profileId)?.credential).not.toEqual(replacement);
+});
 
-it(
-  "accepts published credentials database-free",
-  personalCase(async ({ profileId, credential, replacement, replace }) => {
-    const observe = vi.fn<(observation: CanonicalAuthProfileCredentialObservation) => void>();
-    await withPersonalAuthProfileStore(profileId, async (owner) => {
-      await owner.read();
-      await withCanonicalAuthProfileCredentialObserver(observe, async () => {
-        expect(await withoutDatabase(() => owner.accept(credential))).toEqual(credential);
-        replace();
-        await expect(withoutDatabase(() => owner.accept(credential))).rejects.toThrow(
-          "changed during provider preparation",
-        );
-        const manager = managerWith({
-          canRefreshCredential: async () => false,
-        });
-        expect(
-          await withoutDatabase(() =>
-            resolve(manager, profileId, credential, { personalStore: owner }),
-          ),
-        ).toEqual({ apiKey: replacement.access, credential: replacement });
+it("accepts published credentials database-free", async ({
+  profileId,
+  credential,
+  replacement,
+  replace,
+}) => {
+  const observe = vi.fn<(observation: CanonicalAuthProfileCredentialObservation) => void>();
+  await withPersonalAuthProfileStore(profileId, async (owner) => {
+    await owner.read();
+    await withCanonicalAuthProfileCredentialObserver(observe, async () => {
+      expect(await withoutDatabase(() => owner.accept(credential))).toEqual(credential);
+      replace();
+      await expect(withoutDatabase(() => owner.accept(credential))).rejects.toThrow(
+        "changed during provider preparation",
+      );
+      const manager = managerWith({
+        canRefreshCredential: async () => false,
       });
-      expect(observe.mock.calls.map(([value]) => value.profiles[profileId])).toEqual([
-        credential,
-        replacement,
-      ]);
+      expect(
+        await withoutDatabase(() =>
+          resolve(manager, profileId, credential, { personalStore: owner }),
+        ),
+      ).toEqual({ apiKey: replacement.access, credential: replacement });
     });
-  }),
-);
+    expect(observe.mock.calls.map(([value]) => value.profiles[profileId])).toEqual([
+      credential,
+      replacement,
+    ]);
+  });
+});
 
-it.each(["capability", "refresh"] as const)(
+it.for(["capability", "refresh"] as const)(
   "retains the original personal generation when the %s adapter mutates its input",
-  personalCase(async ({ profileId, credential, replacement }, stage) => {
+  async (stage, { profileId, credential, replacement }) => {
     const manager = managerWith({
       canRefreshCredential: async (input) => {
         if (stage === "capability") {
@@ -530,12 +509,12 @@ it.each(["capability", "refresh"] as const)(
       type: "oauth",
       accountId: credential.accountId,
     });
-  }),
+  },
 );
 
-it.each(["conflict", "unknown"] as const)(
+it.for(["conflict", "unknown"] as const)(
   "does not replay a personal update after %s",
-  personalCase(async ({ profileId, credential, replacement, replace }, outcome) => {
+  async (outcome, { profileId, credential, replacement, replace }) => {
     let attempts = 0;
     probe.command(workerStore, (command, executeOptions, scope) => {
       if (command.type === "authProfiles.personalReplace") {
@@ -563,77 +542,52 @@ it.each(["conflict", "unknown"] as const)(
     expect(readUserModelAuthProfile(profileId)?.credential).toEqual(
       outcome === "conflict" ? replacement : credential,
     );
-  }),
+  },
 );
 
-it(
-  "waits for the native commit receipt",
-  personalCase(async ({ profileId, replacement }) => {
-    const readCurrent = await prepareCredentialReader(profileId);
-    const observe = operationAdmission.observeSqliteWorkerCommittedFacts;
-    let heldReceipt = false;
-    vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementation(
-      (admission, publish) =>
-        observe(admission, (receipt) => {
-          if (isRecord(receipt.facts) && receipt.facts.personalCredentials) {
-            heldReceipt = true;
-            expect(readUserModelAuthProfile(profileId)?.credential).toEqual(replacement);
-            const sql = observeMainThreadSql();
-            const requests = vi.spyOn(Worker.prototype, "postMessage");
-            try {
-              expectUnavailable(readCurrent);
-              sql.expectIdle();
-              expect(requests).not.toHaveBeenCalled();
-            } finally {
-              sql.restore();
-              requests.mockRestore();
-            }
+it("waits for the native commit receipt", async ({ profileId, replacement, readCurrent }) => {
+  const observe = operationAdmission.observeSqliteWorkerCommittedFacts;
+  let heldReceipt = false;
+  vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementation(
+    (admission, publish) =>
+      observe(admission, (receipt) => {
+        if (isRecord(receipt.facts) && receipt.facts.personalCredentials) {
+          heldReceipt = true;
+          expect(readUserModelAuthProfile(profileId)?.credential).toEqual(replacement);
+          const sql = observeMainThreadSql();
+          const requests = vi.spyOn(Worker.prototype, "postMessage");
+          try {
+            expectUnavailable(readCurrent);
+            sql.expectIdle();
+            expect(requests).not.toHaveBeenCalled();
+          } finally {
+            sql.restore();
+            requests.mockRestore();
           }
-          publish(receipt);
-        }),
-    );
-    await writeCredential(profileId, replacement);
-    expect(heldReceipt).toBe(true);
-    expect(readCurrent()).toEqual(replacement);
-  }),
-);
+        }
+        publish(receipt);
+      }),
+  );
+  await writeCredential(profileId, replacement);
+  expect(heldReceipt).toBe(true);
+  expect(readCurrent()).toEqual(replacement);
+});
 
-it(
-  "revokes pins after unacknowledged worker death",
-  personalCase(async ({ profileId, replacement }) => {
-    const readCurrent = await prepareCredentialReader(profileId);
-    const tracked = trackReplacements();
-    let terminated: Promise<number> | undefined;
-    probe.admission(operationAdmission, (request, grant, admit) => {
-      if (tracked.target && request.stage === "commit") {
-        expectUnavailable(readCurrent);
-        terminated = tracked.target.worker.terminate();
-        return;
-      }
-      admit(request, grant);
-    });
-    try {
-      const failure = await writeCredential(profileId, replacement).catch(
-        (error: unknown) => error,
-      );
-      expect(terminated).toBeDefined();
-      expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
-      expectUnavailable(readCurrent);
-      await expect(prepareCredentialReader(profileId)).rejects.toThrow();
-    } finally {
-      await terminated;
-    }
-  }),
-);
-
-it(
-  "publishes the acknowledged postimage after frame loss",
-  personalCase(async ({ profileId, replacement }) => {
-    const readCurrent = await prepareCredentialReader(profileId);
+it.for(["unacknowledged", "acknowledged"] as const)(
+  "preserves the correct postimage after %s worker death",
+  async (stage, { profileId, replacement, readCurrent }) => {
     const acknowledged = { ...replacement };
     const tracked = trackReplacements();
     let terminated: Promise<number> | undefined;
-    // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver.
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      if (stage === "unacknowledged" && tracked.target && request.stage === "commit") {
+        expectUnavailable(readCurrent);
+        terminated = tracked.target.worker.terminate();
+      } else {
+        admit(request, grant);
+      }
+    });
+    // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted worker receiver.
     const emit = Worker.prototype.emit;
     vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
       this: Worker,
@@ -642,6 +596,7 @@ it(
     ) {
       const reply = args[0];
       if (
+        stage === "acknowledged" &&
         event === "message" &&
         !terminated &&
         tracked.target?.worker === this &&
@@ -656,23 +611,36 @@ it(
       return emit.call(this, event, ...args);
     });
     try {
+      let failure: unknown;
       const result = await withPersonalAuthProfileStore(profileId, (owner) =>
         owner.update((store) => {
-          replacement.idToken = undefined;
+          if (stage === "acknowledged") {
+            replacement.idToken = undefined;
+            store.usageStats = { [profileId]: { lastProbeAt: 123, blockedUntil: undefined } };
+          }
           store.profiles[profileId] = replacement;
-          store.usageStats = { [profileId]: { lastProbeAt: 123, blockedUntil: undefined } };
           return true;
         }),
-      );
-      expect(result?.profiles[profileId]).toStrictEqual(acknowledged);
-      expect(result?.usageStats?.[profileId]).toStrictEqual({ lastProbeAt: 123 });
+      ).catch((error: unknown) => {
+        failure = error;
+        return undefined;
+      });
       expect(terminated).toBeDefined();
-      await terminated;
-      expect(tracked.attempts).toBe(1);
-      expect(readUserModelAuthProfile(profileId)?.credential).toEqual(acknowledged);
-      expect(readCurrent()).toEqual(acknowledged);
+      if (stage === "unacknowledged") {
+        expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+        expectUnavailable(readCurrent);
+        await expect(prepareCredentialReader(profileId)).rejects.toThrow();
+      } else {
+        expect(failure).toBeUndefined();
+        expect(result?.profiles[profileId]).toStrictEqual(acknowledged);
+        expect(result?.usageStats?.[profileId]).toStrictEqual({ lastProbeAt: 123 });
+        await terminated;
+        expect(tracked.attempts).toBe(1);
+        expect(readUserModelAuthProfile(profileId)?.credential).toEqual(acknowledged);
+        expect(readCurrent()).toEqual(acknowledged);
+      }
     } finally {
       await terminated;
     }
-  }),
+  },
 );

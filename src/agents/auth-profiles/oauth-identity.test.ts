@@ -54,23 +54,16 @@ describe("isSafeToCopyOAuthIdentity (unified copy gate, used for mirror and adop
     ).toBe(false);
   });
 
-  it("refuses when existing has only accountId and incoming has only email", () => {
-    expect(isSafeToCopyOAuthIdentity({ accountId: "x" }, { email: "u@example.com" })).toBe(false);
-  });
-
-  it("refuses mismatching accountIds even when emails match", () => {
-    expect(
-      isSafeToCopyOAuthIdentity(
-        { accountId: "a", email: "u@example.com" },
-        { accountId: "A", email: "u@example.com" },
-      ),
-    ).toBe(false);
-  });
-
-  it("refuses mismatching emails when both sides expose only email", () => {
-    expect(isSafeToCopyOAuthIdentity({ email: "a@example.com" }, { email: "b@example.com" })).toBe(
-      false,
-    );
+  it.each([
+    ["non-overlapping fields", { accountId: "x" }, { email: "u@example.com" }],
+    [
+      "account mismatch despite matching email",
+      { accountId: "a", email: "u@example.com" },
+      { accountId: "A", email: "u@example.com" },
+    ],
+    ["email mismatch", { email: "a@example.com" }, { email: "b@example.com" }],
+  ] as const)("refuses %s", (_name, existing, incoming) => {
+    expect(isSafeToCopyOAuthIdentity(existing, incoming)).toBe(false);
   });
 
   it("normalizes case while preserving plus-addressing", () => {
@@ -137,16 +130,11 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
 describe("isSafeToCopyOAuthIdentity fuzz", () => {
   it("accepts matching accountIds even when email identity differs", () => {
     const rng = makeSeededRandom(0x9a_9b_9c_9d);
+    const email = () => maybe(rng, randomString(rng, 32));
     for (let i = 0; i < 500; i += 1) {
       const shared = `acct-${randomString(rng, 32) || "x"}`;
-      const a = {
-        accountId: shared,
-        email: maybe(rng, randomString(rng, 32)),
-      };
-      const b = {
-        accountId: shared,
-        email: maybe(rng, randomString(rng, 32)),
-      };
+      const a = { accountId: shared, email: email() };
+      const b = { accountId: shared, email: email() };
       expect(isSafeToCopyOAuthIdentity(a, b)).toBe(true);
     }
   });
