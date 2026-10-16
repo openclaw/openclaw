@@ -330,17 +330,21 @@ export async function recoverGatewaySession(params: {
         });
         const fullAccess =
           execPolicy.mode === "full" && execPolicy.security === "full" && execPolicy.ask === "off";
+        const retainedSafeTools =
+          initialSource.restartRecoveryForceSafeTools === true && !fullAccess;
         const noticeKey = `main-session-restart-recovery:${initialSource.restartRecoveryDeliverySourceRunId ?? initialSource.restartRecoveryDeliveryRunId ?? initialSource.sessionId}:failed-notice`;
         const policy = resolveMainSessionResumePolicy(
           messages.filter((message) => readMessageIdempotencyKey(message) !== noticeKey),
-          initialSource.restartRecoveryForceSafeTools === true && !fullAccess,
+          retainedSafeTools,
           initialSource.restartRecoveryDeliverySourceRunId,
           initialSource.restartRecoveryBeforeAgentReplyState,
           initialSource.restartRecoveryDeliveryReceiptState,
           initialSource.restartRecoveryDeliveryToolCallId,
           fullAccess,
         );
-        if (policy.action === "complete" || policy.forceRestartSafeTools) {
+        const forceRestartSafeTools =
+          retainedSafeTools || policy.action === "complete" || policy.forceRestartSafeTools;
+        if (forceRestartSafeTools) {
           const runtime = await resolveWorkerPlacementSessionRuntimeAsync({
             cfg: params.cfg,
             entry: initialSource,
@@ -380,7 +384,7 @@ export async function recoverGatewaySession(params: {
             entry: initialSource,
             recordTerminalSource: true,
           }),
-          forceRestartSafeTools: policy.action === "complete" || policy.forceRestartSafeTools,
+          forceRestartSafeTools,
           ...(policy.action === "resume" && policy.forceCodeModeTools
             ? { forceCodeModeTools: true }
             : {}),

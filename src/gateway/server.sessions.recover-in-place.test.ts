@@ -35,7 +35,11 @@ beforeEach(async () => {
 });
 let requestSequence = 0;
 
-async function fixture(name: string, runtime?: "codex" | "claude-cli") {
+async function fixture(
+  name: string,
+  runtime?: "codex" | "claude-cli",
+  restricted = runtime === "claude-cli",
+) {
   const { storePath } = await createSessionStoreDir();
   const key = `agent:main:dashboard:${name}`;
   const sessionId = `${name}-session`;
@@ -66,9 +70,7 @@ async function fixture(name: string, runtime?: "codex" | "claude-cli") {
         ...retainedMetadata,
         status: "failed",
         abortedLastRun: false,
-        ...(runtime === "claude-cli"
-          ? { permissionMode: "guarded", restartRecoveryForceSafeTools: true }
-          : {}),
+        ...(restricted ? { permissionMode: "guarded", restartRecoveryForceSafeTools: true } : {}),
         mainRestartRecovery: {
           cycleId: recoveryCycleId,
           revision: 4,
@@ -95,15 +97,6 @@ async function fixture(name: string, runtime?: "codex" | "claude-cli") {
         toolName: "write",
         content: [{ type: "text", text: "The requested file was written." }],
       },
-      ...(runtime === "claude-cli"
-        ? [
-            {
-              role: "assistant",
-              stopReason: "toolUse",
-              content: [{ type: "toolCall", id: "pending-write", name: "write", arguments: {} }],
-            },
-          ]
-        : []),
     ],
   });
   const cfg = getRuntimeConfig();
@@ -195,6 +188,7 @@ test.for([false, true])(
     const current = await fixture(
       native ? "native-resume" : "builtin-resume",
       native ? "codex" : undefined,
+      true,
     );
     const before = await current.transcript();
     const dispatched = createDeferredCore();
@@ -208,6 +202,7 @@ test.for([false, true])(
           current.operator.authenticatedUserProfile!.profileId,
         );
         replyOptions?.operatorAuthority?.assertCurrent();
+        expect(replyOptions?.forceRestartSafeTools).toBe(true);
         expect(current.entry()).toMatchObject({
           sessionId: current.sessionId,
           ...current.retainedMetadata,
