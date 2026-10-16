@@ -55,7 +55,7 @@ export function createChannelsViewProps(
       state: () => ({ phase: "idle" }),
       draft: { multiselect: [], textValue: "", secretVisible: false },
       setTextValue: () => {},
-      blockedByDirtyConfig: () => false,
+      blockedByDirtyConfig: createSignal(false)[0],
       whatsappAccountId: () => undefined,
       startSetup: () => {},
       toggleMultiselect: () => {},
