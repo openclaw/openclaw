@@ -19,8 +19,7 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import "./mcp-app-catalog.tsx";
 import "./sidebar-agent-card.tsx";
 import "./sidebar-attention.tsx";
-import { showToast } from "../lib/toast.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
@@ -48,14 +47,10 @@ import {
   type SidebarRecentSession,
   type SidebarToolActivity,
 } from "./app-sidebar-session-types.ts";
-import {
-  COMMUNITY_INVITE_KEY,
-  dismissCommunityInvite as persistCommunityInviteDismissal,
-  isCommunityInviteEligible,
-} from "./community-invite-state.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarAgentRoster, renderSidebarPinnedSession } from "./sidebar-agent-roster.tsx";
-import { SidebarContextController } from "./sidebar-context-controller.ts";
+import type { createSidebarScroll } from "./sidebar-context-controller.ts";
+import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 import {
@@ -65,8 +60,8 @@ import {
 import { SidebarSnapshotController } from "./sidebar-snapshot-controller.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
-import { NewSessionMenu } from "./solid/new-session-link.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
+import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
 import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
@@ -87,7 +82,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     for (const row of rows) {
       rows.push(...row.children);
     }
-    this.sessionProjection.restoreChildrenDisplay(rows);
+    this.sessionProjection.children.restore(rows);
     this.people.sortMode = model.peopleSortMode;
     this.people.statusFilter = model.peopleStatusFilter;
     this.people.presenceFilter = model.peoplePresenceFilter;
@@ -109,7 +104,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   clearSidebarSnapshot(): void {
     this.sidebarSnapshot = null;
     this.sidebarPluginSnapshot = null;
-    this.sessionProjection.restoreChildrenDisplay([]);
+    this.sessionProjection.children.restore([]);
     sidebarOnlineOrder(this).clear();
     this.people.resetView();
     this.people.setPresenceFilter("online");
@@ -181,10 +176,26 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   // dropped because the controller aligns from cumulative snapshots.
   private narration: SidebarSessionNarrationController | null = null;
   private narrationLoad: Promise<void> | null = null;
-  private readonly sidebarContext = new SidebarContextController(this);
   constructor(...args: ConstructorParameters<typeof AppSidebarSessionNavigationElement>) {
     super(...args);
     new SubscriptionsController(this)
+      .watch(
+        () => this.router,
+        (router, notify) => {
+          const stop = router.subscribeSelector(selectSidebarContext, notify, equalSidebarContext);
+          return () => {
+            stop();
+            this.contextualSidebar = undefined;
+          };
+        },
+        (router) => {
+          this.contextualSidebar = selectSidebarContext(router.getState());
+        },
+      )
+      .effect(
+        () => this.context?.chatSubmissions,
+        (submissions) => submissions.subscribeCreate(() => this.requestUpdate()),
+      )
       .effect(
         () => this.sidebarSnapshotController,
         (snapshot) => {
@@ -220,14 +231,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         () => this.context?.agentIdentity,
         (identity) => identity.subscribe(this.sessionData.requestSessionDataUpdate),
       )
-      .watchStore(
-        () => this.context?.theme,
-        () => this.syncCommunityInviteState(),
-      )
-      .watchStore(
-        () => this.context?.config,
-        () => this.syncCommunityInviteState(),
-      )
+      .watchStore(() => this.context?.theme)
+      .watchStore(() => this.context?.config)
       .effect(
         () => this.context?.plugins,
         (plugins) => plugins.subscribe(this.sessionData.requestSessionDataUpdate),
@@ -249,14 +254,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
     this.requestUpdate();
   };
-  private communityInvitePresentation: "unavailable" | "pending" | "shown" = "unavailable";
-  private readonly communityInviteStorageChanged = (event: StorageEvent) => {
-    if (event.key === COMMUNITY_INVITE_KEY || event.key === null) {
-      this.syncCommunityInviteState();
-      this.requestUpdate();
-    }
-  };
-
   // Catalog rows are non-startup content. Load their renderer through the same
   // idle boundary as other sidebar chrome, then repaint when the chunk arrives.
   private catalogRenderer: SessionCatalogGroupsRenderer | null = null;
@@ -284,7 +281,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     );
     this.narration?.disconnect();
     this.catalogRendererImport.dispose();
-    window.removeEventListener("storage", this.communityInviteStorageChanged);
     super.disconnectedCallback();
   }
 
@@ -293,19 +289,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sidebarSnapshotController.synchronize();
     if (this.context?.plugins.registryStatus === "complete") {
       this.sidebarPluginSnapshot = null;
-    }
-    // Admit new geometry only between interactions; once shown it stays put.
-    // Popover focus can leave :focus-within false; inspect the owned DOM instead.
-    // Native drag can clear :hover, so retain the organizer's authoritative drag facts.
-    if (
-      this.communityInvitePresentation === "pending" &&
-      !this.matches(":hover") &&
-      !this.contains(this.ownerDocument.activeElement) &&
-      this.sessionOrganizer.draggingSessionKey === null &&
-      this.sessionOrganizer.draggingSidebarSection === null &&
-      this.sessionOrganizer.draggingSidebarEntry === null
-    ) {
-      this.communityInvitePresentation = "shown";
     }
     // An open switcher tracks roster/reconnect updates; otherwise only hydrate
     // the active card and avoid background RPCs for every configured agent.
@@ -383,44 +366,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
       this.hiddenSessionCatalogsChanged,
     );
-    window.addEventListener("storage", this.communityInviteStorageChanged);
-    this.syncCommunityInviteState();
     this.catalogRendererImport.schedule();
   }
-
-  private readonly handleSidebarInteractionEnd = (event: Event) => {
-    // Internal focus handoffs can briefly clear :focus-within before the new target focuses.
-    if (
-      this.communityInvitePresentation !== "pending" ||
-      (event instanceof FocusEvent &&
-        event.relatedTarget instanceof Node &&
-        this.contains(event.relatedTarget))
-    ) {
-      return;
-    }
-    this.requestUpdate();
-  };
-
-  private syncCommunityInviteState() {
-    if (
-      !this.context?.theme.branding.communityLinks ||
-      !this.context?.config.current.communityInvite ||
-      !isCommunityInviteEligible()
-    ) {
-      this.communityInvitePresentation = "unavailable";
-    } else if (this.communityInvitePresentation !== "shown") {
-      this.communityInvitePresentation = "pending";
-    }
-  }
-
-  private readonly dismissCommunityInvite = () => {
-    const result = persistCommunityInviteDismissal();
-    this.syncCommunityInviteState();
-    this.requestUpdate();
-    if (!result.ok) {
-      showToast({ message: t("communityInvite.dismissFailed") });
-    }
-  };
 
   toggleSessionPin(session: SidebarRecentSession): void {
     this.sessionOrganizer.setPersonalSessionPin(
@@ -559,34 +506,46 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       />
     );
     return (
-      <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
-        <SidebarAgentRoster
-          host={host()}
-          active={
-            host().navigationVisible &&
-            host().navigationView === "sessions" &&
-            !host().contextualSidebar
-          }
-          sections={sections()}
-          empty={visibleSessions().length === 0}
-          involvingMe={host().sessionInvolvingMeFilterActive}
-        />
-      </Show>
+      <>
+        <Show when={host().pendingSessionCreate()}>
+          {(pending) => (
+            <div class="sidebar-recent-session sidebar-recent-session--single-line sidebar-recent-session--active sidebar-recent-session--creating">
+              <div class="sidebar-recent-session__link" aria-current="page" aria-busy="true">
+                <span class="sidebar-recent-session__text">
+                  <span class="sidebar-recent-session__title-row">
+                    <Show when={pending().displayName} fallback={<SessionTitlePlaceholder />}>
+                      {(name) => <span class="sidebar-recent-session__name">{name()}</span>}
+                    </Show>
+                  </span>
+                </span>
+              </div>
+            </div>
+          )}
+        </Show>
+        <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
+          <SidebarAgentRoster
+            host={host()}
+            active={
+              host().navigationVisible &&
+              host().navigationView === "sessions" &&
+              !host().contextualSidebar
+            }
+            sections={sections()}
+            empty={visibleSessions().length === 0}
+            involvingMe={host().sessionInvolvingMeFilterActive}
+          />
+        </Show>
+      </>
     );
   }
 
-  renderSidebar(Sessions: () => JSX.Element): JSX.Element {
+  renderSidebar(
+    Sessions: () => JSX.Element,
+    scroll: ReturnType<typeof createSidebarScroll>,
+  ): JSX.Element {
     const SidebarFrame = () => {
-      const rail = renderSidebarRail(this, () => (
-        <NewSessionMenu
-          basePath={this.basePath}
-          active={this.navigationVisible}
-          access={this.readNewSessionAccess()}
-          snapshotCards={this.sidebarSnapshot?.cards}
-          onShow={() => this.dismissTransientMenus()}
-          onOpen={(agentId) => this.requestOpenNewSession(agentId)}
-        />
-      ));
+      const scrollRef = scroll.createRef();
+      const rail = renderSidebarRail(this);
       const pages = renderSidebarPages(this);
       const toolbar = renderSessionListToolbar(this);
       const online = renderAppSidebarOnline(this);
@@ -596,8 +555,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           class="sidebar sidebar--rail"
           data-snapshot-state={this.sidebarSnapshot ? "cached" : "live"}
           data-snapshot-saved={String(this.sidebarSnapshotController.saved)}
-          onPointerLeave={this.handleSidebarInteractionEnd}
-          onFocusOut={this.handleSidebarInteractionEnd}
           onContextMenu={(event) => {
             if (
               !(event.target instanceof Element) ||
@@ -611,8 +568,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           <div class="sidebar-shell" onMouseDown={beginNativeWindowDragFromTopInset}>
             <div class="sidebar-shell__content">
               <div
-                class={`sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData.sessionsScrollState}`}
-                onScroll={(event) => this.sidebarContext.handleScroll(event)}
+                ref={scrollRef}
+                class={["sidebar-shell__body", `sidebar-shell__body--scroll-${scroll.state()}`]}
+                onScroll={scroll.onScroll}
               >
                 <Show
                   when={this.navigationView === "pages"}
@@ -653,12 +611,11 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
             <div class="sidebar-shell__invite">
               <Show
                 when={
-                  this.communityInvitePresentation === "shown" && this.context.theme.resolvedMode
+                  this.context.theme.branding.communityLinks &&
+                  this.context.config.current.communityInvite
                 }
               >
-                {(mode) => (
-                  <SidebarCommunityInvite onDismiss={this.dismissCommunityInvite} mode={mode()} />
-                )}
+                <SidebarCommunityInvite />
               </Show>
             </div>
             <Show when={this.devGitBranch}>

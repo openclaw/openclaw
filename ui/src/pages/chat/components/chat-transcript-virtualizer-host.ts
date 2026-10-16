@@ -1,11 +1,12 @@
+import type { JSX } from "@solidjs/web";
 // Per-session virtualizer host: scroll anchoring, measurement, and row sync
 // for one transcript. Owned and swapped by ChatTranscriptController.
 import { Virtualizer } from "@tanstack/virtual-core";
-import { nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
+import type { PresentationValue } from "../../../lib/presentation.ts";
 import { resolveScrollBehavior } from "../../../lib/scroll-behavior.ts";
-import type { PresentationValue } from "../../../lit/presentation-binding.ts";
+import type { SolidController, SolidControllerHost } from "../../../lit/solid-controller-host.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition, ChatScrollToEndOptions } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
@@ -29,7 +30,7 @@ import {
 } from "./chat-transcript-interaction-anchor.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
-import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import type { TranscriptContent, TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   isTranscriptMaintenanceScroll,
   isTranscriptProgrammaticScroll,
@@ -61,12 +62,12 @@ import {
 } from "./chat-transcript-session.ts";
 import { TranscriptViewportRect } from "./chat-transcript-viewport-rect.ts";
 
-export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscriptSession {
+export class ChatSessionVirtualizerHost implements SolidControllerHost, ChatTranscriptSession {
   private readonly renderer = new ChatTranscriptRenderer();
   private readonly offsetState = new TranscriptOffsetState();
   readonly entryAnimations = new ChatMessageEntryAnimations();
   expandedAssistantMessages = new Map<string, AssistantMessageExpansionState>();
-  private readonly controllers = new Set<ReactiveController>();
+  private readonly controllers = new Set<SolidController>();
   private readonly positionRail: PositionRailGutterController;
   private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
   private readonly viewportRect: TranscriptViewportRect;
@@ -162,7 +163,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: SolidControllerHost,
     initialOffset: number | null = null,
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
     private readonly callbacks: TranscriptCallbacks = {},
@@ -286,11 +287,11 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
 
   requestUpdate = () => this.host.requestUpdate();
 
-  addController(controller: ReactiveController): void {
+  addController(controller: SolidController): void {
     this.controllers.add(controller);
   }
 
-  removeController(controller: ReactiveController): void {
+  removeController(controller: SolidController): void {
     this.controllers.delete(controller);
   }
 
@@ -425,10 +426,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
 
   render<T>(
     rows: readonly TranscriptRow<T>[],
-    renderRow: (row: TranscriptRow<T>) => unknown,
+    renderRow: (row: TranscriptRow<T>) => TranscriptContent,
     announcement: TranscriptAnnouncement | null,
     announce: boolean,
-    overlay: unknown = nothing,
+    overlay: JSX.Element = null,
     header: TranscriptHeader | null = null,
     presented: PresentationValue = true,
     applicationContext?: ApplicationContext,
@@ -523,10 +524,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           initialPositionPending: () => this.initialPositionPending,
           onCommit: () => this.connected && this.didCommit(),
           rows,
-          getContent: (index) => (rows[index] ? renderRow(rows[index]) : nothing),
+          getContent: (index) => (rows[index] ? renderRow(rows[index]) : null),
           virtualizer,
           overlay,
-          header: header?.template ?? nothing,
+          header: header?.props ?? null,
           scrollElementRef: this.scrollElementRef,
           captureInteractionResize: this.captureInteractionResize,
           measureRowRefFor: (key) => this.rowRefs.forKey(key),

@@ -410,6 +410,7 @@ export async function buildPreparedCompactionRuntime(
       cfg: params.config,
       channel: params.messageChannel ?? params.messageProvider,
       accountId: params.agentAccountId,
+      requester: params,
     });
 
     const runtimeInfo = {

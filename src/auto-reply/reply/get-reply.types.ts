@@ -39,6 +39,7 @@ export type ReplySessionBinding = {
 };
 
 export type PendingContinuationSettlement = {
+  /** Accept visible status delivery or an explicit silent handoff; false releases custody. */
   settle: (statusDelivered: boolean) => Promise<void>;
 };
 
@@ -88,7 +89,7 @@ type InternalReplySessionOptions = {
   requireExplicitMessageTarget?: boolean;
   /** Retire the run's bundle MCP runtime at settlement. Set by one-shot isolated runs (isolated heartbeats) whose session ID is never reused. */
   cleanupBundleMcpOnRunEnd?: boolean;
-  /** Defers the child-completion wake until the visible waiting status is delivered. */
+  /** Defers child completion until the waiting status or explicit silent handoff settles. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
   bindSessionCreation?: SessionEventExecution["bindSessionCreation"];
   /** Follow the admitted turn's own first-store registration in its retained request facts. */

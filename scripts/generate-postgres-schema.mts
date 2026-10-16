@@ -22,6 +22,8 @@ import {
   postgresCatalogQuery,
   readPostgresCatalog,
 } from "../src/infra/database-engine/postgres-catalog.ts";
+import { extractSqliteTableSchema } from "../src/infra/sqlite-schema-sql.ts";
+import { DOCTOR_OWNED_STATE_TABLES } from "../src/state/openclaw-state-db-contract.ts";
 import {
   TASK_RUN_INDEX_RETIREMENT_V24_SQL,
   TASK_RUN_INDEX_REPLACEMENTS_V24,
@@ -68,12 +70,7 @@ function tableStatements(data: Catalog): string[] {
   );
 }
 
-/** Shared metadata recipe; family owners supply canonical SQLite and generated PostgreSQL DDL. */
-function generateDatabasePortMetadata(
-  db: import("node:sqlite").DatabaseSync,
-  data: Catalog,
-  source: { id: string; version: number; sqlite: string; postgres: string },
-) {
+function postgresPortDataRanges(data: Catalog, postgres: string) {
   const postData = tableStatements(data).find((sql) =>
     data.objects.some(
       (object) =>
@@ -81,10 +78,17 @@ function generateDatabasePortMetadata(
         object.sql === sql,
     ),
   );
-  const split = postData ? source.postgres.indexOf(postData) : source.postgres.length;
-  if (split < 0) {
-    throw new Error(`Generated PostgreSQL port DDL differs from ${source.id} catalog`);
-  }
+  const split = postData ? postgres.indexOf(postData) : postgres.length;
+  assert.ok(split >= 0, "Generated PostgreSQL port DDL differs from its catalog");
+  return { preData: [0, split], postData: [split, postgres.length] };
+}
+
+/** Shared metadata recipe; family owners supply canonical SQLite and generated PostgreSQL DDL. */
+function generateDatabasePortMetadata(
+  db: import("node:sqlite").DatabaseSync,
+  data: Catalog,
+  source: { id: string; version: number; sqlite: string; postgres: string },
+) {
   return {
     id: source.id,
     version: source.version,
@@ -99,9 +103,9 @@ function generateDatabasePortMetadata(
       .prepare(
         "SELECT name, tbl_name AS 'table', sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
       )
-      .all(),
-    preData: [0, split],
-    postData: [split, source.postgres.length],
+      .all()
+      .filter((trigger) => data.tables.some((table) => table.name === trigger.table)),
+    ...postgresPortDataRanges(data, source.postgres),
   };
 }
 
@@ -189,7 +193,25 @@ export async function generatePostgresSchemas(
   const { DatabaseSync } = await import("node:sqlite");
   const catalogs: Record<string, Catalog> = {};
   const files: Record<string, string> = {};
-  const fragments = root === ROOT ? listOpenClawStateFeatureSchemas() : [];
+  const fragments =
+    root === ROOT
+      ? [
+          ...listOpenClawStateFeatureSchemas(),
+          // Absence means lost history: retain it on port without recreating it on admission.
+          ...DOCTOR_OWNED_STATE_TABLES.map((id) => ({
+            id,
+            tables: [id],
+            indexes: [],
+            dependencies: [],
+            activation: "version-additive" as const,
+            sql: () =>
+              extractSqliteTableSchema(
+                fs.readFileSync(path.join(root, "src/state/openclaw-state-schema.sql"), "utf8"),
+                id,
+              ),
+          })),
+        ]
+      : [];
   const manifest = fragments.map(({ id, tables, indexes, dependencies, activation }) => ({
     id,
     tables,
@@ -311,6 +333,10 @@ export async function generatePostgresSchemas(
           { repoRoot: ROOT, outputPath: "runtime.ts", errorLabel: "state runtime" },
         );
       }
+      if (root === ROOT && !options.reportOnly) {
+        files["state-port.json"] =
+          `${JSON.stringify(generateStatePortMetadata(root, data, fragments, files), null, 2)}\n`;
+      }
       continue;
     }
     files[`${name}.postgres.sql`] =
@@ -357,7 +383,7 @@ export async function generatePostgresSchemas(
     "Agent runtime DDL represents one admitted store UUID per owner-supplied namespace. Agent PostgreSQL enablement remains blocked on the pending search capability and runtime cutover.",
     "Text uses C collation. PostgreSQL text rejects NUL; SQLite length(text) stops at NUL. Data validation and numeric/JSON representation differences need a separate migration contract.",
     "STRICT and WITHOUT ROWID options are removed. Identity sequences do not reproduce SQLite rowid/AUTOINCREMENT/sqlite_sequence allocation or rollback semantics; each rowid alias adds a PostgreSQL PK index absent from SQLite's index_list.",
-    "Not covered: runtime-created memory FTS5 in packages/memory-host-sdk/src/host/memory-schema-fts.ts; vec0 in extensions/memory-core/src/memory/manager-sync-base.ts and src/migration/doctor-memory-sidecar-import.ts.",
+    "Not covered: runtime-created memory FTS5 in src/infra/database-engine/sqlite-search-schema.ts; vec0 in src/infra/database-engine/sqlite-vector.ts.",
     "Not covered: plugin-owned databases, including extensions/workboard/src/sqlite-store-schema.ts, extensions/logbook/src/store-schema.ts and extensions/team-reports/src/store-schema.ts.",
     "Not covered: additive/startup repair DDL in src/state/*-schema.ts and *migration*.ts, including openclaw-agent-transcript-fts-schema.ts, openclaw-agent-board-schema.ts and openclaw-agent-canonical-validation-migration.ts.",
   ];
@@ -530,6 +556,51 @@ async function generateTeamReportsPostgresSchema(verify: boolean) {
       fs.writeFileSync(path.join(ROOT, file), content);
     }
   }
+}
+
+/** Only copy ordering, allocation policy and DDL slices are port-owned metadata. */
+function generateStatePortMetadata(
+  root: string,
+  data: Catalog,
+  fragments: ReturnType<typeof listOpenClawStateFeatureSchemas>,
+  files: Record<string, string>,
+) {
+  const sqlite = fs.readFileSync(path.join(root, "src/state/openclaw-state-schema.sql"), "utf8");
+  const fragmentTables = new Set(fragments.flatMap((fragment) => fragment.tables));
+  const schema = (tables: ReadonlySet<string>, postgres: string) => {
+    const subset = {
+      ...data,
+      tables: data.tables.filter((table) => tables.has(table.name)),
+      objects: data.objects.filter((item) => tables.has(item.table)),
+    };
+    return {
+      tables: portTables(subset).map(({ name, identities }) => ({ name, identities })),
+      ...postgresPortDataRanges(subset, postgres),
+    };
+  };
+  const eager = new Set(
+    data.tables.filter((table) => !fragmentTables.has(table.name)).map((table) => table.name),
+  );
+  const sqliteRanges = [...eager].map((table) => {
+    const ddl = extractSqliteTableSchema(sqlite, table);
+    const start = sqlite.indexOf(ddl);
+    return [start, start + ddl.length];
+  });
+  for (const match of sqlite.matchAll(
+    /CREATE (?:UNIQUE )?INDEX IF NOT EXISTS \w+\s+ON (\w+)[\s\S]*?;/g,
+  )) {
+    if (eager.has(match[1]!)) {
+      sqliteRanges.push([match.index, match.index + match[0].length]);
+    }
+  }
+  return {
+    ...schema(eager, files["state.postgres.sql"]!),
+    sqliteRanges,
+    fragments: fragments.map((fragment) => ({
+      id: fragment.id,
+      ...schema(new Set(fragment.tables), files[`fragment-${fragment.id}.postgres.sql`]!),
+    })),
+  };
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

@@ -142,6 +142,11 @@ webchat `chat.send` arriving while another turn is active), Gateway keeps a
 content runs or is dropped. The identity follows content folded into an
 overflow summary.
 
+Once compatible inputs are admitted as one collected turn, the latest cancelable
+input owns client cancellation. Canceling an older input no longer stops the
+combined turn. Original operator access still governs execution: revoking that
+access cancels the collected turn and blocks further effects.
+
 - `chat.abort` with a specific `runId` cancels that turn while it is still
   queued, if the requester is authorized (same ownership rules as active runs).
 - `chat.abort` for a session without `runId` cancels **authorized queued turns

@@ -57,8 +57,18 @@ Display-only catalog refreshes retain prepared metadata selections; stored-entry
 identity, and topology changes still invalidate them.
 Native adoption bindings still use their storage owner, and paired-node enumeration
 can use network I/O. Previews remain limited to 500 characters;
-native hydration and catalog pages remain limited to 64 rows each. Native `thread/list` has no bounded metadata projection, so wire JSON can still be
-large. Complete catalog `thread/list` pages and metadata-only `thread/read` responses
+native hydration and overflow requests ask for at most 16 threads per page.
+Codex `thread/list` has no preview truncation or exclusion option, so wire JSON can
+still be large. Catalog responses over 8 MiB fail before JSON parsing. Native
+listing halves an oversized page and retries the same cursor within the original
+request deadline, retaining the smaller page limit for that resident home's lifetime.
+If a single thread still exceeds 8 MiB, the host reports an error and waits 15 minutes
+before another native listing attempt; repeated reads during backoff reuse that error
+without repeating its background warning. Reduce that thread's oversized preview
+to allow discovery to recover. Each local host has
+one eight-second response budget covering all page reads and adoption projection,
+matching the paired-node response budget. Healthy siblings still return; background
+native hydration can continue warming the next request. Complete catalog `thread/list` pages and metadata-only `thread/read` responses
 up to 64 KiB are parsed and projected inline, avoiding worker startup for small
 catalog refreshes. Larger responses use a worker owned by their app-server client.
 Both paths apply the same projection. The stdout reader waits for the compact result
@@ -69,8 +79,7 @@ valid frames continue normally. Native control reads, normal streaming notificat
 and full-history reads keep their in-process decoder. Control reads preserve complete
 native metadata, including model selection and direct-input capability; transcript
 consumers require complete native raw items.
-Each native list page contains at most 64 rows (less than 6 MiB of serialized
-catalog metadata even at all field limits). Both paths apply the existing
+Both paths apply the existing
 prefix-first preview selector and 500-character display bound. Unchanged
 background rows can reuse resident previews before delivery. Large native payloads
 and their temporary objects stay in the worker. Metadata reads preserve exact
@@ -93,7 +102,7 @@ The retained window is not a discovery limit. Once a home reaches 20,000 retaine
 rows, recent unfiltered pages still use memory. Paging at the retained boundary,
 working-directory queries, and title searches use authoritative native database-only
 pages, including sessions absent from memory. Those requests can be slower. Each
-fallback request retains at most one 64-row native page. Search, exclusion filling,
+fallback request retains at most one 16-row native page. Search, exclusion filling,
 and any nested membership, status, or descendant reads share one 20-read budget
 and the existing request deadline, including across scheduler pauses. The request
 returns an opaque continuation when more discovery remains. Continue paging even
@@ -242,7 +251,7 @@ oldest remaining rows. Row eviction preserves independently bounded live status 
 settings while their supporting native connections remain open. Eviction removes only cached metadata: older sessions remain
 discoverable through native paging/search and readable by ID. Initial and full safety walks finish pagination, but rows beyond the
 resident limit are discarded before native-response metadata projection or preview
-sanitization. The native page size stays 64, and pagination continues to completion.
+sanitization. Native requests use 16-row pages, and pagination continues to completion.
 At most 20,000 detached native cursors are remembered during a walk.
 The same archived-oldest row limit applies when restoring a complete snapshot.
 Incomplete snapshots still cannot establish a pageable native prefix.
@@ -592,7 +601,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.161.0` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.162.0` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned

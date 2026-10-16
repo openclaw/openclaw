@@ -1,6 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
+import { join, posix, resolve } from "node:path";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import {
@@ -47,6 +54,52 @@ export function isNodeTestDataOnlyPath(changedPath) {
       changedPath,
     )
   );
+}
+
+const GLOBAL_NODE_TEST_INPUT_RE =
+  /^(?:pnpm-workspace\.yaml|\.npmrc|node-version\.mjs|tsconfig(?:\.[^/]+)?\.json|vitest\.config\.ts|test\/setup(?:\.shared|\.extensions|-openclaw-runtime)?\.ts|test\/vitest\/vitest\.(?:shared\.config|scoped-config|performance-config)\.ts|scripts\/run-vitest\.(?:mjs|mts)|scripts\/test-projects\.mts|scripts\/lib\/vitest-process-env\.mts|\.github\/actions\/(?:setup-node-env|setup-pnpm-store-cache)\/action\.yml)$|^patches\//u;
+
+/** @param {string} changedPath @param {string} cwd */
+export function isIndependentlyCheckedDocumentation(changedPath, cwd) {
+  if (
+    changedPath !== changedPath.trim() ||
+    posix.normalize(changedPath) !== changedPath ||
+    !isNodeTestDataOnlyPath(changedPath)
+  ) {
+    return false;
+  }
+  // Docs/instruction routing owns these pages; packaged templates retain runtime proof.
+  // Missing pages are deletions, but symlinks (including dangling ones) are not pages.
+  const entry = lstatSync(join(cwd, changedPath), { throwIfNoEntry: false });
+  return entry === undefined || entry.isFile();
+}
+
+/**
+ * @param {readonly string[] | null} changedPaths
+ * @param {{ cwd?: string }} [options]
+ * @returns {{ eligible: true } | { eligible: false; reason: string }}
+ */
+export function resolveReleaseFastLaneScope(changedPaths, options = {}) {
+  if (!changedPaths?.length) {
+    return { eligible: false, reason: "missing changed paths" };
+  }
+  const globalInput = changedPaths.find((file) => GLOBAL_NODE_TEST_INPUT_RE.test(file));
+  if (globalInput) {
+    return { eligible: false, reason: `global execution or resolution input: ${globalInput}` };
+  }
+  const cwd = options.cwd ?? process.cwd();
+  const outsideScope = changedPaths.find(
+    (file) =>
+      !file.startsWith(".github/workflows/") &&
+      !file.startsWith("scripts/") &&
+      !file.startsWith("test/scripts/") &&
+      !/^\.agents\/skills\/release-[^/]+\//u.test(file) &&
+      file !== "docs/reference/RELEASING.md" &&
+      !isIndependentlyCheckedDocumentation(file, cwd),
+  );
+  return outsideScope === undefined
+    ? { eligible: true }
+    : { eligible: false, reason: `outside the release tooling scope: ${outsideScope}` };
 }
 
 /** @type {ChangedScope} */

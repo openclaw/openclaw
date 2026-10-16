@@ -1,8 +1,9 @@
-import { createMemo, Match, Show, Switch } from "solid-js";
+import { createMemo, createSignal, Match, Show, Switch } from "solid-js";
 import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
+import { formatTimeMs } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import "./chat-permission-card.tsx";
@@ -93,7 +94,7 @@ export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }
   );
 }
 
-export type ChatNoticeRecovery = Pick<
+type ChatNoticeRecovery = Pick<
   ChatThreadProps,
   "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun"
 >;
@@ -147,6 +148,7 @@ function NoticeBody(props: { text: string }) {
 }
 
 function OrdinaryNotice(props: ChatNoticeProps) {
+  const [expanded, setExpanded] = createSignal(false);
   return (
     <div
       class={[
@@ -158,7 +160,11 @@ function OrdinaryNotice(props: ChatNoticeProps) {
       role={props.item.tone === "danger" ? "alert" : undefined}
     >
       <Show when={props.item.label}>
-        <SystemLine icon={props.item.icon} label={props.item.label!} />
+        <SystemLine
+          icon={props.item.icon}
+          label={props.item.label!}
+          metric={props.item.showTimestamp ? formatTimeMs(props.item.timestamp) : undefined}
+        />
       </Show>
       <Show
         when={props.item.collapsedBody && props.item.text}
@@ -168,8 +174,13 @@ function OrdinaryNotice(props: ChatNoticeProps) {
           </Show>
         }
       >
-        <details class="chat-notice__collapse">
-          <summary class="chat-notice__toggle">{t("chat.systemNotice.showContent")}</summary>
+        <details
+          class="chat-notice__collapse"
+          onToggle={(event) => setExpanded(event.currentTarget.open)}
+        >
+          <summary class="chat-notice__toggle">
+            {t(expanded() ? "chat.systemNotice.hideContent" : "chat.systemNotice.showContent")}
+          </summary>
           <NoticeBody text={props.item.text} />
         </details>
       </Show>

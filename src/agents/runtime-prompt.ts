@@ -8,6 +8,7 @@ import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { resolveRuntimeChannelPromptContext } from "./runtime-capabilities.js";
 import { detectRuntimeShell } from "./shell-utils.js";
+import type { SpawnRequesterConversationSource } from "./spawn-requester-origin.js";
 import { buildSystemPromptParams } from "./system-prompt-params.js";
 
 export async function resolveAgentRuntimePrompt(params: {
@@ -22,6 +23,7 @@ export async function resolveAgentRuntimePrompt(params: {
   model: string;
   channel?: string;
   accountId?: string | null;
+  requester?: SpawnRequesterConversationSource;
   chatType?: ChatType;
   requesterProfileId?: string;
   remoteWorkspace?: boolean;
@@ -30,6 +32,7 @@ export async function resolveAgentRuntimePrompt(params: {
     cfg: params.config,
     channel: params.channel,
     accountId: params.accountId,
+    requester: params.requester,
   });
   const { runtimeChannel, runtimeCapabilities } = channelPromptContext;
   const defaultModel = resolveDefaultModelForAgent({

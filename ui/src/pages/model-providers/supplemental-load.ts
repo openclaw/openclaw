@@ -1,16 +1,15 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import {
   requestProviderUsage,
   type ProviderUsageRequestResult,
 } from "../../lib/provider-usage-request.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import { loadModelProviderCost, type ModelProvidersData } from "./load.ts";
 
 type SupplementalOptions = {
   isCoreLoading: () => boolean;
-  getGateway: () => Pick<GatewayPageController, "connected" | "client" | "epoch" | "isCurrent">;
+  getGateway: () => Pick<GatewayPageBinding, "connected" | "client" | "epoch" | "isCurrent">;
   getData: () => ModelProvidersData | null;
   getDataClient: () => GatewayBrowserClient | null;
   setData: (data: ModelProvidersData) => void;
@@ -26,7 +25,7 @@ export class ModelProviderSupplementalLoader {
   private forceReload = false;
 
   constructor(
-    private readonly host: ControllerHost,
+    private readonly notify: () => void,
     private readonly options: SupplementalOptions,
   ) {}
 
@@ -97,7 +96,7 @@ export class ModelProviderSupplementalLoader {
     for (const request of retired) {
       request.abort();
     }
-    this.host.requestUpdate();
+    this.notify();
   }
 
   loadUsage(): Promise<void> {
@@ -131,7 +130,7 @@ export class ModelProviderSupplementalLoader {
     this.requests.get(kind)?.abort();
     const request = new AbortController();
     this.requests.set(kind, request);
-    this.host.requestUpdate();
+    this.notify();
     try {
       const patch:
         | { providerUsage: ProviderUsageRequestResult }
@@ -159,7 +158,7 @@ export class ModelProviderSupplementalLoader {
       if (this.requests.get(kind) === request) {
         this.requests.delete(kind);
         this.options.refreshPolicy.flushPending();
-        this.host.requestUpdate();
+        this.notify();
       }
     }
   }

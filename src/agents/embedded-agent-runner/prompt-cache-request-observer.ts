@@ -7,7 +7,7 @@ import {
   completePromptCacheObservation,
   type PromptCacheChange,
 } from "./prompt-cache-observability.js";
-import type { ProviderPromptState } from "./provider-prompt-state.js";
+import { preparePromptCacheHistory, type ProviderPromptState } from "./provider-prompt-state.js";
 
 type PromptCacheObservationStart = ReturnType<typeof beginPromptCacheObservation> & {
   requestIndex: number;
@@ -60,10 +60,12 @@ export function createPromptCacheRequestObserver(
   let observation: PromptCacheRequestObservation | undefined;
   let contextUsage: MeasuredRequestContext | undefined;
   return {
-    onModelRequest: (
+    onModelRequest: async (
       model: Pick<Parameters<StreamFn>[0], "provider" | "id" | "api">,
       context: Pick<Parameters<StreamFn>[1], "systemPrompt" | "tools" | "messages">,
+      signal?: AbortSignal,
     ) => {
+      await preparePromptCacheHistory(context.messages, signal);
       if (request) {
         completePromptCacheObservation(params);
       }

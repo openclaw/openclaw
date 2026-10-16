@@ -41,7 +41,6 @@ import type { createEmbeddedRunFailoverRetryController } from "./failover-retry-
 import { buildErrorAgentMeta } from "./helpers.js";
 import { hasComposedVisibleAnswerAfterSettledTools } from "./incomplete-turn-classification.js";
 import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
-import { resolveSilentToolResultReplyPayload } from "./incomplete-turn-resolution.js";
 import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
@@ -182,14 +181,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     recoveryAssistant.content.length === 0 &&
     !isContextOverflow(recoveryAssistant, runtime.contextTokenBudget) &&
     !hasAttemptTerminalState(attempt) &&
-    !hasComposedVisibleAnswerAfterSettledTools(attempt) &&
-    !resolveSilentToolResultReplyPayload({
-      isCronTrigger: params.trigger === "cron",
-      payloadCount: 0,
-      aborted,
-      timedOut,
-      attempt,
-    });
+    !hasComposedVisibleAnswerAfterSettledTools(attempt);
   const emptyLengthNeedsContinuation =
     emptyLengthStop &&
     resolveSourceReplyDelivery(

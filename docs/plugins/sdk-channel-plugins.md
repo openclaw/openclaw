@@ -44,6 +44,10 @@ shared `message` tool. Your plugin owns:
   owns inline-button guidance; core then omits its generic callback example and
   capability-configuration hint. Return no button instructions when the account
   has buttons disabled. The flag defaults to `false`.
+- **Question input** - declare `agentPrompt.questionInputMode: "buttons"` only
+  when your channel supports native `ask_user` controls. Core resolves this from
+  the inbound channel when preparing the conversation's tool capabilities;
+  omission keeps `ask_user` out of the tool catalog so the agent asks in plain text.
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch. For configured agent group
@@ -219,6 +223,15 @@ when initialization must finish before the child runs.
     generations are not credential caches. Read-only `inspectAccount` and
     config-only bootstrap activation remain separate; persisted credentials alone
     do not enable a channel.
+
+    `gateway.loginWithQrStart` receives an optional
+    `assertCredentialPersistenceCurrent()` callback. Retain it with the QR login
+    and invoke it immediately before credential writes, including deferred writes
+    after the RPC returns. It throws when the Gateway's account configuration or
+    plugin lifetime changes. Compose it with the plugin's own active-login guard;
+    do not replace that guard or tie QR lifetime to the initiating RPC. Omitted
+    account IDs retain plugin-specific single-account profile selection; the
+    Gateway rejects omission when multiple accounts are configured.
 
     Create `src/channel.ts`:
 
@@ -428,8 +441,16 @@ when initialization must finish before the child runs.
       remains pending; sources evicted from the summary cap report `queue-cap-old`.
 
       A `queuedDeliveryCorrelations` entry stays bound to its source through collect
-      batching. Its `begin()` cleanup receives an optional settlement with
-      `visibleReplySent` and `failed` after delivery and presentation cleanup finish.
+      batching. Its optional `shouldSuppressReply(payload)` applies before an
+      origin-routed send, which bypasses the immediate reply dispatcher. All source
+      policies in a collected batch must agree to suppress it; an explicit request
+      can therefore retain feedback alongside passive messages. `onReplyDelivered`
+      runs only after confirmed origin delivery, so deduplication must not record
+      a failed or transport-pending send as delivered.
+      Its `begin()` cleanup receives an optional settlement with `visibleReplySent`,
+      `failed`, and `completed` after delivery and presentation cleanup finish.
+      `completed` identifies successful execution, including deliberate silence;
+      cancellation does not count as recovery from an earlier failure.
       `transportPending: true` means delivery remains owned by transport without a
       later callback to this source; clear activity UI without claiming success or failure
       unless `visibleReplySent` or `failed` already proves the outcome.

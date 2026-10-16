@@ -1,6 +1,6 @@
 import { createMemo, Show } from "solid-js";
-import "../../components/agent-row-chip.tsx";
-import { handleCopyButton } from "../../components/copy-button.ts";
+import { AgentRowChip } from "../../components/agent-row-chip.tsx";
+import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
 export function SessionBarRow(props: {
@@ -35,7 +35,7 @@ export function SessionBarRow(props: {
       >
         <span class="session-bar-label">
           <span class="session-bar-title">{props.displayLabel}</span>
-          {props.agentId ? <openclaw-agent-row-chip prop:agentId={props.agentId} /> : undefined}
+          {props.agentId ? <AgentRowChip agentId={props.agentId} /> : undefined}
           {props.meta.length > 0 ? (
             <>
               {" "}

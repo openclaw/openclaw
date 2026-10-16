@@ -26,9 +26,9 @@ const channelState = vi.hoisted(() => ({
   deliver: vi.fn(),
 }));
 
+// mock-isolation: channel custody tests provide the follow-up route without loading model or auth plans.
 vi.mock("../../agents/runtime-plan/build.js", () => ({
   buildAgentRuntimeDeliveryPlan: () => ({
-    isSilentPayload: () => false,
     resolveFollowupRoute: () => undefined,
   }),
 }));
@@ -128,6 +128,7 @@ async function deliverBatch(params: {
   fallbackOutcome?: "delivered" | "failed-before-deliver" | "channel-transform" | "recovery-owned";
   fallbackPending?: boolean;
   onObservedReplyDelivery?: () => void;
+  correlations?: AdmittedFollowupTurn["queued"]["deliveryCorrelations"];
 }) {
   channelState.outcomes = [...params.outcomes];
   const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {
@@ -137,9 +138,11 @@ async function deliverBatch(params: {
       );
     }
   });
+  const turn = createTurn(params);
+  turn.queued.deliveryCorrelations = params.correlations;
   const result = await deliverFollowupDecision({
     decision: { kind: "deliver", payloads: params.payloads },
-    turn: createTurn(params),
+    turn,
     defaults: createDefaults(onBlockReply),
     runId: "run-1",
     runFollowup: vi.fn(async () => {}),
@@ -182,6 +185,42 @@ afterEach(() => {
 });
 
 describe("follow-up delivery channel boundary", () => {
+  it("suppresses repeated source failures before transport without falling back to another dispatcher", async () => {
+    const delivered = vi.fn();
+    const { onBlockReply, result } = await deliverBatch({
+      messageProvider: "slack",
+      originatingChannel: "slack",
+      outcomes: ["delivered"],
+      payloads: [{ text: "Request timed out", isError: true }],
+      correlations: [{ begin() {}, shouldSuppressReply: () => true, onReplyDelivered: delivered }],
+    });
+    expect(channelState.deliver).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+    expect(result.kind).toBe("completed");
+  });
+
+  it.each(["delivered", "failed", "held", "ambiguous"] as const)(
+    "keeps a collected explicit request visible and records only confirmed origin delivery (%s)",
+    async (outcome) => {
+      const passive = vi.fn();
+      const explicit = vi.fn();
+      await deliverBatch({
+        messageProvider: "slack",
+        originatingChannel: "slack",
+        outcomes: [outcome],
+        payloads: [{ text: "Request timed out", isError: true }],
+        correlations: [
+          { begin() {}, shouldSuppressReply: () => true, onReplyDelivered: passive },
+          { begin() {}, shouldSuppressReply: () => false, onReplyDelivered: explicit },
+        ],
+      });
+      expect(channelState.deliver).toHaveBeenCalledTimes(1);
+      expect(passive).toHaveBeenCalledTimes(outcome === "delivered" ? 1 : 0);
+      expect(explicit).toHaveBeenCalledTimes(outcome === "delivered" ? 1 : 0);
+    },
+  );
+
   it.each([
     { route: "held", fallback: "delivered", pending: false },
     { route: "ambiguous", fallback: "delivered", pending: false },
@@ -263,12 +302,20 @@ describe("follow-up delivery channel boundary", () => {
 
   it.each([
     {
-      name: "optional group generic silence",
+      name: "optional group control-looking failure",
+      expectation: "optional",
+      channel: "discord",
+      recipient: "channel:C1",
+      text: "NO_REPLY.",
+      delivered: true,
+    },
+    {
+      name: "optional group literal control-looking failure",
       expectation: "optional",
       channel: "discord",
       recipient: "channel:C1",
       text: "NO_REPLY",
-      delivered: false,
+      delivered: true,
     },
     {
       name: "optional work without a recipient",

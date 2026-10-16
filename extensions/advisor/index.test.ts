@@ -191,6 +191,7 @@ function setup(pluginConfig: Record<string, unknown>) {
       startedAt?: number;
       itemId?: string;
       type?: string;
+      aborted?: boolean;
     } = {},
   ) =>
     toolEvents?.handle(
@@ -205,6 +206,7 @@ function setup(pluginConfig: Record<string, unknown>) {
           startedAt: overrides.startedAt,
           itemId: overrides.itemId,
           type: overrides.type,
+          aborted: overrides.aborted,
         },
       },
       eventContext(overrides.runId ?? context.runId),
@@ -671,6 +673,7 @@ describe("advisor", () => {
         expect.objectContaining({
           sessionKey: "agent:main:main",
           text: expect.stringContaining("Return to the requested README typo"),
+          displayText: "Return to the requested README typo; leave CI unchanged.",
         }),
       );
       expect(run.steer.mock.calls[0]?.[0].text.split("\n\n").at(-1)).toBe(
@@ -852,6 +855,59 @@ describe("advisor", () => {
       await run.stopService();
     },
   );
+
+  it("does not queue a correction already accepted under the same key", async () => {
+    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+    run.steer.mockResolvedValue({ steered: false, reason: "duplicate" });
+    run.forkSession
+      .mockResolvedValueOnce({ text: "CORRECTION\nRead the answer file." })
+      .mockResolvedValueOnce({ text: "APPROVE\nRead the answer file." });
+    await run.startService();
+    await run.startRun();
+    await run.toolCompleted();
+    await run.wakeScheduler();
+    expect(run.steer).toHaveBeenCalledOnce();
+    expect(run.enqueue).not.toHaveBeenCalled();
+    await run.stopService();
+  });
+
+  it.each(["end", "error"])("cancels an in-flight review on an aborted %s", async (phase) => {
+    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+    await run.startService();
+    await run.startRun();
+    await run.toolCompleted();
+    const review = await run.dispatchReview();
+    await run.emitEvent("lifecycle", phase, { aborted: true });
+    expect(review.signal?.aborted).toBe(true);
+    await expect(review.result).rejects.toThrow("aborted");
+    expect(run.steer).not.toHaveBeenCalled();
+    expect(run.enqueue).not.toHaveBeenCalled();
+    await run.stopService();
+  });
+
+  it("drops an old review when a new user turn starts after active delivery", async () => {
+    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+    await run.startService();
+    await run.startRun();
+    await run.toolCompleted();
+    const first = await run.dispatchReview();
+    const verificationStarted = run.nextFork();
+    const delivered = run.finished();
+    first.resolve("CORRECTION\nRead the answer file.");
+    (await verificationStarted).resolve("APPROVE\nRead the answer file.");
+    await delivered;
+    expect(run.steer).toHaveBeenCalledOnce();
+
+    await run.toolCompleted();
+    const stale = await run.dispatchReview();
+    await run.endRun();
+    await run.startRun({ runId: "run-2" });
+    expect(stale.signal?.aborted).toBe(true);
+    await expect(stale.result).rejects.toThrow("aborted");
+    expect(run.steer).toHaveBeenCalledOnce();
+    expect(run.enqueue).not.toHaveBeenCalled();
+    await run.stopService();
+  });
 
   it("cancels verification when the service stops", async () => {
     const run = setup({ everyToolCalls: 1, everyMinutes: 0 });

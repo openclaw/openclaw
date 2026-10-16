@@ -1,7 +1,7 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
+import type { SolidController, SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import { fetchPluginActivityIconBlobUrl } from "../plugins/icon-loader.ts";
 import { PluginIconController } from "../plugins/plugin-icon-controller.ts";
 
@@ -10,7 +10,7 @@ export type PluginToolIcons = Pick<ReadonlyMap<string, PluginToolIcon>, "get">;
 
 type ToolIconSession = { sessionKey: string; agentId?: string };
 
-export class ChatToolIconController implements ReactiveController {
+export class ChatToolIconController implements SolidController {
   icons: PluginToolIcons = { get: (name) => this.getIcon(name) };
   private owner: {
     client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
@@ -28,7 +28,7 @@ export class ChatToolIconController implements ReactiveController {
   private readonly loader: PluginIconController;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: SolidControllerHost,
     private readonly getContext: () => Pick<ApplicationContext, "resourceBasePath"> & {
       gateway: Pick<
         ApplicationContext["gateway"],

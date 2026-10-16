@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexThread } from "./app-server/protocol.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
@@ -27,9 +26,7 @@ function catalog(
   data: CodexThread[],
   options: { homeId?: string; local?: boolean } = {},
 ) {
-  const readNative = vi.fn(async () =>
-    projectCodexCatalogPage({ data }, { sanitize: sanitizeTerminalText }),
-  );
+  const readNative = vi.fn(async () => projectCodexCatalogPage({ data }));
   const index = new CodexCatalogIndex({
     homeId: options.homeId ?? root,
     ...(options.local === false ? {} : { localSessionsRoot: root }),

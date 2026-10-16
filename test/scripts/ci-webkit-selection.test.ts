@@ -7,11 +7,15 @@ describe("Control UI WebKit selection", () => {
   it.each([
     ["ui/vitest.config.ts", true],
     ["ui/src/components/modal-dialog.ts", true],
+    ["ui/src/components/session-hovercard-automations.tsx", true],
+    ["ui/src/components/solid/session-hovercard-automations.browser.test.tsx", true],
+    ["ui/src/components/session-hovercard.css", true],
     ["ui/src/pages/chat/components/chat-composer.tsx", true],
     ["ui/src/pages/chat/chat-pane-header.ts", true],
     ["ui/src/pages/chat/components/chat-pane-header.ts", true],
     ["ui/src/pages/chat/components/chat-pane-versions-menu.tsx", true],
     ["ui/src/lit/presentation-binding.ts", true],
+    ["ui/src/lib/presentation.ts", true],
     ["ui/src/styles/chat/composer.css", true],
     ["ui/src/pages/about/about-page.tsx", false],
   ])("selects %s: %s without adding UI rows", (file, selected) => {

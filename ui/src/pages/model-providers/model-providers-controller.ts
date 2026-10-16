@@ -1,16 +1,23 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
+import { createEffect, createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import * as modelCatalog from "../../lib/model-catalog-store.ts";
-import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import {
+  projectGateway,
+  projectAgentSelection,
+  projectOverlays,
+} from "../../lib/reactive/application.ts";
+import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import type { ModelAccountUsageElement } from "./account-usage.tsx";
 import {
@@ -31,12 +38,11 @@ import {
   type DefaultsDraft,
   type ModelProviderPendingLogout,
 } from "./data.ts";
-import { ModelProviderDiscoveryController } from "./discovery-controller.tsx";
-import { InstalledAgentsController } from "./installed-agents.tsx";
+import { createModelProviderDiscovery } from "./discovery-controller.tsx";
+import { createInstalledAgents } from "./installed-agents.tsx";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
-import { ModelProviderLoginController } from "./login-controller.ts";
-import { ModelPageController } from "./page-controller.ts";
-import { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
+import { createModelProviderLogin } from "./login-controller.ts";
+import { createModelProviderProfileActions } from "./profile-actions-controller.ts";
 import { updateRecordEntry } from "./record-state.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
@@ -49,47 +55,34 @@ type ModelProvidersState = {
   keyEditorProvider: string | null;
   keyDraft: string;
   profileOrders: Record<string, string[]>;
-  providerQuery: string;
-  addProviderOpen: boolean;
   addProviderId: string;
   addProviderKey: string;
   defaultsDraft: DefaultsDraft | null;
   selectedAgentId: string;
 };
 
-export class ModelProvidersController extends ModelPageController {
-  private readonly mutationBlockedReason = (): string | null =>
-    modelProviderConfigMutationBlockedReason(this.context) ??
-    (this.state.selectedAgentId ? null : t("agents.noAgents"));
-  private readonly canMutate = (): boolean =>
-    this.mutationBlockedReason() === null && !modelProviderConfigBusy(this.context);
-
-  context: ApplicationContext;
-
-  private routeDataValue: ModelProvidersRouteData | undefined;
-  get routeData() {
-    return this.routeDataValue;
-  }
-  set routeData(value: ModelProvidersRouteData | undefined) {
-    if (this.routeDataValue === value) {
-      return;
-    }
-    this.routeDataValue = value;
-    this.requestUpdate();
-  }
-  private loaderPendingValue = false;
-  get loaderPending() {
-    return this.loaderPendingValue;
-  }
-  set loaderPending(value: boolean) {
-    if (this.loaderPendingValue === value) {
-      return;
-    }
-    this.loaderPendingValue = value;
-    this.requestUpdate();
-  }
-
-  readonly state: ModelProvidersState = {
+export function createModelProviders(
+  context: ApplicationContext,
+  inputs: { readonly routeData?: ModelProvidersRouteData; readonly loaderPending?: boolean },
+) {
+  const [providerQuery, setProviderQuery] = createSignal("");
+  const [addProviderOpen, setAddProviderOpen] = createSignal(false);
+  const runtimeConfig = projectRuntimeConfig(context.runtimeConfig);
+  const agents = projectAgents(context.agents);
+  const gatewayState = projectGateway(context.gateway);
+  const selection = projectAgentSelection(context.settingsAgentSelection);
+  const overlays = projectOverlays(context.overlays);
+  const listeners = new Set<() => void>();
+  const notify = () => listeners.forEach((listener) => listener());
+  const mutationBlockedReason = (): string | null =>
+    modelProviderConfigMutationBlockedReason(context) ??
+    (state.selectedAgentId ? null : t("agents.noAgents"));
+  const canMutate = (): boolean =>
+    mutationBlockedReason() === null && !modelProviderConfigBusy(context);
+  let loaderPending = false;
+  let connected = false;
+  const accountUsages = new Set<ModelAccountUsageElement>();
+  const state: ModelProvidersState = {
     data: null,
     busy: {},
     messages: {},
@@ -97,379 +90,392 @@ export class ModelProvidersController extends ModelPageController {
     keyEditorProvider: null,
     keyDraft: "",
     profileOrders: {},
-    providerQuery: "",
-    addProviderOpen: false,
     addProviderId: "",
     addProviderKey: "",
     defaultsDraft: null,
     selectedAgentId: "",
   };
-  private logoutConfirmation: AbortController | null = null;
-  private pendingConnection = false;
-  private pendingCredentialInvalidation = false;
+  let logoutConfirmation: AbortController | null = null;
+  let pendingConnection = false;
+  let pendingCredentialInvalidation = false;
 
-  setState<Key extends keyof ModelProvidersState>(key: Key, value: ModelProvidersState[Key]) {
-    if (!Object.is(this.state[key], value)) {
-      this.state[key] = value;
-      this.requestUpdate();
+  function setState<Key extends keyof ModelProvidersState>(
+    key: Key,
+    value: ModelProvidersState[Key],
+  ) {
+    if (!Object.is(state[key], value)) {
+      state[key] = value;
+      notify();
     }
     return value;
   }
 
   /** Client the current data was loaded from; a new client means stale data. */
-  private dataClient: GatewayBrowserClient | null = null;
-  private routeDataObserved = false;
+  let dataClient: GatewayBrowserClient | null = null;
+  let routeDataObserved = false;
   // Global config writes survive agent switches; their card state does not.
-  private agentEpoch = 0;
-  private readonly core = new ModelProviderCoreLoader(this, {
+  let agentEpoch = 0;
+  const core = new ModelProviderCoreLoader(notify, {
     onStart: (reason) => {
-      this.supplemental.beginCoreRefresh(reason === "forced");
+      supplemental.beginCoreRefresh(reason === "forced");
       if (reason === "forced") {
-        this.querySelectorAll<ModelAccountUsageElement>("openclaw-model-account-usage").forEach(
-          (account) => account.refreshUsage(),
-        );
+        for (const account of accountUsages) {
+          account.refreshUsage();
+        }
       }
     },
     onComplete: ({ client, data }) => {
       // A page refresh settles its feedback; an overlapping picker Retry is best effort.
-      this.core.resetCatalog();
-      this.supplemental.adoptCoreData(client, data);
+      core.resetCatalog();
+      supplemental.adoptCoreData(client, data);
     },
     onCatalogComplete: (result) => {
-      if (this.state.data) {
-        this.setState("data", {
-          ...this.state.data,
+      if (state.data) {
+        setState("data", {
+          ...state.data,
           providerOutcomes: result.providerOutcomes ?? [],
           catalogError: null,
         });
       }
     },
   });
-  private readonly refreshPolicy = new UsageRefreshPolicy({
+  const refreshPolicy = new UsageRefreshPolicy({
     isLoading: () =>
-      this.loaderPending ||
-      !this.routeDataObserved ||
-      this.core.loading ||
-      this.supplemental.usageLoading,
+      loaderPending || !routeDataObserved || core.loading || supplemental.usageLoading,
     // Usage convergence must not restart the independent local-cost request.
-    reload: () => this.supplemental.loadUsage(),
-    onIncompleteUsageExhausted: () => this.requestUpdate(),
+    reload: () => supplemental.loadUsage(),
+    onIncompleteUsageExhausted: notify,
   });
-  private readonly supplemental = new ModelProviderSupplementalLoader(this, {
-    isCoreLoading: () => this.loaderPending,
-    getGateway: () => this.gateway,
-    getData: () => this.state.data,
-    getDataClient: () => this.dataClient,
-    setData: (data) => this.setState("data", data),
-    setDataClient: (client) => (this.dataClient = client),
-    refreshPolicy: this.refreshPolicy,
+  const supplemental = new ModelProviderSupplementalLoader(notify, {
+    isCoreLoading: () => loaderPending,
+    getGateway: () => gateway,
+    getData: () => state.data,
+    getDataClient: () => dataClient,
+    setData: (data) => setState("data", data),
+    setDataClient: (client) => (dataClient = client),
+    refreshPolicy,
   });
-  private readonly gateway = new GatewayPageController(this, {
-    getGateway: () => this.context?.gateway,
-    onIdentityChange: () => this.resetConnectionState(),
-    invalidateRequests: () => this.invalidateRequests(),
-    ensureInitialData: () => this.ensureInitialData(),
+  const gateway = new GatewayPageBinding(notify, {
+    getGateway: () => context.gateway,
+    onIdentityChange: () => resetConnectionState(),
+    invalidateRequests,
+    ensureInitialData,
     onSnapshot: (change) => {
       if (change.initial) {
-        this.resetConnectionState();
+        resetConnectionState();
       } else if (change.connectionChanged && !change.identityChanged) {
         // Keep the last snapshot visible while the canonical reconnect load replaces it.
-        this.resetConnectionState({ preserveVisibleData: true });
+        resetConnectionState({ preserveVisibleData: true });
       }
-      if (
-        change.becameConnected &&
-        !change.initial &&
-        this.routeDataObserved &&
-        !this.loaderPending
-      ) {
-        void this.refresh("replacement");
+      installedAgents.synchronize();
+      if (change.becameConnected && !change.initial && routeDataObserved && !loaderPending) {
+        void refresh("replacement");
       }
     },
-    onPageActivation: () => this.refreshPolicy.request("focus"),
+    onPageActivation: () => void refreshPolicy.request("focus"),
   });
-  readonly installedAgents = new InstalledAgentsController(this, {
-    gateway: this.gateway,
-    getContext: () => this.context,
+  const installedAgents = createInstalledAgents({
+    gateway,
+    context,
   });
-  private readonly profileActions = new ModelProviderProfileActionsController({
-    getAgentEpoch: () => this.agentEpoch,
-    getAgentId: () => this.state.selectedAgentId,
-    getClient: () => this.context.gateway.snapshot.client,
-    getClientEpoch: () => this.gateway.epoch,
-    getData: () => this.state.data,
-    getOrders: () => this.state.profileOrders,
-    setData: (data) => this.setState("data", data),
-    setOrders: (orders) => this.setState("profileOrders", orders),
-    clearMessage: (cardId) => this.setMessage(cardId, null),
-    canMutate: () => this.canMutate(),
-    cancelRefresh: () => this.core.invalidate(),
-    refresh: () => this.refresh("forced"),
-    isCurrentClient: (client, epoch) => this.gateway.isCurrent({ client, epoch }),
-    isBusy: (key) => Boolean(this.state.busy[key]),
-    setBusy: (key, value) => this.setBusy(key, value),
+  const profileActions = createModelProviderProfileActions({
+    getAgentEpoch: () => agentEpoch,
+    getAgentId: () => state.selectedAgentId,
+    getClient: () => context.gateway.snapshot.client,
+    getClientEpoch: () => gateway.epoch,
+    getData: () => state.data,
+    getOrders: () => state.profileOrders,
+    setData: (data) => setState("data", data),
+    setOrders: (orders) => setState("profileOrders", orders),
+    clearMessage: (cardId) => setMessage(cardId, null),
+    canMutate: () => canMutate(),
+    cancelRefresh: () => core.invalidate(),
+    refresh: () => refresh("forced"),
+    isCurrentClient: (client, epoch) => gateway.isCurrent({ client, epoch }),
+    isBusy: (key) => Boolean(state.busy[key]),
+    setBusy: (key, value) => setBusy(key, value),
     setProbeResult: (cardId, result) =>
-      this.setState("probeResults", updateRecordEntry(this.state.probeResults, cardId, result)),
-    setProbeError: (cardId, error) => this.setMessage(cardId, { kind: "error", text: error }),
-    getConfig: () => this.context.runtimeConfig,
+      setState("probeResults", updateRecordEntry(state.probeResults, cardId, result)),
+    setProbeError: (cardId, error) => setMessage(cardId, { kind: "error", text: error }),
+    getConfig: () => context.runtimeConfig,
   });
-  readonly discovery = new ModelProviderDiscoveryController(this, {
-    canOpen: () => this.canMutate(),
+  const discovery = createModelProviderDiscovery({
+    canOpen: canMutate,
     getOwner: () => ({
-      client: this.gateway.client,
-      agentId: this.context.settingsAgentSelection.state.selectedId,
+      client: gatewayState.read().snapshot.client,
+      agentId: selection.read().state.selectedId,
     }),
-    onClose: () => void this.refresh("replacement"),
+    onClose: () => void refresh("replacement"),
     onError: (error) =>
-      this.setMessage("connection", { kind: "error", text: modelProviderErrorMessage(error) }),
+      setMessage("connection", { kind: "error", text: modelProviderErrorMessage(error) }),
   });
-  readonly login = new ModelProviderLoginController(this, {
-    getScope: () => ({
-      context: this.context,
-      agentId: this.state.selectedAgentId,
-      authStatus: this.state.data?.authStatus ?? null,
-    }),
-    canStart: () => this.canMutate(),
+  const login = createModelProviderLogin({
+    getScope: () => {
+      projection.read();
+      runtimeConfig.read();
+      gatewayState.read();
+      selection.read();
+      overlays.read();
+      return {
+        context,
+        agentId: state.selectedAgentId,
+        authStatus: state.data?.authStatus ?? null,
+      };
+    },
+    canStart: canMutate,
     onDiscover: () => {
-      this.setMessage("connection", null);
-      void this.discovery.open();
+      setMessage("connection", null);
+      void discovery.open();
     },
     onApiKey: (provider) => {
-      this.setState("addProviderId", provider);
-      this.setState("addProviderKey", "");
-      this.setState("addProviderOpen", true);
-      this.setMessage("add", null);
+      setState("addProviderId", provider);
+      setState("addProviderKey", "");
+      setAddProviderOpen(true);
+      setMessage("add", null);
     },
-    canContinue: () => this.mutationBlockedReason() === null,
-    refresh: (providerId) => this.refresh("replacement", providerId),
+    canContinue: () => mutationBlockedReason() === null,
+    refresh: (providerId) => refresh("replacement", providerId),
   });
-  private readonly subscriptions = new SubscriptionsController(this)
-    .effect(
-      () => this.context?.gateway,
-      (gateway) =>
-        modelCatalog.subscribeModelCatalogChanges(gateway, () => {
-          // A picker can outlive other clients' credential writes, even without signing in.
-          if (this.login.busy) {
-            this.pendingCredentialInvalidation = true;
-          } else {
-            void this.refresh("publication");
-          }
-        }),
-    )
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => this.installedAgents.subscribe(gateway),
-    )
-    .watch(() => this.context?.gateway.snapshot.client, modelCatalog.subscribeModelCatalogCache)
-    .watchStore(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig) => {
-        if (!runtimeConfig.state.configSnapshot && !runtimeConfig.state.configLoading) {
-          void runtimeConfig.ensureLoaded().catch(() => undefined);
-        }
-        this.profileActions.flushPendingOrders();
-      },
-    )
-    .watchStore(
-      () => this.context?.overlays,
-      () => this.profileActions.flushPendingOrders(),
-    )
-    .watchStore(
-      () => this.context?.agents,
-      () => this.syncSelectedAgent(),
-    )
-    .effect(
-      () => this.context?.settingsAgentSelection,
-      (selection) => selection.subscribe(() => this.syncSelectedAgent()),
-    );
+  const projection = projectSource(state, {
+    read: (value) => value,
+    subscribe: (_, listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    equality: "revision",
+  });
+  let previousRouteData: ModelProvidersRouteData | undefined;
+  let previousLoaderPending: boolean | undefined;
 
-  constructor(element: HTMLElement, context: ApplicationContext, notify: () => void) {
-    super(element, notify);
-    this.context = context;
-  }
-
-  private previousRouteData: ModelProvidersRouteData | undefined;
-  private previousLoaderPending: boolean | undefined;
-
-  override disconnect() {
-    // Pending orders belong to this page; a delayed save must not dispatch
-    // them after navigation over a replacement page's newer order.
-    this.profileActions.resetOrders();
-    this.subscriptions.clear();
-    this.refreshPolicy.dispose();
-    super.disconnect();
-  }
-
-  override beforeUpdate() {
-    // Initial Gateway synchronization must finish before adopting a cached route snapshot.
-    if (!this.isConnected) {
+  function synchronizeRoute(data: ModelProvidersRouteData | undefined, pending: boolean) {
+    loaderPending = pending;
+    if (!connected) {
       return;
     }
-    super.beforeUpdate();
-    const data = this.routeData;
-    const previous = this.previousRouteData;
+    const previous = previousRouteData;
     const routeChanged = data !== previous;
-    const loaderChanged = this.loaderPending !== this.previousLoaderPending;
-    this.previousRouteData = data;
-    this.previousLoaderPending = this.loaderPending;
+    const loaderChanged = pending !== previousLoaderPending;
+    previousRouteData = data;
+    previousLoaderPending = pending;
     if (routeChanged && data) {
       if (data.connect && !previous?.connect) {
-        this.pendingConnection = true;
+        pendingConnection = true;
       }
-      // Revalidation must not replace a search the operator edited after navigation.
-      if (routeChanged && data.provider !== previous?.provider) {
-        this.setState("providerQuery", canonicalModelAuthProviderId(data.provider ?? ""));
+      // Revalidation must not replace a search edited after navigation.
+      if (data.provider !== previous?.provider) {
+        setProviderQuery(canonicalModelAuthProviderId(data.provider ?? ""));
       }
-      this.core.invalidate();
-      this.routeDataObserved = true;
-      this.setSelectedAgent(this.context.settingsAgentSelection.state.selectedId ?? "");
+      core.invalidate();
+      routeDataObserved = true;
+      setSelectedAgent(context.settingsAgentSelection.state.selectedId ?? "");
       if (
-        (data.agentId ?? "") === this.state.selectedAgentId &&
-        data.selectionIntentRevision === this.context.settingsAgentSelection.intentRevision &&
-        this.gateway.isRouteDataCurrent(data)
+        (data.agentId ?? "") === state.selectedAgentId &&
+        data.selectionIntentRevision === context.settingsAgentSelection.intentRevision &&
+        gateway.isRouteDataCurrent(data)
       ) {
-        this.supplemental.adoptCoreData(data.client, data.data);
+        supplemental.adoptCoreData(data.client, data.data);
       } else {
-        this.setState("data", null);
-        this.dataClient = null;
-        this.refreshPolicy.resetPayload();
+        setState("data", null);
+        dataClient = null;
+        refreshPolicy.resetPayload();
       }
-      this.ensureInitialData();
+      ensureInitialData();
     }
-    if (loaderChanged && !this.loaderPending) {
-      this.supplemental.resume();
+    if (loaderChanged && !pending) {
+      supplemental.resume();
     }
+    notify();
   }
 
-  override afterUpdate() {
-    super.afterUpdate();
-    if (!this.isConnected) {
-      return;
-    }
-    if (this.pendingConnection && this.state.data && this.canMutate() && !this.core.loading) {
-      this.pendingConnection = false;
-      void this.login.open();
-    }
-    if (this.pendingCredentialInvalidation && !this.login.busy) {
-      void this.refresh("replacement");
-    }
-  }
+  createEffect(
+    () => ({ routeData: inputs.routeData, pending: inputs.loaderPending ?? false }),
+    (value) => synchronizeRoute(value.routeData, value.pending),
+  );
+  createEffect(
+    () => ({
+      revision: projection.revision(),
+      configRevision: runtimeConfig.revision(),
+      overlayRevision: overlays.revision(),
+      loginBusy: login.busy,
+    }),
+    ({ loginBusy }) => {
+      if (!connected) {
+        return;
+      }
+      if (pendingConnection && state.data && canMutate() && !core.loading) {
+        pendingConnection = false;
+        void login.open();
+      }
+      if (pendingCredentialInvalidation && !loginBusy) {
+        void refresh("replacement");
+      }
+    },
+  );
+  createEffect(
+    () => gatewayState.read().snapshot.client,
+    (client) => (client ? modelCatalog.subscribeModelCatalogCache(client, notify) : undefined),
+  );
+  onSettled(() => {
+    connected = true;
+    gateway.connect();
+    const syncConfig = () => {
+      if (
+        !context.runtimeConfig.state.configSnapshot &&
+        !context.runtimeConfig.state.configLoading
+      ) {
+        void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+      }
+      profileActions.flushPendingOrders();
+    };
+    const syncAgent = () => {
+      syncSelectedAgent();
+      installedAgents.synchronize();
+    };
+    const cleanups = [
+      modelCatalog.subscribeModelCatalogChanges(context.gateway, () => {
+        if (login.busy) {
+          pendingCredentialInvalidation = true;
+        } else {
+          void refresh("publication");
+        }
+      }),
+      installedAgents.subscribe(context.gateway),
+      context.runtimeConfig.subscribe(syncConfig),
+      context.overlays.subscribe(() => profileActions.flushPendingOrders()),
+      context.agents.subscribe(syncAgent),
+      context.settingsAgentSelection.subscribe(syncAgent),
+    ];
+    syncConfig();
+    syncAgent();
+    synchronizeRoute(inputs.routeData, inputs.loaderPending ?? false);
+    return () => {
+      listeners.clear();
+      connected = false;
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+      profileActions.resetOrders();
+      refreshPolicy.dispose();
+      gateway.dispose();
+    };
+  });
 
-  private ensureInitialData() {
+  function ensureInitialData() {
     if (
-      !this.context.agents.state.agentsList &&
-      !this.context.agents.state.agentsLoading &&
-      !this.context.agents.state.agentsError
+      !context.agents.state.agentsList &&
+      !context.agents.state.agentsLoading &&
+      !context.agents.state.agentsError
     ) {
-      void this.context.agents.ensureList();
+      void context.agents.ensureList();
     }
     // The route owns initial loading, even when its page module is already cached.
-    const client = this.gateway.client;
+    const client = gateway.client;
     if (
-      !this.routeDataObserved ||
-      this.loaderPending ||
-      !this.gateway.connected ||
+      !routeDataObserved ||
+      loaderPending ||
+      !gateway.connected ||
       !client ||
-      !this.state.selectedAgentId ||
-      this.core.loading ||
-      (this.state.data !== null && this.state.data.updatedAt !== null && client === this.dataClient)
+      !state.selectedAgentId ||
+      core.loading ||
+      (state.data !== null && state.data.updatedAt !== null && client === dataClient)
     ) {
       return;
     }
-    void this.refresh("replacement");
+    void refresh("replacement");
   }
 
-  retryCatalog() {
-    const { client, epoch } = this.gateway;
-    const agentId = this.state.selectedAgentId;
-    const agentEpoch = this.agentEpoch;
-    if (!this.gateway.connected || !client || !agentId) {
+  function retryCatalog() {
+    const { client, epoch } = gateway;
+    const agentId = state.selectedAgentId;
+    const capturedAgentEpoch = agentEpoch;
+    if (!gateway.connected || !client || !agentId) {
       return;
     }
-    void this.core.discoverCatalog(
+    void core.discoverCatalog(
       client,
       agentId,
       () =>
-        this.gateway.isCurrent({ client, epoch }) &&
-        this.state.selectedAgentId === agentId &&
-        this.agentEpoch === agentEpoch,
+        gateway.isCurrent({ client, epoch }) &&
+        state.selectedAgentId === agentId &&
+        agentEpoch === capturedAgentEpoch,
     );
   }
 
-  private invalidateRequests() {
-    this.logoutConfirmation?.abort();
-    this.core.invalidate();
-    this.supplemental.invalidate();
+  function invalidateRequests() {
+    logoutConfirmation?.abort();
+    core.invalidate();
+    supplemental.invalidate();
   }
 
-  private resetConnectionState(options: { preserveVisibleData?: boolean } = {}) {
+  function resetConnectionState(options: { preserveVisibleData?: boolean } = {}) {
     if (!options.preserveVisibleData) {
-      this.setState("data", null);
-      this.dataClient = null;
+      setState("data", null);
+      dataClient = null;
     }
-    this.refreshPolicy.resetPayload();
-    this.discovery.cancelLoading();
-    this.installedAgents.reset(options);
-    this.resetAgentScopeState();
-    this.profileActions.resetProbes();
-    this.setState("defaultsDraft", null);
+    refreshPolicy.resetPayload();
+    discovery.cancelLoading();
+    installedAgents.reset(options);
+    resetAgentScopeState();
+    profileActions.resetProbes();
+    setState("defaultsDraft", null);
   }
 
-  private resetAgentScopeState() {
-    this.pendingCredentialInvalidation = false;
-    this.login.reset();
-    this.setState("busy", {});
-    this.setState("messages", {});
-    this.setState("probeResults", {});
-    this.closeKeyEditor();
-    this.logoutConfirmation?.abort();
-    this.profileActions.resetOrders();
-    this.setState("addProviderOpen", false);
-    this.setState("addProviderId", "");
-    this.setState("addProviderKey", "");
+  function resetAgentScopeState() {
+    pendingCredentialInvalidation = false;
+    login.reset();
+    setState("busy", {});
+    setState("messages", {});
+    setState("probeResults", {});
+    closeKeyEditor();
+    logoutConfirmation?.abort();
+    profileActions.resetOrders();
+    setAddProviderOpen(false);
+    setState("addProviderId", "");
+    setState("addProviderKey", "");
   }
 
-  private setSelectedAgent(agentId: string): boolean {
-    if (agentId === this.state.selectedAgentId) {
+  function setSelectedAgent(agentId: string): boolean {
+    if (agentId === state.selectedAgentId) {
       return false;
     }
-    this.setState("selectedAgentId", agentId);
-    this.agentEpoch += 1;
-    this.resetAgentScopeState();
+    setState("selectedAgentId", agentId);
+    agentEpoch += 1;
+    resetAgentScopeState();
     return true;
   }
 
-  private syncSelectedAgent() {
-    if (!this.setSelectedAgent(this.context.settingsAgentSelection.state.selectedId ?? "")) {
+  function syncSelectedAgent() {
+    if (!setSelectedAgent(context.settingsAgentSelection.state.selectedId ?? "")) {
       return;
     }
-    this.invalidateRequests();
-    this.setState("data", null);
-    this.dataClient = null;
-    this.refreshPolicy.resetPayload();
+    invalidateRequests();
+    setState("data", null);
+    dataClient = null;
+    refreshPolicy.resetPayload();
     // probeEpochs stays: per-card counters must remain monotonic across agent
     // switches, or an in-flight probe from the old agent can reuse an epoch
     // and clobber a newer probe's state (A->B->A ABA race).
-    this.requestUpdate();
-    this.ensureInitialData();
+    notify();
+    ensureInitialData();
   }
 
-  private refresh(reason: ModelProviderRefreshReason, providerId?: string): Promise<void> {
-    if (!this.state.selectedAgentId) {
+  function refresh(reason: ModelProviderRefreshReason, providerId?: string): Promise<void> {
+    if (!state.selectedAgentId) {
       return Promise.resolve();
     }
-    const client = this.gateway.client;
-    if (!this.gateway.connected || !client) {
-      this.refreshPolicy.markLoadDeferred();
+    const client = gateway.client;
+    if (!gateway.connected || !client) {
+      refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
     // Another client's write is outside the selected owner, so reconcile every provider.
-    const crossClient = this.pendingCredentialInvalidation;
-    this.pendingCredentialInvalidation = false;
+    const crossClient = pendingCredentialInvalidation;
+    pendingCredentialInvalidation = false;
     const reconcile = providerId !== undefined || crossClient;
-    const target = reconcile && this.state.data ? this.state.data : undefined;
-    return this.core.refresh(
+    const target = reconcile && state.data ? state.data : undefined;
+    return core.refresh(
       client,
-      this.state.selectedAgentId,
+      state.selectedAgentId,
       reason,
       target && {
         providerId: crossClient ? undefined : providerId,
@@ -478,60 +484,60 @@ export class ModelProvidersController extends ModelPageController {
     );
   }
 
-  private setBusy = (key: string, value: boolean) =>
-    this.setState("busy", updateRecordEntry(this.state.busy, key, value ? true : null));
+  const setBusy = (key: string, value: boolean) =>
+    setState("busy", updateRecordEntry(state.busy, key, value ? true : null));
 
-  private setMessage = (key: string, message: ModelProviderRowMessage | null) =>
-    this.setState("messages", updateRecordEntry(this.state.messages, key, message));
+  const setMessage = (key: string, message: ModelProviderRowMessage | null) =>
+    setState("messages", updateRecordEntry(state.messages, key, message));
 
-  private closeKeyEditor() {
-    this.setState("keyEditorProvider", null);
-    this.setState("keyDraft", "");
+  function closeKeyEditor() {
+    setState("keyEditorProvider", null);
+    setState("keyDraft", "");
   }
 
-  private async mutateApiKey(
+  async function mutateApiKey(
     provider: string,
     configKey: string,
     apiKey: string | null,
     action: "edit" | "add" = "edit",
   ) {
-    const client = this.gateway.client;
+    const client = gateway.client;
     const key = action === "add" ? "add" : `key:${provider}`;
-    if (!client || !this.canMutate() || this.state.busy[key] || apiKey === "") {
+    if (!client || !canMutate() || state.busy[key] || apiKey === "") {
       return;
     }
-    const clientEpoch = this.gateway.epoch;
-    const agentEpoch = this.agentEpoch;
+    const clientEpoch = gateway.epoch;
+    const capturedAgentEpoch = agentEpoch;
     const isCurrent = () =>
-      this.gateway.isCurrent({ client, epoch: clientEpoch }) && this.agentEpoch === agentEpoch;
-    this.profileActions.clearProbe(provider);
+      gateway.isCurrent({ client, epoch: clientEpoch }) && agentEpoch === capturedAgentEpoch;
+    profileActions.clearProbe(provider);
     const result = await runModelProviderApiKeyMutation(
       {
-        runtimeConfig: this.context.runtimeConfig,
+        runtimeConfig: context.runtimeConfig,
         isCurrentClient: isCurrent,
         isCurrentAgent: isCurrent,
-        canMutate: () => this.canMutate(),
+        canMutate: () => canMutate(),
         refreshProviders: async () => {
-          const previous = this.state.data;
-          await this.refresh("replacement");
-          if (isCurrent() && this.state.data?.error) {
-            const warning = this.state.data.error;
-            this.setState("data", previous);
+          const previous = state.data;
+          await refresh("replacement");
+          if (isCurrent() && state.data?.error) {
+            const warning = state.data.error;
+            setState("data", previous);
             return warning;
           }
-          return this.state.data?.error ?? this.state.data?.catalogError ?? null;
+          return state.data?.error ?? state.data?.catalogError ?? null;
         },
-        setBusy: (busy) => this.setBusy(key, busy),
+        setBusy: (busy) => setBusy(key, busy),
         setMessage: (message) => {
-          this.setMessage(provider, message);
+          setMessage(provider, message);
           if (action === "add") {
-            this.setMessage("add", message);
+            setMessage("add", message);
           }
         },
       },
       {
         client,
-        agentId: this.state.selectedAgentId,
+        agentId: state.selectedAgentId,
         provider: configKey,
         apiKey,
         success: t(
@@ -548,30 +554,26 @@ export class ModelProvidersController extends ModelPageController {
       return;
     }
     if (action === "add") {
-      if (this.state.addProviderId === provider && this.state.addProviderKey.trim() === apiKey) {
-        this.setState("addProviderOpen", Boolean(result.warning));
+      if (state.addProviderId === provider && state.addProviderKey.trim() === apiKey) {
+        setAddProviderOpen(Boolean(result.warning));
         if (!result.warning) {
-          this.setState("addProviderId", "");
+          setState("addProviderId", "");
         }
-        this.setState("addProviderKey", "");
+        setState("addProviderKey", "");
       }
-    } else if (this.state.keyEditorProvider === provider && this.state.keyDraft.trim() === apiKey) {
-      this.closeKeyEditor();
+    } else if (state.keyEditorProvider === provider && state.keyDraft.trim() === apiKey) {
+      closeKeyEditor();
     }
   }
 
-  private async requestLogout(pending: ModelProviderPendingLogout) {
-    if (
-      this.logoutConfirmation ||
-      !this.canMutate() ||
-      this.state.busy[`logout:${pending.cardId}`]
-    ) {
+  async function requestLogout(pending: ModelProviderPendingLogout) {
+    if (logoutConfirmation || !canMutate() || state.busy[`logout:${pending.cardId}`]) {
       return;
     }
     // Agent changes, reconnects and navigation abort this decision before it can
     // authorize a logout under a different scope.
     const controller = new AbortController();
-    this.logoutConfirmation = controller;
+    logoutConfirmation = controller;
     const confirmed = await showConfirmDialog({
       title: t("modelProviders.logout.actionFor", { account: pending.label }),
       message: t("modelProviders.logout.confirm", { provider: pending.label }),
@@ -579,36 +581,36 @@ export class ModelProvidersController extends ModelPageController {
       danger: true,
       signal: controller.signal,
     }).finally(() => {
-      this.logoutConfirmation = null;
+      logoutConfirmation = null;
     });
-    if (confirmed && !controller.signal.aborted && this.canMutate()) {
-      await this.profileActions.logout(pending.cardId, pending.target);
+    if (confirmed && !controller.signal.aborted && canMutate()) {
+      await profileActions.logout(pending.cardId, pending.target);
     }
   }
 
-  private async saveDefaults() {
-    const defaults = this.state.defaultsDraft;
+  async function saveDefaults() {
+    const defaults = state.defaultsDraft;
     if (!defaults) {
       return;
     }
-    const client = this.context.gateway.snapshot.client;
+    const client = context.gateway.snapshot.client;
     let mutation: Promise<void> | undefined;
     // Global defaults remain editable when the configured roster is empty.
     if (
       client &&
-      !modelProviderConfigMutationBlockedReason(this.context) &&
-      !modelProviderConfigBusy(this.context) &&
-      !this.state.busy.defaults
+      !modelProviderConfigMutationBlockedReason(context) &&
+      !modelProviderConfigBusy(context) &&
+      !state.busy.defaults
     ) {
-      const clientEpoch = this.gateway.epoch;
-      const agentEpoch = this.agentEpoch;
+      const clientEpoch = gateway.epoch;
+      const capturedAgentEpoch = agentEpoch;
       mutation = runModelProviderConfigMutation(
         {
-          runtimeConfig: this.context.runtimeConfig,
-          isCurrentClient: () => this.gateway.isCurrent({ client, epoch: clientEpoch }),
-          isCurrentAgent: () => this.agentEpoch === agentEpoch,
-          setBusy: (busy) => this.setBusy("defaults", busy),
-          setMessage: (message) => this.setMessage("defaults", message),
+          runtimeConfig: context.runtimeConfig,
+          isCurrentClient: () => gateway.isCurrent({ client, epoch: clientEpoch }),
+          isCurrentAgent: () => agentEpoch === capturedAgentEpoch,
+          setBusy: (busy) => setBusy("defaults", busy),
+          setMessage: (message) => setMessage("defaults", message),
         },
         {
           raw: buildDefaultsPatch(defaults),
@@ -620,19 +622,26 @@ export class ModelProvidersController extends ModelPageController {
     await mutation;
     // Global defaults outlive agent selection. Connection resets clear the draft;
     // object identity protects newer edits.
-    if (this.state.defaultsDraft === defaults) {
-      this.setState("defaultsDraft", null);
+    if (state.defaultsDraft === defaults) {
+      setState("defaultsDraft", null);
     }
   }
 
-  viewProps() {
-    const gatewaySnapshot = this.context.gateway.snapshot;
+  function viewProps() {
+    i18nRevision();
+    projection.read();
+    runtimeConfig.read();
+    agents.read();
+    gatewayState.read();
+    selection.read();
+    overlays.read();
+    const gatewaySnapshot = context.gateway.snapshot;
     const operatorAuth = gatewaySnapshot.hello?.auth;
-    const data = this.state.data ?? EMPTY_MODEL_PROVIDERS_DATA;
-    const configObject = currentConfigObject(this.context.runtimeConfig.state);
+    const data = state.data ?? EMPTY_MODEL_PROVIDERS_DATA;
+    const configObject = currentConfigObject(context.runtimeConfig.state);
     const catalog = modelCatalog.readAgentModelCatalog(
       gatewaySnapshot.client,
-      this.state.selectedAgentId,
+      state.selectedAgentId,
     );
     const { configuredDefaults, cards, noSelectableAgents, rosterError, agentLabel, values } =
       buildModelProviderPresentation({
@@ -642,111 +651,113 @@ export class ModelProvidersController extends ModelPageController {
         ),
         catalog,
         data,
-        agentsState: this.context.agents.state,
-        agentId: this.state.selectedAgentId,
-        defaultsDraft: this.state.defaultsDraft,
+        agentsState: context.agents.state,
+        agentId: state.selectedAgentId,
+        defaultsDraft: state.defaultsDraft,
       });
     const stageDefaults = (patch: Partial<DefaultsDraft>) => {
-      this.setState("defaultsDraft", {
-        ...(this.state.defaultsDraft ?? configuredDefaults),
+      setState("defaultsDraft", {
+        ...(state.defaultsDraft ?? configuredDefaults),
         ...patch,
       });
-      this.setMessage("defaults", null);
-      void this.saveDefaults();
+      setMessage("defaults", null);
+      void saveDefaults();
     };
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
     const usageAvailable = isGatewayMethodAdvertised(gatewaySnapshot, "codex.accountUsage");
-    const login = this.login.pageActions;
+    const pageLogin = login.pageActions;
     const props: ModelProvidersViewProps = {
       installedAgents: undefined,
-      providerQuery: this.state.providerQuery,
-      onProviderQueryChange: (value) => this.setState("providerQuery", value),
-      onConnectProvider: () => void this.login.connectProvider(values.configuredModels),
-      usageClient: !this.mutationBlockedReason() && usageAvailable ? gatewaySnapshot.client : null,
-      usageAgentId: this.state.selectedAgentId,
+      providerQuery: providerQuery(),
+      onProviderQueryChange: setProviderQuery,
+      onConnectProvider: () => void login.connectProvider(values.configuredModels),
+      usageClient: !mutationBlockedReason() && usageAvailable ? gatewaySnapshot.client : null,
+      usageAgentId: state.selectedAgentId,
+      registerAccountUsage: (element) => {
+        accountUsages.add(element);
+        return () => accountUsages.delete(element);
+      },
       connected: gatewaySnapshot.phase === "connected",
       loading:
         gatewaySnapshot.phase === "connected" &&
-        this.state.data === null &&
+        state.data === null &&
         !rosterError &&
         !noSelectableAgents,
-      refreshing: this.core.loading,
+      refreshing: core.loading,
       error: rosterError ?? (noSelectableAgents ? t("agents.noAgents") : data.error),
       providerUsageFailed: data.providerUsage?.ok === false,
-      supplementalLoading: this.loaderPending || this.supplemental.loading,
+      supplementalLoading: loaderPending || supplemental.loading,
       updatedAt: data.updatedAt,
       credentialAgentLabel: agentLabel,
-      cards: noSelectableAgents ? [] : this.installedAgents.filterProviders(cards),
+      cards: noSelectableAgents ? [] : installedAgents.filterProviders(cards),
       ...values,
-      catalogDiscovering: this.core.catalogLoading || Boolean(catalog?.pendingProviders?.length),
-      catalogDiscoveryError: this.core.catalogLoading
-        ? null
-        : (this.core.catalogError ?? data.catalogError),
-      configBusy: modelProviderConfigBusy(this.context),
+      catalogDiscovering: core.catalogLoading || Boolean(catalog?.pendingProviders?.length),
+      catalogDiscoveryError: core.catalogLoading ? null : (core.catalogError ?? data.catalogError),
+      configBusy: modelProviderConfigBusy(context),
       canViewProfiles:
         gatewaySnapshot.phase === "connected" &&
         operatorAuth?.scopes !== undefined &&
         hasOperatorAdminAccess(operatorAuth),
-      mutationBlockedReason: this.mutationBlockedReason(),
-      defaultsMutationBlockedReason: modelProviderConfigMutationBlockedReason(this.context),
-      providerUsageStalled: this.refreshPolicy.incompleteUsageExhausted,
+      mutationBlockedReason: mutationBlockedReason(),
+      defaultsMutationBlockedReason: modelProviderConfigMutationBlockedReason(context),
+      providerUsageStalled: refreshPolicy.incompleteUsageExhausted,
       probeAvailable: advertised !== false,
-      busy: this.state.busy,
-      messages: this.state.messages,
-      probeResults: this.state.probeResults,
-      keyEditorProvider: this.state.keyEditorProvider,
-      keyDraft: this.state.keyDraft,
-      profileOrders: this.state.profileOrders,
-      addProviderOpen: this.state.addProviderOpen,
-      addProviderId: this.state.addProviderId,
-      addProviderKey: this.state.addProviderKey,
+      busy: state.busy,
+      messages: state.messages,
+      probeResults: state.probeResults,
+      keyEditorProvider: state.keyEditorProvider,
+      keyDraft: state.keyDraft,
+      profileOrders: state.profileOrders,
+      addProviderOpen: addProviderOpen(),
+      addProviderId: state.addProviderId,
+      addProviderKey: state.addProviderKey,
       onRefresh: () =>
         void (rosterError
-          ? this.context.agents.refreshList()
+          ? context.agents.refreshList()
           : Promise.all([
-              this.context.runtimeConfig.refresh({ background: true }),
-              this.refresh("forced", this.core.retryProvider),
+              context.runtimeConfig.refresh({ background: true }),
+              refresh("forced", core.retryProvider),
             ])),
       onOpenKeyEditor: (provider) => {
-        this.setState("keyEditorProvider", provider);
-        this.setState("keyDraft", "");
-        this.setMessage(provider, null);
+        setState("keyEditorProvider", provider);
+        setState("keyDraft", "");
+        setMessage(provider, null);
       },
-      onCloseKeyEditor: () => this.closeKeyEditor(),
-      onKeyDraftChange: (value) => this.setState("keyDraft", value),
+      onCloseKeyEditor: () => closeKeyEditor(),
+      onKeyDraftChange: (value) => setState("keyDraft", value),
       onSaveKey: (provider, configKey) =>
-        void this.mutateApiKey(provider, configKey, this.state.keyDraft.trim()),
-      onRemoveKey: (provider, configKey) => void this.mutateApiKey(provider, configKey, null),
-      onProbe: (cardId, providers) => void this.profileActions.probe(cardId, providers),
-      onRequestLogout: (pending) => void this.requestLogout(pending),
+        void mutateApiKey(provider, configKey, state.keyDraft.trim()),
+      onRemoveKey: (provider, configKey) => void mutateApiKey(provider, configKey, null),
+      onProbe: (cardId, providers) => void profileActions.probe(cardId, providers),
+      onRequestLogout: (pending) => void requestLogout(pending),
       onProfileOrderChange: (cardId, provider, profileIds) =>
-        this.profileActions.setOrder(cardId, provider, profileIds),
+        profileActions.setOrder(cardId, provider, profileIds),
       onAddProviderToggle: () => {
-        this.setState("addProviderOpen", !this.state.addProviderOpen);
-        this.setState("addProviderKey", "");
-        this.setMessage("add", null);
+        setAddProviderOpen((open) => !open);
+        setState("addProviderKey", "");
+        setMessage("add", null);
       },
-      onAddProviderKeyChange: (value) => this.setState("addProviderKey", value),
+      onAddProviderKeyChange: (value) => setState("addProviderKey", value),
       onAddProvider: () => {
-        const provider = this.state.addProviderId;
+        const provider = state.addProviderId;
         if (provider) {
-          void this.mutateApiKey(provider, provider, this.state.addProviderKey.trim(), "add");
+          void mutateApiKey(provider, provider, state.addProviderKey.trim(), "add");
         }
       },
-      ...modelDefaultsActions(() => this.state.defaultsDraft ?? configuredDefaults, stageDefaults),
-      onCatalogRetry: () => this.retryCatalog(),
-      ...this.login.providerActions,
+      ...modelDefaultsActions(() => state.defaultsDraft ?? configuredDefaults, stageDefaults),
+      onCatalogRetry: () => retryCatalog(),
+      ...login.providerActions,
     };
     return {
       props,
       cards,
-      installedAgentsAvailable: this.installedAgents.available(),
+      installedAgentsAvailable: installedAgents.available(),
       scope: {
         agentLabel,
-        onConnect: login.onConnect,
-        connectDisabled: login.connectDisabled || this.discovery.busy || this.state.addProviderOpen,
+        onConnect: pageLogin.onConnect,
+        connectDisabled: pageLogin.connectDisabled || discovery.busy || addProviderOpen(),
       },
-      loginMessage: this.state.messages.connection ?? login.loginMessage,
+      loginMessage: state.messages.connection ?? pageLogin.loginMessage,
       discovery: {
         agentLabel,
         credentialChoices:
@@ -756,4 +767,13 @@ export class ModelProvidersController extends ModelPageController {
       },
     };
   }
+  return {
+    viewProps,
+    installedAgents,
+    discovery,
+    login,
+    retryCatalog,
+  };
 }
+
+export type ModelProvidersOwner = ReturnType<typeof createModelProviders>;

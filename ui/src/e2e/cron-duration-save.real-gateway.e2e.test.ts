@@ -13,7 +13,7 @@ import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { CronJob } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { openPicker, pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let instance: OpenClawTestInstance | undefined;
@@ -204,15 +204,71 @@ catalogSuite.define(() => {
           await page.locator("#cron-payload-text").fill("Do not submit this draft");
           const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
+            .poll(async () => {
+              await openPicker(picker);
+              return picker.locator('[role="option"][data-value="fixture/retiring"]').count();
+            })
             .toBe(1);
           if (captureEnabled) {
             await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
           }
           await publish("published");
-          await expect
-            .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
-            .toBe(1);
+          try {
+            await expect
+              .poll(async () => {
+                await openPicker(picker);
+                return picker.locator('[role="option"][data-value="fixture/published"]').count();
+              })
+              .toBe(1);
+          } catch (error) {
+            try {
+              const sequence = frames.flatMap<{
+                kind: string;
+                ok?: boolean;
+                fixtureModels?: string[];
+              }>((entry) => {
+                const frame = requireRecord(requireRecord(entry).frame);
+                if (frame.event === "config.changed" || frame.event === "chat.metadata.changed") {
+                  return [{ kind: frame.event }];
+                }
+                if (frame.method === "models.list") {
+                  return [{ kind: "models.request" }];
+                }
+                if (frame.type !== "res") {
+                  return [];
+                }
+                const models = frame.ok === true ? requireRecord(frame.payload).models : [];
+                return [
+                  {
+                    kind: "models.reply",
+                    ok: frame.ok === true,
+                    fixtureModels: ["anchor", "retiring", "published"].filter(
+                      (id) =>
+                        Array.isArray(models) &&
+                        models.some((model) => {
+                          const row = requireRecord(model);
+                          return row.provider === "fixture" && row.id === id;
+                        }),
+                    ),
+                  },
+                ];
+              });
+              console.error(
+                "[automation-catalog-publication]",
+                JSON.stringify({
+                  sequence: sequence.slice(-20),
+                  publicationCount: commands.length,
+                  pickerCount: await picker.count(),
+                  retiringOptionCount: await picker
+                    .locator('[role="option"][data-value="fixture/retiring"]')
+                    .count(),
+                }),
+              );
+            } catch {
+              console.error("[automation-catalog-publication] diagnostic unavailable");
+            }
+            throw error;
+          }
           expect(
             await picker.locator('[role="option"][data-value="fixture/retiring"]').count(),
           ).toBe(0);
@@ -226,6 +282,7 @@ catalogSuite.define(() => {
           const error = page.locator(".cron-error-banner");
           await error.waitFor({ state: "visible" });
           expect(await error.textContent()).toContain("Catalog transport unavailable");
+          await openPicker(picker);
           expect(
             await picker.locator('[role="option"][data-value="fixture/published"]').count(),
           ).toBe(1);
@@ -238,7 +295,10 @@ catalogSuite.define(() => {
           rejectCatalogReplies = false;
           await publish("recovered");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="fixture/recovered"]').count())
+            .poll(async () => {
+              await openPicker(picker);
+              return picker.locator('[role="option"][data-value="fixture/recovered"]').count();
+            })
             .toBe(1);
           await error.waitFor({ state: "hidden" });
           expect(await page.locator("#cron-name").inputValue()).toBe("Retain this draft");
@@ -568,7 +628,6 @@ suite.define(() => {
       const jobId = cronJobId(job);
       await withCronJobPage(cliJson, jobId, async (evidence) => {
         const { page, servedDocumentSha256, servedAssets } = evidence;
-        await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
         await page.locator("details.cron-advanced > summary").click();
         const timeout = page.locator("#cron-timeout-seconds");
         expect(await timeout.inputValue()).toBe("90");

@@ -101,7 +101,7 @@ async function inspectSqliteImage(
 async function inspectSqlite(sourcePath: string, descriptor: PortDescriptor) {
   const prepared = prepareSqliteReadOnlyLocationSync(sourcePath);
   try {
-    using db = openNodeSqliteDatabase(prepared.location, { readOnly: true, readBigInts: true });
+    using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
     return await inspectSqliteImage(db, descriptor);
   } finally {
     prepared.cleanup();
@@ -307,7 +307,7 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
         );
         return { engine, descriptor, facts: undefined };
       }
-      using db = openNodeSqliteDatabase(prepared.location, { readOnly: true, readBigInts: true });
+      using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
       const descriptor = await loadDatabasePortDescriptor(
         sqliteDatabasePortProvider(db).id,
         "config" in task ? task.config : undefined,

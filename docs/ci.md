@@ -35,6 +35,11 @@ Agent auth-store admission and configured model-owner changes explicitly select
 the Gateway agent-config readiness suite. Its lazy startup path is not fully
 visible to the bounded import graph; the owner watch preserves overlap coverage.
 
+Gateway close and run-shutdown owner changes likewise select the Gateway
+detached-execution shutdown and late-admission suites. `server.close()` reaches
+those owners through the kernel's lazy shutdown runtime, beyond the bounded
+import graph.
+
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
@@ -69,6 +74,11 @@ Add `ci:full` before a PR run to select every `checks-ui` unit shard, all
 `checks-ui-e2e-real-gateway` shard, including desktop resize proof. These use the
 same UI inventories and shard budgets as scheduled `main` CI. Unlabeled PRs keep
 change-selected UI coverage; the label does not expand unrelated platform lanes.
+
+Real-Gateway UI shards have a 30-minute whole-job budget on the normal Blacksmith
+path. Successful 16-class jobs reached 19:04, leaving too little margin under the
+former 20-minute limit. Hosted and retry paths retain their 40-minute budget;
+runner size, worker count, shard split, and individual test deadlines are unchanged.
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
@@ -134,7 +144,7 @@ runner startup, then reject expired requests before checkout and hydration. This
 queue allowance does not extend running-job or idle deadlines; see
 [Testbox spending limits](/ci/runners#testbox-spending-limits).
 
-Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. The last four rows then each run one root-test partition serially, leaving extension tests and scripts in the central row. Narrow plans reuse four already-selected rows when available; smaller selections retain central root checking. This adds no jobs or compiler overlap. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. The last four rows then each run one root-test partition serially, leaving extension tests and scripts in the central row. Narrow plans reuse four already-selected rows when available; smaller selections retain central root checking. This adds no jobs or compiler overlap. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts retain both packed core-lint rows on the Blacksmith 16-class. Ordinary upstream hybrid push and scheduled runs, plus same-repository PRs, place `preflight`, the selected `pr-failure-report`, and `openclaw/ci-gate` on hosted `ubuntu-24.04`; fork first attempts and all dispatch, qualification, release, and other backend routes retain their existing overrides. The mandatory controls count toward the existing hosted-row budget. See [critical-path assignment evidence](/ci/routing-costs#hosted-assignment-on-the-critical-path). Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
 Additional checks and narrow-PR guards and dependency scans start directly after preflight. Ordinary PRs selecting Madge or Kysely divide guards into `check-guards` and `check-guards-architecture`, with the same runner routing and no compiler-plan wait. The manifest retains every check once, and both selected rows must pass. Other events retain their existing rows. Guards retain the exact comparison base and shared check commands; compiler and lint rows wait for their selected graphs. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
 

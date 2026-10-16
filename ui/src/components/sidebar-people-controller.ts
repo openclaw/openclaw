@@ -1,9 +1,9 @@
-import type { ReactiveController } from "lit";
 import { t } from "../i18n/index.ts";
+import { createPresenceActivityLifecycle } from "../lib/presence-activity-lifecycle.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
+import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
 import { showToast } from "../lib/toast.ts";
-import { createPresenceActivityController } from "../lit/presence-activity-controller.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import type { SolidController } from "../lit/solid-controller-host.ts";
 import { sidebarPresenceActivityViewers, sidebarPresenceScope } from "./app-sidebar-presence.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { registerPersonActivityData } from "./person-activity-data.ts";
@@ -16,7 +16,7 @@ export type SidebarPeopleSortMode = "presence" | "running" | "open" | "name";
 const EVENTS = ["pointerover", "pointerout", "focusin", "focusout", "click", "keydown"] as const;
 
 /** One lazy interaction owner per sidebar; the data stays in SessionDataController. */
-export class SidebarPeopleController implements ReactiveController {
+export class SidebarPeopleController implements SolidController {
   presenceFilter: SidebarPeoplePresenceFilter = "online";
   statusFilter: SidebarPeopleStatusFilter = "all";
   sortMode: SidebarPeopleSortMode = "presence";
@@ -45,19 +45,18 @@ export class SidebarPeopleController implements ReactiveController {
   }
 
   private runtime: SidebarPeopleRuntime | null = null;
-  private readonly activityExpiry: ReturnType<typeof createPresenceActivityController>;
+  private readonly activityExpiry: ReturnType<typeof createPresenceActivityLifecycle>;
   private activityScope = "";
   private loading: Promise<typeof import("./sidebar-people.runtime.ts")> | null = null;
   private generation = 0;
   private pendingTarget: HTMLElement | null = null;
 
   constructor(private readonly host: AppSidebarSessionNavigationElement) {
-    host.addController(this);
-    this.activityExpiry = createPresenceActivityController(
-      host,
+    this.activityExpiry = createPresenceActivityLifecycle(
       () => (host.connected ? sidebarPresenceActivityViewers(host) : []),
       () => host.refreshPresencePresentation(),
     );
+    host.addController(this);
     new SubscriptionsController(host)
       .effect(
         () => host.sessionDataContext,
@@ -78,6 +77,7 @@ export class SidebarPeopleController implements ReactiveController {
     for (const event of EVENTS) {
       this.host.addEventListener(event, this.handleEvent);
     }
+    this.activityExpiry.connect();
   }
 
   hostUpdate(): void {
@@ -122,6 +122,7 @@ export class SidebarPeopleController implements ReactiveController {
     this.clearPending();
     this.runtime?.dispose();
     this.runtime = null;
+    this.activityExpiry.disconnect();
   }
 
   private clearPending(): void {

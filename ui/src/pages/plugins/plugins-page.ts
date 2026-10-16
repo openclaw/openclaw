@@ -134,7 +134,7 @@ export class PluginsPageController {
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
   });
   readonly skillPreview = new PluginPreviewController(this, this.gateway);
-  readonly mcpLogin = new PluginMcpLoginController(this, this.gateway, {
+  readonly mcpLogin = new PluginMcpLoginController(this.gateway, {
     getDetail: () => this.state.detail,
     getName: (pluginId) =>
       this.state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name,
@@ -241,7 +241,6 @@ export class PluginsPageController {
 
   dispose() {
     this.active = false;
-    this.mcpLogin.reset();
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     this.skillPreview.close();
     this.discovery.disconnect();
@@ -260,8 +259,7 @@ export class PluginsPageController {
       event.key !== "Escape" ||
       isComposingKeyboardEvent(event) ||
       document.querySelector(".shell-nav[aria-modal='true']") ||
-      registryFor(document).stack.at(-1)?.open ||
-      (event.target instanceof Element && event.target.closest("wa-dropdown[open]"))
+      registryFor(document).stack.at(-1)?.open
     ) {
       return;
     }
@@ -396,7 +394,9 @@ export class PluginsPageController {
   }
 
   private invalidateRequests(invalidateCatalog: boolean) {
-    this.mcpLogin.reset();
+    if (this.active) {
+      this.mcpLogin.reset();
+    }
     if (invalidateCatalog) {
       this.catalogTask.reset();
       this.discovery.invalidate();

@@ -12,10 +12,12 @@ import {
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   create as createSessionRow,
+  selectionRow,
   sort as sortSessionRows,
 } from "./session-row-projection-record.js";
 import { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowSelection } from "./session-row-selection.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
@@ -202,6 +204,7 @@ export function createSessionRowProjectionFixture(params: {
           (!query.storePath || row.storeTarget.storePath === query.storePath),
       ),
     describe,
+    readPreview: () => undefined,
     readSource: () => undefined,
     readMembership: (query) => describe(query)?.membership,
     // This row-only fixture cannot certify the resident owner's complete ancestry graph.
@@ -317,6 +320,19 @@ export function createSessionRowProjectionFixture(params: {
     },
     isCurrent: (row) => rows.get(id(row))?.generation === row.generation,
     selectEntries,
+    async projectRecentCandidates(profileIds) {
+      const selection = createSessionRowSelection(
+        cfg,
+        projection.state.scope({}),
+        false,
+        () => rowContext,
+        true,
+      );
+      for (const row of rows.values()) {
+        selection.add(selectionRow(row)!);
+      }
+      return selection.createdEntries(profileIds);
+    },
     listCreatedActors: () =>
       selectEntries({ sortBy: null }).flatMap((row) =>
         row.entry.createdActor ? [row.entry.createdActor] : [],

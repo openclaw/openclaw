@@ -93,6 +93,72 @@ afterEach(async () => {
 });
 
 describe("update readiness generation", () => {
+  it.each(
+    (["npm", "pnpm", "bun"] as const).flatMap((mode) =>
+      (["ready", "starting", "old-version"] as const).map((state) => ({ mode, state })),
+    ),
+  )(
+    "observes a package watcher restart without failing --no-restart ($mode, $state)",
+    async ({ mode, state }) => {
+      mockProcessPlatform("linux");
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(
+        makeGatewayService({ status: "running", pid: 8000 }),
+      );
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      }));
+      callGateway.mockImplementation(
+        state === "starting"
+          ? async () => {
+              throw new Error("gateway timeout after 3000ms");
+            }
+          : gatewayHealthResponse({
+              server: {
+                version: state === "ready" ? "2026.9.8" : "2026.9.7",
+                buildId: "candidate",
+                bootId: "watcher-successor",
+              },
+            }),
+      );
+      const result: UpdateRunResult = {
+        status: "ok",
+        mode,
+        after: { version: "2026.9.8" },
+        steps: [],
+        durationMs: 0,
+      };
+      const outcome = await maybeRestartService({
+        result,
+        opts: { json: true, restart: false, run: { runId: "watcher-restart", env: {} } },
+        shouldRestart: false,
+        observePackageReplacement: true,
+        refreshServiceEnv: false,
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: await listen(),
+        timeoutMs: 1000,
+      });
+      expect(outcome).toBe("ok");
+      expect(runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
+      expect(result.status).toBe("ok");
+      expect(result.steps).toHaveLength(1);
+      expect(result.steps[0]?.failureFacts).toBeUndefined();
+      expect(result.steps[0]?.termination).toBeUndefined();
+      expect(result.steps[0]?.advisory?.message).toEqual(
+        state === "ready" ? undefined : expect.stringContaining("--no-restart"),
+      );
+      expect(recordUpdateRunVerification).toHaveBeenCalledWith(
+        "watcher-restart",
+        expect.objectContaining({
+          versionMatch: state === "starting" ? undefined : state === "ready",
+        }),
+        expect.anything(),
+      );
+    },
+  );
+
   it.each(["transient-timeout", "mixed"])(
     "records collection and channel probe warnings after core verification (%s)",
     async (kind) => {

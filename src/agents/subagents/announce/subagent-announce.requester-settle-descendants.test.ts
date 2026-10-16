@@ -1,5 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { compactSubagentRunForMemory, subagentRuns } from "../registry/subagent-registry-memory.js";
+import { listSubagentRunsForRequester } from "../registry/subagent-registry-read.js";
+import { persistRegistryFixture } from "../registry/subagent-registry-state.fixture.test-support.js";
+import { clearSubagentRunsReadCacheForTest } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "../registry/subagent-run-generation.js";
 import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
@@ -7,6 +12,7 @@ import { createRequesterDescendantReader } from "./subagent-announce.requester-s
 afterEach(() => {
   vi.restoreAllMocks();
   subagentRuns.clear();
+  clearSubagentRunsReadCacheForTest();
 });
 
 function fixture() {
@@ -20,6 +26,7 @@ function fixture() {
     cleanup: "keep",
     createdAt: 1,
     execution: { status: "terminal", startedAt: 2, endedAt: 3 },
+    completion: { required: false },
     delivery: { status: "delivered" },
     requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
   };
@@ -44,8 +51,65 @@ it("reads descendant facts without traversing unrelated retained runs", async ()
     requesterSessionKey: "agent:main:unrelated",
   });
   const values = vi.spyOn(subagentRuns, "values");
+  expect(listSubagentRunsForRequester(entry.requesterSessionKey)).toEqual([entry]);
+  const sibling = { ...entry, runId: "sibling", childSessionKey: "agent:main:subagent:sibling" };
+  subagentRuns.set(sibling.runId, sibling);
+  const changed = { ...entry, task: "updated task" };
+  subagentRuns.set(entry.runId, changed);
+  expect(listSubagentRunsForRequester(entry.requesterSessionKey)).toEqual([changed, sibling]);
   await expect(read()).resolves.toEqual({ unsettled: false, active: 0 });
   expect(values).not.toHaveBeenCalled();
+});
+
+it("counts resident and durable descendants without restoring settled text", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+    async () => {
+      const { entry, read } = fixture();
+      const completed: SubagentRunRecord = {
+        ...entry,
+        runId: "completed",
+        childSessionKey: "agent:main:subagent:completed",
+        requesterSettleWake: undefined,
+        cleanupCompletedAt: 5,
+        task: "retained task ".repeat(100),
+        completion: { required: false, resultText: "retained result" },
+      };
+      const pending: SubagentRunRecord = {
+        ...completed,
+        runId: "pending",
+        childSessionKey: "agent:main:subagent:pending",
+        cleanupCompletedAt: undefined,
+        execution: { status: "terminal", endedAt: 5 },
+        delivery: { status: "failed", disposition: "retryable" },
+      };
+      persistRegistryFixture(new Map([entry, completed, pending].map((row) => [row.runId, row])));
+      subagentRuns.set(completed.runId, compactSubagentRunForMemory(completed));
+      clearSubagentRunsReadCacheForTest();
+      const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      await expect(read()).resolves.toEqual({
+        unsettled: true,
+        active: 0,
+        deliveryWaitUntil: 300_005,
+      });
+      for (const delivery of [
+        { status: "delivered" },
+        { status: "not_required" },
+        { status: "discarded" },
+        { status: "failed", disposition: "intentional_non_delivery" },
+        { status: "failed", disposition: "permanent_failure" },
+      ] as const) {
+        persistRegistryFixture(new Map([[pending.runId, { ...pending, delivery }]]), [
+          pending.runId,
+        ]);
+        await expect(read()).resolves.toEqual({ unsettled: false, active: 0 });
+      }
+      expect(execute.mock.calls.filter(([, command]) => command.type === "subagents.runs")).toEqual(
+        [],
+      );
+      expect(subagentRuns.get(completed.runId)?.completion?.resultText).toBeUndefined();
+    },
+  );
 });
 
 it.each(["removed", "replaced", "rearmed"] as const)(

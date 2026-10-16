@@ -12,6 +12,7 @@ import { isRecord as record } from "@openclaw/normalization-core/record-coerce";
 import { parse } from "acorn";
 import type { CodeModeExecutorId } from "../../src/agents/code-mode-executor-types.js";
 import { resolveCodeModeConfig } from "../../src/agents/code-mode-runtime.js";
+import { normalizeUsage } from "../../src/agents/usage.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { readResponseWithLimit } from "../../src/infra/http-response-body.js";
 import type { ManagedRun } from "../../src/process/supervisor/types.js";
@@ -332,17 +333,17 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]) {
       if (typeof message.provider === "string" && typeof message.model === "string") {
         models.add(`${message.provider}/${message.model}`);
       }
-      const usage = record(message.usage) ? message.usage : {};
-      const inputTokens = asFiniteNumber(usage.input);
-      const outputTokens = asFiniteNumber(usage.output);
+      const usage = normalizeUsage(record(message.usage) ? message.usage : undefined);
+      const inputTokens = usage?.input;
+      const outputTokens = usage?.output;
       if (inputTokens !== undefined && outputTokens !== undefined) {
         usageSamples += 1;
         input += inputTokens;
         output += outputTokens;
-        total = addObservedNumber(total, usage.totalTokens);
-        cacheRead = addObservedNumber(cacheRead, usage.cacheRead);
-        cacheWrite = addObservedNumber(cacheWrite, usage.cacheWrite);
-        costUsd = addObservedNumber(costUsd, record(usage.cost) ? usage.cost.total : undefined);
+        total = addObservedNumber(total, usage?.total);
+        cacheRead = addObservedNumber(cacheRead, usage?.cacheRead);
+        cacheWrite = addObservedNumber(cacheWrite, usage?.cacheWrite);
+        costUsd = addObservedNumber(costUsd, usage?.cost?.total);
       }
       for (const block of Array.isArray(message.content) ? message.content : []) {
         if (

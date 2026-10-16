@@ -19,7 +19,7 @@ import {
 
 const skill = {
   name: "Calendar guide",
-  description: "Configure your calendar and review all supporting files.",
+  description: "Configure your calendar and review all supporting files. ".repeat(16),
 };
 const catalogId = "ch_Y2FsZW5kYXI";
 const bundle: PluginsSkillsReadResult = {
@@ -154,6 +154,33 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
       });
       try {
         await page.goto(`${server.baseUrl}${route}`);
+        if (name === "installed settings") {
+          const description = page.locator(
+            ".plugin-skills-section .plugin-capability__copy > span",
+          );
+          for (const width of [1440, 390]) {
+            await page.setViewportSize({ width, height: 1000 });
+            expect(await description.textContent()).toBe(skill.description);
+            const layouts = await description.evaluateAll((elements) =>
+              elements.map((element) => {
+                const style = getComputedStyle(element);
+                return {
+                  lineClamp: style.webkitLineClamp,
+                  height: element.getBoundingClientRect().height,
+                  lineHeight: Number.parseFloat(style.lineHeight),
+                  scrollHeight: element.scrollHeight,
+                };
+              }),
+            );
+            expect(layouts).toHaveLength(1);
+            const layout = layouts[0]!;
+            expect(layout.lineClamp).toBe("2");
+            expect(layout.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
+            expect(layout.scrollHeight).toBeGreaterThan(layout.height);
+            await captureScreenshot(page, `skill-row-${width}.png`, "viewport");
+          }
+          await page.setViewportSize({ width: 1440, height: 900 });
+        }
         await page.getByRole("button", { name: new RegExp(skill.name) }).click();
         const request = await gateway.waitForRequest("plugins.skills.read");
         expect(request.params).toEqual(

@@ -2496,12 +2496,11 @@ describe("runCodexAppServerAttempt", () => {
       expect(inputText).toContain("[Subagent Task]");
       expect(inputText).not.toContain("private-input-fixture.txt");
       expect(inputText.includes("sk-1234567890abcdef")).toBe(preserve);
+      expect(inputText).not.toContain("[content omitted]");
       if (preserve) {
         expect(inputText).toContain("COBALT-ORCHID-7429");
-        expect(inputText).not.toContain("[content omitted]");
       } else {
         expect(inputText).not.toContain("COBALT-ORCHID-7429");
-        expect(inputText).toContain("[content omitted]");
       }
     },
   );
@@ -4181,6 +4180,33 @@ describe("runCodexAppServerAttempt", () => {
       }
     },
   );
+
+  it("preserves on-request approval policy for native plugin threads and turns", async () => {
+    const { sessionFile, workspaceDir, agentDir } = createRunPaths();
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(
+      createGoogleCalendarRequest((method) =>
+        codexAppInventoryResponse(method, [googleCalendarAppInfo(true)]),
+      ),
+    );
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        ...GOOGLE_CALENDAR_PLUGIN_CONFIG,
+        appServer: { approvalPolicy: "on-request" },
+      },
+    });
+    await completeStartedRun(run, waitForMethod, completeTurn);
+
+    const threadStart = requests.find((request) => request.method === "thread/start");
+    expect(threadStart?.params).toMatchObject({
+      approvalPolicy: "on-request",
+      config: { apps: { "google-calendar-app": { enabled: true } } },
+    });
+    expect(requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
+      approvalPolicy: "on-request",
+    });
+  });
 
   it.each([
     {

@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -10,11 +9,12 @@ import type {
   SessionRowEventListener,
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { TestChatPane } from "./chat-pane.test-support.ts";
@@ -504,9 +504,14 @@ describe("mounted pane session event ownership", () => {
         ];
         adoptStartedChatRun(state, "current-run", 2);
         const container = document.createElement("div");
+        const view = mountSolid(
+          ChatPaneModelControl,
+          composerControls(state, "example/primary").composerControls,
+          container,
+        );
         const draw = () => {
           const controls = composerControls(state, "example/primary");
-          render(controls.composerControls, container);
+          view.update(controls.composerControls);
           return container.querySelector<HTMLElement>("[data-chat-model-select]");
         };
         const initialModel = draw();
@@ -699,11 +704,13 @@ describe("mounted pane session event ownership", () => {
       expect(descriptor.row).toMatchObject(observed);
       expect(selectedChatSessionRow(state)).toMatchObject(observed);
       const container = document.createElement("div");
+      const view = mountSolid(
+        ChatPermissionPicker,
+        composerControls(state).permissionPicker,
+        container,
+      );
       const draw = () => {
-        render(
-          solidContent(ChatPermissionPicker, composerControls(state).permissionPicker),
-          container,
-        );
+        view.update(composerControls(state).permissionPicker);
         return container.querySelector<HTMLButtonElement>("[data-chat-permission-select]");
       };
       expect(draw()?.dataset.chatSelectValue).toBe("workspace");

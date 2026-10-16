@@ -157,7 +157,7 @@ context, and replies to the source room remain unchanged.
 
 ## Incognito sessions
 
-Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
+Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Finishing a turn does not close the thread, and activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
 
 <Warning>
 On the Codex runtime, the Codex app-server still writes each message you submit to its own diagnostic log database (`logs_2.sqlite` in that agent's Codex home), including messages in incognito threads. Codex currently offers no setting that turns this log off, so OpenClaw cannot prevent it. For conversations that must not reach disk, use an agent on the OpenClaw runtime.
@@ -245,6 +245,12 @@ Opt into automatic resets globally, then override them per chat type or channel:
 
 ## Gateway restart recovery
 
+An incoming message does not trigger a delivery-uncertainty notice while the
+previous reply is still being sent or its delivery result is being recorded.
+If a send settles with an unknown outcome, or restart recovery finds an
+unconfirmed final reply, OpenClaw retains the warning for the next turn on the
+same route.
+
 When a Gateway restart interrupts an admitted turn, including one still waiting
 in the queue or preparing to execute, OpenClaw tries to continue the existing
 session automatically. Shutdown records recovery before canceling queued work.
@@ -295,7 +301,8 @@ Parents still waiting after yielding to children remain owned by their child bat
 
 If a delegated turn's sender authority cannot be reconstructed, automatic recovery
 stops with a recorded reason and a visible notice in the transcript or original
-channel. The notice explains how to continue in a replacement session. A saved
+channel. The notice offers **Resume** in WebChat. The click supplies current operator
+authority and continues the saved task in the same session. A saved
 delegation alone does not authorize replay after restart.
 
 Messages sent while restart recovery is waiting to start stay pending. Once
@@ -310,9 +317,21 @@ the message. A saved user message that has not reached the model remains user
 input when a subagent announcement continues the session; it is not demoted to
 background context.
 
-If automatic recovery is exhausted, the transcript remains available. Use
-**Resume in new session** in WebChat, or `/new` or `/reset` in other channels,
-to start a replacement session.
+If automatic recovery is exhausted, the unfinished task and transcript remain
+available. Use **Resume** in WebChat to continue with the same session identity,
+workspace, participants, and child sessions. Resume saves the new operator input
+and clears the restart tombstone together before starting work. It rechecks your
+current permissions; previous approvals and delegated authority are not restored.
+Completed tool results stay in the transcript, and uncertain effects must be
+inspected before being repeated. Existing restart-safe tool restrictions still
+apply to the continuation.
+
+A session already recovered into a replacement opens that replacement instead;
+resuming both could duplicate the task. If a CLI runtime cannot enforce the
+required restart-safe tools, WebChat offers **Resume in new session** instead.
+An unresolved final-delivery record must
+settle before an in-place continuation, and missing transcripts require repair.
+In other channels, `/new` or `/reset` still starts a replacement session.
 
 ## Where state lives
 
@@ -454,6 +473,7 @@ rechecks physical usage before considering another deletion. A measurement
 failure stops the sweep.
 
 Background disk-budget checks run at most every 30 minutes on entry writes.
+Unchanged entry patches do not schedule a check.
 Delete and reset operations can request a check sooner, but repeated requests
 coalesce to at most one forced check per minute per store. If cleanup exhausts
 eligible history and the store remains over budget, automatic checks back off

@@ -402,11 +402,6 @@ export function sanitizeAssistantVisibleText(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
 }
 
-/** Sanitizes text already marked as final-answer prose by the agent runtime. */
-export function sanitizeAssistantFinalAnswerText(text: string): string {
-  return sanitizeAssistantVisibleTextWithProfile(text, "final-answer-delivery");
-}
-
 /**
  * Backwards-compatible trim wrapper.
  * Prefer sanitizeAssistantVisibleTextWithProfile for new call sites.

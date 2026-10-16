@@ -1,5 +1,7 @@
+import type { JSX } from "@solidjs/web";
 import type { ToolsEffectiveResult } from "../../../api/types.ts";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
+import type { IconName } from "../../../components/solid/icon.tsx";
 import type { McpServerSummary } from "../../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerLibraryProps } from "../composer-library-session.ts";
@@ -24,8 +26,7 @@ export type ChatComposerMenuSkill = {
 type ChatComposerRootToggle = {
   value: string;
   label: string;
-  /** Source-owned immutable legacy artwork; replace the fragment when it changes. */
-  icon?: unknown;
+  icon?: IconName;
   checked: boolean;
   disabled: boolean;
   title?: string;
@@ -50,7 +51,7 @@ export type ChatComposerCapabilityMenuProps = {
   skillsLoading: boolean;
   skillsError: boolean;
   library?: ComposerLibraryProps;
-  libraryDialog?: unknown;
+  libraryDialog?: JSX.Element;
   mcpServers: readonly McpServerSummary[];
   toolsEffectiveResult: ToolsEffectiveResult | null;
   toolsEffectiveLoading: boolean;
@@ -60,7 +61,7 @@ export type ChatComposerCapabilityMenuProps = {
   mutationBlockedReason: string | null;
   canAdmin: boolean;
   adminBlockedReason: string | null;
-  addServerDialog?: unknown;
+  addServerDialog?: JSX.Element;
   onLoadSkills: () => void;
   onPatchToolOverrides: (next: SessionToolOverrides | null) => void;
   onNavigate: (

@@ -15,10 +15,10 @@ import type {
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { createMcpAppCatalog } from "../lib/mcp-app-catalog.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { useMcpAppCatalog } from "../lib/reactive/mcp-app-catalog.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import "../styles/mcp-app-extensions.css";
@@ -64,7 +64,7 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
   };
   let generation = 0;
   let mounted = true;
-  const catalog = useMcpAppCatalog(context, () => ({
+  const catalog = createMcpAppCatalog(context, () => ({
     sessionKey: props.sessionKey,
     agentId: props.agentId,
   }));

@@ -262,6 +262,12 @@ export function createGatewayBroadcaster(params: {
     // The bounded signal has no caller-provided serialization or model/config data.
     const metadataInvalidation =
       event === "chat.metadata.changed" ? modelMetadataInvalidationFragment(payload) : undefined;
+    // Older Control UI builds cannot render an unknown status phase.
+    const modelWaitStatus =
+      event === "chat" &&
+      isPlainEventPayload(payload) &&
+      payload.state === "status" &&
+      payload.phase === "waiting_for_model";
     let sessionReadContext: boolean | undefined;
     const hasSessionReadContext = () =>
       (sessionReadContext ??=
@@ -280,10 +286,10 @@ export function createGatewayBroadcaster(params: {
     let skipSourcePayload = false;
     let sessionProjectionPrepared = false;
     let outboundEventLogged = false;
-    let lastFrameSequence = 0;
-    let lastFrameRecipientProfileId: string | undefined;
-    let lastFrame: string | Buffer | undefined;
-    let lastPayloadFragment: FramePayload | undefined;
+    const encodedFrames = new Map<
+      FramePayload,
+      Map<string | undefined, Map<number, string | Buffer>>
+    >();
     const frames: PreparedFrames = retained?.frames ?? {};
     // Private coalescers preserve inputs; identical pending histories can share this merge.
     let mergedFrames: Map<unknown, { payload: unknown; frames: PreparedFrames }> | undefined;
@@ -321,6 +327,8 @@ export function createGatewayBroadcaster(params: {
         (retained && c.socket !== retained.socket) ||
         c.invalidated === true ||
         c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE ||
+        (modelWaitStatus &&
+          !hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.MODEL_WAIT_STATUS)) ||
         (opts?.excludeClientCapability &&
           hasGatewayClientCap(c.connect.caps, opts.excludeClientCapability))
       ) {
@@ -617,19 +625,21 @@ export function createGatewayBroadcaster(params: {
         // A drained write can refresh the recipient; cache only the profile at this send.
         const recipientProfileId =
           (c.connect.role ?? "operator") === "operator" ? c.preparedRecipientProfileId : undefined;
-        if (
-          lastFrame !== undefined &&
-          lastFrameSequence === nextSeq &&
-          lastFrameRecipientProfileId === recipientProfileId &&
-          lastPayloadFragment === payloadFragment
-        ) {
-          frame = lastFrame;
-        } else {
+        // Reuse across interleaved audiences only after each recipient's live projection.
+        let audienceFrames = encodedFrames.get(payloadFragment);
+        if (!audienceFrames) {
+          encodedFrames.set(payloadFragment, (audienceFrames = new Map()));
+        }
+        let sequenceFrames = audienceFrames.get(recipientProfileId);
+        if (!sequenceFrames) {
+          audienceFrames.set(recipientProfileId, (sequenceFrames = new Map()));
+        }
+        const cached = sequenceFrames.get(nextSeq);
+        if (cached === undefined) {
           frame = frameWithSequence(base, nextSeq, payloadFragment, recipientProfileId);
-          lastFrameSequence = nextSeq;
-          lastFrameRecipientProfileId = recipientProfileId;
-          lastPayloadFragment = payloadFragment;
-          lastFrame = frame;
+          sequenceFrames.set(nextSeq, frame);
+        } else {
+          frame = cached;
         }
       } catch (err) {
         log.error(`broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`);

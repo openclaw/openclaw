@@ -9,12 +9,14 @@ import {
   type DatabasePortProvider,
   type PortDescriptor,
 } from "./port-descriptor.js";
+import { statePortProvider } from "./state-port.js";
 import { teamReportsPortProvider } from "./team-reports-port.js";
 import { workboardPortProvider } from "./workboard-port.js";
 
 /** The only registration point for portable database families. */
 export const databasePortProviders: readonly DatabasePortProvider[] = [
   workboardPortProvider,
+  statePortProvider,
   logbookPortProvider,
   teamReportsPortProvider,
 ];

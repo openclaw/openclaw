@@ -15,8 +15,117 @@ import {
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
-import { readPendingInputRecoveryEntriesInWorker } from "./session-entry-read-maintenance.js";
+import {
+  iteratePendingExecNotificationEntriesInWorker,
+  readPendingInputRecoveryEntriesInWorker,
+} from "./session-entry-read-maintenance.js";
+import { readSessionSendRecoveryPage } from "./session-pending-input-history.js";
+
+it("pages only pending exec owners without reading unrelated session entries or saved prompts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const expected: string[] = [];
+    for (let index = 0; index < 70; index += 1) {
+      const sessionKey = `agent:main:exec-${String(index).padStart(2, "0")}`;
+      expected.push(sessionKey);
+      replaceSessionEntrySync(
+        { agentId: "main", env, sessionKey },
+        {
+          sessionId: `exec-${index}`,
+          updatedAt: 1,
+          skillsSnapshot: { prompt: "saved prompt".repeat(1024), skills: [] },
+          pendingExecNotifications: {
+            [`execution-${index}`]: {
+              processSessionId: `process-${index}`,
+              sessionId: `exec-${index}`,
+              incarnation: "previous-gateway",
+              startedAt: 1,
+              label: "background exec",
+              policy: {},
+            },
+          },
+        },
+      );
+      writeSessionEntry(database, `agent:main:unrelated-${index}`, {
+        sessionId: `unrelated-${index}`,
+        updatedAt: 1,
+      });
+    }
+    writeSessionEntry(database, "agent:main:empty-exec", {
+      sessionId: "empty-exec",
+      updatedAt: 1,
+      pendingExecNotifications: {},
+    });
+
+    const selected = [];
+    for await (const item of iteratePendingExecNotificationEntriesInWorker({
+      agentId: "main",
+      storePath: database.path,
+      env,
+    })) {
+      selected.push(item);
+    }
+    expect(selected.map(({ sessionKey }) => sessionKey)).toEqual(expected);
+    expect(selected.every(({ entry }) => entry.skillsSnapshot === undefined)).toBe(true);
+    expect(
+      selected.every(({ entry }) => Object.keys(entry.pendingExecNotifications ?? {}).length === 1),
+    ).toBe(true);
+  });
+});
+
+it("pages saved deliveries without unrelated or cancelled inputs and preserves live custody", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const scope = {
+      agentId: "main",
+      storePath: database.path,
+      env,
+      sessionKey: "agent:main:mixed-recovery",
+      sessionId: "mixed-recovery",
+    };
+    writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+    const receipts: SessionPendingInputReceipt[] = [];
+    try {
+      for (let index = 0; index < 24; index++) {
+        const receipt = expectDefined(
+          await stageSessionPendingInput(scope, {
+            runId: `input-${index}`,
+            message: {
+              role: "user",
+              content: `Synthetic input ${index}`,
+              timestamp: index,
+              idempotencyKey: `input-${index}:user`,
+              ...(index === 22 ? {} : { __openclaw: { sessionSendDelivery: { version: 1 } } }),
+            },
+            assertCurrent() {},
+          }),
+          "Expected pending input custody",
+        );
+        receipts.push(receipt);
+        if (index !== 21) {
+          receipt.finish(index === 23 ? "cancelled" : "interrupted");
+          await receipt.settled?.();
+        }
+      }
+      const newer = await readSessionSendRecoveryPage(scope);
+      const older = await readSessionSendRecoveryPage(scope, { before: newer.nextBefore });
+      expect(newer.items.map((item) => item.runId)).toEqual(
+        Array.from({ length: 20 }, (_, index) => `input-${index + 2}`),
+      );
+      expect(older.items.map((item) => item.runId)).toEqual(["input-0", "input-1"]);
+      expect(older.nextBefore).toBeUndefined();
+      expect(newer.items.at(-1)?.state).toBe("queued");
+      expect(newer.items.slice(0, -1).every((item) => item.state === "interrupted")).toBe(true);
+    } finally {
+      for (const receipt of receipts) {
+        receipt.finish("interrupted");
+      }
+      await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
+    }
+  });
+});
 
 it("skips an admitted store without optional pending-input storage", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -59,6 +168,7 @@ it("discovers only current recoverable inputs and observes writes after an empty
       "completed",
       "consumed",
       "old",
+      "ordinary",
     ]) {
       const target = scope(name);
       writeSessionEntry(database, target.sessionKey, { sessionId: target.sessionId, updatedAt: 1 });
@@ -73,6 +183,7 @@ it("discovers only current recoverable inputs and observes writes after an empty
             content: `Synthetic ${name} input`,
             timestamp: 1,
             idempotencyKey: `${name}:user`,
+            ...(name === "ordinary" ? {} : { __openclaw: { sessionSendDelivery: { version: 1 } } }),
           },
           trackCompletion,
           assertCurrent() {},
@@ -86,6 +197,9 @@ it("discovers only current recoverable inputs and observes writes after an empty
     try {
       expect(await readPendingInputRecoveryEntriesInWorker(store)).toEqual([]);
       await stage("queued");
+      const ordinary = await stage("ordinary");
+      ordinary.finish("interrupted");
+      await ordinary.settled?.();
       const interrupted = await stage("interrupted");
       interrupted.finish("interrupted");
       await interrupted.settled?.();

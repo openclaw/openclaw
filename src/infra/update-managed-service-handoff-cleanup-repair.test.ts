@@ -99,6 +99,19 @@ function run(runId: string, origin: UpdateRunRecord["origin"]): UpdateRunRecord 
 }
 
 describe("managed handoff repair facts", () => {
+  it.each(["S-1-5-21-100", undefined])(
+    "reads the launching SID from retained history after helper cleanup (%s)",
+    async (sid) => {
+      vi.mocked(listUpdateRunsAsync).mockResolvedValue([
+        run("retained-run", {
+          windowsUserSid: sid,
+          driver: { ...lease.executor, host: os.hostname() },
+        }),
+      ]);
+      expect((await readManagedHandoffRepairFacts(lease, env)).windowsUserSid).toBe(sid);
+    },
+  );
+
   it("keeps only exact helper owner/key artifacts and their retained capture paths", async () => {
     await helper("wrong-owner", { updateLeaseOwner: "other", runId: "other-run" });
     await helper("wrong-key", { updateLeaseKey: path.join(root, "other"), runId: "other-run" });
@@ -115,6 +128,7 @@ describe("managed handoff repair facts", () => {
     expect(await readManagedHandoffRepairFacts(lease, env)).toEqual({
       runIds: ["retained-run"],
       artifactPaths: [directory, context, capture],
+      drivers: [lease.helper, lease.executor],
       timeoutMs: null,
     });
   });
@@ -131,6 +145,7 @@ describe("managed handoff repair facts", () => {
     expect(await readManagedHandoffRepairFacts(lease, env)).toEqual({
       runIds: ["matched-run"],
       artifactPaths: [lease.key],
+      drivers: [lease.helper, lease.executor, { ...lease.helper, host: os.hostname() }],
       timeoutMs: null,
     });
   });
@@ -480,6 +495,7 @@ describe("managed handoff repair facts", () => {
       expect(await readManagedHandoffRepairFacts(lease, env)).toEqual({
         runIds: ["retained-run"],
         artifactPaths: [directory, lease.key],
+        drivers: [lease.helper, lease.executor, { ...lease.executor, host: os.hostname() }],
         timeoutMs: null,
       });
     },

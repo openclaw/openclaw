@@ -405,7 +405,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.chatStreamSegments).toEqual([]);
   });
 
-  it("normalizes silent and directive-only keyed preamble progress", () => {
+  it("preserves prepared marker text while stripping inline directive tags", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });
 
@@ -425,7 +425,14 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       progressText: "**NO_REPLY",
     });
 
-    expect(host.chatStreamSegments).toEqual([]);
+    expect(host.chatStreamSegments).toEqual([
+      {
+        text: "**NO_REPLY",
+        ts: TOOL_STREAM_TEST_NOW,
+        runId: "run-1",
+        itemId: "msg-preamble-1",
+      },
+    ]);
   });
 
   it("ignores selected-global tool events from another agent", () => {

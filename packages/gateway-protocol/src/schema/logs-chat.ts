@@ -414,7 +414,7 @@ const ChatEventErrorKindSchema = stringLiteralUnion([
   "unknown",
 ]);
 
-/** Coarse startup stages shown while a run has not produced visible activity yet. */
+/** Transient preparation and model-call stages; model waits can recur during a run. */
 export const ChatRunStartupPhaseSchema = stringLiteralUnion([
   "waiting_for_state",
   "preparing_workspace",
@@ -425,6 +425,7 @@ export const ChatRunStartupPhaseSchema = stringLiteralUnion([
   "preparing_context",
   "memory_flushing",
   "starting_model",
+  "waiting_for_model",
 ]);
 
 /** Transient working status; only the run owner publishes terminal failures. */
@@ -432,6 +433,7 @@ export const ChatStatusEventSchema = closedObject({
   ...ChatEventBaseSchema,
   state: Type.Literal("status"),
   phase: ChatRunStartupPhaseSchema,
+  waitReason: Type.Optional(stringLiteralUnion(["response", "slot"])),
   retry: Type.Optional(
     closedObject({
       attempt: Type.Integer({ minimum: 1, maximum: 10 }),
@@ -531,6 +533,7 @@ export const ChatErrorEventSchema = closedObject({
   message: Type.Optional(Type.Unknown()),
   errorMessage: Type.Optional(Type.String()),
   errorKind: Type.Optional(ChatEventErrorKindSchema),
+  suppressErrorNotice: Type.Optional(Type.Boolean()),
   errorDetail: Type.Optional(ChatErrorDetailSchema),
   usage: Type.Optional(Type.Unknown()),
   stopReason: Type.Optional(Type.String()),

@@ -55,7 +55,9 @@ env:
 
 jobs:
   resolve:
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &linux_runner_ubuntu >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     outputs:
       version: ${{ steps.identity.outputs.version }}
       include_browser: ${{ steps.identity.outputs.include_browser }}
@@ -288,7 +290,7 @@ jobs:
   seal:
     name: Seal prepared Docker images
     needs: [resolve, build]
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     permissions:
       actions: read
       contents: read

@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -13,6 +12,7 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
+import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
 
 describe("chat pane session access", () => {
   it("refuses ordinary session creation for read-only operators", async () => {
@@ -212,7 +212,7 @@ describe("chat pane session access", () => {
     } satisfies GatewaySessionRow;
     const container = document.createElement("div");
 
-    render(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         session,
@@ -248,7 +248,7 @@ describe("chat pane session access", () => {
     document.body.append(container);
     onTestFinished(() => container.remove());
 
-    render(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         session,

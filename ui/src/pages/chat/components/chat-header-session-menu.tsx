@@ -24,7 +24,6 @@ import {
   type MenuItem,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
-import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
@@ -77,6 +76,7 @@ type HeaderMenuProps = {
   deleteAllowed: boolean;
   onOpen: () => void;
   onOpenCommandPalette: () => void;
+  onOpenDetails?: (source: HTMLElement) => void;
   onSettingsChange: (patch: Partial<UiSettings>) => void;
   onAction: (action: HeaderMenuAction) => void;
 };
@@ -108,7 +108,6 @@ function ChatHeaderSessionMenuContent(
   const readState = () => state;
   const controllerHost = useSessionMenuControllers(
     host,
-    useOptionalApplication(),
     () => setRevision((value) => value + 1),
     () => {
       revision();
@@ -263,6 +262,21 @@ function ChatHeaderSessionMenuContent(
           </span>
         ),
       },
+      ...(props.onOpenDetails
+        ? [
+            {
+              id: "session-details",
+              label: t("chat.sessionDetails.menu"),
+              class: "session-menu__item",
+              labelClass: "session-menu__text",
+              icon: (
+                <span class="session-menu__icon" aria-hidden="true">
+                  <Icon name="listChecks" />
+                </span>
+              ),
+            },
+          ]
+        : []),
       paletteDivider,
       ...(board
         ? [
@@ -350,6 +364,15 @@ function ChatHeaderSessionMenuContent(
         props.sharing?.onOpen();
       }
       onSettled(() => actions.focusCurrentView());
+      return;
+    }
+    if (value === "session-details") {
+      event.preventDefault();
+      close();
+      const trigger = menu?.overlay.trigger;
+      if (trigger) {
+        props.onOpenDetails?.(trigger);
+      }
       return;
     }
     if (value === "open-command-palette") {
@@ -479,6 +502,7 @@ defineSolidBridge<HeaderMenuProps, HeaderMenuMethods>(
       deleteAllowed: { default: false, attribute: false },
       onOpen: { default: () => {}, attribute: false },
       onOpenCommandPalette: { default: () => {}, attribute: false },
+      onOpenDetails: { default: undefined, attribute: false },
       onSettingsChange: { default: () => {}, attribute: false },
       onAction: { default: () => {}, attribute: false },
     },

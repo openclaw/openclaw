@@ -57,11 +57,9 @@ describe("system disk snapshots", () => {
   });
 
   it("keeps one container root when a volume disappears with its directory", async () => {
-    mocks.readFile
-      .mockResolvedValueOnce(
-        "1 0 0:5 / / rw - overlay overlay rw\n2 1 8:1 / /data rw - ext4 /dev/sdb rw",
-      )
-      .mockResolvedValue("1 0 0:5 / / rw - overlay overlay rw");
+    mocks.readFile.mockResolvedValueOnce(
+      "1 0 0:5 / / rw - overlay overlay rw\n2 1 8:1 / /data rw - ext4 /dev/sdb rw",
+    );
     mocks.statfs.mockImplementation(async (path: string) => {
       if (path === "/data") {
         throw new Error("ENOENT");

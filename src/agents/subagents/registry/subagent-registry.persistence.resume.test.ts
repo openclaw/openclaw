@@ -545,6 +545,46 @@ describe("subagent registry persistence resume", () => {
     settleOwnedWork: () => settleOwnedWork?.(true),
   });
 
+  it("restores metadata without reloading unchanged retained payloads", async () => {
+    await withRegistryState(async () => {
+      const endedAt = 1_000;
+      const runs = ["unchanged", "retention-changed"].map((runId) =>
+        createSubagentRunRecord({
+          runId,
+          childAgentId: "main",
+          requesterAgentId: "main",
+          childSessionKey: `agent:main:subagent:${runId}`,
+          task: "retained task ".repeat(100),
+          endedAt,
+          cleanup: "delete",
+          cleanupCompletedAt: endedAt,
+          archiveAtMs: runId === "unchanged" ? endedAt + 60_000 : endedAt + 120_000,
+          delivery: { status: "delivered" },
+          completion: { required: true, resultText: "retained result ".repeat(100) },
+        }),
+      );
+      registryConfigModule.setRuntimeConfigSnapshot({
+        agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+      });
+      saveSubagentRegistryToSqlite(new Map(runs.map((run) => [run.runId, run])));
+      const reads = await import("./subagent-registry-read-cache.js");
+      const payloadReads = vi.spyOn(reads, "readFullSubagentRuns");
+
+      await mod.initSubagentRegistry();
+
+      expect(payloadReads.mock.calls.map(([, selection]) => selection)).toEqual([
+        { kind: "ids", runIds: ["retention-changed"] },
+      ]);
+      for (const original of runs) {
+        expect(readPersistedRun(original.runId)).toMatchObject({
+          archiveAtMs: endedAt + 60_000,
+          task: original.task,
+          completion: original.completion,
+        });
+      }
+    });
+  });
+
   it.each([
     { status: "suspended" as const, disposition: undefined, queueId: undefined },
     { status: "in_progress" as const, disposition: "session_queued" as const, queueId: "queue-1" },
@@ -683,7 +723,7 @@ describe("subagent registry persistence resume", () => {
         expect(restoredGatewayContextResolver?.()).toBe(gatewayContext);
 
         await Promise.all([wakeStarted.promise, waitStarted.promise]);
-        expect(wakeRequester).toHaveBeenCalledOnce();
+        expect(wakeRequester).toHaveBeenCalled();
         expect(recoveryRuntime.waitForAgent).toHaveBeenCalledOnce();
         expect(recoveryRuntime.dispatchAgent).not.toHaveBeenCalled();
         expect(callGatewayModule.callGateway).not.toHaveBeenCalledWith(

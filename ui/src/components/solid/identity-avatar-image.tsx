@@ -1,8 +1,9 @@
 import { createEffect, createMemo, onCleanup, untrack, type Accessor } from "solid-js";
 import { retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 
-export type IdentityAvatarImageProps = {
-  view: { imageUrl: string | Promise<string | null> | null; sourceUrl?: string };
+type IdentityAvatarImageProps = {
+  view: { imageUrl: string | Promise<string | null> | null };
   fallbackSelector: string;
   class?: string;
   alt?: string;
@@ -10,10 +11,10 @@ export type IdentityAvatarImageProps = {
   onImageError?: () => void;
 };
 
-export function setIdentityAvatarState(
-  element: Element,
-  state: "none" | "pending" | "loaded" | "failed",
-) {
+function setIdentityAvatarState(element: Element, state: "none" | "pending" | "loaded" | "failed") {
+  if (element.getAttribute("data-avatar-state") === state) {
+    return;
+  }
   element.setAttribute("data-avatar-state", state);
   element.classList.toggle("is-pending", state === "pending");
   element.classList.toggle("is-fallback", state === "none" || state === "failed");
@@ -38,8 +39,8 @@ export function identityAvatarState(
   };
 }
 
-/** Shared by native JSX and the Lit adapter; the existing loader owns all image resources. */
-export function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
+/** The existing loader owns image resources; this binding owns DOM state and events. */
+function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
   let image: HTMLImageElement;
   let release: (() => void) | undefined;
   const state = (value: "pending" | "loaded" | "failed") => {
@@ -66,15 +67,15 @@ export function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps
       if (!active) {
         return;
       }
-      if (image.getAttribute("src") !== url || !url) {
+      if (!url || image.getAttribute("src") !== url) {
         state(url ? "pending" : "failed");
+        if (url) {
+          image.setAttribute("src", url);
+        } else {
+          image.removeAttribute("src");
+        }
       }
-      if (url) {
-        image.setAttribute("src", url);
-      } else {
-        image.removeAttribute("src");
-      }
-      // Lit can supply an image before inserting it into its wrapper; cached decodes emit no event.
+      // Refs run before their wrapper is inserted; cached decodes emit no event.
       queueMicrotask(() =>
         untrack(() => {
           if (
@@ -100,15 +101,11 @@ export function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps
       active = false;
     };
   });
-  onCleanup(() => {
-    image.removeEventListener("load", load);
-    image.removeEventListener("error", error);
-    release?.();
-  });
+  const cleanup = [() => release?.()];
+  onCleanup(() => cleanup.forEach((stop) => stop()));
   return (element: HTMLImageElement) => {
     image = element;
-    image.addEventListener("load", load);
-    image.addEventListener("error", error);
+    cleanup.push(listen(image, "load", load), listen(image, "error", error));
   };
 }
 
