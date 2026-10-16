@@ -24,6 +24,28 @@ import type { SessionManagerPersistenceTarget } from "./session-manager-view-typ
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 export class SessionManagerBranching extends SessionManagerMetadata {
+  /** A context-only view must not rewind past omitted, user-visible entries. */
+  hasLoadedTranscriptTail(entryId: string): boolean {
+    this.assertTranscriptViewAvailable();
+    if (this.appendMode === "side") {
+      return false;
+    }
+    let currentId = this.appendParentId;
+    for (let remaining = this.byId.size; currentId && remaining > 0; remaining--) {
+      const entry = this.byId.get(currentId);
+      if (!entry) {
+        return false;
+      }
+      if (currentId === entryId) {
+        return true;
+      }
+      currentId = this.boundedParentIds.has(currentId)
+        ? (this.boundedParentIds.get(currentId) ?? null)
+        : entry.parentId;
+    }
+    return false;
+  }
+
   private collectBranchedSessionPath(leafId: string): {
     entries: SessionEntry[];
     opaqueEntries: PreservedOpaqueFileEntry[];

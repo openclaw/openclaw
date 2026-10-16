@@ -9,6 +9,7 @@ import { mergeOrphanedTrailingUserPrompt } from "./attempt-prompt-helpers.js";
 type OrphanRepairSessionManager = {
   getLeafEntry: () => SessionManagerEntry | undefined;
   getEntry: (entryId: string) => SessionManagerEntry | undefined;
+  hasLoadedTranscriptTail: (entryId: string) => boolean;
   appendThinkingLevelChange: (thinkingLevel: string) => Promise<string>;
   appendModelChange: (provider: string, modelId: string) => Promise<string>;
   appendCustomEntryAsync: (customType: string, data?: unknown) => Promise<string>;
@@ -96,7 +97,11 @@ export function resolveOrphanRepairPlan(params: {
   preserveLeaf: boolean;
 }): OrphanRepairPlan | undefined {
   const candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);
-  if (!candidate || !isUserSessionMessageEntry(candidate.messageEntry)) {
+  if (
+    !candidate ||
+    !isUserSessionMessageEntry(candidate.messageEntry) ||
+    !params.sessionManager.hasLoadedTranscriptTail(candidate.messageEntry.id)
+  ) {
     return undefined;
   }
   const merge = mergeOrphanedTrailingUserPrompt({
