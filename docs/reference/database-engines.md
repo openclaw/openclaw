@@ -238,30 +238,45 @@ See the [CLI reference](/cli#database).
 
 ## Several Gateways on one PostgreSQL server
 
-Several independent installations can share one PostgreSQL server and database.
-Give each installation its own state directory and a distinct
-`database.postgres.schemaPrefix`, such as `installation_a` and `installation_b`.
-Each store gets a separate anchor UUID and namespace; its writer advisory lock
-uses that UUID. Keep each local anchor with its matching PostgreSQL namespace.
-Pairing one installation's anchor with another installation's namespace refuses
-admission. Changing the configured prefix does not move an existing anchor.
+Several independent installations can share one PostgreSQL server. Each
+installation must have its own state directory and exactly one Gateway.
+Sharing one installation across Gateways, including failover and active-active
+operation, is not supported: each store has one live owner.
 
-Sharing one installation's data across active Gateways is not supported: each
-store has one live owner. Namespace isolation does not provide distributed
-ownership or coordination for a shared installation.
+### Recommended: one database per Gateway
 
-Install search extensions once per database, as described in
-[Search on PostgreSQL](#search-on-postgresql). All installations can use the same
-`unaccent`, `pg_trgm`, and `vector` installation in `public` (or the explicitly
-declared extension schema); admission checks existing extensions and never
-recreates them. Text-search configurations, generated columns, indexes, vector
+Use a separate PostgreSQL database and connection DSN for each Gateway. This
+provides the strongest isolation between installations. Install the required
+search extensions in **each database**, as described in
+[Search on PostgreSQL](#search-on-postgresql); extensions installed in one database
+are not available in another. Each installation can use the default
+`database.postgres.schemaPrefix` because their databases are separate.
+
+A database administrator creates the databases and may need to install extensions.
+The runtime role needs `CONNECT` and database `CREATE` privilege to bootstrap its
+store schemas, plus ownership/access to its store objects and `USAGE` on the
+extension schema.
+
+### One database with separate namespaces
+
+Give each Gateway a distinct `database.postgres.schemaPrefix`, such as
+`installation_a` and `installation_b`. Each store gets a separate anchor UUID and
+namespace; its writer advisory lock uses that UUID. Keep each local anchor with
+its matching PostgreSQL namespace. Pairing one installation's anchor with another
+installation's namespace refuses admission. Changing the configured prefix does
+not move an existing anchor.
+
+Install `unaccent`, `pg_trgm`, and `vector` once in the shared database's `public`
+schema (or the explicitly declared extension schema). All installations reuse
+those extensions; admission checks them and never recreates them. Text-search
+configurations are schema-qualified, and generated columns, indexes, vector
 projections, and functions belong to each store namespace.
 
-The runtime role needs `CONNECT` on the database and `CREATE` on the database to
-bootstrap namespaces, plus ownership/access to its store objects and `USAGE` on
-the extension schema. A database administrator may need to install extensions.
-Use separate roles and schema grants when installations also need a PostgreSQL
-permission boundary; schema prefixes alone do not restrict a role's access.
+The runtime role needs `CONNECT` on the shared database and database `CREATE`
+privilege to bootstrap namespaces, plus ownership/access to its store objects and
+`USAGE` on the extension schema. Use separate roles and schema grants when
+installations also need a PostgreSQL permission boundary; schema prefixes alone
+do not restrict a role's access.
 
 ## Isolation and durability
 

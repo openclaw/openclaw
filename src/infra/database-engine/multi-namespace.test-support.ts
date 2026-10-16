@@ -9,4 +9,9 @@ export type NamespaceCommand =
   | { op: "search"; text: string; withoutSearchPath?: boolean }
   | { op: "reopen"; namespace?: string }
   | { op: "close" };
-export type NamespaceIdentity = { namespace: string; storeId: string; pid: number };
+export type NamespaceIdentity = {
+  namespace: string;
+  storeId: string;
+  pid: number;
+  database: string;
+};

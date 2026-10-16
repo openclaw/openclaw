@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { getEnvironmentData, Worker } from "node:worker_threads";
 import { Client } from "pg";
@@ -20,7 +21,7 @@ const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 
-function launch(prefix: string) {
+function launch(prefix: string, dsn = connection) {
   const databasePath = path.join(dirs.make("pg-multi-namespace-"), "anchor.sqlite");
   const anchor = openNodeSqliteDatabase(databasePath);
   const gates = new Int32Array(new SharedArrayBuffer(8));
@@ -32,7 +33,7 @@ function launch(prefix: string) {
   const worker = new Worker(url, {
     execArgv: resolveRuntimeWorkerThreadExecArgv(url),
     workerData: {
-      connection,
+      connection: dsn,
       prefix,
       path: databasePath,
       gates: gates.buffer,
@@ -86,19 +87,38 @@ describe.skipIf(!connection)("independent PostgreSQL installation namespaces", (
   const admin = new Client({ connectionString: connection });
   const workers: ReturnType<typeof launch>[] = [];
   const identities: NamespaceIdentity[] = [];
+  const separateDatabase = `pgprep_isolation_${randomUUID().replaceAll("-", "")}`;
+  let databaseWorker: ReturnType<typeof launch> | undefined;
+  let databaseIdentity: NamespaceIdentity;
+  let databaseCreated = false;
   beforeAll(async () => {
     await admin.connect();
+    await admin.query(`CREATE DATABASE ${pgSearchName(separateDatabase)}`);
+    databaseCreated = true;
+    const separateDsn = new URL(connection!);
+    separateDsn.pathname = `/${separateDatabase}`;
+    const setup = new Client({ connectionString: separateDsn.href });
+    await setup.connect();
+    try {
+      await setup.query(
+        "CREATE EXTENSION unaccent WITH SCHEMA public; CREATE EXTENSION pg_trgm WITH SCHEMA public; CREATE EXTENSION vector WITH SCHEMA public",
+      );
+    } finally {
+      await setup.end();
+    }
     workers.push(launch("installation_a"), launch("installation_b"));
-    await Promise.all(workers.map((worker) => worker.event("booting")));
-    workers.forEach((worker) => worker.release(0));
-    identities.push(
-      ...(await Promise.all(
-        workers.map(async (worker) => (await worker.event("ready")) as NamespaceIdentity),
-      )),
+    databaseWorker = launch("installation_a", separateDsn.href);
+    const booting = [...workers, databaseWorker];
+    await Promise.all(booting.map((worker) => worker.event("booting")));
+    booting.forEach((worker) => worker.release(0));
+    const opened = await Promise.all(
+      booting.map(async (worker) => (await worker.event("ready")) as NamespaceIdentity),
     );
+    identities.push(...opened.slice(0, 2));
+    databaseIdentity = opened[2]!;
   });
   afterAll(async () => {
-    for (const worker of workers) {
+    for (const worker of [...workers, ...(databaseWorker ? [databaseWorker] : [])]) {
       worker.release(0);
       worker.release(1);
       await worker.run({ op: "close" });
@@ -106,6 +126,9 @@ describe.skipIf(!connection)("independent PostgreSQL installation namespaces", (
     }
     for (const { namespace } of identities) {
       await admin.query(`DROP SCHEMA ${pgSearchName(namespace)} CASCADE`);
+    }
+    if (databaseCreated) {
+      await admin.query(`DROP DATABASE ${pgSearchName(separateDatabase)}`);
     }
     await admin.end();
   });
@@ -163,6 +186,29 @@ describe.skipIf(!connection)("independent PostgreSQL installation namespaces", (
         [`${namespace}.notes`],
       );
       expect(dependency.rows).toEqual([{ nspname: namespace }]);
+    }
+  });
+
+  it("isolates concurrent installations in separate databases on the same server", async () => {
+    expect(databaseIdentity.database).toBe(separateDatabase);
+    expect(identities[0]!.database).not.toBe(separateDatabase);
+    const installations = [workers[0]!, databaseWorker!];
+    await Promise.all(
+      installations.map((worker, i) =>
+        worker.run({
+          op: "write",
+          id: "database-note",
+          text: i ? "databasebeta café" : "databasealpha café",
+        }),
+      ),
+    );
+    for (const [i, worker] of installations.entries()) {
+      const own = i ? "databasebeta" : "databasealpha";
+      const other = i ? "databasealpha" : "databasebeta";
+      expect(await worker.run({ op: "search", text: own, withoutSearchPath: true })).toEqual([
+        { id: "database-note", snippet: `${own} café` },
+      ]);
+      expect(await worker.run({ op: "search", text: other })).toEqual([]);
     }
   });
 

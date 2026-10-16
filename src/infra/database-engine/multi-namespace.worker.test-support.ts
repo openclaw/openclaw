@@ -81,7 +81,7 @@ try {
     result: {
       namespace: db.schema,
       storeId: getPostgresPhysicalFacts(db)!.storeId,
-      pid: db.prepare("SELECT pg_backend_pid() AS pid").get()!.pid,
+      ...db.prepare("SELECT pg_backend_pid() AS pid, current_database() AS database").get(),
     },
   });
   port.on("message", (command: NamespaceCommand) => {
