@@ -40,6 +40,22 @@ const OPENAI_GPT_LIVE_VOICES = [
   "sol",
   "spruce",
   "vale",
+  "aube",
+  "bubbie",
+  "haetsal",
+  "hanul",
+  "himari",
+  "leher",
+  "miko",
+  "neer",
+  "porto",
+  "rindo",
+  "rio",
+  "rivage",
+  "selva",
+  "sonna",
+  "tinta",
+  "viola",
 ] as const;
 const OPENAI_GPT_LIVE_UNLISTED_VOICES = ["marin", "cedar"] as const;
 export type OpenAIGptLiveVoice =
