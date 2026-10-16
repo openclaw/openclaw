@@ -1,15 +1,16 @@
-import { createMemo, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import { normalizeAgentTargetLabel } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { profileAvatarUrl, profileDirectory } from "../lib/profile-directory.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../lib/reactive/gateway-page.ts";
+import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
 
 /** Assignment uses the Gateway directory, independently of session filters and presence. */
-export function createSessionOwnerMenu() {
+export function createSessionOwnerMenu(presented: () => boolean = () => true) {
   const context = useOptionalApplication();
   const agents = context ? projectAgents(context.agents) : undefined;
   const identities = context ? projectOwner(context.agentIdentity, (owner) => owner) : undefined;
@@ -26,11 +27,11 @@ export function createSessionOwnerMenu() {
     opened = true;
     void profiles?.read().load(true);
   };
-  const ownerOptions = createMemo(() => {
+  const snapshot = createParkedProjection(() => {
     const self = sessionSelfOwner(connection.snapshot?.selfUser);
     // Keep a same-connection directory during refresh, never a previous Gateway's result.
-    const directory = profiles?.read().result;
-    const owners: SessionOwnerOption[] = (directory?.profiles ?? [])
+    const directory = profiles?.read();
+    const owners: SessionOwnerOption[] = (directory?.result?.profiles ?? [])
       .filter((profile) => !profile.mergedInto && profile.id !== self?.id)
       .map((profile) => ({
         type: "human",
@@ -66,18 +67,12 @@ export function createSessionOwnerMenu() {
     return {
       self,
       owners: [...new Map(owners.map((owner) => [owner.type + ":" + owner.id, owner])).values()],
-      directory,
-    };
-  });
-  const snapshot = createMemo(() => {
-    const directory = profiles?.read();
-    return {
-      ...ownerOptions(),
+      directory: directory?.result,
       searchGeneration: connection.epoch + searchGeneration(),
       connected: Boolean(connection.snapshot && connection.capture()),
       loading: Boolean(directory?.loading),
       error: directory?.error,
     };
-  });
-  return { load, snapshot, multipleOwners: () => ownerOptions().owners.length > 1 };
+  }, presented);
+  return { load, snapshot, multipleOwners: () => snapshot().owners.length > 1 };
 }
