@@ -119,13 +119,13 @@ it("checks memory pressure every tick without recording idle samples", async () 
   expect(emitMemorySample.mock.contexts.at(-1)).toBe(options);
 });
 
-it.each([true, false])(
-  "keeps heartbeat enrichment off the main thread with its sink enabled=%s",
-  async (enabled) => {
+it.each(["enabled", "disabled", "incognito"])(
+  "keeps %s heartbeat diagnostics off the main thread and excludes reply content",
+  async (label) => {
+    const enabled = label !== "disabled";
     vi.mocked(diagnosticLogger.isEnabled).mockReturnValue(enabled);
-    const label = enabled ? "enabled" : "disabled";
     const sessionId = `heartbeat-${label}`;
-    const sessionKey = `agent:heartbeat:${label}`;
+    const sessionKey = label === "incognito" ? incognitoKey : `agent:heartbeat:${label}`;
     const logged = createDeferred();
     const warn = vi.spyOn(diagnosticLogger, "warn").mockImplementation((message) => {
       if (message.startsWith(`stuck session: sessionId=${sessionId} `)) {
@@ -144,12 +144,10 @@ it.each([true, false])(
     );
     logSessionStateChange({ sessionId, sessionKey, state: "processing" });
     const queries = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      vi.spyOn(StatementSync.prototype, "get"),
-      vi.spyOn(StatementSync.prototype, "all"),
-      vi.spyOn(StatementSync.prototype, "iterate"),
-      vi.spyOn(StatementSync.prototype, "run"),
+      ...(["prepare", "exec"] as const).map((method) => vi.spyOn(DatabaseSync.prototype, method)),
+      ...(["get", "all", "iterate", "run"] as const).map((method) =>
+        vi.spyOn(StatementSync.prototype, method),
+      ),
     ];
     try {
       await tick();
@@ -158,7 +156,10 @@ it.each([true, false])(
       if (enabled) {
         await logged.promise;
         expect(warn).toHaveBeenCalledWith(expect.stringContaining(`sessionId=${sessionId}`));
-        expect(JSON.stringify(warn.mock.calls)).not.toContain(reply);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(`sessionKey=${sessionKey}`));
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(
+          label === "incognito" ? privateReply : reply,
+        );
         expect(JSON.stringify(warn.mock.calls)).not.toContain("lastAssistant=");
       } else {
         expect(warn).not.toHaveBeenCalled();
@@ -173,28 +174,3 @@ it.each([true, false])(
     }
   },
 );
-
-it("never copies an incognito reply into durable heartbeat diagnostics", async () => {
-  const warn = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
-  startGatewayDiagnosticHeartbeat(
-    scheduler,
-    {},
-    {
-      testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
-      sampleLiveness: () => null,
-      recoverStuckSession: vi.fn(),
-    },
-  );
-  logSessionStateChange({
-    sessionId: "heartbeat-incognito",
-    sessionKey: incognitoKey,
-    state: "processing",
-  });
-  await tick();
-  await tick();
-  expect(warn).toHaveBeenCalledWith(expect.stringContaining(`sessionKey=${incognitoKey}`));
-  for (const [message] of warn.mock.calls) {
-    expect(message).not.toContain(privateReply);
-    expect(message).not.toContain("lastAssistant=");
-  }
-});
