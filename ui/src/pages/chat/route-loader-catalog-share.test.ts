@@ -2,21 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadChatRoute } from "./route-loader.ts";
+import { loadRoute, routeLocation } from "./route-loading.test-support.ts";
 
-function loadRoute(
-  context: Parameters<typeof loadChatRoute>[0],
-  target: string | Parameters<typeof loadChatRoute>[1],
-  search = "",
-  face: Parameters<typeof loadChatRoute>[2] = "chat",
-) {
-  return loadChatRoute(
-    context,
-    typeof target === "string" ? { pathname: target, search, hash: "" } : target,
-    face,
-    new AbortController().signal,
-  );
-}
 const fullId = "0123456789abcdef0123456789abcdef";
 const SHARE_ROUTE = {
   kind: "thread-id-prefix",
@@ -70,29 +57,23 @@ function beamCatalog(sessions: Array<{ threadId: string; name: string }>, nextCu
           },
         ],
       },
-    ],
+    ] satisfies [object],
   };
 }
+const loadCatalog = (result: unknown, path = "/beam/0123456789ab") =>
+  loadRoute(catalogContext(vi.fn(async () => result)), path);
 
 describe("catalog share route resolution", () => {
   it("resolves an external-style provider descriptor without catalog-specific UI policy", async () => {
-    const shareRoute = { ...SHARE_ROUTE, routeSegment: "shared-sessions" } as const;
-    const request = vi.fn(async () => {
-      const result = beamCatalog([{ threadId: fullId, name: "External session" }]);
-      return {
-        catalogs: [
-          {
-            ...result.catalogs[0],
-            id: "external",
-            label: "External",
-            shareRoute,
-          },
-        ],
-      };
-    });
-
+    const result = beamCatalog([{ threadId: fullId, name: "External session" }]);
+    const catalog = {
+      ...result.catalogs[0],
+      id: "external",
+      label: "External",
+      shareRoute: { ...SHARE_ROUTE, routeSegment: "shared-sessions" },
+    };
     await expect(
-      loadRoute(catalogContext(request), "/shared-sessions/0123456789ab"),
+      loadCatalog({ catalogs: [catalog] }, "/shared-sessions/0123456789ab"),
     ).resolves.toMatchObject({
       kind: "session",
       sessionKey: `agent:research:catalog:external:gateway:${fullId}`,
@@ -124,16 +105,8 @@ describe("catalog share route resolution", () => {
         expect(loaded).not.toHaveProperty("canonicalLocation");
       } else {
         expect(loaded).toMatchObject({
-          canonicalLocation: {
-            pathname: "/openclaw/beam/pretty-beam-route-0123456789ab",
-            search: "",
-            hash: "",
-          },
-          canonicalLocationSource: {
-            pathname: `/openclaw/beam/${reference}`,
-            search: "",
-            hash: "",
-          },
+          canonicalLocation: routeLocation("/openclaw/beam/pretty-beam-route-0123456789ab"),
+          canonicalLocationSource: routeLocation(`/openclaw/beam/${reference}`),
         });
       }
       expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
@@ -177,44 +150,29 @@ describe("catalog share route resolution", () => {
       message: "This Beam share URL is invalid.",
     });
 
-    const disabled = catalogContext(vi.fn(async () => ({ catalogs: [] })));
-    await expect(loadRoute(disabled, "/beam/0123456789ab")).resolves.toMatchObject({
+    await expect(loadCatalog({ catalogs: [] })).resolves.toMatchObject({
       kind: "route-error",
       message: "This shared session route is unavailable.",
     });
 
-    const duplicated = catalogContext(
-      vi.fn(async () => {
-        const result = beamCatalog([{ threadId: fullId, name: "First" }]);
-        return { catalogs: [...result.catalogs, { ...result.catalogs[0], id: "other" }] };
-      }),
-    );
-    await expect(loadRoute(duplicated, "/beam/0123456789ab")).resolves.toMatchObject({
+    const { catalogs } = beamCatalog([{ threadId: fullId, name: "First" }]);
+    await expect(
+      loadCatalog({ catalogs: [...catalogs, { ...catalogs[0], id: "other" }] }),
+    ).resolves.toMatchObject({
       kind: "route-error",
     });
   });
 
   it("keeps paginated empty results ambiguous and rejects duplicate declared hosts", async () => {
-    const paginated = catalogContext(vi.fn(async () => beamCatalog([], "more")));
-    await expect(loadRoute(paginated, "/beam/0123456789ab")).resolves.toMatchObject({
+    await expect(loadCatalog(beamCatalog([], "more"))).resolves.toMatchObject({
       kind: "ambiguous",
       candidates: [],
       truncated: true,
     });
 
-    const duplicateHost = catalogContext(
-      vi.fn(async () => {
-        const result = beamCatalog([{ threadId: fullId, name: "First" }]);
-        const catalog = result.catalogs[0];
-        if (!catalog) {
-          throw new Error("catalog fixture missing");
-        }
-        return {
-          catalogs: [{ ...catalog, hosts: [...catalog.hosts, { ...catalog.hosts[0] }] }],
-        };
-      }),
-    );
-    await expect(loadRoute(duplicateHost, "/beam/0123456789ab")).resolves.toMatchObject({
+    const catalog = beamCatalog([{ threadId: fullId, name: "First" }]).catalogs[0];
+    const duplicateHost = { ...catalog, hosts: [...catalog.hosts, { ...catalog.hosts[0] }] };
+    await expect(loadCatalog({ catalogs: [duplicateHost] })).resolves.toMatchObject({
       kind: "route-error",
     });
   });
@@ -230,12 +188,8 @@ describe("catalog share route resolution", () => {
     expect(loaded).toMatchObject({
       kind: "session",
       sessionKey: `agent:research:catalog:beam:gateway:${fullId}`,
-      canonicalLocation: {
-        pathname: `/openclaw/beam/renamed-session-${fullId}`,
-        search: "",
-        hash: "",
-      },
-      canonicalLocationSource: { pathname: originalPath, search: "", hash: "" },
+      canonicalLocation: routeLocation(`/openclaw/beam/renamed-session-${fullId}`),
+      canonicalLocationSource: routeLocation(originalPath),
     });
     expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
       agentId: "research",
