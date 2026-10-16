@@ -12,12 +12,10 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn,
   spawnSync: vi.fn(),
 }));
-
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
-
 it.each([
   { phase: "inspection", rows: "12345 Z\n12345 ZN\n", accepted: true },
   { phase: "signal", rows: "12345 Z\n", accepted: true },
@@ -28,7 +26,7 @@ it.each([
   { phase: "inspection", rows: "23456 Z\n", accepted: false },
   { phase: "inspection", rows: "12345 Z\n", failed: true, accepted: false },
 ])(
-  "verifies Darwin EPERM at $phase against all group members ($rows, failed=$failed, reaped=$reaped)",
+  "Darwin EPERM: $phase / $rows / $failed / $reaped",
   async ({ phase, rows, failed, reaped, accepted }) => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -76,104 +74,97 @@ it.each([
   },
 );
 
-it.each(["SIGTERM", "SIGKILL"])(
-  "retains POSIX %s failures through cleanup",
-  async (failedSignal) => {
-    const { child } = createSyntheticChild();
-    const groupError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
-    const childError = Object.assign(new Error("child signal denied"), { code: "EACCES" });
-    const failWith = (error: Error) => (signal: NodeJS.Signals | number | undefined) => {
-      if (signal === failedSignal) {
-        throw error;
-      }
-      return true;
-    };
-    const kill = vi.spyOn(child, "kill").mockImplementation(failWith(childError));
-    const signalProcess = vi
-      .spyOn(process, "kill")
-      .mockImplementation((_pid, signal) => failWith(groupError)(signal));
-    spawn.mockReturnValue(child);
-    const abort = new AbortController();
-    await expect(
-      runFixtureCommand({
-        platform: "linux",
-        signal: abort.signal,
-        abortKillGraceMs: 0,
-        cleanupDrainTimeoutMs: 0,
-        onReady: () => abort.abort(),
-      }),
-    ).rejects.toMatchObject({
-      code: "EPROCESSGROUP_CLEANUP_FAILED",
-      cause: { errors: [groupError, childError] },
-    });
-    expect(kill).toHaveBeenCalledWith(failedSignal);
-    expect(signalProcess).toHaveBeenCalledWith(-12345, "SIGKILL");
-  },
-);
-
-it.each(["exit", "missing PID", "alive"] as const)(
-  "retains an unowned Windows tree after taskkill status 255 (%s)",
-  async (state) => {
-    const { child, exit, waitForOutputClose, destroyOutput } = createSyntheticChild("both");
-    const kill = vi.spyOn(child, "kill").mockReturnValue(true);
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      if (state === "missing PID") {
-        throw Object.assign(new Error("process is gone"), { code: "ESRCH" });
-      }
-      return true;
-    });
-    spawn.mockReturnValue(child);
-    const abort = new AbortController();
-    const outputClosed = waitForOutputClose();
-    const taskkill = { status: 255, stdout: "tree attempted", stderr: "task not found" };
-    const runTaskkill = vi.fn(() => {
-      if (state === "exit") {
-        exit();
-      }
-      return {
-        ...taskkill,
-        stdout: Buffer.from(taskkill.stdout),
-        stderr: Buffer.from(taskkill.stderr),
-      };
-    });
-    try {
-      const completed = runFixtureCommand({
-        platform: "win32",
-        // IPC callers bypass Job admission and exercise the unowned-tree contract.
-        stdio: ["ignore", "pipe", "pipe", "ipc"],
-        runTaskkill,
-        signal: abort.signal,
-        onReady: () => abort.abort(),
-      });
-      // Output may close after the synchronous termination attempt returns.
-      if (state !== "alive") {
-        setImmediate(() => {
-          if (state === "missing PID") {
-            exit();
-          }
-          destroyOutput();
-          child.emit("close", 0, null);
-        });
-      }
-      await expect(completed).rejects.toMatchObject({
-        code: "EPROCESSGROUP_CLEANUP_FAILED",
-        processTreeState: "indeterminate",
-        ...(state === "alive"
-          ? {
-              cause: {
-                message: expect.stringContaining('"status":255'),
-                taskkill: expect.arrayContaining([expect.objectContaining(taskkill)]),
-              },
-            }
-          : {}),
-      });
-      if (state !== "alive") {
-        expect(runTaskkill).toHaveBeenCalledOnce();
-        expect(kill).not.toHaveBeenCalled();
-      }
-    } finally {
-      destroyOutput();
-      await outputClosed;
+it.each(["SIGTERM", "SIGKILL"])("retains POSIX %s failures", async (failedSignal) => {
+  const { child } = createSyntheticChild();
+  const groupError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
+  const childError = Object.assign(new Error("child signal denied"), { code: "EACCES" });
+  const failWith = (error: Error, signal: NodeJS.Signals | number | undefined) => {
+    if (signal === failedSignal) {
+      throw error;
     }
-  },
-);
+    return true;
+  };
+  const kill = vi.spyOn(child, "kill").mockImplementation((signal) => failWith(childError, signal));
+  const signalProcess = vi
+    .spyOn(process, "kill")
+    .mockImplementation((_pid, signal) => failWith(groupError, signal));
+  spawn.mockReturnValue(child);
+  const abort = new AbortController();
+  await expect(
+    runFixtureCommand({
+      platform: "linux",
+      signal: abort.signal,
+      abortKillGraceMs: 0,
+      cleanupDrainTimeoutMs: 0,
+      onReady: () => abort.abort(),
+    }),
+  ).rejects.toMatchObject({
+    code: "EPROCESSGROUP_CLEANUP_FAILED",
+    cause: { errors: [groupError, childError] },
+  });
+  expect(kill).toHaveBeenCalledWith(failedSignal);
+  expect(signalProcess).toHaveBeenCalledWith(-12345, "SIGKILL");
+});
+
+it.each(["exit", "missing PID", "alive"] as const)("unowned Windows tree: %s", async (state) => {
+  const { child, exit, waitForOutputClose, destroyOutput } = createSyntheticChild("both");
+  const kill = vi.spyOn(child, "kill").mockReturnValue(true);
+  vi.spyOn(process, "kill").mockImplementation(() => {
+    if (state === "missing PID") {
+      throw Object.assign(new Error("process is gone"), { code: "ESRCH" });
+    }
+    return true;
+  });
+  spawn.mockReturnValue(child);
+  const abort = new AbortController();
+  const outputClosed = waitForOutputClose();
+  const taskkill = { status: 255, stdout: "tree attempted", stderr: "task not found" };
+  const runTaskkill = vi.fn(() => {
+    if (state === "exit") {
+      exit();
+    }
+    return {
+      ...taskkill,
+      stdout: Buffer.from(taskkill.stdout),
+      stderr: Buffer.from(taskkill.stderr),
+    };
+  });
+  try {
+    const completed = runFixtureCommand({
+      platform: "win32",
+      // IPC bypasses Job admission.
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+      runTaskkill,
+      signal: abort.signal,
+      onReady: () => abort.abort(),
+    });
+    if (state !== "alive") {
+      setImmediate(() => {
+        if (state === "missing PID") {
+          exit();
+        }
+        destroyOutput();
+        child.emit("close", 0, null);
+      });
+    }
+    await expect(completed).rejects.toMatchObject({
+      code: "EPROCESSGROUP_CLEANUP_FAILED",
+      processTreeState: "indeterminate",
+      ...(state === "alive"
+        ? {
+            cause: {
+              message: expect.stringContaining('"status":255'),
+              taskkill: expect.arrayContaining([expect.objectContaining(taskkill)]),
+            },
+          }
+        : {}),
+    });
+    if (state !== "alive") {
+      expect(runTaskkill).toHaveBeenCalledOnce();
+      expect(kill).not.toHaveBeenCalled();
+    }
+  } finally {
+    destroyOutput();
+    await outputClosed;
+  }
+});

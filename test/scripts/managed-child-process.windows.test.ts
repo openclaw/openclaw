@@ -39,7 +39,7 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it.runIf(process.platform === "win32")(
-  "retains the benchmark termination receipt on the original Windows child",
+  "retains the benchmark receipt on the original child",
   async ({ signal }) => {
     const child = spawnChild(
       process.execPath,
@@ -63,7 +63,7 @@ it.runIf(process.platform === "win32")(
 );
 
 it.runIf(process.platform === "win32")(
-  "releases an already-exited Gateway's native Job through the Gateway helper",
+  "releases an already-exited Gateway's native Job",
   async ({ signal }) => {
     const spawn = await loadManagedChildSpawner();
     const child = spawn(process.execPath, ["-e", "process.exit(0)"], {
@@ -189,11 +189,9 @@ ${mode === "normal exit" ? 'process.stdin.once("data", () => process.exit(0));' 
       }
       await outcome;
     }
-    if (mode === "abort") {
-      expect(await outcome).toMatchObject({ code: "ABORT_ERR" });
-    } else {
-      expect(await outcome).toBe(0);
-    }
+    expect(await outcome).toEqual(
+      mode === "abort" ? expect.objectContaining({ code: "ABORT_ERR" }) : 0,
+    );
     owner.assertReleased();
   },
 );
