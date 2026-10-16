@@ -13,7 +13,7 @@ import {
   workboardCardMatchesLifecycleLink,
   workboardCardSessionLookupKey,
 } from "./session-link.js";
-import { cardRunId, cardSessionKey } from "./store-card-helpers.js";
+import { cardRunId, cardSessionKey, latestRunningAttempt } from "./store-card-helpers.js";
 import type { WorkboardStore } from "./store.js";
 
 const WORKBOARD_LIFECYCLE_SWEEP_MS = 60_000;
@@ -66,8 +66,13 @@ function sessionProvesPreparedAcceptance(session: WorkboardLifecycleSession): bo
   );
 }
 
+type WorkboardLifecycleSweep = {
+  agentIds?: Promise<string[]>;
+};
+
 type WorkboardLifecycleSessionReadOptions = {
   sessionKey: string;
+  sweep?: WorkboardLifecycleSweep;
 };
 
 type WorkboardLifecycleSessionReader = (
@@ -86,18 +91,21 @@ type WorkboardLifecycleService = OpenClawPluginService & {
   readSessions: WorkboardLifecycleSessionReader;
 };
 
-function needsWorkboardLifecycleReconciliation(card: WorkboardCard): boolean {
+function needsWorkboardLifecycleReconciliation(card: WorkboardCard, now: number): boolean {
   if (card.metadata?.archivedAt) {
     return false;
   }
   // A running claim can own an accepted session even when persisting its link failed.
   // Keep those cards, and stale cleanup, in the missed-event recovery sweep.
+  const claim = card.metadata?.claim;
+  const settled = card.status === "review" || card.status === "blocked" || card.status === "done";
   return Boolean(
-    card.sessionKey ||
-    card.runId ||
-    card.execution ||
+    (!settled && (card.sessionKey || card.runId || card.execution)) ||
     card.status === "running" ||
-    card.metadata?.claim ||
+    card.execution?.status === "running" ||
+    latestRunningAttempt(card) ||
+    card.metadata?.automation?.launch?.phase === "prepared" ||
+    (claim && (!claim.expiresAt || claim.expiresAt > now)) ||
     card.metadata?.stale,
   );
 }
@@ -385,17 +393,25 @@ export async function readWorkboardLifecycleSessions(
     return { sessions: session ? [session] : [], complete: true };
   }
   if (options.sessionKey.startsWith("subagent:workboard-")) {
-    const payload = await gateway.request("agents.list", {}, { scopes: ["operator.read"] });
-    if (!isRecord(payload) || !Array.isArray(payload.agents)) {
-      throw new Error("agents.list returned an invalid ownership snapshot");
-    }
+    // Success and failure are shared only within this admitted sweep.
+    const sweep: WorkboardLifecycleSweep = options.sweep ?? {};
+    sweep.agentIds ??= gateway
+      .request("agents.list", {}, { scopes: ["operator.read"] })
+      .then((payload) => {
+        if (!isRecord(payload) || !Array.isArray(payload.agents)) {
+          throw new Error("agents.list returned an invalid ownership snapshot");
+        }
+        return payload.agents.map((agent) => {
+          if (!isRecord(agent) || typeof agent.id !== "string" || !agent.id) {
+            throw new Error("agents.list returned an invalid agent identity");
+          }
+          return agent.id;
+        });
+      });
     const sessions: WorkboardLifecycleSession[] = [];
-    for (const agent of payload.agents) {
-      if (!isRecord(agent) || typeof agent.id !== "string" || !agent.id) {
-        throw new Error("agents.list returned an invalid agent identity");
-      }
+    for (const agentId of await sweep.agentIds) {
       const exact = await readWorkboardLifecycleSessions(gateway, {
-        sessionKey: `agent:${agent.id}:${options.sessionKey}`,
+        sessionKey: `agent:${agentId}:${options.sessionKey}`,
       });
       if (!exact.complete) {
         return { sessions: [], complete: false };
@@ -544,7 +560,11 @@ export function createWorkboardLifecycleService(params: {
               return;
             }
             const cardsByKey = new Map<string, WorkboardCard[]>();
-            for (const card of cards.filter(needsWorkboardLifecycleReconciliation)) {
+            const now = params.now?.() ?? Date.now();
+            const sweep: WorkboardLifecycleSweep = {};
+            for (const card of cards.filter((candidate) =>
+              needsWorkboardLifecycleReconciliation(candidate, now),
+            )) {
               const key = workboardCardSessionLookupKey(card);
               const group = cardsByKey.get(key) ?? [];
               group.push(card);
@@ -552,7 +572,7 @@ export function createWorkboardLifecycleService(params: {
             }
             for (const [sessionKey, linkedCards] of cardsByKey) {
               try {
-                const snapshot = await params.readSessions({ sessionKey });
+                const snapshot = await params.readSessions({ sessionKey, sweep });
                 // A partial suffix search cannot establish a unique owner or absence.
                 if (!snapshot.complete) {
                   continue;
@@ -561,7 +581,7 @@ export function createWorkboardLifecycleService(params: {
                   store: params.store,
                   cards: linkedCards,
                   ...snapshot,
-                  now: params.now?.() ?? Date.now(),
+                  now,
                   onMatched,
                 });
               } catch (error) {

@@ -7,29 +7,33 @@ import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
 describe("Workboard archived session recovery", () => {
   it.each([
-    { sessionStatus: "done", cardStatus: "review" },
-    { sessionStatus: "killed", cardStatus: "blocked" },
+    { sessionStatus: "done", cardStatus: "review", provisional: false },
+    { sessionStatus: "killed", cardStatus: "blocked", provisional: true },
   ] as const)(
     "recovers linked $sessionStatus sessions beyond the catalog page without reading unrelated rows",
-    async ({ sessionStatus, cardStatus }) => {
+    async ({ sessionStatus, cardStatus, provisional }) => {
       vi.useFakeTimers();
       try {
         const store = createWorkboardSqliteTestStore();
-        const sessionKey = "agent:main:archived-worker";
+        const suffix = "subagent:workboard-archived-worker";
+        const sessionKey = `agent:main:${suffix}`;
+        const linkedKey = provisional ? suffix : sessionKey;
         const card = await store.create({
           title: "Recover archived worker",
           status: "running",
-          sessionKey,
+          sessionKey: linkedKey,
         });
         const sibling = await store.create({
           title: "Recover the same archived worker",
           status: "running",
-          sessionKey,
+          sessionKey: linkedKey,
         });
         const active = await store.create({
           title: "Recover active worker",
           status: "running",
-          sessionKey: "agent:main:active-worker",
+          sessionKey: provisional
+            ? "subagent:workboard-active-worker"
+            : "agent:main:subagent:workboard-active-worker",
         });
         const sessions = [
           ...Array.from({ length: 10_000 }, (_, index) => ({
@@ -43,7 +47,11 @@ describe("Workboard archived session recovery", () => {
             updatedAt: active.updatedAt + 1,
             archivedAt: 1,
           },
-          { key: active.sessionKey, status: sessionStatus, updatedAt: active.updatedAt + 1 },
+          {
+            key: "agent:main:subagent:workboard-active-worker",
+            status: sessionStatus,
+            updatedAt: active.updatedAt + 1,
+          },
         ];
         let returnedRows = 0;
         const gateway = {
@@ -51,6 +59,9 @@ describe("Workboard archived session recovery", () => {
           request: vi
             .fn<Parameters<typeof readWorkboardLifecycleSessions>[0]["request"]>()
             .mockImplementation(async (method, params = {}) => {
+              if (method === "agents.list") {
+                return { agents: [{ id: "main" }, { id: "worker" }] };
+              }
               if (method === "sessions.describe") {
                 const session = sessions.find((row) => row.key === params.key) ?? null;
                 returnedRows += session ? 1 : 0;
@@ -86,9 +97,21 @@ describe("Workboard archived session recovery", () => {
           await operations.mock.results[0]?.value;
           expect(context.logger.warn).not.toHaveBeenCalled();
           expect(returnedRows).toBe(2);
+          expect(
+            gateway.request.mock.calls.filter(([method]) => method === "agents.list"),
+          ).toHaveLength(provisional ? 1 : 0);
           expect(await store.get(card.id)).toMatchObject({ status: cardStatus });
           expect(await store.get(sibling.id)).toMatchObject({ status: cardStatus });
           expect(await store.get(active.id)).toMatchObject({ status: cardStatus });
+          const callsAfterRecovery = gateway.request.mock.calls.length;
+          service.onGatewayStop();
+          service.stop();
+          operations.mockClear();
+          await service.start(context);
+          service.onGatewayStart();
+          expect(operations).toHaveBeenCalled();
+          await operations.mock.results[0]?.value;
+          expect(gateway.request).toHaveBeenCalledTimes(callsAfterRecovery);
         } finally {
           service.onGatewayStop();
           service.stop();

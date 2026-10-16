@@ -117,7 +117,6 @@ async function runSessionSweep(params: {
     // The admitted operation spans the full sweep, including SQLite worker writes.
     expect(runOperation).toHaveBeenCalled();
     await runOperation.mock.results[0]?.value;
-    expect(readSessions).toHaveBeenCalledOnce();
   } finally {
     service.onGatewayStop();
     await service.stop?.({ logger: { warn: vi.fn() } } as never);
@@ -357,21 +356,28 @@ describe("Workboard gateway lifecycle sync", () => {
     });
   });
 
-  it("keeps completed cards done when their session is running", async () => {
+  it("settles a running execution without reopening a manually completed card", async () => {
     const status = "done";
     const store = createWorkboardSqliteTestStore();
     const sessionKey = `agent:main:dashboard:${status}`;
-    const card = await createLinkedCard(store, { status, sessionKey });
+    const card = await createLinkedCard(store, {
+      status,
+      sessionKey,
+      execution: execution(sessionKey, "manually-completed"),
+    });
 
     await runSessionSweep({
       store,
       sessions: [
-        { key: sessionKey, status: "running", hasActiveRun: true, updatedAt: card.updatedAt + 1 },
+        { key: sessionKey, status: "done", hasActiveRun: false, updatedAt: card.updatedAt + 1 },
       ],
       complete: true,
     });
 
-    expect((await store.get(card.id))?.status).toBe("done");
+    expect(await store.get(card.id)).toMatchObject({
+      status: "done",
+      execution: { status: "review" },
+    });
   });
 
   it("keeps backlog cards in place after a terminal session event", async () => {
@@ -614,6 +620,11 @@ describe("Workboard gateway lifecycle sync", () => {
   it("skips session discovery when no unarchived card needs lifecycle reconciliation", async () => {
     const store = createWorkboardSqliteTestStore();
     await store.create({ title: "Not dispatched", status: "ready" });
+    await createLinkedCard(store, {
+      status: "done",
+      sessionKey: "agent:main:settled",
+      execution: execution("agent:main:settled", "settled", "done"),
+    });
     const archived = await createLinkedCard(store, {
       sessionKey: "agent:retired:subagent:workboard-default-archived",
     });
@@ -621,12 +632,12 @@ describe("Workboard gateway lifecycle sync", () => {
     const readSessions = vi.fn().mockResolvedValue({ sessions: [], complete: true });
     const context = { logger: { warn: vi.fn() } } as never;
     const service = createWorkboardLifecycleService({ store, readSessions });
+    using operation = vi.spyOn(store, "runOperation");
 
     await service.start(context);
     service.onGatewayStart();
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    expect(operation).toHaveBeenCalled();
+    await operation.mock.results[0]?.value;
     service.onGatewayStop();
     await service.stop?.(context);
 
@@ -664,7 +675,7 @@ describe("Workboard gateway lifecycle sync", () => {
     service.onGatewayStop();
     await service.stop?.(context);
 
-    expect(readSessions).toHaveBeenCalledWith({ sessionKey: "unknown" });
+    expect(readSessions).toHaveBeenCalledWith(expect.objectContaining({ sessionKey: "unknown" }));
     expect(request).toHaveBeenNthCalledWith(1, "agents.list", {}, { scopes: ["operator.read"] });
     expect(request).toHaveBeenNthCalledWith(
       2,

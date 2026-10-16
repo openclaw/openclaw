@@ -642,7 +642,8 @@ outcomes immediately. Agent attempt hooks consult the linked session state:
 finishing a model attempt does not move a card into `review` or `blocked` while
 its run is still active. A recovery sweep runs once per minute and reads only the
 sessions linked to active cards, sharing each read across cards with the same link.
-Provisional Workboard links check exact candidates across configured agents; ambiguous
+Settled cards stop polling unless they retain pending lifecycle state. Provisional
+Workboard links share one configured-agent roster per sweep and check exact candidates; ambiguous
 or incomplete results leave the card unchanged. Legacy unqualified links use a bounded
 search tagged `workboard-lifecycle`. Each store mutation emits
 the normal `plugin.workboard.changed` invalidation, so an open Workboard tab reloads
