@@ -3,16 +3,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { click, inputValue } from "./cron-assertions.test-support.ts";
 import {
   createContext,
+  createGateway,
   createPage,
   createRequest,
   cronListResponse,
   operatorHello,
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
+import { cronRpc } from "./cron-rpc.test-support.ts";
 import { createCronViewJob } from "./view.test-support.ts";
 import "./cron-page.tsx";
 
@@ -34,53 +36,17 @@ function conversationTarget(
   };
 }
 
-type TestGateway = ApplicationContext["gateway"] & {
-  emitSnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
-};
-
-function createGateway(client: GatewayBrowserClient, connected: boolean): TestGateway {
-  const snapshot: ApplicationGatewaySnapshot = {
-    client,
-    phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const snapshotListeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
-  return {
-    snapshot,
-    connection: { gatewayUrl: "", token: "", password: "" },
-    subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-      snapshotListeners.add(listener);
-      return () => snapshotListeners.delete(listener);
-    },
-    subscribeEvents() {
-      return () => undefined;
-    },
-    emitSnapshot(patch: Partial<ApplicationGatewaySnapshot>) {
-      Object.assign(snapshot, patch);
-      for (const listener of snapshotListeners) {
-        listener(snapshot);
-      }
-    },
-  } as unknown as TestGateway;
+type DirectoryResult = { conversations: ConversationListItem[] };
+function directoryRequest(load: (params?: unknown) => DirectoryResult | Promise<DirectoryResult>) {
+  return cronRpc({ "conversations.list": load });
 }
 
-function directoryRequest(
-  load: (
-    params?: unknown,
-  ) =>
-    | { conversations: ConversationListItem[] }
-    | Promise<{ conversations: ConversationListItem[] }>,
-) {
-  const fallback = createRequest();
-  return vi.fn(async (method: string, params?: unknown) =>
-    method === "conversations.list" ? load(params) : fallback(method),
-  );
+function targets(page: Awaited<ReturnType<typeof mountPage>>["page"]) {
+  return page.deliveryDirectory.conversations.map((entry) => entry.target);
+}
+
+function waitForTargets(page: Awaited<ReturnType<typeof mountPage>>["page"], expected: string[]) {
+  return waitForCronPage(() => expect(targets(page)).toEqual(expected));
 }
 
 async function mountPage(
@@ -113,20 +79,15 @@ describe("CronPage lifecycle", () => {
     const savedJob = createCronViewJob("saved-route", {
       delivery: { mode: "announce", channel: "telegram", to: "-100saved" },
     });
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "cron.list") {
-        return cronListResponse([savedJob]);
-      }
-      if (method === "conversations.list") {
-        return {
-          conversations: [
-            { ...conversationTarget("-100work"), accountId: "work" },
-            { ...conversationTarget("-100personal"), accountId: "personal" },
-          ],
-        };
-      }
-      return fallbackRequest(method);
+
+    const request = cronRpc({
+      "cron.list": () => cronListResponse([savedJob]),
+      "conversations.list": () => ({
+        conversations: [
+          conversationTarget("-100work", { accountId: "work" }),
+          conversationTarget("-100personal", { accountId: "personal" }),
+        ],
+      }),
     });
     const { page } = await mountPage(request, { render: true });
     await waitForCronPage(() => expect(page.cron.cronJobs).toHaveLength(1));
@@ -151,9 +112,7 @@ describe("CronPage lifecycle", () => {
       limit: 100,
     });
     expect(optionsFor("#cron-failure-alert-to")).toEqual(["-100saved"]);
-    expect(page.querySelector<HTMLInputElement>("#cron-failure-alert-to")?.value).toBe(
-      "-100personal",
-    );
+    expect(inputValue(page, "#cron-failure-alert-to")).toBe("-100personal");
   });
 
   it("keeps account and topic routing operator-authored without rediscovering cached targets", async () => {
@@ -303,15 +262,12 @@ describe("CronPage lifecycle", () => {
   it("keeps recipient discovery when the deletion is rejected", async () => {
     // A rejected remove reports cronError without throwing; its editor still owns discovery.
     const pending = createDeferred<{ conversations: ConversationListItem[] }>();
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        return pending.promise;
-      }
-      if (method === "cron.remove") {
+
+    const request = cronRpc({
+      "conversations.list": () => pending.promise,
+      "cron.remove": () => {
         throw new Error("cron.remove rejected");
-      }
-      return fallbackRequest(method);
+      },
     });
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
     const { page } = await mountPage(request);
@@ -330,11 +286,7 @@ describe("CronPage lifecycle", () => {
     // A directory response that lands after the failed delete still publishes
     // into the editor that asked for it.
     pending.resolve({ conversations: [conversationTarget("@ops-room")] });
-    await waitForCronPage(() =>
-      expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-        "@ops-room",
-      ]),
-    );
+    await waitForTargets(page, ["@ops-room"]);
     expect(page.deliveryDirectory.error).toBeNull();
   });
 
@@ -347,17 +299,14 @@ describe("CronPage lifecycle", () => {
       const save = createDeferred<{ id: string }>();
       const staleDirectory = createDeferred<{ conversations: ConversationListItem[] }>();
       const freshDirectory = createDeferred<{ conversations: ConversationListItem[] }>();
-      const fallbackRequest = createRequest();
+
       let directoryCalls = 0;
-      const request = vi.fn(async (method: string) => {
-        if (method === "cron.add") {
-          return save.promise;
-        }
-        if (method === "conversations.list") {
+      const request = cronRpc({
+        "cron.add": () => save.promise,
+        "conversations.list": () => {
           directoryCalls += 1;
           return directoryCalls === 1 ? staleDirectory.promise : freshDirectory.promise;
-        }
-        return fallbackRequest(method);
+        },
       });
       const { page, gateway, context } = await mountPage(request);
       page.cron.cronCreateOpen = true;
@@ -370,11 +319,7 @@ describe("CronPage lifecycle", () => {
       });
       await waitForCronPage(() => expect(directoryCalls).toBe(1));
       staleDirectory.resolve({ conversations: [conversationTarget("-100stale")] });
-      await waitForCronPage(() =>
-        expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-          "-100stale",
-        ]),
-      );
+      await waitForTargets(page, ["-100stale"]);
 
       page.submitForm();
       await waitForCronPage(() =>
@@ -404,11 +349,7 @@ describe("CronPage lifecycle", () => {
       await waitForCronPage(() => expect(retiredState.cronCreateOpen).toBe(false));
 
       freshDirectory.resolve({ conversations: [conversationTarget("-100fresh")] });
-      await waitForCronPage(() =>
-        expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-          "-100fresh",
-        ]),
-      );
+      await waitForTargets(page, ["-100fresh"]);
       expect(directoryCalls).toBe(2);
       expect(page.deliveryDirectory.error).toBeNull();
     },
@@ -422,17 +363,14 @@ describe("CronPage lifecycle", () => {
       createDeferred<{ conversations: ConversationListItem[] }>(),
     ];
     let directoryCalls = 0;
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
+
+    const request = cronRpc({
+      "conversations.list": () => {
         const pending = directories[Math.min(directoryCalls, directories.length - 1)];
         directoryCalls += 1;
         return pending?.promise;
-      }
-      if (method === "cron.remove") {
-        return removal.promise;
-      }
-      return fallbackRequest(method);
+      },
+      "cron.remove": () => removal.promise,
     });
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
     const { page } = await mountPage(request);
@@ -464,11 +402,7 @@ describe("CronPage lifecycle", () => {
     // would otherwise read as its own confirmed exit.
     expect(page.cron.cronEditingJob?.id).toBe("weekly-digest");
     directories[1]?.resolve({ conversations: [conversationTarget("-100replacement")] });
-    await waitForCronPage(() =>
-      expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-        "-100replacement",
-      ]),
-    );
+    await waitForTargets(page, ["-100replacement"]);
     expect(page.deliveryDirectory.error).toBeNull();
   });
 
@@ -484,11 +418,7 @@ describe("CronPage lifecycle", () => {
       expect(page.deliveryDirectory.error).toBeNull();
       expect(page.deliveryDirectory.conversations).toEqual([]);
       directories[1]?.resolve({ conversations: [conversationTarget("-100recovered")] });
-      await waitForCronPage(() =>
-        expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-          "-100recovered",
-        ]),
-      );
+      await waitForTargets(page, ["-100recovered"]);
     },
   );
 });
@@ -513,22 +443,19 @@ async function startConflictRecovery(operation: "save" | "toggle" = "save") {
       accountId: "default",
     },
   } as CronJob;
-  const fallbackRequest = createRequest();
-  const request = vi.fn(async (method: string, payload?: unknown) => {
-    if (method === "conversations.list") {
+
+  const request = cronRpc({
+    "conversations.list": (payload) => {
       const channel = (payload as { channel?: string } | undefined)?.channel ?? "";
       directoryChannels.push(channel);
       return directories[Math.min(directoryChannels.length - 1, directories.length - 1)]?.promise;
-    }
-    if (method === "cron.update") {
+    },
+    "cron.update": () => {
       throw Object.assign(new Error("cron job definition changed"), {
         details: { code: "CRON_JOB_CHANGED" },
       });
-    }
-    if (method === "cron.get") {
-      return authoritativeJob;
-    }
-    return fallbackRequest(method);
+    },
+    "cron.get": () => authoritativeJob,
   });
   const { page } = await mountPage(request, { render: operation === "toggle" });
   page.selectJob(editedJob);
@@ -537,7 +464,7 @@ async function startConflictRecovery(operation: "save" | "toggle" = "save") {
   if (operation === "save") {
     page.submitForm();
   } else {
-    page.querySelector<HTMLInputElement>('[data-test-id="cron-toggle-enabled"] input')!.click();
+    click(page, '[data-test-id="cron-toggle-enabled"] input');
   }
   await waitForCronPage(() => expect(request).toHaveBeenCalledWith("cron.get", { id: "digest" }));
   return { page, request, directories, directoryChannels };

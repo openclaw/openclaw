@@ -3,6 +3,14 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CronJob } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
+  text,
+  fillInput,
+  click,
+  testId,
+  waitForElement,
+  inputValue,
+} from "./cron-assertions.test-support.ts";
+import {
   createContext,
   createGateway,
   createPage,
@@ -10,6 +18,7 @@ import {
   cronListResponse,
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
+import { cronRpc } from "./cron-rpc.test-support.ts";
 import { createCronViewJob } from "./view.test-support.ts";
 
 afterEach(() => {
@@ -46,63 +55,46 @@ describe("automation revision conflict recovery", () => {
         details: { code: "CRON_JOB_CHANGED" },
       });
       let updates = 0;
-      const request = vi.fn(async (method: string, params?: unknown) => {
-        if (method === "cron.list") {
-          const query = (params as { query?: string } | undefined)?.query;
-          return query === "missing from filtered results"
-            ? cronListResponse([])
-            : cronListResponse([staleJob]);
-        }
-        if (method === "cron.update") {
-          updates += 1;
-          if (updates === 1) {
-            throw conflict;
-          }
-          return { ...authoritativeJob, enabled: false, configRevision: "revision-retried" };
-        }
-        if (method === "cron.get") {
-          return authoritativeJob;
-        }
-        if (method === "cron.status") {
-          return { enabled: true, jobs: 1 };
-        }
-        if (method === "cron.runs") {
-          return { entries: [], total: 0, offset: 0, hasMore: false };
-        }
-        if (method === "models.list") {
-          return { models: [] };
-        }
-        return {};
-      });
+      const request = cronRpc(
+        {
+          "cron.list": (params) => {
+            const query = (params as { query?: string } | undefined)?.query;
+            return query === "missing from filtered results"
+              ? cronListResponse([])
+              : cronListResponse([staleJob]);
+          },
+          "cron.update": () => {
+            updates += 1;
+            if (updates === 1) {
+              throw conflict;
+            }
+            return { ...authoritativeJob, enabled: false, configRevision: "revision-retried" };
+          },
+          "cron.get": () => authoritativeJob,
+          "cron.status": () => ({ enabled: true, jobs: 1 }),
+          "cron.runs": () => ({ entries: [], total: 0, offset: 0, hasMore: false }),
+          "models.list": () => ({ models: [] }),
+        },
+        () => ({}),
+      );
       const gateway = createGateway(createTestGatewayClient(request), true);
       const page = createPage(createContext(gateway), { render: true });
 
-      await waitForCronPage(() =>
-        expect(
-          page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]'),
-        ).not.toBeNull(),
-      );
-      (
-        page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]') as HTMLElement
-      ).click();
+      (await waitForElement(page, testId("cron-row-filtered-conflict-job"))).click();
       await waitForCronPage(() => expect(page.cron.cronEditingJob?.id).toBe(staleJob.id));
 
       page.cron.cronJobsQuery = "missing from filtered results";
       page.refreshView();
       await page.settle();
-      const name = page.querySelector("#cron-name") as HTMLInputElement;
-      name.value = "My stale edit";
-      name.dispatchEvent(new Event("input", { bubbles: true }));
+      const name = fillInput(page, "#cron-name", "My stale edit");
       const action =
-        operation === "save"
-          ? '[data-test-id="cron-submit"]'
-          : '[data-test-id="cron-toggle-enabled"] input';
+        operation === "save" ? testId("cron-submit") : '[data-test-id="cron-toggle-enabled"] input';
       gateway.emitRetiredEvent({ type: "event", event: "cron", payload: {} });
       await waitForCronPage(() => expect(page.cron.cronJobs).toEqual([]));
       await page.settle();
       expect(name.value).toBe("My stale edit");
       expect(page.cron.cronEditingJob?.configRevision).toBe("revision-stale");
-      (page.querySelector(action) as HTMLInputElement).click();
+      click(page, action);
 
       await waitForCronPage(() =>
         expect(page.cron.cronEditingJob?.configRevision).toBe("revision-current"),
@@ -118,19 +110,13 @@ describe("automation revision conflict recovery", () => {
       expect((page.querySelector("#cron-name") as HTMLInputElement).value).toBe(
         authoritativeJob.name,
       );
-      expect(page.querySelector(".cron-detail-title")?.textContent).toContain(
-        authoritativeJob.name,
-      );
-      expect(page.querySelector('[data-test-id="cron-detail-description"]')?.textContent).toContain(
-        authoritativeJob.description,
-      );
-      expect(page.querySelector('[data-test-id="cron-detail-tab-history"]')).not.toBeNull();
-      expect(page.querySelector(".cron-error-banner")?.textContent).toContain(
-        "review it before retrying",
-      );
+      expect(text(page, ".cron-detail-title")).toContain(authoritativeJob.name);
+      expect(text(page, testId("cron-detail-description"))).toContain(authoritativeJob.description);
+      expect(page.querySelector(testId("cron-detail-tab-history"))).not.toBeNull();
+      expect(text(page, ".cron-error-banner")).toContain("review it before retrying");
       expect(updates).toBe(1);
       await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
-      (page.querySelector(action) as HTMLInputElement).click();
+      click(page, action);
       await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
       expect(updates).toBe(2);
       expect(
@@ -143,9 +129,9 @@ describe("automation revision conflict recovery", () => {
       ]);
       expect(page.querySelector(".cron-error-banner")).toBeNull();
 
-      (page.querySelector('[data-test-id="cron-back"]') as HTMLButtonElement).click();
+      click(page, testId("cron-back"));
       await waitForCronPage(() => expect(page.cron.cronEditingJob).toBeNull());
-      expect(page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]')).toBeNull();
+      expect(page.querySelector(testId("cron-row-filtered-conflict-job"))).toBeNull();
     },
   );
 
@@ -163,39 +149,33 @@ describe("automation revision conflict recovery", () => {
       const latest = { ...job, name: "Latest original", configRevision: "current" };
       const pending = createDeferred<CronJob>();
       const reading = createDeferred();
-      const fallback = createRequest();
+
       let exactReads = 0;
-      const request = vi.fn(async (method: string) => {
-        if (method === "cron.list") {
-          return cronListResponse([job, other]);
-        }
-        if (method === "cron.update") {
+      const request = cronRpc({
+        "cron.list": () => cronListResponse([job, other]),
+        "cron.update": () => {
           throw Object.assign(new Error("Definition changed"), {
             details: { code: "CRON_JOB_CHANGED" },
           });
-        }
-        if (method === "cron.get") {
+        },
+        "cron.get": () => {
           exactReads += 1;
           if (exactReads === 2) {
             reading.resolve();
             return pending.promise;
           }
           return job;
-        }
-        return fallback(method);
+        },
       });
       const page = createPage(
         createContext(createGateway(createTestGatewayClient(request), true)),
         { render: true },
       );
       try {
-        await waitForCronPage(() =>
-          expect(page.querySelector('[data-test-id="cron-row-conflict-origin"]')).not.toBeNull(),
-        );
-        page.querySelector<HTMLElement>('[data-test-id="cron-row-conflict-origin"]')!.click();
+        (await waitForElement(page, testId("cron-row-conflict-origin"))).click();
         await page.settle();
         const originalState = page.cron;
-        page.querySelector<HTMLInputElement>('[data-test-id="cron-toggle-enabled"] input')!.click();
+        click(page, '[data-test-id="cron-toggle-enabled"] input');
         await reading.promise;
         if (navigation === "Gateway source") {
           page.context = createContext(
@@ -217,10 +197,8 @@ describe("automation revision conflict recovery", () => {
         await page.settle();
         expect(page.cron.cronEditingJob).toBe(selected);
         expect(page.cron.cronForm).toBe(draft);
-        expect(page.querySelector<HTMLInputElement>("#cron-name")?.value).toBe(
-          "Newer unsaved intent",
-        );
-        expect(page.querySelector(".cron-error-banner")?.textContent).toBe("Newer editor feedback");
+        expect(inputValue(page, "#cron-name")).toBe("Newer unsaved intent");
+        expect(text(page, ".cron-error-banner")).toBe("Newer editor feedback");
         expect(request.mock.calls.filter(([method]) => method === "cron.update")).toHaveLength(1);
       } finally {
         pending.resolve(latest);
