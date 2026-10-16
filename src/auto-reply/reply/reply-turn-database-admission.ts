@@ -105,6 +105,7 @@ export function bindReplyOperationDatabaseAdmission(
         } finally {
           await current.release();
         }
+        assertTransitionActive();
       })();
       try {
         await handoff;

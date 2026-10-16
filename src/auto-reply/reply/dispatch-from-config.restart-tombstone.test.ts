@@ -151,8 +151,10 @@ describe("restart tombstone channel feedback", () => {
       sessionStoreMocks.currentEntry!.sessionId = "replacement-session";
     } else {
       sessionStoreMocks.currentEntry!.mainRestartRecovery = {
-        ...sessionStoreMocks.currentEntry!.mainRestartRecovery,
         cycleId: "replacement-cycle",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
       };
     }
     await rejectInbound();

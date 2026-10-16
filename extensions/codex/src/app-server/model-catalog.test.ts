@@ -27,7 +27,7 @@ vi.mock("./auth-profile.js", async () => {
   });
 });
 
-const rpc = vi.hoisted(() => ({ request: vi.fn(), retire: vi.fn(), client: {} }));
+const rpc = vi.hoisted(() => ({ request: vi.fn(), retire: vi.fn(), epoch: 0, client: {} }));
 vi.mock("./request.js", () => ({
   withCodexAppServerJsonClient: vi.fn(
     (_options: unknown, run: (request: unknown, client: unknown) => unknown) =>
@@ -37,6 +37,10 @@ vi.mock("./request.js", () => ({
 // mock-isolation: Keep physical clients and shared lease state outside catalog projection tests.
 vi.mock("./shared-client.js", () => ({
   retireSharedCodexAppServerClientIfCurrent: rpc.retire,
+  captureSharedCodexAppServerCatalogLifetime: () => {
+    const epoch = rpc.epoch;
+    return () => rpc.epoch === epoch;
+  },
 }));
 let owner: ReturnType<typeof createCodexAppServerModelCatalog>;
 const loadCodexAppServerModelCatalog = async (...args: Parameters<typeof owner.load>) =>
@@ -81,6 +85,7 @@ describe("Codex app-server model catalog", () => {
     });
     listModelsMock.mockReset();
     vi.mocked(withCodexAppServerJsonClient).mockClear();
+    rpc.epoch += 1;
     rpc.retire.mockClear();
     rpc.request
       .mockReset()
@@ -280,6 +285,8 @@ describe("Codex app-server model catalog", () => {
       });
       await owner.load(catalogParams, nativePluginConfig);
       expect(read({}, nativePluginConfig)).toEqual({ accountType: "chatgpt", authMode: mode });
+      rpc.epoch += 1;
+      expect(read({}, nativePluginConfig)).toBeUndefined();
     },
   );
 
@@ -362,6 +369,8 @@ describe("Codex app-server model catalog", () => {
       expect(
         owner.read({ ...catalogParams, provider: "openai", modelId: "synthetic-opaque" }, {}),
       ).toBeUndefined();
+      rpc.epoch += 1;
+      expect(read({}, nativePluginConfig)).toBeUndefined();
     },
   );
 
@@ -377,8 +386,21 @@ describe("Codex app-server model catalog", () => {
     expect(read()).toBeUndefined();
   });
 
-  it("cannot publish disposed asynchronous observations", async () => {
+  it("cannot publish superseded or disposed asynchronous observations", async () => {
     listModelsMock.mockResolvedValue(opaqueCatalog());
+    const pending = createDeferred<unknown>();
+    const pendingStarted = createDeferred<void>();
+    rpc.request.mockImplementationOnce(() => {
+      pendingStarted.resolve();
+      return pending.promise;
+    });
+    const older = owner.load(catalogParams, undefined);
+    await pendingStarted.promise;
+    expect(read()).toBeUndefined();
+    await owner.load(catalogParams, undefined);
+    pending.resolve({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
+    expect(await older).toEqual({ entries: [] });
+    expect(read()).toEqual({ accountType: "apiKey", authMode: "api_key" });
     const disposed = createDeferred<unknown>();
     const disposedStarted = createDeferred<void>();
     rpc.request.mockImplementationOnce(() => {
