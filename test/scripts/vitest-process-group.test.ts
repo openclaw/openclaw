@@ -20,6 +20,14 @@ describe("vitest process group helpers", () => {
     return `${pid} (${comm}) ${state} ${ppid} ${pgid} 0`;
   }
   const procError = (code: string) => Object.assign(new Error(code), { code });
+  function procRead<T>(value: T | Error): T {
+    if (value instanceof Error) {
+      throw value;
+    }
+    return value;
+  }
+  const procScans = () =>
+    vi.mocked(fs.readdirSync).mock.calls.filter(([path]) => String(path) === "/proc");
   async function rejectAtDeadline(completion: Promise<unknown>, message: string) {
     const rejected = expect(completion).rejects.toThrow(message);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -36,35 +44,22 @@ describe("vitest process group helpers", () => {
     const taskReads = new Map<string, number>();
     vi.spyOn(fs, "readdirSync").mockImplementation((path) => {
       if (String(path) === "/proc") {
-        if (listError) {
-          throw listError;
-        }
-        return pids as never;
+        return procRead(listError ?? pids) as never;
       }
       const pid = /^\/proc\/(\d+)\/task$/.exec(String(path))?.[1] ?? "";
       const lists = taskLists[pid] ?? [[pid]];
       const index = taskReads.get(pid) ?? 0;
       taskReads.set(pid, index + 1);
-      const result = lists[Math.min(index, lists.length - 1)];
-      if (result instanceof Error) {
-        throw result;
-      }
-      return result as never;
+      return procRead(lists[Math.min(index, lists.length - 1)]) as never;
     });
     vi.spyOn(fs, "readFileSync").mockImplementation((file) => {
       if (String(file) === "/proc/self/mounts") {
-        if (mounts instanceof Error) {
-          throw mounts;
-        }
-        return mounts;
+        return procRead(mounts);
       }
       const task = /^\/proc\/(\d+)\/task\/(\d+)\/stat$/.exec(String(file));
       const pid = /^\/proc\/(\d+)\/stat$/.exec(String(file))?.[1] ?? "";
       const taskStat = task ? stats[`${task[1]}/${task[2]}`] : undefined;
-      const stat = taskStat ?? stats[task && task[1] === task[2] ? task[1]! : pid];
-      if (stat instanceof Error) {
-        throw stat;
-      }
+      const stat = procRead(taskStat ?? stats[task && task[1] === task[2] ? task[1]! : pid]);
       if (typeof stat !== "string") {
         throw new Error(`missing mocked stat for ${pid}`);
       }
@@ -85,7 +80,7 @@ describe("vitest process group helpers", () => {
     });
     child.emit("exit", 0, null);
     child.emit("close", 0, null);
-    return { completion, kill };
+    return completion;
   }
 
   function cleanupFixture(forceSignal?: NodeJS.Signals, capacity = false) {
@@ -180,7 +175,7 @@ describe("vitest process group helpers", () => {
       undefined,
       { "4200": taskLists },
     );
-    const completion = startLinuxCompletion().completion;
+    const completion = startLinuxCompletion();
     if (!failure) {
       await expect(completion).resolves.toEqual({ code: 0, signal: null });
       return;
@@ -196,7 +191,7 @@ describe("vitest process group helpers", () => {
       undefined,
       "tmpfs /tmp tmpfs rw 0 0\n",
     );
-    await rejectAtDeadline(startLinuxCompletion().completion, "members: unavailable");
+    await rejectAtDeadline(startLinuxCompletion(), "members: unavailable");
     expect(fs.readdirSync).not.toHaveBeenCalled();
   });
 
@@ -205,23 +200,18 @@ describe("vitest process group helpers", () => {
     mockLinuxProc([], {});
     const missing = procError("ESRCH");
     const kill = vi.fn((_target: number, signal?: NodeJS.Signals | 0) => {
-      const scans = vi
-        .mocked(fs.readdirSync)
-        .mock.calls.filter(([path]) => String(path) === "/proc").length;
-      if (signal === 0 && scans >= 2) {
+      if (signal === 0 && procScans().length >= 2) {
         throw missing;
       }
       return true;
     });
 
-    const { completion } = startLinuxCompletion(4200, kill);
+    const completion = startLinuxCompletion(4200, kill);
     const settled = expect(completion).resolves.toEqual({ code: 0, signal: null });
 
     await vi.advanceTimersByTimeAsync(1_000);
     await settled;
-    expect(
-      vi.mocked(fs.readdirSync).mock.calls.filter(([path]) => String(path) === "/proc"),
-    ).toHaveLength(2);
+    expect(procScans()).toHaveLength(2);
   });
 
   it("skips ENOENT races and accepts PID/PGID 1 with PPID 0", async () => {
@@ -229,10 +219,7 @@ describe("vitest process group helpers", () => {
       "1": procStat(1, "Z", 0, 1, "init"),
       "2": missingTask,
     });
-
-    const { completion } = startLinuxCompletion(1);
-
-    await expect(completion).resolves.toEqual({ code: 0, signal: null });
+    await expect(startLinuxCompletion(1)).resolves.toEqual({ code: 0, signal: null });
   });
 
   it.each([
@@ -242,8 +229,7 @@ describe("vitest process group helpers", () => {
   ])("fails closed for %s", async (_label, pids, stats, listError) => {
     vi.useFakeTimers();
     mockLinuxProc(pids, stats, listError);
-    const { completion } = startLinuxCompletion();
-    await rejectAtDeadline(completion, "process group 4200 remained alive 1000ms");
+    await rejectAtDeadline(startLinuxCompletion(), "process group 4200 remained alive 1000ms");
   });
 
   it("sorts and bounds classified Linux process-group diagnostics", async () => {
@@ -254,8 +240,7 @@ describe("vitest process group helpers", () => {
       pids,
       Object.fromEntries(pids.map((pid) => [pid, procStat(Number(pid), "S", 1, 4200, comm)])),
     );
-    const { completion } = startLinuxCompletion();
-    const rejected = completion.catch((failure: unknown) => failure);
+    const rejected = startLinuxCompletion().catch((failure: unknown) => failure);
     await vi.advanceTimersByTimeAsync(1_000);
     const message = ((await rejected) as Error).message;
     expect(message.indexOf("pid=4200")).toBeLessThan(message.indexOf("pid=4201"));

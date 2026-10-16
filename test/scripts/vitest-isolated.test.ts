@@ -20,6 +20,7 @@ import { runVitest } from "../../scripts/run-vitest.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
+const scratch = () => temp.make("isolated-");
 const image = "a".repeat(64);
 const file = "test/example.test.ts";
 const config = "test/vitest/example.config.ts";
@@ -31,8 +32,8 @@ function write(root: string, relative: string, content = "fixture") {
   fs.writeFileSync(path.join(root, relative), content);
 }
 function sourceFixture() {
-  const root = temp.make("isolated-source-");
-  const snapshot = temp.make("isolated-copy-");
+  const root = scratch();
+  const snapshot = scratch();
   return {
     root,
     snapshot,
@@ -58,17 +59,23 @@ function createOptions() {
     argv: ["run", file],
   };
 }
-function containerInspection() {
+const bindMount = (Source: string, Destination: string) => ({
+  Type: "bind",
+  Source,
+  Destination,
+  RW: true,
+});
+function containerInspection(status = "exited", exit = 0, owner = name) {
   const create = createArgs(createOptions());
   return {
     Config: {
-      Labels: { [label]: name },
+      Labels: { [label]: owner },
       User: `${process.getuid?.()}:${process.getgid?.()}`,
       Env: create.flatMap((arg, index) => (arg === "--env" ? [create[index + 1]!] : [])),
     },
     HostConfig: { NetworkMode: "none", Privileged: false, ReadonlyRootfs: true, Init: true },
-    Mounts: [{ Type: "bind", Source: "/owned/source", Destination: "/workspace", RW: true }],
-    State: { Running: false, Status: "exited", ExitCode: 0 },
+    Mounts: [bindMount("/owned/source", "/workspace")],
+    State: { Running: status === "running", Status: status, ExitCode: exit },
   };
 }
 
@@ -88,25 +95,24 @@ describe("isolated Vitest admission", () => {
   });
   const testName = "literal shell ; $()";
   const originalArgs = ["run", file, "--config", config, "-t", testName, "--maxWorkers=1"];
+  type ParseCase = [string[], ReturnType<typeof parseArgs> | string];
+  const repoImage = `repo@sha256:${image}`;
   it.each([
-    { args: [selector, image, ...originalArgs], expected: { image, args: originalArgs } },
-    {
-      args: ["run", `--isolated-image=repo@sha256:${image}`, file],
-      expected: { image: `repo@sha256:${image}`, args: ["run", file] },
-    },
-    { args: originalArgs, expected: null },
-    { args: ["run", "--", selector, image], expected: null },
-    { args: ["run", "-t", `--isolated-image=${image}`], expected: { image, args: ["run", "-t"] } },
-    ...["repo:tag", "sha256:1234", ""].map((value) => ({
-      args: [selector, value, "run", file],
-      error: "full local sha256",
-    })),
-    { args: [selector, image, selector, image], error: "once" },
-  ])("parses only an unambiguous image selector: $args", (scenario) => {
-    if ("error" in scenario) {
-      expect(() => parseArgs(scenario.args)).toThrow(scenario.error);
+    [[selector, image, ...originalArgs], { image, args: originalArgs }],
+    [["run", `${selector}=${repoImage}`, file], { image: repoImage, args: ["run", file] }],
+    [originalArgs, null],
+    [["run", "--", selector, image], null],
+    [["run", "-t", `${selector}=${image}`], { image, args: ["run", "-t"] }],
+    ...["repo:tag", "sha256:1234", ""].map((value): ParseCase => [
+      [selector, value, "run", file],
+      "full local sha256",
+    ]),
+    [[selector, image, selector, image], "once"],
+  ] satisfies ParseCase[])("parses only an unambiguous image selector: %j", (args, expected) => {
+    if (typeof expected === "string") {
+      expect(() => parseArgs(args)).toThrow(expected);
     } else {
-      expect(parseArgs(scenario.args)).toEqual(scenario.expected);
+      expect(parseArgs(args)).toEqual(expected);
     }
   });
   it("admits tracked exact files and config but not old/untracked or alternate inputs", () => {
@@ -194,25 +200,16 @@ describe("isolated Vitest admission", () => {
     const checked = (value: Inspection) =>
       verifyContainer(value, name, ["/owned/source:/workspace:rw"]);
     expect(() => checked(containerInspection())).not.toThrow();
-    const rejects = (mutate: (value: Inspection) => unknown, error: string) => {
+    const rejects = (mutate: (value: Inspection) => unknown, error = "isolation settings") => {
       const value = containerInspection();
       mutate(value);
       expect(() => checked(value)).toThrow(error);
     };
     rejects((value) => value.Config.Env.push("HTTP_PROXY=http://credential-proxy"), "environment");
+    rejects(({ HostConfig }) => Object.assign(HostConfig, { NetworkMode: "host" }));
+    rejects(({ HostConfig }) => Object.assign(HostConfig, { Init: false }));
     rejects(
-      (value) => Object.assign(value.HostConfig, { NetworkMode: "host" }),
-      "isolation settings",
-    );
-    rejects((value) => Object.assign(value.HostConfig, { Init: false }), "isolation settings");
-    rejects(
-      (value) =>
-        value.Mounts.push({
-          Type: "bind",
-          Source: "/run/podman.sock",
-          Destination: "/engine",
-          RW: true,
-        }),
+      (value) => value.Mounts.push(bindMount("/run/podman.sock", "/engine")),
       "unexpected host/default mounts",
     );
   });
@@ -220,8 +217,8 @@ describe("isolated Vitest admission", () => {
 
 describe("isolated working-tree source", () => {
   it.each(["fresh", "symlink"])("owns only fresh private scratch: %s", (kind) => {
-    const snapshot = temp.make("isolated-scratch-");
-    const outside = temp.make("isolated-scratch-outside-");
+    const snapshot = scratch();
+    const outside = scratch();
     if (kind === "symlink") {
       fs.symlinkSync(outside, path.join(snapshot, ".openclaw"), "dir");
     } else {
@@ -251,7 +248,7 @@ describe("isolated working-tree source", () => {
     expect(result.copied).toEqual(new Set([file, "new.test.ts"]));
     expect(source.exists("untracked.test.ts")).toBe(false);
     source.write(file, "changed working bytes");
-    expect(source.copy(tracked, temp.make("isolated-second-")).digest).not.toBe(result.digest);
+    expect(source.copy(tracked, scratch()).digest).not.toBe(result.digest);
   });
   it("preserves tracked relative symlinks but refuses outside or untracked targets", () => {
     const source = sourceFixture();
@@ -259,13 +256,9 @@ describe("isolated working-tree source", () => {
     source.link("AGENTS.md", "CLAUDE.md");
     source.copy(["AGENTS.md", "CLAUDE.md"]);
     expect(source.readlink("CLAUDE.md")).toBe("AGENTS.md");
-    expect(() => source.copy(["CLAUDE.md"], temp.make("isolated-untracked-link-"))).toThrow(
-      "excluded/untracked",
-    );
+    expect(() => source.copy(["CLAUDE.md"], scratch())).toThrow("excluded/untracked");
     source.link("/etc/passwd", "outside.ts");
-    expect(() => source.copy(["outside.ts"], temp.make("isolated-outside-link-"))).toThrow(
-      "escapes",
-    );
+    expect(() => source.copy(["outside.ts"], scratch())).toThrow("escapes");
   });
   it("projects readonly package trees and relocatable workspace symlinks without cached outputs", () => {
     const source = sourceFixture();
@@ -294,12 +287,12 @@ NODE_PATH='${source.root}/node_modules'
     expect(source.read("node_modules/.bin/tool")).toContain("/workspace/node_modules");
     expect(source.exists("node_modules/.vite/stale")).toBe(false);
     source.write(`${dependency}/.env`, "synthetic-secret");
-    const masked = prepare(temp.make("isolated-masked-deps-"));
+    const masked = prepare(scratch());
     const dotenv = masked.find((mount) => mount.target.endsWith("/.env"));
     expect(dotenv).toBeDefined();
     expect(fs.readFileSync(dotenv!.source, "utf8")).toBe("");
     source.link("/etc/passwd", "node_modules/.pnpm/escape");
-    expect(() => prepare(temp.make("isolated-bad-deps-"))).toThrow("escapes");
+    expect(() => prepare(scratch())).toThrow("escapes");
   });
 });
 
@@ -314,48 +307,40 @@ function lifecycle(
   const { failure, exit = 0 } = options;
   let present = false;
   let state = "created";
+  const result = (code = 0, stdout = "") => ({ code, stdout });
   const command: IsolatedPodmanCommand = async (args) => {
     calls.push(args);
-    if (args[0] === "container" && args[1] === "exists") {
-      return { code: present ? 0 : 1, stdout: "" };
-    }
-    if (args[0] === "create") {
-      if (options.unjoined) {
-        throw options.unjoined;
+    switch (args[0] === "container" ? `container ${args[1]}` : args[0]) {
+      case "container exists":
+        return result(present ? 0 : 1);
+      case "create":
+        if (options.unjoined) {
+          throw options.unjoined;
+        }
+        present = true;
+        return result(failure === "create" || failure === "ownership" ? 125 : 0, "id");
+      case "container inspect": {
+        const owner = failure === "ownership" ? "another-invocation" : name;
+        return result(0, JSON.stringify([containerInspection(state, exit, owner)]));
       }
-      present = true;
-      return { code: failure === "create" || failure === "ownership" ? 125 : 0, stdout: "id" };
+      case "start":
+        state = failure === "start" ? "running" : "exited";
+        if (failure === "start") {
+          throw new Error("attach interrupted");
+        }
+        return result(exit);
+      case "stop":
+        state = "exited";
+        break;
+      case "wait":
+        return result(0, String(exit));
+      case "rm":
+        if (failure === "remove") {
+          return result(125);
+        }
+        present = false;
     }
-    if (args[0] === "container" && args[1] === "inspect") {
-      const inspected = containerInspection();
-      inspected.Config.Labels[label] = failure === "ownership" ? "another-invocation" : name;
-      inspected.State = {
-        Running: state === "running",
-        Status: state,
-        ExitCode: exit,
-      };
-      return { code: 0, stdout: JSON.stringify([inspected]) };
-    }
-    if (args[0] === "start") {
-      state = failure === "start" ? "running" : "exited";
-      if (failure === "start") {
-        throw new Error("attach interrupted");
-      }
-      return { code: exit, stdout: "" };
-    }
-    if (args[0] === "stop") {
-      state = "exited";
-    }
-    if (args[0] === "wait") {
-      return { code: 0, stdout: String(exit) };
-    }
-    if (args[0] === "rm") {
-      if (failure === "remove") {
-        return { code: 125, stdout: "" };
-      }
-      present = false;
-    }
-    return { code: 0, stdout: "" };
+    return result();
   };
   const onAbsent = vi.fn();
   const run = () =>

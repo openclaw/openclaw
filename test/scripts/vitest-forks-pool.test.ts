@@ -75,15 +75,11 @@ globalThis.setTimeout = (callback, delay, ...args) => {
       callback(...args);
     }, delay);
   }
-  if (delay === 10000) {
-    const timer = schedule(() => { diagnosticTimers.delete(timer); callback(...args); }, delay);
-    diagnosticTimers.set(timer, () => callback(...args));
-    return timer;
-  }
-  if (delay !== 60000) return schedule(callback, delay, ...args);
+  const pending = delay === 10000 ? diagnosticTimers : delay === 60000 ? deadlines : undefined;
+  if (!pending) return schedule(callback, delay, ...args);
   const invoke = () => callback(...args);
-  const timer = schedule(() => { deadlines.delete(timer); invoke(); }, delay);
-  deadlines.set(timer, invoke);
+  const timer = schedule(() => { pending.delete(timer); invoke(); }, delay);
+  pending.set(timer, invoke);
   return timer;
 };
 globalThis.clearTimeout = timer => { deadlines.delete(timer); diagnosticTimers.delete(timer); return cancel(timer); };

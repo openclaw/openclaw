@@ -143,6 +143,10 @@ function inventoryPaths(lane: BenchmarkManifest["lanes"][number]): string[] {
   return [...(lane.config ? [lane.config] : []), ...lane.files];
 }
 
+function analyzeRecords(durations: Parameters<typeof recordsFor>[0]) {
+  return analyzeBenchmark(recordsFor(durations), manifest);
+}
+
 function writeExecutable(file: string, contents: string): void {
   writeFileSync(file, contents);
   chmodSync(file, 0o755);
@@ -240,18 +244,11 @@ describe("Vitest pair benchmark", () => {
   });
 
   it("rejects malformed and duplicate inventories", () => {
+    const escapeLane = { ...manifest.lanes[0], files: ["../escape.test.ts"] };
     for (const [override, error] of [
       [{ rounds: 6 }, "exactly seven measured rounds"],
       [{ lanes: [...manifest.lanes, manifest.lanes[0]] }, "duplicate benchmark lane id"],
-      [
-        {
-          lanes: [
-            { ...manifest.lanes[0], files: ["../escape.test.ts"] },
-            ...manifest.lanes.slice(1),
-          ],
-        },
-        "normalized repository-relative path",
-      ],
+      [{ lanes: [escapeLane, ...manifest.lanes.slice(1)] }, "normalized repository-relative path"],
     ] as const) {
       expect(() => validateBenchmarkManifest({ ...manifest, ...override })).toThrow(error);
     }
@@ -347,32 +344,26 @@ describe("Vitest pair benchmark", () => {
   });
 
   it("fails critical regressions and avoids noisy improvement claims", () => {
-    const regression = analyzeBenchmark(
-      recordsFor((lane) => ({
-        baselineMs: 10_000,
-        candidateMs: lane === "gateway" ? 13_000 : 10_000,
-      })),
-      manifest,
-    );
+    const regression = analyzeRecords((lane) => ({
+      baselineMs: 10_000,
+      candidateMs: lane === "gateway" ? 13_000 : 10_000,
+    }));
     expect(regression.verdict).toBe("regression");
     expect(regression.regressions).toStrictEqual(
       expect.arrayContaining([expect.stringContaining("gateway median paired wall ratio")]),
     );
 
-    const neutral = analyzeBenchmark(recordsFor(0.98), manifest);
+    const neutral = analyzeRecords(0.98);
     expect(neutral).toMatchObject({ verdict: "pass", performance: "no-material-change" });
     expect(neutral.claim).toContain("No broad improvement claim");
 
-    const improved = analyzeBenchmark(recordsFor(0.9), manifest);
+    const improved = analyzeRecords(0.9);
     expect(improved).toMatchObject({ verdict: "pass", performance: "improved" });
 
-    const noisyFaster = analyzeBenchmark(
-      recordsFor((_lane, round) => ({
-        baselineMs: 100,
-        candidateMs: 100 * (round !== null && round <= 4 ? 0.9 : 0.999),
-      })),
-      manifest,
-    );
+    const noisyFaster = analyzeRecords((_lane, round) => ({
+      baselineMs: 100,
+      candidateMs: 100 * (round !== null && round <= 4 ? 0.9 : 0.999),
+    }));
     expect(noisyFaster).toMatchObject({ verdict: "pass", performance: "no-material-change" });
     expect(noisyFaster.lanes.every((lane) => lane.candidateImprovedPairs === 4)).toBe(true);
   });

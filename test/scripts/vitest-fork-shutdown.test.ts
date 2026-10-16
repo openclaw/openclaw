@@ -2,7 +2,6 @@ import { execFileSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as waitForReaper } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import { afterAll, expect, it, vi, type TestContext } from "vitest";
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
@@ -22,11 +21,9 @@ try {
   throw error;
 }
 
-const fixture = fileURLToPath(new URL("../fixtures/vitest-fork-shutdown.mjs", import.meta.url));
+const fixture = path.resolve(import.meta.dirname, "../fixtures/vitest-fork-shutdown.mjs");
 // Outside the enclosing Vitest TMPDIR: its owner must not erase retained writers.
-const fixtureRoots = fileURLToPath(
-  new URL("../../.artifacts/vitest-fork-shutdown/", import.meta.url),
-);
+const fixtureRoots = path.resolve(import.meta.dirname, "../../.artifacts/vitest-fork-shutdown/");
 fs.mkdirSync(fixtureRoots, { recursive: true });
 
 function observeReadyLine(child: ChildProcess, line: string, ready: () => void) {
@@ -53,9 +50,10 @@ function observeOutcome<T>(invocation: Promise<T>) {
   );
 }
 
+const readPs = (args: string[]) =>
+  execFileSync("ps", args, { encoding: "utf8", timeout: 1_000 }).trim();
 function processRows(args: string[]) {
-  return execFileSync("ps", args, { encoding: "utf8", timeout: 1_000 })
-    .trim()
+  return readPs(args)
     .split("\n")
     .map((row) => {
       const [pid, ppid, pgid] = row.trim().split(/\s+/).map(Number);
@@ -323,14 +321,7 @@ installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.m
         pids.push(shim, worker);
         process.kill(shim, "SIGSTOP");
         for (const pid of pids) {
-          await expect
-            .poll(() =>
-              execFileSync("ps", ["-o", "stat=", "-p", String(pid)], {
-                encoding: "utf8",
-                timeout: 1_000,
-              }).trim(),
-            )
-            .toMatch(/^T/);
+          await expect.poll(() => readPs(["-o", "stat=", "-p", String(pid)])).toMatch(/^T/);
         }
         const rows = processRows(["-axo", "pid=,ppid=,pgid="]);
         const owned = new Set([child.pid!]);
@@ -388,13 +379,16 @@ it.runIf(process.platform !== "win32")(
       const descendantPidPath = path.join(root, "descendant.pid");
       // Reuse the managed-owner tests' TERM-resistant tree and atomic ready PID.
       // This proves the shared helper boundary, not cold Vitest initialization.
-      const descendantSource = `
-const fs = require("node:fs");
+      const resistTerm = (role: string) => `
 process.on("SIGTERM", () => {
-  process.stdout.write("descendant-out\\n");
-  process.stderr.write("descendant-err\\n");
+  process.stdout.write("${role}-out\\n");
+  process.stderr.write("${role}-err\\n");
 });
 setInterval(() => {}, 1000);
+`;
+      const descendantSource = `
+const fs = require("node:fs");
+${resistTerm("descendant")}
 fs.writeFileSync(process.argv[1] + ".tmp", String(process.pid));
 fs.renameSync(process.argv[1] + ".tmp", process.argv[1]);
 process.stdout.write("descendant-ready\\n");
@@ -407,11 +401,7 @@ process.stdout.write("descendant-ready\\n");
           "-e",
           `
 const { spawn } = require("node:child_process");
-process.on("SIGTERM", () => {
-  process.stdout.write("leader-out\\n");
-  process.stderr.write("leader-err\\n");
-});
-setInterval(() => {}, 1000);
+${resistTerm("leader")}
 spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv[1]], {
   stdio: ["ignore", "inherit", "inherit"],
 });
