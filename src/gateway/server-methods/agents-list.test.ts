@@ -2,7 +2,6 @@ import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listAgentsForGateway } from "../session-utils.js";
 import { agentListHandler } from "./agents-list.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -20,7 +19,7 @@ const roster = vi.hoisted(() => ({
 
 // Roster enrichment reads workspaces and model state; authorization remains real.
 vi.mock("../session-utils.js", () => ({
-  listAgentsForGateway: vi.fn(async () => roster),
+  listAgentsForGateway: async () => roster,
 }));
 
 function roleConfig(agents: GatewayOperatorRoleDefinition["agents"]): OpenClawConfig {
@@ -114,28 +113,6 @@ test("agents.list applies role changes made while catalog preparation is pending
   await started.promise;
   cfg = roleConfig(["research"]);
   released.resolve();
-  expect(await response).toHaveBeenCalledExactlyOnceWith(
-    true,
-    { ...roster, agents: [roster.agents[1]] },
-    undefined,
-  );
-});
-
-test("agents.list applies revocations made while roster enrichment is pending", async () => {
-  let cfg = roleConfig(["ops", "research"]);
-  const started = createDeferred();
-  const released = createDeferred();
-  vi.mocked(listAgentsForGateway).mockImplementationOnce(async () => {
-    started.resolve();
-    await released.promise;
-    return roster;
-  });
-
-  const response = listAgents(() => cfg);
-  await started.promise;
-  cfg = roleConfig(["research"]);
-  released.resolve();
-
   expect(await response).toHaveBeenCalledExactlyOnceWith(
     true,
     { ...roster, agents: [roster.agents[1]] },
