@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { resolveStateDir } from "../config/paths.js";
 import {
   completeUnshippedDaemonRuntimePinMigration,
@@ -6,13 +7,72 @@ import {
   withDaemonRuntimePinStore,
 } from "../daemon/runtime-pin-store.js";
 import { deleteConfigMachineState } from "../state/config-machine-state-write.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { writeDaemonRuntimePinMigrationReceipt } from "./state-migrations.daemon-runtime-pins-receipt.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+
+function writeDaemonRuntimePinMigrationReceipt(
+  db: DatabaseSync,
+  sourceState: string,
+  phase: "copied" | "complete",
+): void {
+  const result = db
+    .prepare(`
+      INSERT INTO daemon_runtime_pin_migration VALUES (1, ?, ?, ?)
+      ON CONFLICT(version) DO UPDATE SET source_state=excluded.source_state,
+        phase=excluded.phase, updated_at=excluded.updated_at
+      WHERE daemon_runtime_pin_migration.phase != 'copied'
+        OR daemon_runtime_pin_migration.source_state = excluded.source_state
+    `)
+    .run(sourceState, phase, Date.now());
+  if (result.changes === 0) {
+    throw new Error(
+      "Runtime pin migration source changed; both stores were retained. Restore the original source and run openclaw doctor.",
+    );
+  }
+}
+
+/** Profile producers can finish the handoff without custody when no legacy pins exist. */
+export function initializeFreshDaemonRuntimePinMigration(env: NodeJS.ProcessEnv): void {
+  if (isStatePostgres()) {
+    return;
+  }
+  const hasReceipt = (db: DatabaseSync) =>
+    Boolean(db.prepare("SELECT 1 FROM daemon_runtime_pin_migration WHERE version = 1").get());
+  // Copied and foreign-source receipts still require Doctor to reconcile their history.
+  if (withDaemonRuntimePinStore(env, false, hasReceipt)) {
+    return;
+  }
+  const legacyPin = withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) =>
+      executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "config_machine_state">>(db)
+          .selectFrom("config_machine_state")
+          .select("state_key")
+          .where("state_key", "like", "daemon-runtime-pin:%")
+          .limit(1),
+      ),
+    { env },
+  );
+  if (legacyPin) {
+    return;
+  }
+  withDaemonRuntimePinStore(env, true, (db) => {
+    if (!hasReceipt(db)) {
+      writeDaemonRuntimePinMigrationReceipt(db, resolveOpenClawStateSqlitePath(env), "complete");
+    }
+  });
+}
 
 export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<MigrationMessages> {
   if (completeUnshippedDaemonRuntimePinMigration(env)) {

@@ -10,7 +10,6 @@ import { getSqliteWorkerStateIntegrityAdmission } from "../infra/sqlite-worker-s
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
-import { initializeFreshDaemonRuntimePinMigration } from "../infra/state-migrations.daemon-runtime-pins-receipt.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import { publishStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
@@ -114,9 +113,6 @@ export function ensureOpenClawStateRuntimeSchema(
           return [];
         }
         const previousVersion = readStateSchemaContentVersion(db);
-        if (previousVersion === 0 && isUninitializedNativeStartupDatabase(db)) {
-          initializeFreshDaemonRuntimePinMigration(env, pathname);
-        }
         const schema = getAdmittedSqliteSchemaFacts(db);
         if (previousVersion === 0 && schema?.tables.size === 0 && schema.views.size === 0) {
           // The admitted empty catalog has no history to migrate or indexes to repair.

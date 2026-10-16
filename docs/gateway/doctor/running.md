@@ -21,8 +21,7 @@ settles, so cancellation cannot abandon an in-progress migration.
 
 Doctor can run while the Gateway owns a current profile: completed daemon
 runtime-pin migrations do not request offline ownership again. Fresh profiles
-record this completion when their empty or native-only state database is
-initialized, so their first live Doctor run needs no runtime-pin migration. A pending
+record this completion during setup or Gateway startup when no legacy pins exist, so their first live Doctor run needs no runtime-pin migration. A pending
 runtime-pin migration still needs exclusive ownership, including during
 `--non-interactive` diagnosis. Stop the Gateway and other state owners for that
 profile, run `openclaw doctor --fix` with the same profile/state/config, then
