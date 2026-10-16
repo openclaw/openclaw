@@ -402,6 +402,12 @@ const runAndroidAccessNative =
     existsSync(
       "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessNativeTest.kt",
     ));
+const runAndroidAccessPersistence =
+  runAndroidAccessNative &&
+  (!frozenTarget ||
+    existsSync(
+      "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessPersistenceNativeTest.kt",
+    ));
 let runWindows =
   !ordinaryPullRequest &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
@@ -1719,6 +1725,7 @@ const manifest = {
   ios_simulator_selection: iosSimulatorSelection,
   run_android_job: runAndroid,
   run_android_access_native: runAndroidAccessNative,
+  run_android_access_persistence: runAndroidAccessPersistence,
   use_compatible_android_ci: useCompatibleAndroidCi,
   run_protocol_event_coverage: runProtocolEventCoverage,
   android_matrix: createMatrix(

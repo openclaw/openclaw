@@ -70,6 +70,7 @@ export function runCiManifestFixture(options: {
   iosBuildCapability?: boolean;
   androidCiCapabilities?: boolean;
   androidAccessNativeCapability?: boolean;
+  androidAccessPersistenceCapability?: boolean;
   nativeI18nCapabilities?: boolean;
   macosNodeParts?: boolean | 2;
   windowsPlanner?: boolean;
@@ -612,6 +613,17 @@ export function runCiManifestFixture(options: {
       writeFileSync(
         nativeTest,
         "package ai.openclaw.app.gateway\n\nclass CloudflareAccessNativeTest\n",
+      );
+    }
+    if (options.androidAccessPersistenceCapability ?? options.bundledPlanner) {
+      const persistenceTest = path.join(
+        root,
+        "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessPersistenceNativeTest.kt",
+      );
+      mkdirSync(path.dirname(persistenceTest), { recursive: true });
+      writeFileSync(
+        persistenceTest,
+        "package ai.openclaw.app.gateway\n\nclass CloudflareAccessPersistenceNativeTest\n",
       );
     }
     const targetWorkflow = path.join(root, ".github", "workflows", "ci.yml");

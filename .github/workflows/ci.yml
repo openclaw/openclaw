@@ -240,6 +240,7 @@ jobs:
       run_android_screenshots: ${{ steps.manifest.outputs.run_android_screenshots }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
       run_android_access_native: ${{ steps.manifest.outputs.run_android_access_native }}
+      run_android_access_persistence: ${{ steps.manifest.outputs.run_android_access_persistence }}
       use_compatible_android_ci: ${{ steps.manifest.outputs.use_compatible_android_ci }}
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
@@ -6310,6 +6311,7 @@ jobs:
       - name: Run packaged Access crypto on Android
         shell: bash
         env:
+          RUN_ACCESS_PERSISTENCE: ${{ needs.preflight.outputs.run_android_access_persistence }}
           EXPECTED_PAGE_SIZE: ${{ matrix.page-size }}
           SYSTEM_IMAGE: system-images;android-36;${{ matrix.image }};x86_64
         run: |
@@ -6338,21 +6340,37 @@ jobs:
             test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d '\r')" = false
             test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d '\r')" = true
           fi
+          native_test_methods=(ai.openclaw.app.gateway.CloudflareAccessNativeTest#packagedSodiumLoadsAndDecryptsTheGoTransferVector)
+          if [[ "$RUN_ACCESS_PERSISTENCE" == true ]]; then
+            native_test_methods+=(ai.openclaw.app.gateway.CloudflareAccessPersistenceNativeTest#encryptedGrantRestoresAndDeletesWithoutChangingGatewayPairing)
+          fi
+          ACCESS_NATIVE_TEST_CLASSES=""
+          native_test_pattern=""
+          for method in "${native_test_methods[@]}"; do
+            ACCESS_NATIVE_TEST_CLASSES+="${ACCESS_NATIVE_TEST_CLASSES:+,}${method%%#*}"
+            native_test_pattern+="${native_test_pattern:+|}${method//./[.]}"
+          done
+          export ACCESS_NATIVE_TEST_CLASSES
+          # AGP 9.4 splits instrumentation values on commas; quote the exact regex for adb's remote shell.
+          native_test_filter="-Pandroid.testInstrumentationRunnerArguments.tests_regex='^(${native_test_pattern})$'"
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
             :app:connectedPlayDebugAndroidTest \
             -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
-            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest \
+            "$native_test_filter" \
             -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           apk="$(python3 - <<'PY'
           from pathlib import Path
           import json
+          import os
           import xml.etree.ElementTree as ET
           import zipfile
           reports = Path('apps/android/app/build/outputs/androidTest-results/connected').rglob('*.xml')
-          cases = [case for report in reports for case in ET.parse(report).getroot().iter('testcase')
-                   if case.get('classname') == 'ai.openclaw.app.gateway.CloudflareAccessNativeTest']
-          assert len(cases) == 1, 'The packaged native test must execute exactly once'
-          assert all(case.find(tag) is None for case in cases for tag in ('failure', 'error', 'skipped')), 'The packaged native test failed or skipped'
+          cases = [case for report in reports for case in ET.parse(report).getroot().iter('testcase')]
+          expected_classes = os.environ['ACCESS_NATIVE_TEST_CLASSES'].split(',')
+          assert len(cases) == len(expected_classes), 'Every selected native test must execute exactly once'
+          for expected in expected_classes:
+              assert sum(case.get('classname') == expected for case in cases) == 1, f'Missing or duplicate native test: {expected}'
+          assert all(case.find(tag) is None for case in cases for tag in ('failure', 'error', 'skipped')), 'A packaged native test failed or skipped'
           directory = Path('apps/android/app/build/outputs/apk/play/debug')
           metadata = json.loads((directory / 'output-metadata.json').read_text())
           assert metadata['variantName'] == 'playDebug' and metadata['artifactType']['type'] == 'APK'
@@ -6478,6 +6496,19 @@ jobs:
           OPENCLAW_DOCKER_ALL_PARALLELISM: &docker_parallelism ${{ (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && 3 || 1 }}
           OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: *docker_parallelism
         run: pnpm test:docker:all
+
+      - name: Upload Docker seed MCP diagnostics
+        if: always() && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' mcp-channels ')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: docker-seed-mcp-channels-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/docker-tests/????????T??????Z/mcp-channels.log
+            .artifacts/docker-tests/????????T??????Z/summary.json
+            .artifacts/docker-tests/????????T??????Z/failures.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload sanitized upgrade survivor proof
         if: always() && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ')
