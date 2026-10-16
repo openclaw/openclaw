@@ -267,8 +267,8 @@ it("keeps snapshot replacements and tool events immediate and ordered", async ()
       "toolcall_start",
     ]);
     const updates = run.events.filter((event) => event.type === "message_update");
-    expect(updates[0]?.message.content).toEqual([{ type: "text", text: "old" }]);
-    expect(updates[1]?.message.content).toEqual([{ type: "text", text: "new" }]);
+    expect(updates[0]?.message).toMatchObject({ content: [{ type: "text", text: "old" }] });
+    expect(updates[1]?.message).toMatchObject({ content: [{ type: "text", text: "new" }] });
     const reasoning = makeAssistantMessage([{ type: "thinking", thinking: "replacement" }]);
     run.stream.push({
       type: "thinking_delta",
