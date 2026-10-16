@@ -9,9 +9,7 @@ import { createTextProjection, trimTextFilter } from "../shared/text/text-projec
 import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
 import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
-import {
-  recordPendingAssistantReplyDirectives,
-} from "./embedded-agent-subscribe.handlers.messages.replies.js";
+import { recordPendingAssistantReplyDirectives } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
   extractAssistantStreamSnapshot,
   reconcileBlockReplySnapshot,
