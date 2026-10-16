@@ -799,8 +799,6 @@ describe("published Gateway plugin services", () => {
           assert(record);
           const gatewayInstance = getPluginInstance(record);
           assert(gatewayInstance);
-          // Startup catalog refresh shares this counter with the run lease.
-          await gatewayInstance.waitForRetainedWork(runtime.requestEntryLifetime.signal);
           const retainedBeforeRun = gatewayInstance.retainedWorkCount;
           runLease = await withPluginRuntimeRegistryScope(registryOwner.registry, () =>
             acquireAgentRunPreparedModelRuntime(
@@ -834,7 +832,6 @@ describe("published Gateway plugin services", () => {
           expect(gatewayInstance.retainedWorkCount).toBeGreaterThan(retainedBeforeRun);
           await runLease[Symbol.asyncDispose]();
           runLease = undefined;
-          await gatewayInstance.waitForRetainedWork(runtime.requestEntryLifetime.signal);
           expect(gatewayInstance.retainedWorkCount).toBe(retainedBeforeRun);
         } finally {
           await runLease?.[Symbol.asyncDispose]();
