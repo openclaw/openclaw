@@ -5,6 +5,8 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
+import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { resolveGatewayLockPaths } from "../../infra/gateway-lock.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
@@ -121,7 +123,11 @@ function publishOwner(pid = process.pid, supervised = false) {
         owner: { pid, host: hostname(), startedAt: getFileLockProcessStartTime(pid) },
         port: 18789,
         mode: supervised ? "supervised" : "foreground",
-        supervisor: supervised ? { kind: "systemd", name: "openclaw-gateway.service" } : null,
+        supervisor: supervised
+          ? process.platform === "darwin"
+            ? { kind: "launchd", name: resolveLaunchAgentLabel(process.env) }
+            : { kind: "systemd", name: resolveSystemdServiceName(process.env) }
+          : null,
       }),
       now,
       now,
