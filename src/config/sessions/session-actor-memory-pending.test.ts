@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { createSessionActorMemoryPending } from "./session-actor-memory-pending.js";
 import { createMemoryTestState } from "./session-actor-memory-publication.test-support.js";
 import type {
@@ -66,15 +66,17 @@ function fixture() {
       );
     }
   };
-  return { state, pending, grants, stageInput, stageMany };
+  const source = (pendingOnly = true, sessionId = scope.sessionId) =>
+    pending.read({ ...scope, sessionId, kind: "source", pendingOnly });
+  return { state, pending, grants, stageInput, stageMany, source };
 }
 
 describe("memory actor pending input custody", () => {
   it("reads its writes and adopts the canonical input when a retry proposes new bytes", () => {
-    const { state, pending, stageInput } = fixture();
+    const { state, pending, stageInput, source } = fixture();
     const before = stageInput();
     const first = pending.mutate(before);
-    expect(pending.read({ ...scope, kind: "source", pendingOnly: true })).toMatchObject({
+    expect(source()).toMatchObject({
       current: true,
       pending: { input_id: "input-1", message_json: JSON.stringify(message) },
     });
@@ -88,11 +90,9 @@ describe("memory actor pending input custody", () => {
     expect(retried.stagedInput).toEqual(first.stagedInput);
     expect(state.hot.pendingInputs).toHaveLength(1);
     expect(state.hot.pendingInputs[0]).not.toHaveProperty("message_json");
-    if (!retried.stagedInput) {
-      throw new Error("Expected staged input");
-    }
+    assert(retried.stagedInput, "Expected staged input");
     retried.stagedInput.message_json = "caller mutation";
-    expect(pending.read({ ...scope, kind: "source", pendingOnly: true })).toMatchObject({
+    expect(source()).toMatchObject({
       pending: { message_json: JSON.stringify(message) },
     });
   });
@@ -123,11 +123,9 @@ describe("memory actor pending input custody", () => {
   });
 
   it("settles only the accepted owner and supplies current authority to admission", () => {
-    const { state, pending, grants, stageInput } = fixture();
+    const { state, pending, grants, stageInput, source } = fixture();
     state.hot.members = [{ identityId: "person-1", addedAt: 1, addedBy: "person-1" }];
-    if (!state.hot.entry) {
-      throw new Error("Expected session");
-    }
+    assert(state.hot.entry, "Expected session");
     state.hot.entry.sessionDiffBaseline = {
       version: 1,
       sessionId: scope.sessionId,
@@ -156,7 +154,7 @@ describe("memory actor pending input custody", () => {
       pending.mutate({ ...owner, kind: "finish", inputId: "input-1", disposition: "cancelled" })
         .withdrawnInputId,
     ).toBe("input-1");
-    expect(pending.read({ ...scope, kind: "source", pendingOnly: true })).toMatchObject({
+    expect(source()).toMatchObject({
       pending: { state: "cancelled" },
     });
     expect(
@@ -166,7 +164,7 @@ describe("memory actor pending input custody", () => {
   });
 
   it("finds committed input when pending custody is absent and excludes other sessions", () => {
-    const { state, pending } = fixture();
+    const { state, pending, source } = fixture();
     const event = { type: "message", id: "event-1", message };
     state.events.push({ rawSeq: 1, event, eventJson: JSON.stringify(event) });
     state.hot.transcript.idempotency.push({
@@ -174,21 +172,19 @@ describe("memory actor pending input custody", () => {
       eventId: "event-1",
       rawSeq: 1,
     });
-    expect(pending.read({ ...scope, kind: "source", pendingOnly: false })).toEqual({
+    expect(source(false)).toEqual({
       kind: "source",
       current: true,
       committed: message,
     });
-    expect(pending.read({ ...scope, kind: "source", pendingOnly: true })).toEqual({
+    expect(source()).toEqual({
       kind: "source",
       current: true,
     });
     expect(pending.read({ ...scope, kind: "stage", trackCompletion: true })).toMatchObject({
       committed: { messageId: "event-1", message },
     });
-    expect(
-      pending.read({ ...scope, sessionId: "old-session", kind: "source", pendingOnly: false }),
-    ).toEqual({ kind: "source", current: false });
+    expect(source(false, "old-session")).toEqual({ kind: "source", current: false });
   });
 
   it("pages unconsumed inputs and reconciles receipts without exposing payloads", () => {

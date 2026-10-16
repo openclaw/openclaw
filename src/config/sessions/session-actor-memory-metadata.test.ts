@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { SessionActorAuthority, SessionActorStorage } from "./session-actor-contract.js";
 import {
   readMemory,
@@ -38,9 +38,7 @@ afterEach(() => {
 
 async function hydrate(storage: SessionActorStorage, selectedId = sessionId) {
   const result = await readMemory(storage, "session.history.hydrate", { sessionId: selectedId });
-  if (result.kind !== "full") {
-    throw new Error("Expected full memory history");
-  }
+  assert(result.kind === "full", "Expected full memory history");
   return result.snapshot;
 }
 
@@ -54,9 +52,7 @@ async function fixture() {
       { database: owner.identity, sessionKey },
       { assertCurrent() {}, assertReadable() {} },
     );
-    if (!actor.storage) {
-      throw new Error("Missing memory storage");
-    }
+    assert(actor.storage, "Missing memory storage");
     return { actor, storage: actor.storage };
   };
   const { actor, storage } = await acquire();
@@ -104,9 +100,7 @@ describe("memory actor metadata storage", () => {
     expect(read.eventJson?.[1]).toContain(`"message":${messageJson}}`);
     expect(actor.snapshot(authority)?.transcript.anchors).toHaveLength(1);
     expect(await readMemory(storage, "session.metadata.mutation", { scope })).toBeGreaterThan(1000);
-    if (!read.events[1] || typeof read.events[1] !== "object") {
-      throw new Error("Expected message");
-    }
+    assert(read.events[1] && typeof read.events[1] === "object", "Expected message");
     Object.assign(read.events[1], { id: "changed-returned-copy" });
     expect((await hydrate(storage)).events).not.toContainEqual(
       expect.objectContaining({ id: "changed-returned-copy" }),
@@ -121,9 +115,7 @@ describe("memory actor metadata storage", () => {
     const source = before.events.find(
       (event) => isIndexedSessionEntry(event) && event.id === "user-1",
     );
-    if (!isIndexedSessionEntry(source) || source.type !== "message") {
-      throw new Error("Expected source message");
-    }
+    assert(isIndexedSessionEntry(source) && source.type === "message", "Expected source message");
     const copied = { ...source, id: "copied-user", parentId: null };
     const input = {
       scope,
@@ -209,9 +201,7 @@ describe("memory actor metadata storage", () => {
     const custom = before.events.find(
       (event) => isIndexedSessionEntry(event) && event.id === "opaque",
     );
-    if (!isIndexedSessionEntry(custom) || custom.type !== "custom") {
-      throw new Error("Expected custom entry");
-    }
+    assert(isIndexedSessionEntry(custom) && custom.type === "custom", "Expected custom entry");
     const { data: _data, ...navigation } = custom;
     const expected = [navigation, before.events.at(-1)];
     const next = [{ ...navigation, parentId: null }];

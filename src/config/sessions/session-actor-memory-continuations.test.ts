@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { reconcileHarnessCompletionDelivery } from "../../agents/agent-harness-completion-delivery.js";
 import { createHarnessCompletionSourceAssertion } from "../../agents/agent-harness-completion-recovery.js";
 import type {
@@ -77,9 +77,7 @@ async function fixture(patch: Partial<SessionEntry> = {}) {
       authority,
       create: true,
     });
-    if (!binding) {
-      throw new Error("Expected memory session acquisition");
-    }
+    assert(binding, "Expected memory session acquisition");
     return binding;
   };
   const binding = await acquire();
@@ -115,9 +113,7 @@ async function fixture(patch: Partial<SessionEntry> = {}) {
     const current = await acquire();
     try {
       const entry = current.actor.snapshot(authority)?.entry;
-      if (!entry) {
-        throw new Error("Expected current memory entry");
-      }
+      assert(entry, "Expected current memory entry");
       return await commitMemory(current.actor.storage!, "session.entry.replace", {
         expected: entry,
         entry: { ...entry, ...next },
@@ -194,9 +190,7 @@ describe("memory continuation adapters", () => {
       idempotencyKey,
       trackCompletion: true,
     });
-    if (expected.kind !== "stage") {
-      throw new Error("Expected pending stage");
-    }
+    assert(expected.kind === "stage", "Expected pending stage");
     await commitMemory(storage, "session.pendingInput.mutate", {
       ...scope,
       kind: "stage",
@@ -281,9 +275,7 @@ describe("memory continuation adapters", () => {
     try {
       const read = { ...scope, idempotencyKey, kind: "stage" as const, trackCompletion: true };
       const expected = await store.read(read);
-      if (expected.kind !== "stage") {
-        throw new Error("Expected pending stage");
-      }
+      assert(expected.kind === "stage", "Expected pending stage");
       const identity = {
         ...scope,
         idempotencyKey,
@@ -345,9 +337,7 @@ describe("memory continuation adapters", () => {
     await binding.actor.release();
     const target = scope;
     const receipt = await stageSessionPendingInput(target, options);
-    if (!receipt?.completeAsync) {
-      throw new Error("Expected complete input custody");
-    }
+    assert(receipt?.completeAsync, "Expected complete input custody");
     try {
       expect(
         await readSessionPendingInputReceiptsInWorker(scope, { runIds: ["recorded"] }),

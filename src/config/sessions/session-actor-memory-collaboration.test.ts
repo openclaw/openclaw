@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
@@ -98,9 +98,7 @@ describe("memory collaboration through the public adapters", () => {
     });
     const replace = async (patch: Partial<SessionEntry>) => {
       const before = actor.snapshot(authority)?.entry;
-      if (!before) {
-        throw new Error("Expected the current memory entry");
-      }
+      assert(before, "Expected the current memory entry");
       await commitMemory(storage, "session.entry.replace", {
         expected: before,
         entry: { ...before, ...patch },
@@ -224,9 +222,7 @@ describe("memory collaboration through the public adapters", () => {
       now: 10,
     });
     expect(claim?.kind).toBe("claimed");
-    if (claim?.kind !== "claimed") {
-      throw new Error("Missing dispatch claim");
-    }
+    assert(claim?.kind === "claimed", "Missing dispatch claim");
     expect(
       await claimSessionSuggestionDispatchInWorker(scope, {
         id: "suggestion",
@@ -259,9 +255,7 @@ describe("memory collaboration through the public adapters", () => {
       resolution: "edit",
       now: 50_000,
     });
-    if (retry?.kind !== "claimed") {
-      throw new Error("Missing retry claim");
-    }
+    assert(retry?.kind === "claimed", "Missing retry claim");
     await finalizeSessionSuggestionClaimInWorker(scope, {
       id: "suggestion",
       token: retry.token,
@@ -320,9 +314,7 @@ describe("memory collaboration through the public adapters", () => {
     }
     expect((await setSessionReactionAsync(scope, reaction)).changed).toBe(false);
     const history = await readMemory(storage, "session.history.hydrate", {});
-    if (history.kind !== "full") {
-      throw new Error("Expected full history");
-    }
+    assert(history.kind === "full", "Expected full history");
     await commitMemory(storage, "session.transcript.replaceSuffix", {
       scope: { ...scope, sessionId: "first" },
       args: [

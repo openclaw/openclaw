@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import type {
   SessionActor,
   SessionActorAuthority,
@@ -31,9 +31,7 @@ afterEach(() => {
 });
 
 function storage(actor: SessionActor): SessionActorStorage {
-  if (!actor.storage) {
-    throw new Error("Memory actor storage is missing");
-  }
+  assert(actor.storage, "Memory actor storage is missing");
   return actor.storage;
 }
 
@@ -122,9 +120,7 @@ describe("memory actor fork and cut", () => {
     committed(await patch);
     const result = committed(await fork);
     expect(result.status).toBe("forked");
-    if (result.status !== "forked") {
-      throw new Error("Fork failed");
-    }
+    assert(result.status === "forked", "Fork failed");
     expect(result.sessionEntry).toMatchObject({
       incognito: true,
       forkSource: { sessionKey: parentKey, sessionId: "parent-session" },
@@ -154,9 +150,7 @@ describe("memory actor fork and cut", () => {
     });
     const result = await commitMemory(storage(child), "session.parentFork.commit", forkInput);
     expect(result.status).toBe("forked");
-    if (result.status !== "forked") {
-      throw new Error("Fork failed");
-    }
+    assert(result.status === "forked", "Fork failed");
     expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
   });
 
@@ -177,9 +171,7 @@ describe("memory actor fork and cut", () => {
       editorText: "Edit this",
       editorAttachments: [{ mimeType: "image/png", data: "c3ludGhldGlj" }],
     });
-    if (rewind.status !== "created") {
-      throw new Error("Rewind failed");
-    }
+    assert(rewind.status === "created", "Rewind failed");
     await expect(async () => readMemory(storage(parent), "session.entry.read", {})).rejects.toThrow(
       /closed/,
     );
@@ -236,9 +228,7 @@ describe("memory actor fork and cut", () => {
       editorText: "Edit this",
       entry: { incognito: true, thinkingLevel: "high", createdVia: "operator" },
     });
-    if (result.status !== "created") {
-      throw new Error("Message fork failed");
-    }
+    assert(result.status === "created", "Message fork failed");
     expect(result.entry.cliSessionIds).toBeUndefined();
     expect(result.entry.totalTokens).toBeUndefined();
     expect(

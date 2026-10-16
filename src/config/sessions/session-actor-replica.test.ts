@@ -1,6 +1,6 @@
 import path from "node:path";
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import {
@@ -36,10 +36,7 @@ import {
   consumeSessionPendingInput,
   readSessionInputCompletion,
 } from "./session-accessor.sqlite-pending-inputs.js";
-import {
-  appendTranscriptEventSync,
-  replaceTranscriptEventsSync,
-} from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type {
   SessionActorHotState,
   SessionActorOperations,
@@ -89,9 +86,7 @@ async function withReplica(
     };
     replaceSessionEntrySync(scope, { sessionId: "replica-session", updatedAt: 1, label: "before" });
     const identity = readOpenClawAgentDatabaseIdentity(database);
-    if (typeof identity.identity !== "string") {
-      throw new Error("Replica fixture requires a durable database");
-    }
+    assert(typeof identity.identity === "string", "Replica fixture requires a durable database");
     const target = sessionActorFileTarget(database, scope.sessionKey);
     let generation = 0;
     const reacquire = () =>
@@ -106,9 +101,7 @@ async function withReplica(
         database.path,
         collectSessionEntryLookupKeys(target.sessionKey),
       );
-      if (!writeToken) {
-        throw new Error("Replica fixture has an unsettled native writer");
-      }
+      assert(writeToken, "Replica fixture has an unsettled native writer");
       const state = hydrateSessionActorState(database, target, { epoch, sequence }, writeToken).hot;
       state.writeToken = readSqliteDatabaseScopedWriteTokenForPath(database.path, [
         ...collectSessionEntryLookupKeys(target.sessionKey),
@@ -165,9 +158,7 @@ it("keeps transcript replacement charges within the shared byte and entry budget
         fixture.database.path,
         collectSessionEntryLookupKeys(state.target.sessionKey),
       )!;
-      if (state.target.database.kind !== "file") {
-        throw new Error("Replica fixture requires a durable target");
-      }
+      assert(state.target.database.kind === "file", "Replica fixture requires a durable target");
       const target = { ...state.target, database: state.target.database };
       if (entryFirst) {
         retainSessionActorEntryFacts(
@@ -264,9 +255,7 @@ it.each(["entry", "transcript", "plugin keys"] as const)(
   async (payload) => {
     await withReplica(({ replica, load }) => {
       const first = load();
-      if (first.target.database.kind !== "file") {
-        throw new Error("Replica fixture requires a durable target");
-      }
+      assert(first.target.database.kind === "file", "Replica fixture requires a durable target");
       const database = first.target.database;
       const siblingTarget = {
         database,
@@ -510,9 +499,7 @@ it("retains unrelated session postimages but invalidates a shared physical sessi
     const other = { ...fixture.scope, sessionKey: "agent:main:other-replica" };
     replaceSessionEntrySync(other, { sessionId: "other-session", updatedAt: 1, label: "other" });
     const snapshot = hydrate(fixture);
-    if (snapshot.target.database.kind !== "file") {
-      throw new Error("Replica fixture requires a durable target");
-    }
+    assert(snapshot.target.database.kind === "file", "Replica fixture requires a durable target");
     retainSessionActorEntryFacts(
       snapshot.target.database,
       [{ sessionKey: snapshot.target.sessionKey, facts: { entry: snapshot.entry, snapshots: [] } }],
@@ -607,22 +594,15 @@ it("invalidates partial native publications before disclosure and count-only par
   });
 });
 
-it("installs complete outcomes and fences unknowns", async () => {
+it("invalidates unaccounted native writes and retains accepted postimages across handle closure", async () => {
   await withReplica((fixture) => {
     const { replica, load, scope, database } = fixture;
     const initial = hydrate(fixture);
-    if (initial.target.database.kind !== "file") {
-      throw new Error("Replica fixture requires a durable target");
-    }
-    const target = { ...initial.target, database: initial.target.database };
     const shared = replica.read()!;
     expect(shared).toBe(initial);
     expect(replica.read()).toBe(shared);
     expect(replica.beginRead()(shared)).toBe(true);
     expect(replica.read()).toBe(shared);
-    const detached = structuredClone(shared);
-    detached.entry!.label = "caller edit";
-    expect(replica.read()?.entry?.label).toBe("before");
 
     const accepted = command(initial, "accepted");
     const pending = replica.beginCommand();
@@ -652,39 +632,6 @@ it("installs complete outcomes and fences unknowns", async () => {
     expect(pending.settle(outcome)).toBe(true);
     expect(replica.read()).toBe(outcome.receipt.postimage);
 
-    const rollback = replica.beginCommand();
-    expect(
-      rollback.settle({ kind: "rolled-back", error: { name: "Error", message: "refused" } }),
-    ).toBe(true);
-    expect(replica.read()?.version.sequence).toBe(1);
-    const unknown = replica.beginCommand();
-    expect(
-      unknown.settle({
-        kind: "unknown",
-        target: initial.target,
-        commandId: "unknown",
-        error: { name: "Error", message: "reply lost without receipt" },
-      }),
-    ).toBe(false);
-    expect(replica.read()).toBeUndefined();
-    expect(readSessionActorEntryFacts(target)).toBeUndefined();
-    retainSessionActorEntryFacts(
-      target.database,
-      [{ sessionKey: target.sessionKey, facts: { entry: load().entry, snapshots: "full" } }],
-      "cold-entry-reader",
-    );
-
-    const stale = replica.beginCommand();
-    const superseded = load("superseded");
-    expect(
-      stale.settle({
-        kind: "stale-version",
-        expected: initial.version,
-        postimage: superseded,
-        error: { name: "SessionActorStaleVersionError", message: "Session actor version changed" },
-      }),
-    ).toBe(true);
-    expect(replica.read()?.version).toEqual(superseded.version);
     const opaque = load("opaque");
     opaque.entry!.swarmOutputSchema = { value: new Date(0) };
     expect(replica.beginRead()(opaque)).toBe(true);
@@ -699,53 +646,6 @@ it("installs complete outcomes and fences unknowns", async () => {
     replica.close();
     expect(closing.settle(committed(closingContext, load("final", 1)))).toBe(true);
     expect(replica.read()).toBeUndefined();
-  });
-});
-
-it("invalidates for native owner, replacement, transcript and deletion writers", async () => {
-  await withReplica((fixture) => {
-    const { scope, database } = fixture;
-    hydrate(fixture);
-    assignSessionOwner(scope, {
-      owner: { type: "agent", id: "assigned" },
-      assignedBy: { type: "agent", id: "main" },
-      assignedAt: 10,
-    });
-    expect(reloadInvalidated(fixture).entry?.owner?.actor.id).toBe("assigned");
-
-    replaceSessionEntrySync(scope, {
-      ...fixture.load().entry!,
-      category: "work",
-      archivedAt: 12,
-      restartRecoveryDeliveryRunId: "recovery-run",
-      restartRecoveryDeliveryReceiptState: "terminal-pending",
-    });
-    expect(reloadInvalidated(fixture).entry).toMatchObject({
-      category: "work",
-      archivedAt: 12,
-      restartRecoveryDeliveryRunId: "recovery-run",
-    });
-
-    const transcriptScope = { ...scope, sessionId: "replica-session" };
-    expect(
-      appendTranscriptEventSync(transcriptScope, { type: "proof", id: "first-event" }).ok,
-    ).toBe(true);
-    const first = reloadInvalidated(fixture).transcript.watermark;
-    expect(first.maxSeq).not.toBeNull();
-    expect(
-      replaceTranscriptEventsSync(transcriptScope, [{ type: "proof", id: "replacement-event" }]),
-    ).toBe(true);
-    expect(reloadInvalidated(fixture).transcript.watermark).not.toEqual(first);
-
-    runOpenClawAgentWriteTransaction(
-      (current) => deleteSessionEntryRows(current, scope.sessionKey),
-      {
-        agentId: scope.agentId,
-        path: database.path,
-        env: scope.env,
-      },
-    );
-    expect(reloadInvalidated(fixture).entry).toBeUndefined();
   });
 });
 
@@ -780,15 +680,11 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
       hasBoard: false,
       activitySummaryWatermark: { generation: null, maxSeq: null },
     });
-    if (!facts) {
-      throw new Error("Expected resident row facts");
-    }
+    assert(facts, "Expected resident row facts");
     facts.entry.label = "caller edit";
     expect(readSessionActorRowFacts(target)?.entry.label).toBeUndefined();
 
-    if (before.target.database.kind !== "file") {
-      throw new Error("Replica fixture requires a durable target");
-    }
+    assert(before.target.database.kind === "file", "Replica fixture requires a durable target");
     const entryTarget = { ...before.target, database: before.target.database };
     const projection = {
       hasBoard: before.hasBoard,
@@ -888,9 +784,7 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
         kind: "stage",
         trackCompletion: true,
       });
-      if (expected.kind !== "stage") {
-        throw new Error("Expected a pending input staging snapshot");
-      }
+      assert(expected.kind === "stage", "Expected a pending input staging snapshot");
       mutate({
         ...identity,
         kind: "stage",

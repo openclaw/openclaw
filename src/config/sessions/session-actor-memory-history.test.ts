@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
 import type { SessionActorMemoryHistoryQuery } from "./session-actor-memory-history-contract.js";
 import { mutateMemory, readMemory } from "./session-actor-memory-publication.test-support.js";
@@ -46,9 +46,7 @@ async function fixture(events: unknown[], entry: Partial<InternalSessionEntry> =
     );
   const actor = await acquire();
   const storage = actor.storage;
-  if (!storage) {
-    throw new Error("Expected memory storage capability");
-  }
+  assert(storage, "Expected memory storage capability");
   const transcriptEvents = [
     { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
     ...events,
@@ -89,9 +87,7 @@ describe("memory actor history", () => {
     ]);
     const raw = await readMemory(storage, "session.history.raw-delta", { limits: {} });
     const visible = await readMemory(storage, "session.history.visible-delta", { limits: {} });
-    if (raw.kind !== "page" || visible.kind !== "page") {
-      throw new Error("Expected initial pages");
-    }
+    assert(raw.kind === "page" && visible.kind === "page", "Expected initial pages");
     expect(ids(raw.events.map((row) => row.event))).toEqual([sessionId, "user", "old"]);
     expect(visible.events.map((row) => row.seq)).toEqual([1, 2]);
     const [write, page] = await Promise.all([
@@ -225,9 +221,7 @@ describe("memory actor history", () => {
     const raw = await readMemory(storage, "session.history.raw-delta", {
       limits: { maxEvents: 2 },
     });
-    if (raw.kind !== "page") {
-      throw new Error("Expected raw page");
-    }
+    assert(raw.kind === "page", "Expected raw page");
     expect(
       await readMemory(storage, "session.history.raw-delta", {
         limits: { cursor: raw.cursor, maxBytes: 1024 },
@@ -320,9 +314,7 @@ describe("memory actor history", () => {
       ).kind,
     ).toBe("committed");
     const next = await acquire();
-    if (!next.storage) {
-      throw new Error("Expected memory storage");
-    }
+    assert(next.storage, "Expected memory storage");
     const old = await readMemory(next.storage, "session.history.hydrate", { sessionId });
     expect(ids(old.snapshot.events)).toEqual([sessionId, "old"]);
     expect((await readMemory(next.storage, "session.history.hydrate", {})).snapshot.events).toEqual(
@@ -366,9 +358,7 @@ describe("memory actor history", () => {
     expect(JSON.stringify(unbounded.events)).not.toContain("old-body-");
     const full = await readMemory(storage, "session.history.hydrate", {});
     expect(full.kind).toBe("full");
-    if (full.kind !== "full") {
-      throw new Error("Expected full hydration");
-    }
+    assert(full.kind === "full", "Expected full hydration");
     expect(full.snapshot.events.slice(1)).toEqual(events);
     expect(full.snapshot.eventJson?.slice(1)).toEqual(events.map((event) => JSON.stringify(event)));
     const anchor = actor
@@ -460,9 +450,7 @@ describe("memory actor history facts", () => {
       request: { operation: "version" },
     });
     expect(version.appendParentId).toBe("new-answer");
-    if (!version.version) {
-      throw new Error("Expected transcript version");
-    }
+    assert(version.version, "Expected transcript version");
     expect(
       await readMemory(storage, "session.history.current-turn-entry", {
         entryId: "new-answer",
@@ -702,9 +690,7 @@ describe("memory actor history facts", () => {
       metadata: { present: true },
     });
     const anchor = captured.anchors[0];
-    if (!anchor) {
-      throw new Error("Expected input anchor");
-    }
+    assert(anchor, "Expected input anchor");
     expect(
       (
         await mutateMemory(storage, "session.entry.patch", {
@@ -803,9 +789,7 @@ describe("memory actor history facts", () => {
       },
     ]);
     const admitted = facts.anchors.find((anchor) => anchor.entryId === "followup");
-    if (!admitted) {
-      throw new Error("Expected followup input anchor");
-    }
+    assert(admitted, "Expected followup input anchor");
     expect(
       await readMemory(storage, "session.history.anchors", {
         entryIds: ["user", "followup"],

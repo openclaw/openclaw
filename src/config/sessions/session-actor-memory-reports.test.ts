@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createWorkerTranscriptCommitter } from "../../gateway/worker-environments/transcript-commit.js";
 import {
   createRequest,
@@ -72,9 +72,7 @@ async function fixture() {
   });
   const hydrate = async () => {
     const result = await readMemory(storage, "session.history.hydrate", {});
-    if (result.kind !== "full") {
-      throw new Error("Expected complete memory transcript");
-    }
+    assert(result.kind === "full", "Expected complete memory transcript");
     return result.snapshot;
   };
   const custom = async (id: string, content: string) =>
@@ -126,9 +124,7 @@ describe("memory transcript reports and edits", () => {
       scope: reportScope,
       selection: { kind: "custom", customTypes: ["status"] },
     });
-    if (!selected.ok) {
-      throw new Error("Expected report selection");
-    }
+    assert(selected.ok, "Expected report selection");
     const bytes = `{ "type":"custom_message", "id":"prepared-report", "parentId":${JSON.stringify(selected.value.facts.appendParentId)}, "timestamp":"2026-10-11T00:00:00.000Z", "customType":"status", "content":"exact", "display":true }`;
     await commitMemory(storage, "session.report.append", {
       scope: reportScope,
