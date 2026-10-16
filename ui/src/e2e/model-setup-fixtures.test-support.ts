@@ -1,45 +1,96 @@
-import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
-import { beforeEach, expect } from "vitest";
+import { expect } from "vitest";
 import type { SystemAgentSetupDetectResult, WizardStep } from "../api/types.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import type { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
+import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-export function setupContext(
-  options: BrowserContextOptions = {},
-  videoDir?: string,
-): BrowserContextOptions {
+type SetupSuite = ReturnType<typeof createControlUiE2eSuite>;
+type SetupPage = Parameters<Parameters<SetupSuite["withPage"]>[1]>[0];
+export const setupRpc = {
+  detect: "openclaw.setup.detect",
+  activate: "openclaw.setup.activate.start",
+  auth: "openclaw.setup.auth.start",
+  prepare: "openclaw.setup.prepare.start",
+  verify: "openclaw.setup.verify",
+  next: "wizard.next",
+  cancel: "wizard.cancel",
+} as const;
+
+export function setupPages(suite: SetupSuite, options: () => BrowserContextOptions) {
+  return <T>(run: (fixture: SetupPage) => Promise<T>, overrides: BrowserContextOptions = {}) =>
+    suite.withPage({ ...options(), ...overrides }, run);
+}
+
+export const providerLogin = {
+  id: "provider-login",
+  label: "Provider login",
+  kind: "oauth",
+  featured: true,
+} as const;
+export const wizardNotFound = {
+  __mockError: {
+    code: "INVALID_REQUEST",
+    message: "wizard not found",
+    details: { code: "WIZARD_NOT_FOUND" },
+  },
+};
+export const localSetupFeatures = [
+  "chat.metadata",
+  "chat.startup",
+  "openclaw.setup.detect",
+  "openclaw.setup.activate.start",
+  "openclaw.setup.prepare.start",
+  "wizard.next",
+];
+
+export function activated(modelRef: string, options: { gatewayRestartRequired?: boolean } = {}) {
+  return { done: true, status: "done", modelActivation: { modelRef, ...options } };
+}
+
+export function activationFailure(error: string, status?: "auth" | "timeout" | "unavailable") {
   return {
-    locale: "en-US",
-    serviceWorkers: "block",
-    ...options,
-    ...(videoDir ? { recordVideo: { dir: videoDir, size: options.viewport ?? undefined } } : {}),
+    done: true,
+    status: "error",
+    error,
+    ...(status
+      ? { activationRejection: { disposition: "rejected-before-promotion", status } }
+      : {}),
   };
 }
 
-export function setupArtifacts(name: string) {
-  const root = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-  const artifacts: { dir?: string } = {};
-  beforeEach(() => {
-    artifacts.dir = root ? createControlUiE2eArtifactDir(name, root) : undefined;
-  });
-  return artifacts;
-}
-
-export async function screenshot(
-  page: Page,
-  directory: string | undefined,
-  name: string,
-  options: Parameters<Page["screenshot"]>[0] = {},
+export function localPrepareOptions(
+  llamaHint = "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
 ) {
-  if (directory) {
-    await page.screenshot({ ...options, path: path.join(directory, name) });
-  }
+  return [
+    {
+      id: "ollama",
+      brandId: "ollama",
+      label: "Ollama",
+      hint: "Connect to an Ollama server and select a cloud or local model",
+      actionLabel: "Choose connection",
+    },
+    {
+      id: "llama-cpp",
+      brandId: "llama-cpp",
+      label: "llama.cpp",
+      hint: llamaHint,
+      actionLabel: "Set up model",
+    },
+    {
+      id: "lmstudio",
+      brandId: "lmstudio",
+      label: "LM Studio",
+      hint: "Connect to a running LM Studio server and use an already loaded model",
+      actionLabel: "Connect server",
+      icon: "https://cdn.simpleicons.org/lmstudio",
+      website: "https://lmstudio.ai/download",
+    },
+  ];
 }
 
-export function fullScreenshot(page: Page, directory: string | undefined, name: string) {
-  return screenshot(page, directory, name, { animations: "disabled", fullPage: true });
+export function setupContext(options: BrowserContextOptions = {}): BrowserContextOptions {
+  return { locale: "en-US", serviceWorkers: "block", ...options };
 }
 
 export async function expectText(target: Locator, text: string, absent = false) {
@@ -99,10 +150,17 @@ export function candidate(
   kind: SystemAgentSetupDetectResult["candidates"][number]["kind"],
   label: string,
   modelRef: string,
-  options: Pick<SystemAgentSetupDetectResult["candidates"][number], "detail"> &
-    Partial<SystemAgentSetupDetectResult["candidates"][number]>,
+  options: Partial<SystemAgentSetupDetectResult["candidates"][number]> = {},
 ) {
-  return { kind, label, modelRef, recommended: false, credentials: true, ...options };
+  return {
+    kind,
+    label,
+    modelRef,
+    detail: "Available on this Gateway",
+    recommended: false,
+    credentials: true,
+    ...options,
+  };
 }
 
 export async function returnToLocalModelSettings(
@@ -159,4 +217,11 @@ export async function expectRequestCounts(
   for (const [method, count] of Object.entries(counts)) {
     expect(await gateway.getRequests(method), method).toHaveLength(count);
   }
+}
+
+export function pollRequestCount(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  method: string,
+) {
+  return expect.poll(async () => (await gateway.getRequests(method)).length);
 }

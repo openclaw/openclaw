@@ -2,17 +2,18 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  activated,
   configSnapshot,
   expectCount,
   expectText,
-  fullScreenshot,
+  localPrepareOptions,
+  localSetupFeatures,
   makeDetection,
   returnToLocalModelSettings,
   runningStep,
   runningWizard,
-  screenshot,
-  setupArtifacts,
   setupContext,
+  setupRpc as rpc,
 } from "./model-setup-fixtures.test-support.ts";
 import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
@@ -22,37 +23,14 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifacts = setupArtifacts("model-setup-llamacpp");
-const prepareOptions = [
-  {
-    id: "ollama",
-    brandId: "ollama",
-    label: "Ollama",
-    hint: "Connect to an Ollama server and select a cloud or local model",
-    actionLabel: "Choose connection",
-  },
-  {
-    id: "llama-cpp",
-    brandId: "llama-cpp",
-    label: "llama.cpp",
-    hint: "Choose a Qwen, Gemma, or Muse model for this Gateway’s hardware and install llama.cpp",
-    actionLabel: "Set up model",
-  },
-  {
-    id: "lmstudio",
-    brandId: "lmstudio",
-    label: "LM Studio",
-    hint: "Connect to a running LM Studio server and use an already loaded model",
-    actionLabel: "Connect server",
-    icon: "https://cdn.simpleicons.org/lmstudio",
-    website: "https://lmstudio.ai/download",
-  },
-];
+const prepareOptions = localPrepareOptions(
+  "Choose a Qwen, Gemma, or Muse model for this Gateway’s hardware and install llama.cpp",
+);
 
 suite.define(() => {
   it("downloads, verifies, and keeps llama.cpp visible in settings", async () => {
     await suite.withPage(
-      setupContext({ colorScheme: "dark", viewport: { height: 900, width: 1280 } }, artifacts.dir),
+      setupContext({ colorScheme: "dark", viewport: { height: 900, width: 1280 } }),
       async ({ page }) => {
         const initialDetection = makeDetection({ prepareOptions });
         const modelRef = "llama-cpp/qwen3.5-9b-q4_k_m";
@@ -61,20 +39,13 @@ suite.define(() => {
         const gateway = await installSetupGateway(page, {
           agentModel: globalModel,
           models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", available: true }],
-          featureMethods: [
-            "chat.metadata",
-            "chat.startup",
-            "openclaw.setup.detect",
-            "openclaw.setup.activate.start",
-            "openclaw.setup.prepare.start",
-            "wizard.next",
-          ],
+          featureMethods: localSetupFeatures,
           methodResponses: {
             "config.get": configSnapshot(initialConfig, "before-local-activation"),
-            "openclaw.setup.detect": initialDetection,
-            "openclaw.setup.prepare.start": runningWizard("llama-cpp-prepare-session"),
-            "openclaw.setup.activate.start": runningWizard("activation-session"),
-            "wizard.next": {
+            [rpc.detect]: initialDetection,
+            [rpc.prepare]: runningWizard("llama-cpp-prepare-session"),
+            [rpc.activate]: runningWizard("activation-session"),
+            [rpc.next]: {
               sequence: [
                 runningStep(
                   "llama-cpp-consent",
@@ -98,7 +69,7 @@ suite.define(() => {
                   { executor: "gateway" },
                 ),
                 { done: true, status: "done" },
-                { done: true, status: "done", modelActivation: { modelRef } },
+                activated(modelRef),
               ],
             },
           },
@@ -113,10 +84,8 @@ suite.define(() => {
         await expectText(llamaCppRow, "GB", true);
         await expectText(llamaCppRow, "RAM", true);
 
-        await fullScreenshot(page, artifacts.dir, "llama-cpp-offer-desktop.png");
-
         await llamaCppRow.getByRole("button", { name: "Set up model" }).click();
-        const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
+        const start = await gateway.waitForRequest(rpc.prepare);
         expect(start.params).toMatchObject({ authChoice: "llama-cpp" });
         await page.getByRole("heading", { name: "Set up a local model" }).waitFor();
         await page.getByText("Runs on Gateway host gateway-host", { exact: false }).waitFor();
@@ -137,9 +106,7 @@ suite.define(() => {
           )
           .toEqual({ opening: false, opacity: "1", visibility: "visible" });
 
-        await screenshot(page, artifacts.dir, "llama-cpp-confirm-desktop.png", { fullPage: true });
-
-        await gateway.setMethodResponse("openclaw.setup.detect", {
+        await gateway.setMethodResponse(rpc.detect, {
           ...initialDetection,
           candidates: [
             {
@@ -159,7 +126,7 @@ suite.define(() => {
         await expectText(page.locator(".model-setup-success"), "Verified in", true);
         await expectCount(page.locator('.model-setup-success [data-provider-icon="llamacpp"]'), 1);
 
-        const activate = await gateway.waitForRequest("openclaw.setup.activate.start");
+        const activate = await gateway.waitForRequest(rpc.activate);
         expect(activate.params).toEqual({
           sessionId: expect.any(String),
           kind: "provider-auto:llama-cpp",
@@ -167,11 +134,7 @@ suite.define(() => {
           modelRef,
         });
 
-        if (artifacts.dir) {
-          await fullScreenshot(page, artifacts.dir, "llama-cpp-ready-desktop.png");
-          await page.setViewportSize({ height: 844, width: 390 });
-          await fullScreenshot(page, artifacts.dir, "llama-cpp-ready-mobile.png");
-        }
+        await page.setViewportSize({ height: 844, width: 390 });
 
         await returnToLocalModelSettings(page, gateway, {
           provider: "llama-cpp",
@@ -180,7 +143,6 @@ suite.define(() => {
           model: "qwen3.5-9b-q4_k_m",
           hash: "llamacpp-activated",
         });
-        await fullScreenshot(page, artifacts.dir, "llama-cpp-main-desktop.png");
       },
     );
   });

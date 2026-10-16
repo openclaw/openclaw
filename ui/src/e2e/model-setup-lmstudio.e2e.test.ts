@@ -2,17 +2,18 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  activated,
   candidate,
   configSnapshot,
   expectCount,
   expectText,
-  fullScreenshot,
+  localSetupFeatures,
   makeDetection,
   returnToLocalModelSettings,
   runningStep,
   runningWizard,
-  setupArtifacts,
   setupContext,
+  setupRpc as rpc,
 } from "./model-setup-fixtures.test-support.ts";
 import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
@@ -22,7 +23,6 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifacts = setupArtifacts("model-setup-lmstudio");
 const prepareOptions = [
   {
     id: "lmstudio",
@@ -47,20 +47,13 @@ suite.define(() => {
         const gateway = await installSetupGateway(page, {
           agentModel: globalModel,
           models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", available: true }],
-          featureMethods: [
-            "chat.metadata",
-            "chat.startup",
-            "openclaw.setup.detect",
-            "openclaw.setup.activate.start",
-            "openclaw.setup.prepare.start",
-            "wizard.next",
-          ],
+          featureMethods: localSetupFeatures,
           methodResponses: {
             "config.get": configSnapshot(initialConfig, "before-local-activation"),
-            "openclaw.setup.detect": initialDetection,
-            "openclaw.setup.prepare.start": runningWizard("lmstudio-prepare-session"),
-            "openclaw.setup.activate.start": runningWizard("activation-session"),
-            "wizard.next": {
+            [rpc.detect]: initialDetection,
+            [rpc.prepare]: runningWizard("lmstudio-prepare-session"),
+            [rpc.activate]: runningWizard("activation-session"),
+            [rpc.next]: {
               sequence: [
                 runningStep("lmstudio-base-url", "text", "LM Studio base URL", {
                   initialValue: "http://localhost:1234/v1",
@@ -85,7 +78,7 @@ suite.define(() => {
                   { initialValue: true },
                 ),
                 { done: true, status: "done" },
-                { done: true, status: "done", modelActivation: { modelRef } },
+                activated(modelRef),
               ],
             },
           },
@@ -97,10 +90,8 @@ suite.define(() => {
         await lmStudioRow.getByRole("button", { name: "Connect server" }).waitFor();
         await expectCount(lmStudioRow.locator('[data-provider-icon="lmstudio"]'), 1);
 
-        await fullScreenshot(page, artifacts.dir, "lmstudio-offer-desktop.png");
-
         await lmStudioRow.getByRole("button", { name: "Connect server" }).click();
-        const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
+        const start = await gateway.waitForRequest(rpc.prepare);
         expect(start.params).toMatchObject({ authChoice: "lmstudio" });
         await expect
           .poll(() => page.getByLabel("LM Studio base URL").inputValue())
@@ -112,11 +103,9 @@ suite.define(() => {
           .getByText("LM Studio could not be reached at http://localhost:1234/v1.")
           .waitFor();
 
-        await fullScreenshot(page, artifacts.dir, "lmstudio-recovery-desktop.png");
-
         await page.getByRole("button", { name: "Continue" }).click();
         await page.getByText("Retry this LM Studio connection now?").waitFor();
-        await gateway.setMethodResponse("openclaw.setup.detect", {
+        await gateway.setMethodResponse(rpc.detect, {
           ...initialDetection,
           candidates: [
             candidate("provider-auto:lmstudio", "LM Studio", modelRef, {
@@ -131,7 +120,7 @@ suite.define(() => {
         await expectText(page.locator(".model-setup-success"), "Verified in", true);
         await expectCount(page.locator('.model-setup-success [data-provider-icon="lmstudio"]'), 1);
 
-        const activate = await gateway.waitForRequest("openclaw.setup.activate.start");
+        const activate = await gateway.waitForRequest(rpc.activate);
         expect(activate.params).toEqual({
           sessionId: expect.any(String),
           kind: "provider-auto:lmstudio",
@@ -139,11 +128,7 @@ suite.define(() => {
           modelRef,
         });
 
-        if (artifacts.dir) {
-          await fullScreenshot(page, artifacts.dir, "lmstudio-ready-desktop.png");
-          await page.setViewportSize({ height: 844, width: 390 });
-          await fullScreenshot(page, artifacts.dir, "lmstudio-ready-mobile.png");
-        }
+        await page.setViewportSize({ height: 844, width: 390 });
 
         await returnToLocalModelSettings(page, gateway, {
           provider: "lmstudio",
@@ -152,7 +137,6 @@ suite.define(() => {
           model: "qwen3-8b-instruct",
           hash: "lmstudio-activated",
         });
-        await fullScreenshot(page, artifacts.dir, "lmstudio-main-desktop.png");
       },
     );
   });

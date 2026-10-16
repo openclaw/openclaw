@@ -1,24 +1,22 @@
 // Control UI tests cover local-provider recovery against a mocked Gateway.
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  activated,
   button,
   candidate,
   configSnapshot,
   expectCount,
   expectRequestCounts,
   expectText,
-  fullScreenshot,
   makeDetection,
+  providerLogin,
   runningStep,
   runningWizard,
-  screenshot,
-  setupArtifacts,
   setupContext,
+  setupRpc as rpc,
+  pollRequestCount,
 } from "./model-setup-fixtures.test-support.ts";
 import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
@@ -28,12 +26,10 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifacts = setupArtifacts("model-setup-recovery");
-
 suite.define(() => {
   it("verifies the current model connection and retries saved replacement credentials", async () => {
     await suite.withPage(
-      setupContext({ viewport: { height: 900, width: 1280 } }, artifacts.dir),
+      setupContext({ viewport: { height: 900, width: 1280 } }),
       async ({ page }) => {
         const config = { agents: { defaults: { model: "openai/gpt-5" } } };
         const gateway = await installSetupGateway(page, {
@@ -41,11 +37,11 @@ suite.define(() => {
           featureMethods: [
             "chat.metadata",
             "chat.startup",
-            "openclaw.setup.detect",
+            rpc.detect,
             "models.probe",
-            "openclaw.setup.activate.start",
-            "openclaw.setup.auth.start",
-            "wizard.next",
+            rpc.activate,
+            rpc.auth,
+            rpc.next,
           ],
           models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", available: true }],
           methodResponses: {
@@ -62,7 +58,7 @@ suite.define(() => {
                 },
               ],
             },
-            "openclaw.setup.detect": makeDetection({
+            [rpc.detect]: makeDetection({
               candidates: [
                 candidate("existing-model", "Current model", "openai/gpt-5", {
                   brandId: "openai",
@@ -94,12 +90,8 @@ suite.define(() => {
                 { label: "Configured credential · openai/gpt-5", status: "ok", latencyMs: 1234 },
               ],
             },
-            "openclaw.setup.activate.start": runningWizard(),
-            "wizard.next": {
-              done: true,
-              status: "done",
-              modelActivation: { modelRef: "openai/gpt-5" },
-            },
+            [rpc.activate]: runningWizard(),
+            [rpc.next]: activated("openai/gpt-5"),
           },
         });
 
@@ -112,31 +104,15 @@ suite.define(() => {
           '[data-candidate-kind="saved-auth:openai:replacement"]',
         );
         await savedCredentials.getByText("Saved OpenAI credentials", { exact: true }).waitFor();
-        if (artifacts.dir) {
-          await writeFile(
-            path.join(artifacts.dir, "configured-route-dedup-desktop.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-              page.locator('[data-candidate-kind="claude-cli"]'),
-              savedCredentials,
-            ]),
-          );
-          await page.setViewportSize({ height: 844, width: 390 });
-          await expect
-            .poll(() =>
-              page
-                .locator(".shell-nav.nav-drawer")
-                .evaluate((element) => element.getAttribute("aria-hidden") !== "true"),
-            )
-            .toBe(false);
-          await writeFile(
-            path.join(artifacts.dir, "configured-route-dedup-mobile.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-              page.locator('[data-candidate-kind="claude-cli"]'),
-              savedCredentials,
-            ]),
-          );
-          await page.setViewportSize({ height: 900, width: 1280 });
-        }
+        await page.setViewportSize({ height: 844, width: 390 });
+        await expect
+          .poll(() =>
+            page
+              .locator(".shell-nav.nav-drawer")
+              .evaluate((element) => element.getAttribute("aria-hidden") !== "true"),
+          )
+          .toBe(false);
+        await page.setViewportSize({ height: 900, width: 1280 });
         await button(page.locator(".model-setup-discovery"), "Close").click();
         const currentProvider = page.locator('[data-provider-id="openai"]');
         await button(currentProvider, "Test connection").click();
@@ -150,16 +126,11 @@ suite.define(() => {
           .locator(".model-providers__probe-summary")
           .getByText("Connected", { exact: true })
           .waitFor();
-        const detectCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.detect"))
-          .length;
+        const detectCountBeforeRefresh = (await gateway.getRequests(rpc.detect)).length;
         const verifyCountBeforeRefresh = (await gateway.getRequests("models.probe")).length;
         await button(currentProvider, "Test connection").click();
-        await expect
-          .poll(async () => (await gateway.getRequests("models.probe")).length)
-          .toBe(verifyCountBeforeRefresh + 1);
-        expect((await gateway.getRequests("openclaw.setup.detect")).length).toBe(
-          detectCountBeforeRefresh,
-        );
+        await pollRequestCount(gateway, "models.probe").toBe(verifyCountBeforeRefresh + 1);
+        expect((await gateway.getRequests(rpc.detect)).length).toBe(detectCountBeforeRefresh);
         await button(currentProvider, "Test connection").waitFor();
         await currentProvider
           .locator(".model-providers__probe-target")
@@ -171,7 +142,7 @@ suite.define(() => {
           .waitFor();
         await openModelSetup(page);
         await button(savedCredentials, "Test & use for this agent").click();
-        const activation = await gateway.waitForRequest("openclaw.setup.activate.start");
+        const activation = await gateway.waitForRequest(rpc.activate);
         expect(activation.params).toEqual({
           kind: "saved-auth:openai:replacement",
           modelRef: "openai/gpt-5",
@@ -179,30 +150,7 @@ suite.define(() => {
           sessionId: expect.any(String),
         });
         await page.locator(".model-setup-success").waitFor();
-        await expectRequestCounts(gateway, {
-          "openclaw.setup.activate.start": 1,
-          "openclaw.setup.auth.start": 0,
-        });
-        if (artifacts.dir) {
-          await writeFile(
-            path.join(artifacts.dir, "saved-retry-request.json"),
-            JSON.stringify(
-              {
-                activation,
-                activations: await gateway.getRequests("openclaw.setup.activate.start"),
-                signIns: await gateway.getRequests("openclaw.setup.auth.start"),
-              },
-              null,
-              2,
-            ),
-          );
-          await writeFile(
-            path.join(artifacts.dir, "saved-retry-success-desktop.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-              page.locator(".model-setup-success"),
-            ]),
-          );
-        }
+        await expectRequestCounts(gateway, { [rpc.activate]: 1, [rpc.auth]: 0 });
       },
     );
   });
@@ -211,18 +159,14 @@ suite.define(() => {
     "preserves first-run recovery after a terminal %s activation outcome",
     async (outcome) => {
       await suite.withPage(
-        setupContext({ viewport: { height: 900, width: 1280 } }, artifacts.dir),
+        setupContext({ viewport: { height: 900, width: 1280 } }),
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
-            featureMethods: ["openclaw.setup.detect", "openclaw.setup.auth.start", "wizard.next"],
+            featureMethods: [rpc.detect, rpc.auth, rpc.next],
             methodResponses: {
-              "openclaw.setup.detect": makeDetection({
-                authOptions: [
-                  { id: "provider-login", label: "Provider login", kind: "oauth", featured: true },
-                ],
-              }),
-              "openclaw.setup.auth.start": runningWizard(),
-              "wizard.next": {
+              [rpc.detect]: makeDetection({ authOptions: [providerLogin] }),
+              [rpc.auth]: runningWizard(),
+              [rpc.next]: {
                 done: true,
                 status: "error",
                 error: "The model could not finish setup",
@@ -240,9 +184,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
           const signIn = page.locator('[data-auth-choice="provider-login"] button');
           await signIn.waitFor();
-          await screenshot(page, artifacts.dir, `${outcome}-before.png`, {
-            animations: "disabled",
-          });
+
           await signIn.click();
           const dialog = page.locator("openclaw-modal-dialog");
           const alert = dialog.getByRole("alert");
@@ -256,15 +198,12 @@ suite.define(() => {
           const receipt = await page.evaluate((key) => localStorage.getItem(key), receiptKey);
           expect(receipt === null).toBe(outcome === "rejected");
           expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
-          await expectRequestCounts(gateway, {
-            "openclaw.setup.auth.start": 1,
-            "openclaw.setup.activate.start": 0,
-          });
+          await expectRequestCounts(gateway, { [rpc.auth]: 1, [rpc.activate]: 0 });
           if (outcome === "uncertain") {
             const recovery = page.locator(".model-setup__recovery");
             await button(recovery, "Check again").click();
             await page.getByText("may still be running", { exact: false }).waitFor();
-            expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(1);
+            expect(await gateway.getRequests(rpc.auth)).toHaveLength(1);
             expect(await page.evaluate((key) => localStorage.getItem(key), receiptKey)).toBe(
               receipt,
             );
@@ -272,9 +211,8 @@ suite.define(() => {
             await signIn.click();
             await alert.waitFor();
             await alert.getByText("The model could not finish setup", { exact: true }).waitFor();
-            expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(2);
+            expect(await gateway.getRequests(rpc.auth)).toHaveLength(2);
           }
-          await screenshot(page, artifacts.dir, `${outcome}-after.png`, { animations: "disabled" });
         },
       );
     },
@@ -303,10 +241,10 @@ suite.define(() => {
           featureMethods: [
             "chat.metadata",
             "chat.startup",
-            "openclaw.setup.detect",
+            rpc.detect,
             "models.probe",
-            "openclaw.setup.prepare.start",
-            "wizard.next",
+            rpc.prepare,
+            rpc.next,
           ],
           models: [
             {
@@ -325,7 +263,7 @@ suite.define(() => {
                 { provider: "lmstudio", displayName: "LM Studio", status: "static", profiles: [] },
               ],
             },
-            "openclaw.setup.detect": makeDetection({
+            [rpc.detect]: makeDetection({
               candidates: [
                 candidate("provider-auto:lmstudio", "LM Studio", modelRef, {
                   brandId: "lmstudio",
@@ -357,8 +295,8 @@ suite.define(() => {
                 },
               ],
             },
-            "openclaw.setup.prepare.start": runningWizard("lmstudio-recovery-session"),
-            "wizard.next": runningStep("lmstudio-base-url", "text", "LM Studio base URL", {
+            [rpc.prepare]: runningWizard("lmstudio-recovery-session"),
+            [rpc.next]: runningStep("lmstudio-base-url", "text", "LM Studio base URL", {
               initialValue: "http://localhost:1234/v1",
             }),
           },
@@ -382,16 +320,9 @@ suite.define(() => {
           "The connection probe failed.",
         );
         await button(selectedModel, "Test connection").waitFor();
-        await expectRequestCounts(gateway, {
-          "openclaw.setup.prepare.start": 0,
-          "openclaw.setup.activate.start": 0,
-        });
+        await expectRequestCounts(gateway, { [rpc.prepare]: 0, [rpc.activate]: 0 });
 
-        if (artifacts.dir) {
-          await fullScreenshot(page, artifacts.dir, "local-provider-failure-desktop.png");
-          await page.setViewportSize({ height: 844, width: 390 });
-          await fullScreenshot(page, artifacts.dir, "local-provider-failure-mobile.png");
-        }
+        await page.setViewportSize({ height: 844, width: 390 });
 
         const verify = await gateway.waitForRequest("models.probe");
         expect(verify.params).toEqual({ provider: "lmstudio", agentId: "main" });
@@ -400,10 +331,7 @@ suite.define(() => {
           0,
         );
         expect(await page.locator('[data-prepare-choice="lmstudio"]').count()).toBe(0);
-        await expectRequestCounts(gateway, {
-          "openclaw.setup.prepare.start": 0,
-          "openclaw.setup.activate.start": 0,
-        });
+        await expectRequestCounts(gateway, { [rpc.prepare]: 0, [rpc.activate]: 0 });
       },
     );
   });
