@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

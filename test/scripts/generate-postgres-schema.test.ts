@@ -46,15 +46,11 @@ describe("PostgreSQL schema generation", () => {
     expect(
       metadata.fragments.find((fragment) => fragment.id === "agent_deletion_journal"),
     ).toBeDefined();
-    using db = new DatabaseSync(":memory:");
-    for (const schema of schemas) db.exec(schema.sqlite);
-    expect(
-      db
-        .prepare(
-          "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-        )
-        .get()?.count,
-    ).toBe(134);
+    expect(Buffer.byteLength(files["state-port.json"]!)).toBeLessThan(60_000);
+    expect(schemas.some((schema) => "sqlite" in schema || "objects" in schema)).toBe(false);
+    expect(schemas.flatMap((schema) => schema.tables).some((table) => "columns" in table)).toBe(
+      false,
+    );
   });
 
   it("preserves all agent relational objects and declares search separately", async () => {
