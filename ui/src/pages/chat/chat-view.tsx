@@ -1,6 +1,6 @@
 import { dynamic } from "@solidjs/web";
 import type { Component } from "solid-js";
-import { createEffect, createMemo, createSignal, Show, untrack } from "solid-js";
+import { createMemo, Show, untrack } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { ExecApprovalCard } from "../../components/exec-approval-card-solid.tsx";
@@ -9,12 +9,12 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
@@ -176,6 +176,7 @@ function ChatComposerView(input: ChatViewInput) {
 }
 
 function ChatComposerCompanion(input: ChatViewInput) {
+  // The retained companion keeps the composer identity it mounted with.
   const questionPanel = createComposerQuestionPanel(
     () => ({ ...input.props, asyncQuestions: input.frame.asyncQuestions }),
     getChatComposerState(untrack(() => input.props.paneId)),
@@ -209,7 +210,7 @@ function ChatComposerCompanion(input: ChatViewInput) {
 
 /** Plugin mountDefault creates a separate root and must carry its application scope. */
 function ChatSurfaceContent(input: { view: Component<ChatViewInput>; viewProps: ChatViewInput }) {
-  const View = untrack(() => input.view);
+  const View = dynamic(() => input.view);
   return (
     <Show when={input.viewProps.application} keyed fallback={<View {...input.viewProps} />}>
       {(application) => (
@@ -264,23 +265,7 @@ export function ChatView(input: { props: ChatProps; application?: ApplicationCon
 function ChatContent(input: { props: ChatProps }) {
   const application = useOptionalApplication();
   const frame = createMemo(() => createChatViewFrame(input.props));
-  const [presentationRevision, setPresentationRevision] = createSignal(0, { ownedWrite: true });
-  createEffect(
-    () => input.props.presented,
-    (binding) => {
-      if (typeof binding !== "object") {
-        return undefined;
-      }
-      const notify = () => setPresentationRevision((value) => value + 1);
-      binding.owner.addEventListener(PRESENTATION_CHANGED_EVENT, notify);
-      return () => binding.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, notify);
-    },
-  );
-  const presented = () => {
-    presentationRevision();
-    const binding = input.props.presented;
-    return typeof binding === "object" ? binding.isPresented() : (binding ?? true);
-  };
+  const presented = usePanePresentation(() => input.props.presented ?? true, true);
   const viewProps = () => ({
     props: input.props,
     frame: frame(),

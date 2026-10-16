@@ -103,7 +103,7 @@ it("retains the primary input and the region-owned outlet while changing the lay
   ).toBe(false);
 });
 
-it("parks on owner events and reveals only with the matching parent props", () => {
+it.each([false, true])("parks on owner events (immediate reveal: %s)", (immediate) => {
   const owner = new EventTarget();
   let presented = true;
   const binding: PresentationBinding = { owner, isPresented: () => presented };
@@ -113,7 +113,7 @@ it("parks on owner events and reveals only with the matching parent props", () =
   const mounted = mountSolid(() => {
     const [presentation, setPresentation] = createSignal(binding);
     repaint = () => setPresentation({ ...binding });
-    const active = usePanePresentation(presentation);
+    const active = usePanePresentation(presentation, immediate);
     return <Show when={active()}>{content}</Show>;
   });
   flush();
@@ -125,7 +125,7 @@ it("parks on owner events and reveals only with the matching parent props", () =
   presented = true;
   owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
   flush();
-  expect(mounted.container.querySelector("input")).toBeNull();
+  expect(mounted.container.querySelector("input")).toBe(immediate ? content : null);
   repaint();
   flush();
   expect(mounted.container.querySelector("input")).toBe(content);
