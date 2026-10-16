@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawAgentDatabaseRegistrationCommit } from "./openclaw-agent-db-contract.js";
-import * as registryListing from "./openclaw-agent-db-registry-listing.js";
+import { prepareOpenClawAgentDatabaseRegistrySnapshotRead as prepareSnapshot } from "./openclaw-agent-db-registry-listing.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import * as validation from "./openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
@@ -22,10 +22,7 @@ describe("agent registration commit publication", () => {
       const assertCurrent = vi.fn(() => fixture.admission.assertCurrent());
       const registration = fixture.capture({ admission: { ...fixture.admission, assertCurrent } });
       registration.begin();
-      const prepared = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead(
-        { env: fixture.env },
-        () => false,
-      );
+      const prepared = prepareSnapshot({ env: fixture.env }, () => false);
       try {
         await expect(prepared.read()).rejects.toThrow(
           "Agent database registry ownership is changing during discovery",
@@ -49,9 +46,7 @@ describe("agent registration commit publication", () => {
     "requires following the owned registration commit (follow=%s)",
     async (followCommit) => {
       const fixture = createFixture();
-      const snapshot = await registryListing
-        .prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: fixture.env }, () => false)
-        .read();
+      const snapshot = await prepareSnapshot({ env: fixture.env }, () => false).read();
       let follow = true;
       const registration = fixture.capture({
         onRegistryChange: (change) => {
@@ -132,9 +127,7 @@ describe("agent registration commit publication", () => {
 
   it("invalidates lazy registry snapshots across worker registration settlement", async () => {
     const fixture = createFixture();
-    const prepared = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead({
-      env: fixture.env,
-    });
+    const prepared = prepareSnapshot({ env: fixture.env });
     const before = await prepared.read();
     expect(before.result).toEqual({ status: "available", entries: [] });
     const registration = fixture.capture();
