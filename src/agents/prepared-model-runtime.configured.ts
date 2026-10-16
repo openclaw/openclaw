@@ -317,7 +317,7 @@ export function listConfiguredOwnerInputs(
       const configured = resolveDefaultModelForAgent({
         cfg: config,
         agentId,
-        ...(pluginMetadataSnapshot ? { manifestPlugins: pluginMetadataSnapshot } : {}),
+        manifestPlugins: pluginMetadataSnapshot,
       });
       const subagentModel = resolveSubagentConfiguredModelSelection({
         cfg: config,

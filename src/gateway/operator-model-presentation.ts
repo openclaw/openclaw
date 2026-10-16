@@ -30,8 +30,10 @@ import { projectModelFastModeCatalog } from "./session-fast-mode-presentation.js
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "./session-utils.types.js";
 
-/** Inventory/auth changes do not retire choices; changed selection authority does. */
-/** Commit listeners pass the published inventory; reload's lease cache cannot see it. */
+/**
+ * Inventory/auth changes do not retire choices; changed selection authority does.
+ * Commit listeners pass the published inventory; reload's lease cache cannot see it.
+ */
 export function modelSelectionPoliciesMatch(
   previous: OpenClawConfig,
   next: OpenClawConfig,
@@ -69,7 +71,7 @@ export function modelSelectionPoliciesMatch(
       const model = resolveDefaultModelForAgent({
         cfg,
         agentId,
-        ...(publishedMetadata ? { manifestPlugins: publishedMetadata } : {}),
+        manifestPlugins: publishedMetadata,
       });
       return createModelVisibilityPolicy({
         cfg,
