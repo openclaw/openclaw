@@ -113,6 +113,36 @@ describe("setupWizardShellCompletion", () => {
     );
   });
 
+  it("keeps quickstart finalization alive when profile encoding blocks install", async () => {
+    const prompter = createPrompter();
+    const deps = createDeps();
+    const encodingCause = Object.assign(
+      new Error("Shell profile must be valid UTF-8: /tmp/.zshrc"),
+      {
+        name: "InvalidUtf8CompletionProfileError",
+        profilePath: "/tmp/.zshrc",
+      },
+    );
+    const recovery = new Error(
+      "Shell profile must be valid UTF-8: /tmp/.zshrc. The file was left untouched. For this session, load the prepared cache with: source /tmp/openclaw.zsh. Persistent installation requires backing up the profile and correcting its encoding first.",
+      { cause: encodingCause },
+    );
+    vi.mocked(deps.installCompletion!).mockRejectedValue(
+      new Error(`Failed to install completion: ${recovery.message}`, { cause: recovery }),
+    );
+
+    await expect(
+      setupWizardShellCompletion({ flow: "quickstart", prompter }),
+    ).resolves.not.toThrow();
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /not valid UTF-8[\s\S]*left untouched[\s\S]*source \/tmp\/openclaw\.zsh/,
+      ),
+      "Shell completion",
+    );
+  });
+
   it.each([
     {
       description: "repairing a missing completion cache",

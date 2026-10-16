@@ -70,6 +70,71 @@ describe("shell completion health mapping", () => {
     });
   });
 
+  it("does not abort status checks when the shell profile is not valid UTF-8", async () => {
+    const homeDir = tempDirs.make("openclaw-zsh-invalid-utf8-home-");
+    const stateDir = tempDirs.make("openclaw-zsh-invalid-utf8-state-");
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/zsh");
+    setTestEnvValue("ZDOTDIR", homeDir);
+
+    const cachePath = path.join(stateDir, "completions", "openclaw.zsh");
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.writeFile(cachePath, "# cached completion\n", "utf8");
+    await fs.writeFile(
+      path.join(homeDir, ".zshrc"),
+      Buffer.concat([Buffer.from("export KEEP="), Buffer.from([0xff]), Buffer.from("\n")]),
+    );
+
+    await expect(checkShellCompletionStatus("openclaw", { shell: "zsh" })).resolves.toEqual({
+      shell: "zsh",
+      profileInstalled: false,
+      cacheExists: true,
+      cachePath,
+      usesSlowPattern: false,
+    });
+  });
+
+  it("still reports a missing cache when a Latin-1 comment surrounds an installed hook", async () => {
+    const homeDir = tempDirs.make("openclaw-bash-latin1-hook-home-");
+    const stateDir = tempDirs.make("openclaw-bash-latin1-hook-state-");
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/bash");
+
+    const cachePath = path.join(stateDir, "completions", "openclaw.bash");
+    await fs.writeFile(
+      path.join(homeDir, ".bashrc"),
+      Buffer.concat([
+        Buffer.from("# caf"),
+        Buffer.from([0xe9]),
+        Buffer.from("\n"),
+        Buffer.from(`# OpenClaw Completion\n[ -f '${cachePath}' ] && source '${cachePath}'\n`),
+      ]),
+    );
+
+    const completionStatus = await checkShellCompletionStatus("openclaw", { shell: "bash" });
+    expect(completionStatus).toEqual({
+      shell: "bash",
+      profileInstalled: true,
+      cacheExists: false,
+      cachePath,
+      usesSlowPattern: false,
+    });
+    expect(shellCompletionStatusToHealthFindings(completionStatus)).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/shell-completion",
+        path: "shellCompletion.bash",
+      }),
+    ]);
+    expect(shellCompletionStatusToRepairEffects(completionStatus)).toEqual([
+      expect.objectContaining({
+        action: "would-regenerate-completion-cache",
+        target: cachePath,
+      }),
+    ]);
+  });
+
   it("reports slow dynamic shell completion with dry-run effects", () => {
     const current = status({ usesSlowPattern: true, cacheExists: false });
 
@@ -250,6 +315,33 @@ describe("doctorShellCompletion", () => {
       "Shell completion",
     );
     expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining(failedPath), "Shell completion");
+  });
+
+  it("offers session recovery when profile encoding blocks install", async () => {
+    await setupDoctorCompletionTest(false);
+    const encodingCause = Object.assign(
+      new Error("Shell profile must be valid UTF-8: /tmp/.bash_profile"),
+      { name: "InvalidUtf8CompletionProfileError", profilePath: "/tmp/.bash_profile" },
+    );
+    const recovery = new Error(
+      "Shell profile must be valid UTF-8: /tmp/.bash_profile. The file was left untouched. For this session, load the prepared cache with: source /tmp/openclaw.bash. Persistent installation requires backing up the profile and correcting its encoding first.",
+      { cause: encodingCause },
+    );
+    installCompletionMock.mockRejectedValue(
+      new Error(`Failed to install completion: ${recovery.message}`, { cause: recovery }),
+    );
+    const noteSpy = vi.spyOn(noteModule, "note");
+
+    await expect(doctorShellCompletion(mockPrompter())).resolves.not.toThrow();
+
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/not valid UTF-8[\s\S]*left untouched[\s\S]*session only/),
+      "Shell completion",
+    );
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("/tmp/.bash_profile"),
+      "Shell completion",
+    );
   });
 
   it("re-throws non-permission errors from installCompletion", async () => {
