@@ -13,7 +13,7 @@ import * as clientVoiceSession from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-types.js";
 import { makeBridge, makeVoiceProvider } from "../../../talk/session-runtime.test-support.js";
-import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import { withEnv } from "../../../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -49,7 +49,7 @@ afterEach(async () => {
   }
   await Promise.allSettled(
     [...drainingRelaySessions].map(
-      (session) => session.closing?.completion ?? session.voiceSessionClose ?? Promise.resolve(),
+      (session) => session.closing?.completion ?? session.voiceSessionClose,
     ),
   );
   vi.restoreAllMocks();
@@ -110,9 +110,8 @@ it.each([
       ["user", "check my task"],
       ["assistant", "final words"],
     ] as const;
-    const finalTranscripts = () => {
+    const finalTranscripts = () =>
       transcripts.forEach(([role, text]) => request?.onTranscript?.(role, text, true));
-    };
     const close = vi.fn(() => {
       if (providerAsync) {
         return completion.promise;
@@ -132,7 +131,6 @@ it.each([
         },
       );
     }
-    const bridge = makeBridge({ close });
     const broadcastToConnIds = vi.fn();
     const warn = vi.fn();
     const session = createTalkRealtimeRelaySession({
@@ -148,7 +146,7 @@ it.each([
       sessionTarget: await prepareTalkSessionTarget(cfg, sessionKey),
       provider: makeVoiceProvider((callbacks) => {
         request = callbacks;
-        return bridge;
+        return makeBridge({ close });
       }),
       providerConfig: {},
       instructions: "brief",
@@ -189,18 +187,14 @@ it.each([
       "Unknown realtime relay session",
     );
     if (providerAsync) {
-      const env = captureEnv(["OPENCLAW_STATE_DIR"]);
-      try {
-        if (changeState) {
-          successorStateDir = state.statePath("successor");
-          setTestEnvValue("OPENCLAW_STATE_DIR", successorStateDir);
-        }
+      if (changeState) {
+        successorStateDir = state.statePath("successor");
+      }
+      withEnv({ OPENCLAW_STATE_DIR: successorStateDir ?? process.env.OPENCLAW_STATE_DIR }, () => {
         if (!silent) {
           finalTranscripts();
         }
-      } finally {
-        env.restore();
-      }
+      });
     }
     if (!sourceFails && !silent) {
       if (!permitFails) {

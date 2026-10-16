@@ -65,9 +65,10 @@ function transcriptionFixture(config = cfg) {
     call,
     context,
     events,
-    create: async (params: Record<string, unknown> = {}) =>
-      expectRespondOk(await call("talk.session.create", { mode: "transcription", ...params }))
-        .sessionId,
+    create: async (params: Record<string, unknown> = {}, options?: Parameters<typeof call>[2]) =>
+      expectRespondOk(
+        await call("talk.session.create", { mode: "transcription", ...params }, options),
+      ).sessionId,
     append: (sessionId: string, samples = 1600) =>
       call("talk.session.appendAudio", {
         sessionId,
@@ -174,13 +175,9 @@ describe("configured file transcription through Talk RPCs", () => {
           await maintenance.close().finally(() => lease.release());
         }
         await withFileProvider(async (requests) => {
-          const { call, append } = transcriptionFixture(config);
-          const created = await call(
-            "talk.session.create",
-            {
-              mode: "transcription",
-              sessionKey: "agent:researcher:main",
-            },
+          const { call, create, append } = transcriptionFixture(config);
+          const sessionId = await create(
+            { sessionKey: "agent:researcher:main" },
             {
               client: {
                 connId: "conn-1",
@@ -188,8 +185,6 @@ describe("configured file transcription through Talk RPCs", () => {
               },
             },
           );
-          expect(created.mock.calls[0]?.[2]).toBeUndefined();
-          const sessionId = (expectRespondOk(created) as { sessionId: string }).sessionId;
           await append(sessionId);
           expectRespondOk(await call("talk.session.close", { sessionId }));
           expect(requests).toMatchObject([{ apiKey: "synthetic-researcher-key" }]);

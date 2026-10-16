@@ -156,21 +156,16 @@ describe("native Talk through the public OpenAI plugin registration", () => {
           }
           closing = closeTalkClientGatewayControlSession(target);
           void closing.catch(() => {});
-          await withinTest(
-            awaitGateBeforeSettlement(
-              providerClosed.promise,
-              closing,
-              "provider close was skipped",
-            ),
-            signal,
+          const providerClose = awaitGateBeforeSettlement(
+            providerClosed.promise,
+            closing,
+            "provider close was skipped",
           );
-          let settled = false;
-          const markSettled = () => {
-            settled = true;
-          };
-          void closing.then(markSettled, markSettled);
+          await withinTest(providerClose, signal);
+          const settled = vi.fn();
+          void closing.then(settled, settled);
           await Promise.resolve();
-          expect(settled).toBe(false);
+          expect(settled).not.toHaveBeenCalled();
           release.resolve();
           if (transition === "source environment drift") {
             await expect(closing).resolves.toBe(true);
@@ -179,13 +174,13 @@ describe("native Talk through the public OpenAI plugin registration", () => {
           }
           expect(await closeTalkClientGatewayControlSession(target)).toBe(false);
           env.restore();
-          expect(transcriptEvents(originalStorePath).map(({ event }) => event)).toEqual([
-            expect.objectContaining({
-              message: expect.objectContaining({
+          expect(transcriptEvents(originalStorePath).map(({ event }) => event)).toMatchObject([
+            {
+              message: {
                 role: "user",
                 content: [{ type: "text", text: "accepted before close" }],
-              }),
-            }),
+              },
+            },
           ]);
         } finally {
           env.restore();
@@ -233,17 +228,13 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       },
     );
     const parked = withParkedNativeTask(assertions);
-    const outcome = parked.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const outcome = parked.catch((error: unknown) => error);
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         preparing.promise,
-        parked.then(() => {
-          throw new Error("Native task completed before workspace preparation");
-        }),
-      ]);
+        parked,
+        "Native task completed before workspace preparation",
+      );
       // Hold a real setup boundary past the separate registration deadline.
       await delay(1100);
     } finally {
