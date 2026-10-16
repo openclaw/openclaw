@@ -103,6 +103,8 @@ describe("CDP screenshots", () => {
     expect(socket).toHaveBeenCalledWith(server.wsUrl, expect.any(Function), {
       commandTimeoutMs: 12_345,
       lookup: undefined,
+      abortScope: "operation",
+      signal: undefined,
     });
     expect(messages.map(({ method }) => method)).toEqual([
       "Page.enable",
