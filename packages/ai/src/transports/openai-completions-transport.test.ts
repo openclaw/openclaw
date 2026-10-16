@@ -50,7 +50,7 @@ async function captureTransportRequest(
 describe("openai completions transport", () => {
   it.each([
     {
-      modelId: "gpt-6-astra",
+      modelId: "gpt-5.6-sol",
       endpoint: "official OpenAI",
       baseUrl: "https://api.openai.com/v1",
       path: "/v1/responses",
@@ -58,7 +58,7 @@ describe("openai completions transport", () => {
       responsesEffort: "high",
     },
     {
-      modelId: "gpt-6-astra",
+      modelId: "gpt-5.6-sol",
       endpoint: "OpenAI-compatible proxy",
       baseUrl: "https://proxy.example.com/v1",
       path: "/v1/chat/completions",
@@ -91,16 +91,15 @@ describe("openai completions transport", () => {
   it("passes provider request timeouts to OpenAI SDK per-request options", () => {
     const signal = new AbortController().signal;
     const model = {
-      id: "glm-5",
-      name: "GLM-5",
-      api: "openai-completions",
-      provider: "vllm",
-      baseUrl: "http://localhost:8000/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 4096,
+      ...makeCompletionsModel({
+        id: "glm-5",
+        name: "GLM-5",
+        provider: "vllm",
+        baseUrl: "http://localhost:8000/v1",
+        reasoning: false,
+        contextWindow: 128000,
+        maxTokens: 4096,
+      }),
       requestTimeoutMs: 900_000.7,
     } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
 
@@ -166,16 +165,15 @@ describe("openai completions transport", () => {
         throw new Error("Missing loopback server address");
       }
       const baseModel = {
-        id: "mlx-community/Qwen3-30B-A3B-6bit",
-        name: "Qwen3 MLX",
-        api: "openai-completions",
-        provider: "mlx",
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 4096,
-        maxTokens: 256,
+        ...makeCompletionsModel({
+          id: "mlx-community/Qwen3-30B-A3B-6bit",
+          name: "Qwen3 MLX",
+          provider: "mlx",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          reasoning: false,
+          contextWindow: 4096,
+          maxTokens: 256,
+        }),
         requestTimeoutMs: 900_000,
       } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
       const stream = createOpenAICompletionsTransportStreamFn()(
@@ -228,11 +226,7 @@ describe("openai completions transport", () => {
     });
     const stream = createOpenAICompletionsTransportStreamFn()(
       model,
-      {
-        systemPrompt: "runtime-only system prompt",
-        messages: [],
-        tools: [],
-      } as never,
+      { systemPrompt: "runtime-only system prompt", messages: [], tools: [] } as never,
       { apiKey: "test-key" } as never,
     );
 
@@ -378,23 +372,18 @@ describe("openai completions transport", () => {
   });
 
   it("moves Azure OpenAI completions api-version headers into query params", async () => {
-    const request = await captureTransportRequest({
-      id: "gpt-4o-mini",
-      name: "GPT-4o Mini",
-      api: "openai-completions",
-      provider: "azure-custom",
-      baseUrl: "https://example.openai.azure.com/openai/deployments/gpt-4o-mini?existing=1",
-      headers: {
-        "api-key": "azure-key",
-        "api-version": "2024-10-21",
-        "X-Tenant": "acme",
-      },
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 4096,
-    } as unknown as Model<"openai-completions">);
+    const request = await captureTransportRequest(
+      makeCompletionsModel({
+        id: "gpt-4o-mini",
+        name: "GPT-4o Mini",
+        provider: "azure-custom",
+        baseUrl: "https://example.openai.azure.com/openai/deployments/gpt-4o-mini?existing=1",
+        headers: { "api-key": "azure-key", "api-version": "2024-10-21", "X-Tenant": "acme" },
+        reasoning: false,
+        contextWindow: 128000,
+        maxTokens: 4096,
+      }),
+    );
     const url = new URL(request.url);
 
     expect(url.origin + url.pathname).toBe(

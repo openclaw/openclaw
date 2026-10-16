@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AssistantMessageEvent } from "../types.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   type CapturedStreamEvent,
@@ -16,22 +17,32 @@ const model = makeCompletionsModel({
 const call =
   '<|tool_call>call:process{action:<|"|>poll<|"|>,sessionId:<|"|>example<|"|>}<tool_call|>';
 
+function streamFixture() {
+  const output = createAssistantOutput(model);
+  const events: CapturedStreamEvent[] = [];
+  const sink = {
+    push: (event: AssistantMessageEvent) => events.push(event),
+  };
+  const runStream = (
+    chunks: Parameters<typeof processCompletionsStream>[0],
+    options?: Parameters<typeof processCompletionsStream>[4],
+  ) => processCompletionsStream(chunks, output, model, sink, options);
+  const run = (chunks: readonly unknown[]) => runStream(streamChunks(chunks));
+  const text = (parts: Iterable<string>, finish = "stop") =>
+    run([
+      ...Array.from(parts, (content) => makeCompletionsChunk({ content })),
+      makeCompletionsChunk({}, finish),
+    ]);
+  return { output, events, run, runStream, text };
+}
+
 describe("Gemma tool-call text recovery", () => {
   it.each([
     { label: "trailing", suffix: "" },
     { label: "mid-stream", suffix: "\n" },
   ])("recovers a $label call before stop", async ({ suffix }) => {
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-    await processCompletionsStream(
-      streamChunks([
-        ...[call, suffix].map((text) => makeCompletionsChunk({ content: text })),
-        makeCompletionsChunk({}, "stop"),
-      ]),
-      output,
-      model,
-      { push: (event) => events.push(event) },
-    );
+    const { output, events, text } = streamFixture();
+    await text([call, suffix]);
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toEqual([
       {
@@ -55,16 +66,8 @@ describe("Gemma tool-call text recovery", () => {
     const raw = 'quotes " and \\slashes\n<tool_call|> <think>literal</think> {a:b}';
     const args = `{path:<|"|>${raw}<|"|>,options:{enabled:true,limit:2,items:[null,false,<|"|><|"|>]},<|"|>quoted key<|"|>:<|"|>value<|"|>}`;
     const content = `<|tool_call>call:read${args}<tool_call|>\n<|tool_call>call:status{}<tool_call|>`;
-    const output = createAssistantOutput(model);
-    await processCompletionsStream(
-      streamChunks([
-        ...Array.from(content, (text) => makeCompletionsChunk({ content: text })),
-        makeCompletionsChunk({}, "stop"),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
+    const { output, text } = streamFixture();
+    await text(content);
     expect(output.stopReason).toBe("toolUse");
     const calls = output.content.filter((block) => block.type === "toolCall");
     expect(calls).toMatchObject([
@@ -108,13 +111,8 @@ describe("Gemma tool-call text recovery", () => {
     call.replace('poll<|"|>', "poll"),
     call.replace("sessionId:", "sessionId"),
   ])("preserves non-call or incomplete text: %s", async (content) => {
-    const output = createAssistantOutput(model);
-    await processCompletionsStream(
-      streamChunks([makeCompletionsChunk({ content }), makeCompletionsChunk({}, "stop")]),
-      output,
-      model,
-      { push() {} },
-    );
+    const { output, text } = streamFixture();
+    await text([content]);
     expect(output.stopReason).toBe("stop");
     expect(output.content).toEqual([{ type: "text", text: content }]);
   });
@@ -133,23 +131,12 @@ describe("Gemma tool-call text recovery", () => {
 
   it("does not flush a cancelled call into executable events", async () => {
     const controller = new AbortController();
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
+    const { output, events, runStream } = streamFixture();
     async function* chunks() {
       yield makeCompletionsChunk({ content: call });
       controller.abort();
     }
-    await expect(
-      processCompletionsStream(
-        chunks(),
-        output,
-        model,
-        {
-          push: (event) => events.push(event),
-        },
-        { signal: controller.signal },
-      ),
-    ).rejects.toThrow();
+    await expect(runStream(chunks(), { signal: controller.signal })).rejects.toThrow();
     expect(output.content).toEqual([]);
     expect(events.some((event) => event.type === "toolcall_end")).toBe(false);
   });
@@ -157,8 +144,7 @@ describe("Gemma tool-call text recovery", () => {
   it.each([true, false])(
     "declines recovery with mixed native calls (raw first: %s)",
     async (rawFirst) => {
-      const output = createAssistantOutput(model);
-      const events: CapturedStreamEvent[] = [];
+      const { output, events, run } = streamFixture();
       const raw = makeCompletionsChunk({ content: call });
       const native = makeCompletionsChunk({
         tool_calls: [
@@ -170,15 +156,10 @@ describe("Gemma tool-call text recovery", () => {
           },
         ],
       });
-      await processCompletionsStream(
-        streamChunks([
-          ...(rawFirst ? [raw, native] : [native, raw]),
-          makeCompletionsChunk({}, "tool_calls"),
-        ]),
-        output,
-        model,
-        { push: (event) => events.push(event) },
-      );
+      await run([
+        ...(rawFirst ? [raw, native] : [native, raw]),
+        makeCompletionsChunk({}, "tool_calls"),
+      ]);
       const text = { type: "text", text: call };
       const tool = {
         type: "toolCall",
@@ -193,14 +174,9 @@ describe("Gemma tool-call text recovery", () => {
   );
 
   it("bounds buffered candidates", async () => {
-    const output = createAssistantOutput(model);
+    const { run } = streamFixture();
     await expect(
-      processCompletionsStream(
-        streamChunks([makeCompletionsChunk({ content: "<|tool_call>" + "x".repeat(256_001) })]),
-        output,
-        model,
-        { push() {} },
-      ),
+      run([makeCompletionsChunk({ content: "<|tool_call>" + "x".repeat(256_001) })]),
     ).rejects.toThrow("Exceeded Gemma tool-call recovery buffer limit");
   });
 });

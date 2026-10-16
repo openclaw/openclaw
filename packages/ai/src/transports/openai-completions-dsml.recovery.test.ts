@@ -13,73 +13,67 @@ import {
   streamChunks,
 } from "./openai-completions.test-support.js";
 
+function streamFixture(model = createDeepSeekCompletionsModel()) {
+  const output = createAssistantOutput(model);
+  const events: CapturedStreamEvent[] = [];
+  const run = (
+    chunks: readonly unknown[],
+    options?: Parameters<typeof processCompletionsStream>[4],
+  ) =>
+    processCompletionsStream(
+      streamChunks(chunks),
+      output,
+      model,
+      { push: (event) => events.push(event) },
+      options,
+    );
+  return { output, events, run };
+}
+
 describe("openai completions DSML", () => {
   it("rejects a nested DSML wrapper before the original outer close", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
+    const { output, events, run } = streamFixture();
 
     await expect(
-      processCompletionsStream(
-        streamChunks([
-          makeCompletionsChunk({ content: "<|DSML|tool_calls><|DSML|tool_" }),
-          makeCompletionsChunk({
-            content:
-              'calls><|DSML|invoke name="read">{"path":"/tmp/nested.md"}</|DSML|invoke></|DSML|tool_calls>',
-          }),
-          makeCompletionsChunk({ content: "</|DSML|tool_calls>" }, "stop"),
-        ]),
-        output,
-        model,
-        {
-          push(event) {
-            events.push(event as CapturedStreamEvent);
-          },
-        },
-      ),
+      run([
+        makeCompletionsChunk({ content: "<|DSML|tool_calls><|DSML|tool_" }),
+        makeCompletionsChunk({
+          content:
+            'calls><|DSML|invoke name="read">{"path":"/tmp/nested.md"}</|DSML|invoke></|DSML|tool_calls>',
+        }),
+        makeCompletionsChunk({ content: "</|DSML|tool_calls>" }, "stop"),
+      ]),
     ).rejects.toThrow("Nested DeepSeek DSML recovery wrappers are not supported");
     expect(events.filter((event) => event.type?.startsWith("toolcall_") === true)).toEqual([]);
     expect(output.content.some((part) => part.type === "toolCall")).toBe(false);
   });
 
   it("does not accept a different DSML wrapper kind as the outer close", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
+    const { output, run } = streamFixture();
 
-    await processCompletionsStream(
-      streamChunks([
-        makeCompletionsChunk({
-          content:
-            '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/mismatch.md"}</|DSML|invoke></|DSML|function_calls>',
-        }),
-        makeCompletionsChunk({}, "stop"),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
+    await run([
+      makeCompletionsChunk({
+        content:
+          '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/mismatch.md"}</|DSML|invoke></|DSML|function_calls>',
+      }),
+      makeCompletionsChunk({}, "stop"),
+    ]);
 
     expect(output.stopReason).toBe("stop");
     expect(output.content.some((part) => part.type === "toolCall")).toBe(false);
   });
 
   it("ignores an incomplete invoke-like prefix before a valid invoke", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
+    const { output, run } = streamFixture();
     const content =
       "<|DSML|tool_calls>literal <|DSML|invoke marker " +
       '<|DSML|invoke name="read">{"path":"/tmp/valid.md"}</|DSML|invoke>' +
       "</|DSML|tool_calls>";
 
-    await processCompletionsStream(
-      streamChunks(
-        Array.from(content, (char) => makeCompletionsChunk({ content: char })).concat([
-          makeCompletionsChunk({}, "stop"),
-        ]),
-      ),
-      output,
-      model,
-      { push() {} },
+    await run(
+      Array.from(content, (char) => makeCompletionsChunk({ content: char })).concat([
+        makeCompletionsChunk({}, "stop"),
+      ]),
     );
 
     expect(output.stopReason).toBe("toolUse");
@@ -94,24 +88,13 @@ describe("openai completions DSML", () => {
   });
 
   it("does not recover a nested call hidden inside a nameless invoke", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
+    const { output, events, run } = streamFixture();
     const content =
       "<|DSML|tool_calls><|DSML|invoke><|DSML|tool_calls>" +
       '<|DSML|invoke name="read">{"path":"/tmp/bypass"}</|DSML|invoke>' +
       "</|DSML|tool_calls>";
 
-    await processCompletionsStream(
-      streamChunks([makeCompletionsChunk({ content }), makeCompletionsChunk({}, "stop")]),
-      output,
-      model,
-      {
-        push(event) {
-          events.push(event as CapturedStreamEvent);
-        },
-      },
-    );
+    await run([makeCompletionsChunk({ content }), makeCompletionsChunk({}, "stop")]);
 
     expect(output.stopReason).toBe("stop");
     expect(events.filter((event) => event.type?.startsWith("toolcall_") === true)).toEqual([]);
@@ -119,20 +102,14 @@ describe("openai completions DSML", () => {
   });
 
   it("does not authorize recovered DeepSeek DSML calls when the stream omits a terminal", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
+    const { output, run } = streamFixture();
 
-    await processCompletionsStream(
-      streamChunks([
-        makeCompletionsChunk({
-          content:
-            '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
-        }),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
+    await run([
+      makeCompletionsChunk({
+        content:
+          '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
+      }),
+    ]);
 
     expect(output.stopReason).toBe("stop");
     expect(output.content).toEqual([]);
@@ -219,18 +196,12 @@ describe("openai completions DSML", () => {
   it("parses repeated DeepSeek DSML calls with response-unique ids", async () => {
     // Guards the cached attribute matchers: repeated parses must stay identical
     // apart from invocation identity (no stale RegExp lastIndex).
-    const model = createDeepSeekCompletionsModel();
     const content =
       '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>';
 
     const runOnce = async () => {
-      const output = createAssistantOutput(model);
-      await processCompletionsStream(
-        streamChunks([makeCompletionsChunk({ content }, "stop")]),
-        output,
-        model,
-        { push() {} },
-      );
+      const { output, run } = streamFixture();
+      await run([makeCompletionsChunk({ content }, "stop")]);
       return output.content;
     };
 
@@ -263,19 +234,12 @@ describe("openai completions DSML", () => {
       body: '<|DSML|invoke name="read"><|DSML|parameter name="path">/tmp/unexecuted</｜DSML｜parameter></|DSML|invoke>',
     },
   ])("does not authorize DSML with $name", async ({ body }) => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
+    const { output, events, run } = streamFixture();
     const content = `<|DSML|tool_calls>${body}</|DSML|tool_calls>`;
-    await processCompletionsStream(
-      streamChunks([
-        ...Array.from(content, (char) => makeCompletionsChunk({ content: char })),
-        makeCompletionsChunk({}, "stop"),
-      ]),
-      output,
-      model,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-    );
+    await run([
+      ...Array.from(content, (char) => makeCompletionsChunk({ content: char })),
+      makeCompletionsChunk({}, "stop"),
+    ]);
     expect(output.stopReason).toBe("stop");
     expect(output.content).toEqual([]);
     expect(events.filter((event) => event.type?.startsWith("toolcall_"))).toEqual([]);

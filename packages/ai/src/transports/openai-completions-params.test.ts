@@ -468,10 +468,7 @@ describe("OpenAI request cache policy", () => {
       const params = build(
         { ...makeCompletionsModel({ id }), api },
         { messages: [] },
-        {
-          sessionId: "session-123",
-          cacheRetention: "long",
-        },
+        { sessionId: "session-123", cacheRetention: "long" },
       );
       expect(params.prompt_cache_key).toBe("session-123");
       expect(params.prompt_cache_retention).toBe(retention);
@@ -752,12 +749,7 @@ describe("OpenAI completions compatibility and tools", () => {
       );
       expect(payload.tools?.[0]?.function.parameters).toEqual({
         type: "object",
-        properties: {
-          v: {
-            [union]: cases.map(([, expected]) => expected),
-            default: literal,
-          },
-        },
+        properties: { v: { [union]: cases.map(([, expected]) => expected), default: literal } },
       });
     }
   });
