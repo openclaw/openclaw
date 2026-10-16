@@ -449,8 +449,8 @@ describe("sidebar projection memo", () => {
         ?.querySelector('[data-session-attention="question"]')
         ?.getAttribute("aria-label"),
     ).toContain("Continue checking?");
-    const parent = sidebar.parentElement!;
-    sidebar.remove();
+    const parent = sidebar.hostElement.parentElement!;
+    sidebar.hostElement.remove();
     parent.append(sidebar.hostElement);
     await settleLitElement(sidebar);
     expect(row(target.key)?.querySelector('[data-session-attention="question"]')).not.toBeNull();
