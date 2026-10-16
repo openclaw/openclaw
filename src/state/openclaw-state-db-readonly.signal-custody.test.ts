@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi, type Mock } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqliteRuntime from "../infra/bun-sqlite-library.js";
 import {
@@ -31,6 +31,9 @@ import type {
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const readResult: OpenClawStateReadOutcome = {
+  value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
+};
 
 const mocks = vi.hoisted(() => ({
   cleanupKey: Symbol("signal-custody snapshot cleanup"),
@@ -40,25 +43,31 @@ const mocks = vi.hoisted(() => ({
   resources: new Set<OpenClawStateDatabaseAsyncResource>(),
   removed: [] as string[],
   events: [] as string[],
-  prepare:
-    vi.fn<
-      (
-        pathname: string,
-        options?: { signal?: AbortSignal; preserveSourceArtifacts?: boolean },
-      ) => Promise<PreparedSqliteReadOnlyLocation>
-    >(),
+  prepare: vi.fn<Prepare>(),
   removeAsync: vi.fn<(file: string) => Promise<void>>(),
   close: vi.fn<() => Promise<void>>(),
-  read: vi.fn<
-    (
-      source: OpenClawStateReadLocation,
-      authority: OpenClawStateReadAuthority,
-    ) => Promise<OpenClawStateReadOutcome>
-  >(),
+  read: vi.fn<Read>(),
+  admission: (databasePath: string): OpenClawStateWorkerContext["admission"] => ({
+    coordinationKey: databasePath,
+    databasePath,
+    identity: mocks.sourceIdentity,
+    assertCurrent() {},
+  }),
   forbidden: vi.fn(() => {
     throw new Error("This controlled custody test must not open SQLite or start a worker");
   }),
 }));
+type Prepare = (
+  path: string,
+  options?: {
+    signal?: AbortSignal;
+    preserveSourceArtifacts?: boolean;
+  },
+) => Promise<PreparedSqliteReadOnlyLocation>;
+type Read = (
+  source: OpenClawStateReadLocation,
+  authority: OpenClawStateReadAuthority,
+) => Promise<OpenClawStateReadOutcome>;
 
 // Synthetic files and captured exit callbacks must not reuse another file's native cleanup owner.
 vi.mock("../shared/global-singleton.js", async (importOriginal) => {
@@ -99,12 +108,7 @@ vi.mock("node:fs", async (importOriginal) => {
 vi.mock("../cli/signal-exit-barrier.js", () => ({ registerSignalExitFinalizer: vi.fn() }));
 vi.mock("../logging/logger.js", () => ({ getChildLogger: () => ({ warn: vi.fn() }) }));
 vi.mock("./openclaw-state-db-cache.js", () => ({
-  captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
-    coordinationKey: databasePath,
-    databasePath,
-    identity: mocks.sourceIdentity,
-    assertCurrent() {},
-  }),
+  captureOpenClawStateDatabaseReadAdmission: mocks.admission,
   registerOpenClawStateDatabaseAsyncResource: (resource: OpenClawStateDatabaseAsyncResource) => {
     mocks.resources.add(resource);
     return () => mocks.resources.delete(resource);
@@ -123,12 +127,7 @@ vi.mock("./openclaw-state-worker-context.js", () => ({
   }: {
     path: string;
   }): OpenClawStateWorkerContext => ({
-    admission: {
-      coordinationKey: path,
-      databasePath: path,
-      identity: mocks.sourceIdentity,
-      assertCurrent() {},
-    },
+    admission: mocks.admission(path),
     environment: { OPENCLAW_STATE_DIR: "/synthetic/state" },
   }),
 }));
@@ -202,31 +201,64 @@ beforeEach(() => {
     mocks.removed.push(file);
     mocks.events.push("remove");
   });
-  mocks.prepare
-    .mockReset()
-    .mockImplementation(async () =>
-      adoptPreparedLocation(`${mocks.directory}/database.sqlite`, mocks.directory),
-    );
+  mocks.prepare.mockReset().mockImplementation(async () => location());
   mocks.close.mockReset().mockResolvedValue();
-  mocks.read.mockReset().mockResolvedValue({
-    value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
-  });
+  mocks.read.mockReset().mockResolvedValue(readResult);
 });
 
 afterEach(async () => {
   mocks.close.mockResolvedValue();
-  for (const resource of mocks.resources) {
-    await resource.close();
-  }
+  await closeResources();
   await cleanupSnapshotOperations();
   expect(mocks.resources.size).toBe(0);
   expect(mocks.forbidden).not.toHaveBeenCalled();
 });
 
 function runDirectRead() {
-  return withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" }),
-  );
+  return withArtifactPreservingStateReads(read);
+}
+
+const read = () =>
+  executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" });
+const snapshot = <T>(callback: () => Promise<T>) =>
+  withOpenClawStateDatabaseReadSnapshot(callback, { path: mocks.source });
+const location = (deferCleanup = false) =>
+  adoptPreparedLocation(`${mocks.directory}/database.sqlite`, mocks.directory, deferCleanup);
+
+function hold<TArgs extends unknown[], TResult>(
+  mock: Mock<(...args: TArgs) => Promise<TResult>>,
+  result: TResult,
+  event?: string,
+) {
+  const entered = createDeferredCore();
+  const finish = createDeferredCore();
+  mock.mockImplementation(async () => {
+    entered.resolve();
+    await finish.promise;
+    if (event) {
+      mocks.events.push(event);
+    }
+    return result;
+  });
+  return { entered: entered.promise, release: finish.resolve };
+}
+
+async function closeResources() {
+  for (const resource of mocks.resources) {
+    await resource.close();
+  }
+}
+
+async function expectEntered(entered: Promise<unknown>, operation: Promise<unknown>) {
+  expect(await Promise.race([entered.then(() => "entered"), operation])).toBe("entered");
+}
+
+function expectCallerPending(caller: AsyncWorkScope, drained = false) {
+  expect({ removed: mocks.removed, pending: caller.hasPendingWork, drained }).toEqual({
+    removed: [],
+    pending: true,
+    drained: false,
+  });
 }
 
 function captureOutcome(operation: Promise<unknown>) {
@@ -259,34 +291,27 @@ it.each([
     const busy = Object.assign(new Error("private SQLite file is still open"), {
       code: failure === "permission" ? "EACCES" : "EBUSY",
     });
-    mocks.prepare.mockImplementation(async () =>
-      adoptPreparedLocation(`${mocks.directory}/database.sqlite`, mocks.directory, true),
-    );
+    mocks.prepare.mockImplementation(async () => location(true));
     mocks.removeAsync.mockRejectedValue(busy);
     if (failure === "native close") {
       mocks.close.mockRejectedValue(new Error("native close failed"));
     }
     try {
       const result = await captureOutcome(
-        withOpenClawStateDatabaseReadSnapshot(
-          async () => {
-            await executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" });
-            if (failure === "read") {
-              throw new Error("discovery read failed");
-            }
-            return "discovered";
-          },
-          { path: mocks.source },
-        ),
+        snapshot(async () => {
+          await read();
+          if (failure === "read") {
+            throw new Error("discovery read failed");
+          }
+          return "discovered";
+        }),
       );
       expect(mocks.removed).toEqual([]);
       mocks.close.mockResolvedValue();
       mocks.removeAsync.mockImplementation(async (file) => {
         mocks.removed.push(file);
       });
-      for (const resource of mocks.resources) {
-        await resource.close();
-      }
+      await closeResources();
       await cleanupSnapshotOperations();
       expect(mocks.removed).toEqual([mocks.directory]);
       expect(mocks.read).toHaveBeenCalledOnce();
@@ -304,26 +329,17 @@ it.each([
 it.each(["direct", "snapshot"] as const)(
   "joins a pending %s preparation handoff before removing its directory",
   async (kind) => {
-    const preparing = createDeferredCore();
-    const finishPreparation = createDeferredCore<PreparedSqliteReadOnlyLocation>();
-    const prepared = adoptPreparedLocation(`${mocks.directory}/database.sqlite`, mocks.directory);
-    mocks.prepare.mockImplementation(() => {
-      preparing.resolve();
-      return finishPreparation.promise;
-    });
+    const prepared = location();
+    const preparation = hold(mocks.prepare, prepared);
     const operation = captureOutcome(
-      kind === "direct"
-        ? runDirectRead()
-        : withOpenClawStateDatabaseReadSnapshot(async () => "complete", { path: mocks.source }),
+      kind === "direct" ? runDirectRead() : snapshot(async () => "complete"),
     );
-    expect(await Promise.race([preparing.promise.then(() => "preparing"), operation])).toBe(
-      "preparing",
-    );
+    await expectEntered(preparation.entered, operation);
     const cleanup = cleanupSnapshotOperations();
     try {
       assertFilesRetained();
     } finally {
-      finishPreparation.resolve(prepared);
+      preparation.release();
       await operation;
       await cleanup;
     }
@@ -333,32 +349,19 @@ it.each(["direct", "snapshot"] as const)(
 );
 
 it("joins the direct reader and its transport close before deleting prepared bytes", async () => {
-  const reading = createDeferredCore();
-  const finishRead = createDeferredCore();
-  const closing = createDeferredCore();
-  const finishClose = createDeferredCore();
-  mocks.read.mockImplementation(async () => {
-    reading.resolve();
-    await finishRead.promise;
-    mocks.events.push("read-settled");
-    return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
-  });
-  mocks.close.mockImplementation(async () => {
-    closing.resolve();
-    await finishClose.promise;
-    mocks.events.push("close-settled");
-  });
+  const reading = hold(mocks.read, readResult, "read-settled");
+  const closing = hold(mocks.close, undefined, "close-settled");
   const operation = captureOutcome(runDirectRead());
-  await reading.promise;
+  await reading.entered;
   const cleanup = cleanupSnapshotOperations();
   try {
     assertFilesRetained();
-    finishRead.resolve();
-    await closing.promise;
+    reading.release();
+    await closing.entered;
     assertFilesRetained();
   } finally {
-    finishRead.resolve();
-    finishClose.resolve();
+    reading.release();
+    closing.release();
     await operation;
     await cleanup;
   }
@@ -370,27 +373,18 @@ it("retains an enclosing snapshot callback while cleanup closes new read admissi
   const finishCallback = createDeferredCore();
   let escaped!: ReturnType<typeof AsyncLocalStorage.snapshot>;
   const operation = captureOutcome(
-    withOpenClawStateDatabaseReadSnapshot(
-      async () => {
-        escaped = AsyncLocalStorage.snapshot();
-        entered.resolve();
-        await finishCallback.promise;
-        mocks.events.push("callback-settled");
-      },
-      { path: mocks.source },
-    ),
+    snapshot(async () => {
+      escaped = AsyncLocalStorage.snapshot();
+      entered.resolve();
+      await finishCallback.promise;
+      mocks.events.push("callback-settled");
+    }),
   );
   await entered.promise;
   const cleanup = cleanupSnapshotOperations();
   try {
     assertFilesRetained();
-    const rejected = await escaped(() =>
-      captureOutcome(
-        Promise.resolve().then(() =>
-          executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" }),
-        ),
-      ),
-    );
+    const rejected = await escaped(() => captureOutcome(Promise.resolve().then(read)));
     expect(
       "error" in rejected && isStateDatabaseReadAdmissionInvalidatedError(rejected.error),
     ).toBe(true);
@@ -433,8 +427,7 @@ it.each(["registered", "not-yet-registered"] as const)(
     const finishPreparation = createDeferredCore<PreparedSqliteReadOnlyLocation>();
     let prepared: PreparedSqliteReadOnlyLocation | undefined;
     let preparationSignal: AbortSignal | undefined;
-    const prepareLocation = () =>
-      (prepared ??= adoptPreparedLocation(`${mocks.directory}/database.sqlite`, mocks.directory));
+    const prepareLocation = () => (prepared ??= location());
     mocks.removeAsync.mockImplementation(async (file) => {
       if (file === initialDirectory) {
         removingInitial.resolve();
@@ -481,61 +474,40 @@ it("forwards caller cancellation while retaining descendants and transport close
   const caller = new AsyncWorkScope();
   const reason = new Error("Controlled caller cancellation");
   const entered = createDeferredCore();
-  const reading = createDeferredCore();
-  const closing = createDeferredCore();
+  const reading = hold(mocks.read, readResult);
+  const closing = hold(mocks.close, undefined, "close-settled");
   const finishCallback = createDeferredCore();
   const finishDescendant = createDeferredCore();
-  const finishRead = createDeferredCore();
-  const finishClose = createDeferredCore();
   let observedSignal: AbortSignal | undefined;
   let abortListenerSignal: AbortSignal | undefined;
   let descendant: Promise<void> | undefined;
   let reader: ReturnType<typeof captureOutcome> | undefined;
   let draining: Promise<void> | undefined;
   let callerDrained = false;
-  mocks.read.mockImplementation(async () => {
-    reading.resolve();
-    await finishRead.promise;
-    return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
-  });
-  mocks.close.mockImplementation(async () => {
-    closing.resolve();
-    await finishClose.promise;
-    mocks.events.push("close-settled");
-  });
   const operation = captureOutcome(
     caller.track(() =>
-      withOpenClawStateDatabaseReadSnapshot(
-        async () => {
-          observedSignal = getAsyncWorkSignal();
-          observedSignal?.addEventListener(
-            "abort",
-            () => {
-              abortListenerSignal = getAsyncWorkSignal();
-            },
-            { once: true },
-          );
-          descendant = trackAsyncWork(async () => {
-            await finishDescendant.promise;
-            mocks.events.push("descendant-settled");
-          });
-          reader = captureOutcome(
-            executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" }),
-          );
-          entered.resolve();
-          await finishCallback.promise;
-        },
-        { path: mocks.source },
-      ),
+      snapshot(async () => {
+        observedSignal = getAsyncWorkSignal();
+        observedSignal?.addEventListener(
+          "abort",
+          () => {
+            abortListenerSignal = getAsyncWorkSignal();
+          },
+          { once: true },
+        );
+        descendant = trackAsyncWork(async () => {
+          await finishDescendant.promise;
+          mocks.events.push("descendant-settled");
+        });
+        reader = captureOutcome(read());
+        entered.resolve();
+        await finishCallback.promise;
+      }),
     ),
   );
   try {
-    expect(await Promise.race([entered.promise.then(() => "callback-entered"), operation])).toBe(
-      "callback-entered",
-    );
-    expect(
-      await Promise.race([reading.promise.then(() => "reader-entered"), reader ?? operation]),
-    ).toBe("reader-entered");
+    await expectEntered(entered.promise, operation);
+    await expectEntered(reading.entered, reader ?? operation);
     caller.beginClose(reason);
     draining = caller.drain().then(() => {
       callerDrained = true;
@@ -545,23 +517,17 @@ it("forwards caller cancellation while retaining descendants and transport close
     expect(observedSignal?.reason).toBe(reason);
     expect(abortListenerSignal).toBe(observedSignal);
     finishCallback.resolve();
-    finishRead.resolve();
-    expect(
-      await Promise.race([closing.promise.then(() => "transport-closing"), reader ?? operation]),
-    ).toBe("transport-closing");
-    expect(mocks.removed).toEqual([]);
-    expect(caller.hasPendingWork).toBe(true);
-    expect(callerDrained).toBe(false);
-    finishClose.resolve();
+    reading.release();
+    await expectEntered(closing.entered, reader ?? operation);
+    expectCallerPending(caller, callerDrained);
+    closing.release();
     expect(await reader).toEqual({ error: reason });
-    expect(mocks.removed).toEqual([]);
-    expect(caller.hasPendingWork).toBe(true);
-    expect(callerDrained).toBe(false);
+    expectCallerPending(caller, callerDrained);
   } finally {
     finishCallback.resolve();
     finishDescendant.resolve();
-    finishRead.resolve();
-    finishClose.resolve();
+    reading.release();
+    closing.release();
     await descendant;
     await reader;
     await operation;
@@ -574,37 +540,27 @@ it("forwards caller cancellation while retaining descendants and transport close
 it("preserves caller cancellation that precedes snapshot callback admission", async () => {
   const caller = new AsyncWorkScope();
   const reason = new Error("Controlled cancellation during preparation");
-  const preparing = createDeferredCore();
   const entered = createDeferredCore();
-  const finishPreparation = createDeferredCore<PreparedSqliteReadOnlyLocation>();
   const finishCallback = createDeferredCore();
-  const prepared = adoptPreparedLocation(`${mocks.directory}/database.sqlite`, mocks.directory);
+  const prepared = location();
   let observed: { aborted: boolean | undefined; reason: unknown } | undefined;
   let draining: Promise<void> | undefined;
-  mocks.prepare.mockImplementation(() => {
-    preparing.resolve();
-    return finishPreparation.promise;
-  });
+  const preparation = hold(mocks.prepare, prepared);
   const operation = captureOutcome(
     caller.track(() =>
-      withOpenClawStateDatabaseReadSnapshot(
-        async () => {
-          const signal = getAsyncWorkSignal();
-          observed = { aborted: signal?.aborted, reason: signal?.reason };
-          entered.resolve();
-          await finishCallback.promise;
-        },
-        { path: mocks.source },
-      ),
+      snapshot(async () => {
+        const signal = getAsyncWorkSignal();
+        observed = { aborted: signal?.aborted, reason: signal?.reason };
+        entered.resolve();
+        await finishCallback.promise;
+      }),
     ),
   );
   try {
-    expect(await Promise.race([preparing.promise.then(() => "preparing"), operation])).toBe(
-      "preparing",
-    );
+    await expectEntered(preparation.entered, operation);
     caller.beginClose(reason);
     draining = caller.drain();
-    finishPreparation.resolve(prepared);
+    preparation.release();
     const progress = await Promise.race([
       entered.promise.then(() => "callback-entered"),
       operation.then(() => "operation-settled"),
@@ -612,10 +568,9 @@ it("preserves caller cancellation that precedes snapshot callback admission", as
     expect(progress).toBe("callback-entered");
     expect(observed?.aborted).toBe(true);
     expect(observed?.reason).toBe(reason);
-    expect(mocks.removed).toEqual([]);
-    expect(caller.hasPendingWork).toBe(true);
+    expectCallerPending(caller);
   } finally {
-    finishPreparation.resolve(prepared);
+    preparation.release();
     finishCallback.resolve();
     await operation;
     await (draining ?? caller.drain());
@@ -631,34 +586,29 @@ it("retains tracked abort-listener cleanup when a snapshot callback completes no
   let tail: Promise<void> | undefined;
   let operationSettled = false;
   const operation = captureOutcome(
-    withOpenClawStateDatabaseReadSnapshot(
-      async () => {
-        callbackSignal = getAsyncWorkSignal();
-        callbackSignal?.addEventListener(
-          "abort",
-          () => {
-            listenerSignal = getAsyncWorkSignal();
-            tail = trackAsyncWork(async () => {
-              await finishTail.promise;
-              mocks.events.push("listener-tail-settled");
-            });
-            listenerEntered.resolve();
-          },
-          { once: true },
-        );
-        return "complete";
-      },
-      { path: mocks.source },
-    ),
+    snapshot(async () => {
+      callbackSignal = getAsyncWorkSignal();
+      callbackSignal?.addEventListener(
+        "abort",
+        () => {
+          listenerSignal = getAsyncWorkSignal();
+          tail = trackAsyncWork(async () => {
+            await finishTail.promise;
+            mocks.events.push("listener-tail-settled");
+          });
+          listenerEntered.resolve();
+        },
+        { once: true },
+      );
+      return "complete";
+    }),
   ).then((outcome) => {
     operationSettled = true;
     mocks.events.push("operation-settled");
     return outcome;
   });
   try {
-    expect(
-      await Promise.race([listenerEntered.promise.then(() => "listener-entered"), operation]),
-    ).toBe("listener-entered");
+    await expectEntered(listenerEntered.promise, operation);
     // Let the fake close/removal promise chain settle while the listener tail stays held.
     await new Promise<void>((resolve) => {
       setImmediate(resolve);

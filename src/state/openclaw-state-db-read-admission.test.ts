@@ -16,29 +16,32 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import * as databaseIdentity from "../infra/sqlite-worker-identity.js";
-import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { runWithSqliteWorkerStateContext as runInContext } from "../infra/sqlite-worker-state-context.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   createOpenClawStateDatabaseAsyncLifecycle,
 } from "./openclaw-state-db-async-lifecycle.js";
 import * as stateCache from "./openclaw-state-db-cache.js";
 import {
-  captureOpenClawStateDatabaseReadAdmission,
-  closeOpenClawStateDatabaseAsync,
+  captureOpenClawStateDatabaseReadAdmission as captureAdmission,
+  closeOpenClawStateDatabaseAsync as closeDatabases,
   closeOpenClawStateDatabaseByPath,
   publishOpenClawStateDatabaseWorkerAdmission,
 } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
-import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
-import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { withExistingOpenClawStateSchema as withSchema } from "./openclaw-state-db-schema-policy.js";
+import { openOpenClawStateDatabase as openDatabase } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
-  captureOpenClawStateWorkerContext,
+  captureOpenClawStateWorkerContext as captureContext,
   prepareOpenClawStateReadSource,
 } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
@@ -52,10 +55,34 @@ const hostBirth: {
   relocated: boolean;
   ctimeAdvanceNs: bigint;
 } = { paths: new Set(), mode: undefined, relocated: false, ctimeAdvanceNs: 0n };
+const ignoresHostBirthtime = process.platform === "linux" || process.platform === "android";
+
+function keyedStore(state: OpenClawTestState, namespace: string) {
+  return createPluginStateKeyedStore<string>("discord", {
+    namespace,
+    maxEntries: 1,
+    env: state.env,
+  });
+}
+
+function emptyDatabase(state: OpenClawTestState, version?: number) {
+  const pathname = state.statePath("inspected.sqlite");
+  const database = new DatabaseSync(pathname);
+  if (version !== undefined) {
+    database.exec(`PRAGMA user_version = ${version}`);
+  }
+  database.close();
+  return pathname;
+}
+
+function relocate(inspectedPath: string, databasePath: string) {
+  mkdirSync(path.dirname(databasePath), { recursive: true });
+  renameSync(inspectedPath, databasePath);
+}
 
 afterEach(async () => {
   try {
-    await closeOpenClawStateDatabaseAsync();
+    await closeDatabases();
   } finally {
     vi.restoreAllMocks();
     syncBuiltinESMExports();
@@ -124,17 +151,16 @@ function advanceHostCtime(): void {
 
 it("permits a lazy native write after healthy peer changes when birthtime falls back to ctime", async () => {
   await withOpenClawTestState({ label: "state-ctime-lazy" }, async (state) => {
-    const pathname = openOpenClawStateDatabase({ env: state.env }).path;
-    await closeOpenClawStateDatabaseAsync();
+    const pathname = openDatabase({ env: state.env }).path;
+    await closeDatabases();
     const alias = state.statePath("same-file-alias.sqlite");
     observeHostBirthtime("ctime", [pathname, alias]);
     const before = statSync(pathname, { bigint: true });
-    const captured = captureOpenClawStateWorkerContext({ env: state.env });
-    const preparedRead =
-      process.platform === "linux" || process.platform === "android"
-        ? prepareOpenClawStateReadSource({ path: pathname, env: state.env })
-        : undefined;
-    const backend = runWithSqliteWorkerStateContext(captured, () =>
+    const captured = captureContext({ env: state.env });
+    const preparedRead = ignoresHostBirthtime
+      ? prepareOpenClawStateReadSource({ path: pathname, env: state.env })
+      : undefined;
+    const backend = runInContext(captured, () =>
       openExistingSqliteWorkerBackend(undefined, {
         databasePath: pathname,
         existingIdentity: captured.admission.identity.key,
@@ -151,15 +177,14 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
       const after = statSync(pathname, { bigint: true });
       expect(after.ino).toBe(before.ino);
       expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
-      const linked = captureOpenClawStateDatabaseReadAdmission(alias);
+      const linked = captureAdmission(alias);
       expect(linked.identity.key).toBe(captured.admission.identity.key);
       expect(captured.admission.assertCurrent).not.toThrow();
       expect(linked.assertCurrent).not.toThrow();
-      await withExistingOpenClawStateSchema({ path: pathname }, async () => {
-        const current =
-          preparedRead?.workerContext() ?? captureOpenClawStateWorkerContext({ env: state.env });
+      await withSchema({ path: pathname }, async () => {
+        const current = preparedRead?.workerContext() ?? captureContext({ env: state.env });
         expect(
-          runWithSqliteWorkerStateContext(current, () =>
+          runInContext(current, () =>
             backend.execute({
               type: "config.health.patch",
               input: {
@@ -172,11 +197,9 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
           ),
         ).toBe(true);
         expect(captured.admission.identity.birthtime).toBe(
-          process.platform === "linux" || process.platform === "android"
-            ? "0"
-            : before.ctimeNs.toString(),
+          ignoresHostBirthtime ? "0" : before.ctimeNs.toString(),
         );
-        const database = openOpenClawStateDatabase({ env: state.env });
+        const database = openDatabase({ env: state.env });
         expect(
           database.db
             .prepare(
@@ -202,16 +225,13 @@ it.each(["native", "zero", "changing"] as const)(
   "joins a stale worker's retirement after same-inode relocation with %s birth timestamps",
   async (birth) => {
     await withOpenClawTestState({ label: "state-worker-inode-reuse" }, async (state) => {
-      const inspectedPath = state.statePath("inspected.sqlite");
-      const inspected = new DatabaseSync(inspectedPath);
-      inspected.exec("PRAGMA user_version = 0");
-      inspected.close();
+      const inspectedPath = emptyDatabase(state, 0);
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
       const readIdentity = databaseIdentity.readDatabasePathIdentitySync;
       const retiredKey = readIdentity(inspectedPath).key;
       mkdirSync(path.dirname(databasePath), { recursive: true });
       observeHostBirthtime(birth === "native" ? undefined : birth, [inspectedPath, databasePath]);
-      const context = captureOpenClawStateWorkerContext({ path: inspectedPath, env: state.env });
+      const context = captureContext({ path: inspectedPath, env: state.env });
       const retained = await retainExistingReader(context);
       const actor = workerStore.getSqliteWorkerActorIdentity(retained);
       renameSync(inspectedPath, databasePath);
@@ -229,11 +249,7 @@ it.each(["native", "zero", "changing"] as const)(
           await releaseRetirement.promise;
           await retireActor(identity);
         });
-      const store = createPluginStateKeyedStore<string>("discord", {
-        namespace: "worker-inode-reuse",
-        maxEntries: 1,
-        env: state.env,
-      });
+      const store = keyedStore(state, "worker-inode-reuse");
       const registration = store.register("retained", "replacement");
       let settled = false;
       void registration.then(
@@ -272,23 +288,16 @@ it.each(["same scope", "different scope"] as const)(
   "refuses replacement from an active callback on a stale actor (%s)",
   async (ownership) => {
     await withOpenClawTestState({ label: "state-worker-active-replacement" }, async (state) => {
-      const inspectedPath = state.statePath("inspected.sqlite");
-      new DatabaseSync(inspectedPath).close();
-      const context = captureOpenClawStateWorkerContext({ path: inspectedPath, env: state.env });
+      const inspectedPath = emptyDatabase(state);
+      const context = captureContext({ path: inspectedPath, env: state.env });
       const retained = await retainExistingReader(context);
       const maintenance =
         ownership === "different scope" ? createOpenClawDatabaseMaintenanceScope() : undefined;
       const activeContext = maintenance
-        ? maintenance.run(() =>
-            captureOpenClawStateWorkerContext({ path: inspectedPath, env: state.env }),
-          )
+        ? maintenance.run(() => captureContext({ path: inspectedPath, env: state.env }))
         : context;
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
-      const store = createPluginStateKeyedStore<string>("discord", {
-        namespace: "active-replacement",
-        maxEntries: 1,
-        env: state.env,
-      });
+      const store = keyedStore(state, "active-replacement");
       const retiring = createDeferredCore();
       const retireActor = workerStore.retireSqliteWorkerActor;
       const retirement = vi
@@ -303,8 +312,7 @@ it.each(["same scope", "different scope"] as const)(
           await runOpenClawStateWorkerOperation(
             activeContext,
             async () => {
-              mkdirSync(path.dirname(databasePath), { recursive: true });
-              renameSync(inspectedPath, databasePath);
+              relocate(inspectedPath, databasePath);
               registration = store.register("retained", "replacement");
               // Observe retirement to fail without stranding the callback on its own close.
               await expect(
@@ -342,13 +350,11 @@ it.each(["same scope", "different scope"] as const)(
 
 it("reuses a current database actor across separate lexical schema scopes", async () => {
   await withOpenClawTestState({ label: "state-worker-schema-scope" }, async (state) => {
-    const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
-    await closeOpenClawStateDatabaseAsync();
+    const databasePath = openDatabase({ env: state.env }).path;
+    await closeDatabases();
     const read = () =>
-      withExistingOpenClawStateSchema({ path: databasePath }, () =>
-        retainExistingReader(
-          captureOpenClawStateWorkerContext({ path: databasePath, env: state.env }),
-        ),
+      withSchema({ path: databasePath }, () =>
+        retainExistingReader(captureContext({ path: databasePath, env: state.env })),
       );
     const first = await read();
     const second = await read();
@@ -359,13 +365,12 @@ it("reuses a current database actor across separate lexical schema scopes", asyn
 
 it("propagates an unexpected recorded-admission error without retiring the actor", async () => {
   await withOpenClawTestState({ label: "state-worker-admission-error" }, async (state) => {
-    const databasePath = state.statePath("inspected.sqlite");
-    new DatabaseSync(databasePath).close();
-    const context = captureOpenClawStateWorkerContext({ path: databasePath, env: state.env });
+    const databasePath = emptyDatabase(state);
+    const context = captureContext({ path: databasePath, env: state.env });
     const capture = stateCache.captureOpenClawStateDatabaseReadAdmission;
     const failure = new Error("Unexpected database admission failure");
     let reject = false;
-    const captureAdmission = vi
+    const captureSpy = vi
       .spyOn(stateCache, "captureOpenClawStateDatabaseReadAdmission")
       .mockImplementationOnce((pathname) => {
         const admission = capture(pathname);
@@ -380,7 +385,7 @@ it("propagates an unexpected recorded-admission error without retiring the actor
         };
       });
     const retained = await retainExistingReader(context);
-    captureAdmission.mockRestore();
+    captureSpy.mockRestore();
     reject = true;
     try {
       await expect(
@@ -397,12 +402,10 @@ it.each(["read", "refused-read", "closed-writer"] as const)(
   "admits a new target path when a retired %s physical database moves into it",
   async (kind) => {
     await withOpenClawTestState({ label: "state-read-admission" }, async (state) => {
-      const inspectedPath = path.join(state.stateDir, "inspected.sqlite");
-      const inspected = new DatabaseSync(inspectedPath);
-      inspected.exec(
-        `PRAGMA user_version = ${kind === "refused-read" ? OPENCLAW_STATE_SCHEMA_VERSION + 1 : 0}`,
+      const inspectedPath = emptyDatabase(
+        state,
+        kind === "refused-read" ? OPENCLAW_STATE_SCHEMA_VERSION + 1 : 0,
       );
-      inspected.close();
       const retiredIdentity = databaseIdentity.readDatabasePathIdentitySync(inspectedPath);
       const read = () =>
         withOpenClawStateDatabaseReadOnly(() => "inspected", {
@@ -411,9 +414,8 @@ it.each(["read", "refused-read", "closed-writer"] as const)(
         });
       let assertRetiredAdmission: (() => void) | undefined;
       if (kind === "closed-writer") {
-        openOpenClawStateDatabase({ path: inspectedPath, env: state.env });
-        assertRetiredAdmission =
-          captureOpenClawStateDatabaseReadAdmission(inspectedPath).assertCurrent;
+        openDatabase({ path: inspectedPath, env: state.env });
+        assertRetiredAdmission = captureAdmission(inspectedPath).assertCurrent;
         closeOpenClawStateDatabaseByPath(inspectedPath);
       } else if (kind === "refused-read") {
         expect(read).toThrow(/newer schema/);
@@ -461,11 +463,7 @@ it.each(["read", "refused-read", "closed-writer"] as const)(
         });
       };
       interceptOpen();
-      const store = createPluginStateKeyedStore<string>("discord", {
-        namespace: "read-admission",
-        maxEntries: 1,
-        env: state.env,
-      });
+      const store = keyedStore(state, "read-admission");
       await store.register("retained", "original");
       expect(moved).toBe(true);
       expect(existsSync(inspectedPath)).toBe(false);
@@ -481,13 +479,13 @@ it("binds an in-flight first creation when a native alias publishes first", asyn
   await withOpenClawTestState({ label: "state-native-alias-admission" }, async (state) => {
     const databasePath = resolveOpenClawStateSqlitePath(state.env);
     const alias = path.join(path.dirname(databasePath), "alias.sqlite");
-    const admission = captureOpenClawStateDatabaseReadAdmission(databasePath);
+    const admission = captureAdmission(databasePath);
     mkdirSync(path.dirname(databasePath), { recursive: true });
     const created = new DatabaseSync(databasePath);
     created.close();
     linkSync(databasePath, alias);
 
-    openOpenClawStateDatabase({ path: alias, env: state.env });
+    openDatabase({ path: alias, env: state.env });
     publishOpenClawStateDatabaseWorkerAdmission(admission);
     admission.assertCurrent();
   });

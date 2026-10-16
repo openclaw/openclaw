@@ -47,13 +47,36 @@ vi.mock("./openclaw-state-db-cache.js", () => ({
 }));
 
 import {
-  openOpenClawStateReadConnection,
-  readOpenClawStateReadOnlyLocation,
-  withOpenClawStateReadOnlyLocation,
+  openOpenClawStateReadConnection as openConnection,
+  readOpenClawStateReadOnlyLocation as readLocation,
+  withOpenClawStateReadOnlyLocation as withLocation,
 } from "./openclaw-state-db-read-connection.js";
 
 const pathname = "/fixture/state.sqlite";
 const expectedIdentity = "file:1:2";
+const cleanupMessage = "Shared-state snapshot cleanup is incomplete.";
+const value = () => "value";
+const failWith = (error: Error) => () => {
+  throw error;
+};
+
+function caught(run: () => unknown) {
+  try {
+    run();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected an exception");
+}
+
+function readPrivate(prepared: ReturnType<typeof snapshot>, identity?: string) {
+  return readLocation(value, pathname, prepared, undefined, identity, "/fixture");
+}
+
+function expectAggregate(error: unknown, primary: Error, cleanup: unknown) {
+  expect(error).toBeInstanceOf(AggregateError);
+  expect(error).toMatchObject({ cause: primary, errors: [primary, cleanup] });
+}
 
 beforeEach(() => {
   mocks.identity.mockReset();
@@ -88,9 +111,7 @@ it.each([
   "native cleanup",
 ])("settles a %s failure only after releasing native custody", (phase) => {
   const failure = new Error(`${phase} failed`);
-  const fail = () => {
-    throw failure;
-  };
+  const fail = failWith(failure);
   if (phase === "schema") {
     mocks.schema.mockImplementation(fail);
   }
@@ -103,10 +124,10 @@ it.each([
   if (phase === "native cleanup") {
     mocks.db.close.mockImplementation(fail);
   }
-  const read = phase === "query" ? fail : () => "value";
+  const read = phase === "query" ? fail : value;
   const admission =
     phase === "admission" ? fail : phase === "admission cleanup" ? () => fail : undefined;
-  const run = () => readOpenClawStateReadOnlyLocation(read, pathname, pathname, admission);
+  const run = () => readLocation(read, pathname, pathname, admission);
   const unavailable = phase === "schema" || phase === "query";
   if (unavailable) {
     expect(run()).toEqual({ status: "unavailable", error: failure });
@@ -122,7 +143,7 @@ it.each([
   }
   if (unavailable) {
     mocks.db.isOpen = true;
-    expect(() => withOpenClawStateReadOnlyLocation(read, pathname, pathname)).toThrow(failure);
+    expect(() => withLocation(read, pathname, pathname)).toThrow(failure);
   }
 });
 
@@ -137,30 +158,14 @@ function snapshot(cleaned = true) {
 it.each([false, true])("rejects incomplete snapshot cleanup (query failed: %s)", (queryFailed) => {
   const failure = new Error("query failed");
   const prepared = snapshot(false);
-  const read = () => {
-    if (queryFailed) {
-      throw failure;
-    }
-    return "read";
-  };
+  const read = queryFailed ? failWith(failure) : value;
   if (queryFailed) {
-    let caught: unknown;
-    try {
-      readOpenClawStateReadOnlyLocation(read, pathname, prepared);
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toMatchObject({
+    expect(caught(() => readLocation(read, pathname, prepared))).toMatchObject({
       cause: failure,
-      errors: [
-        failure,
-        expect.objectContaining({ message: "Shared-state snapshot cleanup is incomplete." }),
-      ],
+      errors: [failure, expect.objectContaining({ message: cleanupMessage })],
     });
   } else {
-    expect(() => withOpenClawStateReadOnlyLocation(read, pathname, prepared)).toThrow(
-      "Shared-state snapshot cleanup is incomplete.",
-    );
+    expect(() => withLocation(read, pathname, prepared)).toThrow(cleanupMessage);
   }
   expect(mocks.db.isOpen).toBe(false);
   expect(prepared.cleanup).toHaveBeenCalledOnce();
@@ -176,9 +181,7 @@ it.each([
 ])("releases only acquired resources after %s refusal", (phase) => {
   const primary = new Error("reader admission refused");
   const cleanup = new Error("native reader close failed");
-  const fail = () => {
-    throw primary;
-  };
+  const fail = failWith(primary);
   const privateSource = phase.startsWith("private");
   const afterOpen = phase === "native post-open identity" || phase === "native identity and close";
   const closeFailed = phase === "native identity and close";
@@ -193,31 +196,16 @@ it.each([
     mocks.identity.mockImplementation(fail);
   }
   if (closeFailed) {
-    mocks.db.close.mockImplementation(() => {
-      throw cleanup;
-    });
+    mocks.db.close.mockImplementation(failWith(cleanup));
   }
   const prepared = snapshot();
-  let failure: unknown;
-  try {
-    if (privateSource) {
-      readOpenClawStateReadOnlyLocation(
-        () => "read",
-        pathname,
-        prepared,
-        undefined,
-        expectedIdentity,
-        "/fixture",
-      );
-    } else {
-      openOpenClawStateReadConnection(pathname, pathname, expectedIdentity);
-    }
-  } catch (error) {
-    failure = error;
-  }
+  const failure = caught(() =>
+    privateSource
+      ? readPrivate(prepared, expectedIdentity)
+      : openConnection(pathname, pathname, expectedIdentity),
+  );
   if (closeFailed) {
-    expect(failure).toBeInstanceOf(AggregateError);
-    expect(failure).toMatchObject({ cause: primary, errors: [primary, cleanup] });
+    expectAggregate(failure, primary, cleanup);
   } else {
     expect(failure).toBe(primary);
   }
@@ -245,48 +233,29 @@ it.each(["clean", "token failure", "incomplete snapshot"])(
   (cleanupKind) => {
     const primary = new Error("private native database open failed");
     const tokenFailure = new Error("private reader token close failed");
-    mocks.openPrivate.mockImplementationOnce(() => {
-      throw primary;
-    });
+    mocks.openPrivate.mockImplementationOnce(failWith(primary));
     if (cleanupKind === "token failure") {
-      mocks.releaseToken.mockImplementationOnce(() => {
-        throw tokenFailure;
-      });
+      mocks.releaseToken.mockImplementationOnce(failWith(tokenFailure));
     }
     const prepared = snapshot(cleanupKind !== "incomplete snapshot");
     if (cleanupKind === "clean") {
-      expect(
-        readOpenClawStateReadOnlyLocation(
-          () => "value",
-          pathname,
-          prepared,
-          undefined,
-          undefined,
-          "/fixture",
-        ),
-      ).toEqual({ status: "unavailable", error: primary });
+      expect(readPrivate(prepared)).toEqual({ status: "unavailable", error: primary });
     } else {
-      let failure: unknown;
-      try {
-        openOpenClawStateReadConnection(
+      const failure = caught(() =>
+        openConnection(
           pathname,
           prepared,
           undefined,
           cleanupKind === "token failure" ? "/fixture" : undefined,
-        );
-      } catch (error) {
-        failure = error;
-      }
-      expect(failure).toBeInstanceOf(AggregateError);
-      expect(failure).toMatchObject({
-        cause: primary,
-        errors: [
-          primary,
-          cleanupKind === "token failure"
-            ? tokenFailure
-            : expect.objectContaining({ message: "Shared-state snapshot cleanup is incomplete." }),
-        ],
-      });
+        ),
+      );
+      expectAggregate(
+        failure,
+        primary,
+        cleanupKind === "token failure"
+          ? tokenFailure
+          : expect.objectContaining({ message: cleanupMessage }),
+      );
     }
     if (cleanupKind !== "incomplete snapshot") {
       expect(mocks.acquireToken).toHaveBeenCalledExactlyOnceWith("/fixture");
