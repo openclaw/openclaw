@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -18,9 +19,12 @@ import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
 const command = () => ({ command: "true", env: {}, usePty: false });
 const failedOutcome = { status: "failed" as const, exitCode: 0, timedOut: false };
+const authorityChanged = "Local sandbox workspace authority changed";
 const writeSource = (dir: string, data: string) => fs.writeFile(path.join(dir, "source.txt"), data);
 const expectSource = async (dir: string, data: string) =>
   expect(await fs.readFile(path.join(dir, "source.txt"), "utf8")).toBe(data);
+const finish = (backend: SandboxBackendHandle, token: unknown) =>
+  backend.finalizeExec!({ ...failedOutcome, token });
 
 function createBackend(runtimeId: string): SandboxBackendHandle {
   return {
@@ -64,9 +68,7 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
       }
     },
   });
-  if (!projection) {
-    throw new Error("Expected managed projection");
-  }
+  assert(projection, "Expected managed projection");
   const backend = createBackend("stopped-command");
   const sandbox = createSandboxTestContext({
     overrides: { workspaceDir: projection.workspaceDir, backend },
@@ -81,8 +83,7 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
   if (disposeBeforeCheckpoint) {
     projection[Symbol.dispose]();
   }
-  const outcome = { ...failedOutcome, token: spec.finalizeToken };
-  await expect(backend.finalizeExec!(outcome)).resolves.toBeUndefined();
+  await expect(finish(backend, spec.finalizeToken)).resolves.toBeUndefined();
   await expectSource(owner.worktree.path, "stopped guest edit\n");
   await expect(backend.runShellCommand({ script: "true" })).rejects.toBe(reason);
   await expect(backend.buildExecSpec(command())).rejects.toBe(reason);
@@ -94,11 +95,9 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
   });
   if (disposeBeforeCheckpoint) {
     await writeSource(projection.workspaceDir, "last stopped guest edit\n");
-    await backend.finalizeExec!({ ...outcome, token: laterSpec.finalizeToken });
+    await finish(backend, laterSpec.finalizeToken);
     await expectSource(owner.worktree.path, "last stopped guest edit\n");
-    await expect(projection.checkpoint()).rejects.toThrow(
-      "Local sandbox workspace authority changed",
-    );
+    await expect(projection.checkpoint()).rejects.toThrow(authorityChanged);
     return;
   }
   hostCurrent = false;
@@ -106,51 +105,37 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
   hostCurrent = true;
   await writeSource(projection.workspaceDir, "guest conflict\n");
   await writeSource(owner.worktree.path, "human conflict\n");
-  await expect(
-    backend.finalizeExec!({ ...outcome, token: laterSpec.finalizeToken }),
-  ).rejects.toThrow("conflict");
+  await expect(finish(backend, laterSpec.finalizeToken)).rejects.toThrow("conflict");
   await writeSource(owner.worktree.path, "stopped guest edit\n");
   await projection.checkpoint();
   await replaceSessionEntry(scope, { ...entry, sessionId: randomUUID(), updatedAt: 2 });
-  await expect(projection.checkpoint()).rejects.toThrow(
-    "Local sandbox workspace authority changed",
-  );
+  await expect(projection.checkpoint()).rejects.toThrow(authorityChanged);
 }
 
 export async function proveStoppedSandboxAuthority(
   owner: LocalWorkspaceOwner,
   revoke: "operator" | "gateway",
 ) {
-  const [
-    { withOpenClawTestState },
-    { acquireGatewayStateOwner },
-    { resolveOpenClawStateSqlitePath },
-    { ensureCanonicalUserProfileForEmail, setCanonicalUserProfileRole },
-    { invalidateOperatorRolePolicy },
-    { captureGatewayOperatorRunAuthority },
-    { createContext, createOperatorClient },
-    { setRuntimeConfigSnapshot },
-    { resolveAttemptWorkspaceSandbox },
-    backendModule,
-  ] = await Promise.all([
-    import("../../test-utils/openclaw-test-state.js"),
-    import("../../infra/gateway-state-owner.js"),
-    import("../../state/openclaw-state-db.paths.js"),
-    import("../../state/user-profile-writes.js"),
-    import("../operator-role-policy.js"),
-    import("../operator-run-authority.js"),
-    import("../server-plugin-in-process-dispatch.test-support.js"),
-    import("../../config/runtime-snapshot.js"),
-    import("../../agents/workspace-sandbox.js"),
-    import("../../agents/sandbox/backend.js"),
-  ]);
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const gateway = acquireGatewayStateOwner({
-      databasePath: resolveOpenClawStateSqlitePath(),
+  const [state, lease, paths, users, roles, auth, server, cfg, workspaces, backends] =
+    await Promise.all([
+      import("../../test-utils/openclaw-test-state.js"),
+      import("../../infra/gateway-state-owner.js"),
+      import("../../state/openclaw-state-db.paths.js"),
+      import("../../state/user-profile-writes.js"),
+      import("../operator-role-policy.js"),
+      import("../operator-run-authority.js"),
+      import("../server-plugin-in-process-dispatch.test-support.js"),
+      import("../../config/runtime-snapshot.js"),
+      import("../../agents/workspace-sandbox.js"),
+      import("../../agents/sandbox/backend.js"),
+    ]);
+  await state.withOpenClawTestState({ scenario: "minimal" }, async ({ configPath }) => {
+    const gateway = lease.acquireGatewayStateOwner({
+      databasePath: paths.resolveOpenClawStateSqlitePath(),
       payload: {
         pid: process.pid,
         createdAt: new Date().toISOString(),
-        configPath: state.configPath,
+        configPath,
         role: "gateway",
       },
     });
@@ -186,18 +171,18 @@ export async function proveStoppedSandboxAuthority(
           },
         },
       };
-      setRuntimeConfigSnapshot(config);
-      const profile = await ensureCanonicalUserProfileForEmail("checkpoint-operator@example.test");
-      await setCanonicalUserProfileRole(profile.id, "writer");
-      const context = createContext();
+      cfg.setRuntimeConfigSnapshot(config);
+      const profile = await users.ensureCanonicalUserProfileForEmail(
+        "checkpoint-operator@example.test",
+      );
+      await users.setCanonicalUserProfileRole(profile.id, "writer");
+      const context = server.createContext();
       context.getRuntimeConfig = () => config;
-      const captured = await captureGatewayOperatorRunAuthority({
-        client: createOperatorClient({ profileId: profile.id, scopes: ["operator.write"] }),
+      const captured = await auth.captureGatewayOperatorRunAuthority({
+        client: server.createOperatorClient({ profileId: profile.id, scopes: ["operator.write"] }),
         context,
       });
-      if (!captured?.authority.retain) {
-        throw new Error("Expected retained operator authority");
-      }
+      assert(captured?.authority.retain, "Expected retained operator authority");
       const releaseOperator = captured.authority.retain();
       const admission = prepareSystemAgentRunAdmission(
         config,
@@ -209,11 +194,11 @@ export async function proveStoppedSandboxAuthority(
       );
       const backend = createBackend("authority-command");
       // Substitute container execution only; the authority and checkpoint owners stay real.
-      const provision = vi.spyOn(backendModule, "createSandboxBackend").mockResolvedValue(backend);
+      const provision = vi.spyOn(backends, "createSandboxBackend").mockResolvedValue(backend);
       try {
         await registerWorkspace(owner);
         const controller = new AbortController();
-        using workspace = await resolveAttemptWorkspaceSandbox({
+        using workspace = await workspaces.resolveAttemptWorkspaceSandbox({
           config,
           agentId: owner.agentId,
           sessionKey: owner.sessionKey,
@@ -223,9 +208,7 @@ export async function proveStoppedSandboxAuthority(
           admittedRunContext: await admission.admit("embedded"),
         });
         const sandbox = workspace.sandbox;
-        if (!sandbox?.backend || !sandbox.fsBridge) {
-          throw new Error("Expected managed sandbox");
-        }
+        assert(sandbox?.backend && sandbox.fsBridge, "Expected managed sandbox");
         expect(sandbox.workspaceSource).toBe("managed-worktree");
         const accepted = await backend.buildExecSpec(command());
         const pending = await backend.buildExecSpec(command());
@@ -235,24 +218,23 @@ export async function proveStoppedSandboxAuthority(
         admission.close();
         captured.release();
         workspace[Symbol.dispose]();
-        const outcome = failedOutcome;
-        await backend.finalizeExec!({ ...outcome, token: accepted.finalizeToken });
+        await finish(backend, accepted.finalizeToken);
         await expectSource(owner.worktree.path, "accepted guest edit\n");
         await expect(backend.buildExecSpec(command())).rejects.toBe(reason);
         await writeSource(sandbox.workspaceDir, "revoked guest edit\n");
         if (revoke === "operator") {
-          await setCanonicalUserProfileRole(profile.id, "denied", {
-            onCommitted: invalidateOperatorRolePolicy,
+          await users.setCanonicalUserProfileRole(profile.id, "denied", {
+            onCommitted: roles.invalidateOperatorRolePolicy,
           });
           expect(captured.authority.assertCurrent).toThrow();
-          await expect(
-            backend.finalizeExec!({ ...outcome, token: pending.finalizeToken }),
-          ).rejects.toThrow(/operator|source execution authority/);
+          await expect(finish(backend, pending.finalizeToken)).rejects.toThrow(
+            /operator|source execution authority/,
+          );
         } else {
           gateway.release();
-          await expect(
-            backend.finalizeExec!({ ...outcome, token: pending.finalizeToken }),
-          ).rejects.toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+          await expect(finish(backend, pending.finalizeToken)).rejects.toMatchObject({
+            code: "GATEWAY_STATE_OWNER_REQUIRED",
+          });
         }
         await expectSource(owner.worktree.path, "accepted guest edit\n");
       } finally {

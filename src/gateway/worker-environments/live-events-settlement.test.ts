@@ -32,7 +32,7 @@ describe("worker live event write settlement", () => {
   it.each(["persisted", "failed", "revoked", "stopped"] as const)(
     "joins accepted trajectory writes before RPC acknowledgment (%s)",
     async (outcome) => {
-      const sessionId = "session-live-settlement";
+      const sessionId = "live-settlement";
       const storePath = path.join(support.testState.root, "shared.sqlite");
       const target = {
         agentId: "main",
@@ -45,7 +45,7 @@ describe("worker live event write settlement", () => {
       const receiver = createWorkerLiveEventReceiver();
       const { identity, placementStore, source, releaseSource, workerService } =
         await support.placementHarness(
-          "worker-live-settlement",
+          "live-settlement",
           sessionId,
           { liveEvents: receiver },
           target,
@@ -62,18 +62,12 @@ describe("worker live event write settlement", () => {
       });
 
       if (outcome === "failed") {
-        const warmupTarget = {
-          ...target,
-          sessionId: "session-live-settlement-warmup",
-          sessionKey: "agent:main:live-settlement-warmup",
-        };
-        await upsertSessionEntryCore(warmupTarget, {
-          sessionId: warmupTarget.sessionId,
-          updatedAt: 1,
-        });
+        const warmupId = "warmup";
+        const warmupTarget = { ...target, sessionId: warmupId, sessionKey: "agent:main:warmup" };
+        await upsertSessionEntryCore(warmupTarget, { sessionId: warmupId, updatedAt: 1 });
         const warmup = expectDefined(
           await createTrajectoryRuntimeRecorder({
-            sessionId: warmupTarget.sessionId,
+            sessionId: warmupId,
             sessionTarget: warmupTarget,
           }),
           "worker warmup recorder",
@@ -151,24 +145,18 @@ describe("worker live event write settlement", () => {
 
         writer.release();
         await writer.done;
-        await request;
-        await replay;
-        await stopped;
+        await Promise.all([request, replay, stopped]);
         if (outcome === "stopped") {
           releaseSource();
           expect(getAgentRunContext(identity.runId!)).toBeUndefined();
         }
         expect(phases).toEqual(["start", "end"]);
         const rows = trajectoryStore.loadSqliteTrajectoryRuntimeEventRowsSync(target);
-        if (outcome === "failed" || outcome === "revoked") {
-          expect(rows).toEqual([]);
-        } else {
-          expect(rows.map((row) => row.event.type)).toEqual([
-            "session.started",
-            "model.completed",
-            "session.ended",
-          ]);
-        }
+        expect(rows.map((row) => row.event.type)).toEqual(
+          outcome === "failed" || outcome === "revoked"
+            ? []
+            : ["session.started", "model.completed", "session.ended"],
+        );
         if (outcome === "revoked" || outcome === "stopped") {
           expect(respond).toHaveBeenCalledWith(
             false,
@@ -192,9 +180,7 @@ describe("worker live event write settlement", () => {
       } finally {
         writer.release();
         await writer.done;
-        await request;
-        await replay;
-        await stopped;
+        await Promise.all([request, replay, stopped]);
         await workerService.stop();
         releaseSource();
         unsubscribe();

@@ -2,6 +2,7 @@ import { afterEach, expect, vi } from "vitest";
 import type { WorkerInferenceStartParams } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import * as sessionAuthRuntime from "../../agents/auth-profiles/session-override.js";
 import * as extraParamsRuntime from "../../agents/embedded-agent-runner/extra-params.js";
+import { createEmptyPreparedModelRuntimeFixture } from "../../agents/embedded-agent-runner/model.fixture.test-support.js";
 import * as diagnosticModelCallRuntime from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import * as streamResolutionRuntime from "../../agents/embedded-agent-runner/stream-resolution.js";
 import * as modelSelectionRuntime from "../../agents/model-selection.js";
@@ -103,13 +104,7 @@ export const usage: Usage = {
   cacheRead: 3,
   cacheWrite: 2,
   totalTokens: 23,
-  cost: {
-    input: 0.001,
-    output: 0.002,
-    cacheRead: 0.0001,
-    cacheWrite: 0.0002,
-    total: 0.0033,
-  },
+  cost: { input: 0.001, output: 0.002, cacheRead: 0.0001, cacheWrite: 0.0002, total: 0.0033 },
 };
 export const logicalModel: Model = {
   id: MODEL,
@@ -136,12 +131,7 @@ export function request(model = ALIAS): WorkerInferenceStartParams {
       messages: [{ role: "user", content: "Prepared worker context", timestamp: 10 }],
       tools: [{ name: "lookup", description: "Look up a value", parameters: { type: "object" } }],
     },
-    options: {
-      temperature: 0.25,
-      maxTokens: 256,
-      reasoning: "low",
-      thinkingBudgets: { low: 96 },
-    },
+    options: { temperature: 0.25, maxTokens: 256, reasoning: "low", thinkingBudgets: { low: 96 } },
   };
 }
 
@@ -195,25 +185,16 @@ export function setup(
 ) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(100);
-  const scope: {
-    agentDir?: string;
-    agentRuntime?: string;
-    authProfile?: string;
-    preparedModelRuntime?: boolean;
-    prepareWorkspace?: string;
-  } = {};
   const preparedModelRuntime = {
+    ...createEmptyPreparedModelRuntimeFixture({
+      agentDir: "/gateway-agent",
+      config: options.config ?? config,
+      metadataSnapshot: options.metadataSnapshot ?? createEmptyPluginMetadataSnapshot(WORKSPACE),
+      createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+    }),
     accountCatalog: options.accountCatalog,
-    catalogOwner: undefined,
-    agentDir: "/gateway-agent",
-    activeProjectKeys: [],
     allowGatewaySubagentBinding: true,
     workspaceDir: WORKSPACE,
-    config: options.config ?? config,
-    observationConfig: options.config ?? config,
-    isCurrent: () => true,
-    authModes: {},
-    metadataSnapshot: options.metadataSnapshot ?? createEmptyPluginMetadataSnapshot(WORKSPACE),
     pluginRegistry: options.pluginRegistry ?? createEmptyPluginRegistry(),
     modelCatalog: {
       entries: [
@@ -222,21 +203,14 @@ export function setup(
       ],
       routeVariants: [],
     },
-    configuredRuntimeModels: [],
     findConfiguredRuntimeModel: () => options.configuredRuntimeModel,
-    inlineProviderModels: [],
-    createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
   } satisfies preparedRuntime.PreparedModelRuntimeSnapshot;
-  let leasedPreparedModelRuntime: preparedRuntime.PreparedModelRuntimeSnapshot | undefined;
   const prepareModel = vi
     .spyOn(simpleCompletionRuntime, "prepareSimpleCompletionModel")
     .mockImplementation(async (modelParams) => {
       if (options.catalogOnlyModel && !modelParams.allowBundledStaticCatalogFallback) {
         return { error: `Unknown model: ${modelParams.provider}/${modelParams.modelId}` };
       }
-      scope.agentRuntime = modelParams.agentRuntimeId;
-      scope.preparedModelRuntime = modelParams.preparedModelRuntime === leasedPreparedModelRuntime;
-      scope.prepareWorkspace = modelParams.workspaceDir;
       options.afterModelPreparation?.();
       return {
         model: bindModelLlmRuntime(logicalModel, {
@@ -272,15 +246,12 @@ export function setup(
     options.observeStage?.("factory", observedRegistry());
     return stream;
   });
-  vi.spyOn(streamResolutionRuntime, "resolveEmbeddedAgentStream").mockImplementation(
-    (streamParams) => {
-      scope.authProfile = streamParams.authProfileId;
-      return {
-        streamFn: streamParams.providerStreamFn ?? streamParams.currentStreamFn ?? fallbackStream,
-        strategy: "provider",
-      };
-    },
-  );
+  const resolveStream = vi
+    .spyOn(streamResolutionRuntime, "resolveEmbeddedAgentStream")
+    .mockImplementation((streamParams) => ({
+      streamFn: streamParams.providerStreamFn ?? streamParams.currentStreamFn ?? fallbackStream,
+      strategy: "provider",
+    }));
   const applyStreamPolicy = vi
     .spyOn(extraParamsRuntime, "applyExtraParamsToAgent")
     .mockImplementation(() => {
@@ -294,9 +265,7 @@ export function setup(
   const acquireRuntimeLease = vi
     .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
     .mockImplementation(async (runtimeParams) => {
-      scope.agentDir = runtimeParams.agentDir;
       const leased = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
-      leasedPreparedModelRuntime = leased;
       return {
         snapshot: leased,
         pluginGeneration: {
@@ -369,7 +338,7 @@ export function setup(
     readSessionEntry,
     readPromptCacheContext,
     resolveAuthSelection,
-    scope,
+    resolveStream,
     stream,
   };
 }

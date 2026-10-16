@@ -50,24 +50,31 @@ const REQUEST: WorkerInferenceStartParams = {
   context: { messages: [] },
   options: {},
 };
-const IDENTITY: WorkerConnectionIdentity = {
-  environmentId: ENVIRONMENT_ID,
-  credentialHash: ["fixture", "digest"].join("-"),
-  bundleHash: ["fixture", "bundle", "digest"].join("-"),
-  sessionId: REQUEST.sessionId,
-  runId: REQUEST.runId,
-  turnClaim: {
+function identityFor(
+  runId = REQUEST.runId,
+  environmentId = ENVIRONMENT_ID,
+  claimId = "claim-store",
+): WorkerConnectionIdentity {
+  return {
+    environmentId,
+    credentialHash: ["fixture", "digest"].join("-"),
+    bundleHash: ["fixture", "bundle", "digest"].join("-"),
     sessionId: REQUEST.sessionId,
-    claimId: "claim-store",
-    runId: REQUEST.runId,
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: REQUEST.runEpoch },
-  },
-  ownerEpoch: REQUEST.runEpoch,
-  rpcSetVersion: 1,
-  protocolFeatures: ["worker-inference-v1"],
-  credentialExpiresAtMs: 10_000,
-};
+    runId,
+    turnClaim: {
+      sessionId: REQUEST.sessionId,
+      claimId,
+      runId,
+      placementGeneration: 4,
+      owner: { kind: "worker", environmentId, ownerEpoch: REQUEST.runEpoch },
+    },
+    ownerEpoch: REQUEST.runEpoch,
+    rpcSetVersion: 1,
+    protocolFeatures: ["worker-inference-v1"],
+    credentialExpiresAtMs: 10_000,
+  };
+}
+const IDENTITY = identityFor();
 const PROVIDER_ERROR: WorkerInferenceTerminalOutcome = {
   type: "error",
   reason: "provider-error",
@@ -75,23 +82,16 @@ const PROVIDER_ERROR: WorkerInferenceTerminalOutcome = {
 };
 const REJECTED_START = { ok: false, reason: "provider-error" };
 
-function hashRequest(
-  identity: WorkerConnectionIdentity,
-  request: WorkerInferenceStartParams,
-): string {
-  assert(identity.turnClaim, "inference fixture requires a turn claim");
-  return createHash("sha256")
-    .update(`${serializeWorkerSessionTurnClaim(identity.turnClaim)}\0${stableStringify(request)}`)
-    .digest("hex");
-}
-
+assert(IDENTITY.turnClaim, "inference fixture requires a turn claim");
 const BASE_INPUT: WorkerInferenceTurnInput = {
   environmentId: ENVIRONMENT_ID,
   sessionId: REQUEST.sessionId,
   runEpoch: REQUEST.runEpoch,
   runId: REQUEST.runId,
   turnId: REQUEST.turnId,
-  requestHash: hashRequest(IDENTITY, REQUEST),
+  requestHash: createHash("sha256")
+    .update(`${serializeWorkerSessionTurnClaim(IDENTITY.turnClaim)}\0${stableStringify(REQUEST)}`)
+    .digest("hex"),
 };
 
 function createSink() {
@@ -109,8 +109,8 @@ function createSink() {
   return { frames, sink, terminal: terminal.promise };
 }
 
-function rejectedReason([settled]: PromiseSettledResult<unknown>[], message: string): unknown {
-  assert(settled.status === "rejected", message);
+function rejectedReason([settled]: PromiseSettledResult<unknown>[]): unknown {
+  assert(settled.status === "rejected", "native operation unexpectedly fulfilled");
   return settled.reason;
 }
 
@@ -153,10 +153,6 @@ describe("worker inference SQLite store", async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-inference-store-"));
     nowMs = 1_000;
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    await initializeStore();
-  });
-
-  async function initializeStore(): Promise<void> {
     const environments = await createWorkerEnvironmentStore({ database, now: () => nowMs });
     await environments.createIntent({
       environmentId: ENVIRONMENT_ID,
@@ -166,7 +162,7 @@ describe("worker inference SQLite store", async () => {
       provisionOperationId: "fixture-operation",
     });
     store = createWorkerInferenceStore({ path: database.path, now: () => nowMs });
-  }
+  });
 
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
@@ -234,7 +230,6 @@ describe("worker inference SQLite store", async () => {
     expect(execute).not.toHaveBeenCalled();
     return manager;
   }
-
   it("retains process ownership checks when the captured environment permits writes", async () => {
     const options = {
       path: database.path,
@@ -275,7 +270,7 @@ describe("worker inference SQLite store", async () => {
   });
 
   it.each(["known-refusal", "lost-refusal-reply"] as const)(
-    "preserves native begin settlement after an ordinary authority failure (%s)",
+    "settles native begin after authority failure (%s)",
     async (mode) => {
       const ordinary = new Error("inference authority was revoked after native dispatch");
       const errorGraph = (error: unknown) =>
@@ -302,41 +297,34 @@ describe("worker inference SQLite store", async () => {
       const restores: Array<() => void> = [];
       try {
         await manager.ready();
-        const originalPost: unknown = Object.getOwnPropertyDescriptor(
-          Worker.prototype,
-          "postMessage",
-        )?.value;
-        if (typeof originalPost !== "function") {
-          throw new Error("native Worker.postMessage is not an own callable property");
-        }
+        const originalPost = Worker.prototype.postMessage;
         const posts = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
           this: Worker,
           ...args: Parameters<Worker["postMessage"]>
         ) {
           const request: unknown = args[0];
           if (
-            !target &&
-            isRecord(request) &&
-            request.type === "execute" &&
-            types.isUint8Array(request.input)
+            target ||
+            !isRecord(request) ||
+            request.type !== "execute" ||
+            !types.isUint8Array(request.input)
           ) {
-            const command: unknown = deserialize(request.input);
-            if (isRecord(command) && command.type === "workerInference.begin") {
-              if (
-                typeof request.id !== "number" ||
-                typeof request.actor !== "number" ||
-                !(request.operationAdmission instanceof MessagePort)
-              ) {
-                throw new Error("native begin omitted its operation admission");
-              }
-              Reflect.apply(originalPost, this, args);
-              target = { worker: this, id: request.id, actor: request.actor };
-              invalid = true;
-              dispatched.resolve();
-              return;
-            }
+            return Reflect.apply(originalPost, this, args);
           }
+          const command: unknown = deserialize(request.input);
+          if (!isRecord(command) || command.type !== "workerInference.begin") {
+            return Reflect.apply(originalPost, this, args);
+          }
+          assert(
+            typeof request.id === "number" &&
+              typeof request.actor === "number" &&
+              request.operationAdmission instanceof MessagePort,
+            "native begin omitted its operation admission",
+          );
           Reflect.apply(originalPost, this, args);
+          target = { worker: this, id: request.id, actor: request.actor };
+          invalid = true;
+          dispatched.resolve();
         });
         restores.push(() => posts.mockRestore());
         const originalReceive = brokerReply.receiveSqliteWorkerReply;
@@ -373,26 +361,19 @@ describe("worker inference SQLite store", async () => {
           },
         });
         const { promise } = await submitted.promise;
-        const endedBeforeDispatch = promise.then(
-          () => {
-            throw new Error("begin settled without observed native dispatch");
-          },
-          () => {
-            throw new Error("begin failed before observed native dispatch");
-          },
-        );
+        const failBeforeDispatch = () => {
+          throw new Error("begin settled before native dispatch");
+        };
+        const endedBeforeDispatch = promise.then(failBeforeDispatch, failBeforeDispatch);
         await Promise.race([dispatched.promise, endedBeforeDispatch]);
         drain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
         const drained = Promise.allSettled([drain.drained]);
-        const native = rejectedReason(
-          await Promise.allSettled([promise]),
-          "native begin unexpectedly succeeded",
-        );
+        const native = rejectedReason(await Promise.allSettled([promise]));
         expect(refusalReplies).toBe(1);
         expect(hasSqliteWorkerOutcomeUnknown(native)).toBe(mode === "lost-refusal-reply");
         expect(await started).toEqual(REJECTED_START);
         drain.start();
-        const settled = rejectedReason(await drained, "accepted drain discarded begin failure");
+        const settled = rejectedReason(await drained);
         expect(hasSqliteWorkerOutcomeUnknown(settled)).toBe(mode === "lost-refusal-reply");
         expect(complete).not.toHaveBeenCalled();
         expect(execute).not.toHaveBeenCalled();
@@ -406,10 +387,7 @@ describe("worker inference SQLite store", async () => {
           expect(await startInference(manager, initial.sink)).toEqual(REJECTED_START);
           expect(begin).toHaveBeenCalledOnce();
           expect(complete).not.toHaveBeenCalled();
-          const stopped = rejectedReason(
-            await Promise.allSettled([manager.stop()]),
-            "shutdown discarded native refusal evidence",
-          );
+          const stopped = rejectedReason(await Promise.allSettled([manager.stop()]));
           expect(hasSqliteWorkerOutcomeUnknown(stopped)).toBe(true);
           expect(errorGraph(stopped)).toContain(ordinary);
           expect(errorGraph(stopped)).toContain(native);
@@ -440,7 +418,7 @@ describe("worker inference SQLite store", async () => {
   );
 
   it.each(["shutdown", "successor"] as const)(
-    "retains a native post-commit terminal result failure until the accepted provider drains (%s)",
+    "retains native post-commit failure until provider drain (%s)",
     async (mode) => {
       const entered = createDeferred<AbortSignal>();
       const provider = createDeferred<WorkerInferenceTerminalOutcome>();
@@ -467,15 +445,11 @@ describe("worker inference SQLite store", async () => {
         runId: "run-native-successor",
         turnId: "turn-native-successor",
       };
-      const successorIdentity: WorkerConnectionIdentity = {
-        ...IDENTITY,
-        runId: successorRequest.runId,
-        turnClaim: {
-          ...IDENTITY.turnClaim!,
-          runId: successorRequest.runId,
-          claimId: "claim-native-successor",
-        },
-      };
+      const successorIdentity = identityFor(
+        successorRequest.runId,
+        ENVIRONMENT_ID,
+        "claim-native-successor",
+      );
       const startSuccessor = (nextSink: WorkerInferenceSink) =>
         startInference(manager, nextSink, {
           identity: successorIdentity,
@@ -484,9 +458,7 @@ describe("worker inference SQLite store", async () => {
       try {
         await manager.ready();
         const started = await startInference(manager, sink);
-        if (!started.ok) {
-          throw new Error(`start failed: ${started.reason}`);
-        }
+        assert(started.ok, "inference start failed");
         started.launch();
         const signal = await entered.promise;
         const originalReceive = brokerReply.receiveSqliteWorkerReply;
@@ -521,17 +493,10 @@ describe("worker inference SQLite store", async () => {
         const cancelled = Promise.allSettled([cancellation]);
         expect(signal.aborted).toBe(true);
         const { promise: completion } = await submitted.promise;
-        const failure: unknown = rejectedReason(
-          await Promise.allSettled([completion]),
-          "corrupted native terminal result unexpectedly succeeded",
-        );
-        if (!committedOutcome) {
-          throw new Error(
-            "native terminal completion settled without intercepting its committed result",
-          );
-        }
+        const failure = rejectedReason(await Promise.allSettled([completion]));
+        assert(committedOutcome, "terminal completion missed committed result");
         expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
-        expect(rejectedReason(await cancelled, "cancellation lost native failure")).toBe(failure);
+        expect(rejectedReason(await cancelled)).toBe(failure);
         if (mode === "successor") {
           expect(await startSuccessor(createSink().sink)).toEqual(REJECTED_START);
           expect(begin).toHaveBeenCalledOnce();
@@ -566,9 +531,9 @@ describe("worker inference SQLite store", async () => {
         expectTerminal();
 
         provider.resolve(PROVIDER_ERROR);
-        expect(rejectedReason(await drained, "drain lost native failure")).toBe(failure);
+        expect(rejectedReason(await drained)).toBe(failure);
         if (stopped) {
-          expect(rejectedReason(await stopped, "shutdown lost native failure")).toBe(failure);
+          expect(rejectedReason(await stopped)).toBe(failure);
         }
         expect(complete).toHaveBeenCalledOnce();
         expect(terminalReplies).toBe(1);
@@ -577,18 +542,7 @@ describe("worker inference SQLite store", async () => {
         expectTerminal();
         if (mode === "successor") {
           drain.release();
-          const changedFactsIdentity: WorkerConnectionIdentity = {
-            ...IDENTITY,
-            environmentId: "replacement-environment",
-            turnClaim: {
-              ...IDENTITY.turnClaim!,
-              owner: {
-                kind: "worker",
-                environmentId: "replacement-environment",
-                ownerEpoch: REQUEST.runEpoch,
-              },
-            },
-          };
+          const changedFactsIdentity = identityFor(REQUEST.runId, "replacement-environment");
           for (const [identity, request] of [
             [IDENTITY, REQUEST],
             [
@@ -601,20 +555,14 @@ describe("worker inference SQLite store", async () => {
             );
           }
           expect(begin).toHaveBeenCalledOnce();
-          const successor = createSink();
-          const accepted = await startSuccessor(successor.sink);
-          if (!accepted.ok) {
-            throw new Error("independent native successor was blocked after original settlement");
+          for (const status of ["accepted", "replayed"]) {
+            const successor = createSink();
+            const accepted = await startSuccessor(successor.sink);
+            assert(accepted.ok, "independent native successor was blocked");
+            expect(accepted.result.status).toBe(status);
+            accepted.launch();
+            expect(await successor.terminal).toEqual(PROVIDER_ERROR);
           }
-          expect(accepted.result.status).toBe("accepted");
-          accepted.launch();
-          expect(await successor.terminal).toEqual(PROVIDER_ERROR);
-          const replaySink = createSink();
-          const replayed = await startSuccessor(replaySink.sink);
-          assert(replayed.ok, "independent native successor could not replay");
-          expect(replayed.result.status).toBe("replayed");
-          replayed.launch();
-          expect(await replaySink.terminal).toEqual(PROVIDER_ERROR);
           const successorDrain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
           successorDrain.start();
           await expect(successorDrain.drained).resolves.toBeUndefined();
@@ -718,8 +666,11 @@ describe("worker inference SQLite store", async () => {
 
   it("prunes retention without hydrating cached terminal payloads", async () => {
     const outcome = { ...PROVIDER_ERROR, message: "🦞".repeat(128) };
-    await completeTurn("run-first", outcome);
-    await completeTurn("run-second", outcome);
+    for (const runId of ["run-first", "run-second"]) {
+      const input = { ...BASE_INPUT, runId, turnId: `turn-${runId}` };
+      expect(await store.begin(input)).toEqual({ kind: "claimed" });
+      expect(await store.complete({ ...input, outcome })).toEqual(outcome);
+    }
     const counter = trackSqliteStatementExecutions(
       requireNativeSqliteDatabase(database.db),
       ["inference"],
