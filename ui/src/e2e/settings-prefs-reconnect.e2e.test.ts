@@ -213,11 +213,11 @@ suite.define(() => {
         await textarea.waitFor();
         await textarea.fill("Synthetic preference proof");
         const reads = await page.evaluate(
-          async ({ activeRoute, selector }) => {
+          async ({ activeRoute, selector: textareaSelector }) => {
             const owner = document.querySelector(
               activeRoute === "new" ? "openclaw-new-session-page" : "openclaw-chat-pane",
             ) as HTMLElement & { updateComplete: Promise<unknown> };
-            const input = document.querySelector<HTMLTextAreaElement>(selector)!;
+            const input = document.querySelector<HTMLTextAreaElement>(textareaSelector)!;
             const draft = input.value;
             const descriptor = Object.getOwnPropertyDescriptor(Storage.prototype, "getItem")!;
             const keys: string[] = [];
