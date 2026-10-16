@@ -6,7 +6,7 @@ import type {
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
-import type { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
+import type { TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import type { StartupInputBuffer } from "./terminal-startup-input.ts";
 import type { TerminalTabReadinessState } from "./terminal-tab-readiness.ts";
 
@@ -84,7 +84,7 @@ export interface TerminalPanelSessionControllerHost {
   readonly routeTarget: TerminalRouteTarget;
   readonly terminalPanelOpen: boolean;
   readonly catalogReadyTimeoutMs: number;
-  readonly terminalPanelUploadController: TerminalPanelUploadController;
+  readonly terminalPanelUploadController: TerminalPanelUpload;
   createTerminalController(
     options: CreateGhosttyTerminalOptions,
     shouldFocusOnOpen?: () => boolean,
