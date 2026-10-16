@@ -1,5 +1,5 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, onSettled } from "solid-js";
+import { createEffect, createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -55,8 +55,6 @@ type ModelProvidersState = {
   keyEditorProvider: string | null;
   keyDraft: string;
   profileOrders: Record<string, string[]>;
-  providerQuery: string;
-  addProviderOpen: boolean;
   addProviderId: string;
   addProviderKey: string;
   defaultsDraft: DefaultsDraft | null;
@@ -67,6 +65,8 @@ export function createModelProviders(
   context: ApplicationContext,
   inputs: { readonly routeData?: ModelProvidersRouteData; readonly loaderPending?: boolean },
 ) {
+  const [providerQuery, setProviderQuery] = createSignal("");
+  const [addProviderOpen, setAddProviderOpen] = createSignal(false);
   const runtimeConfig = projectRuntimeConfig(context.runtimeConfig);
   const agents = projectAgents(context.agents);
   const gatewayState = projectGateway(context.gateway);
@@ -90,8 +90,6 @@ export function createModelProviders(
     keyEditorProvider: null,
     keyDraft: "",
     profileOrders: {},
-    providerQuery: "",
-    addProviderOpen: false,
     addProviderId: "",
     addProviderKey: "",
     defaultsDraft: null,
@@ -232,7 +230,7 @@ export function createModelProviders(
     onApiKey: (provider) => {
       setState("addProviderId", provider);
       setState("addProviderKey", "");
-      setState("addProviderOpen", true);
+      setAddProviderOpen(true);
       setMessage("add", null);
     },
     canContinue: () => mutationBlockedReason() === null,
@@ -265,7 +263,7 @@ export function createModelProviders(
       }
       // Revalidation must not replace a search edited after navigation.
       if (data.provider !== previous?.provider) {
-        setState("providerQuery", canonicalModelAuthProviderId(data.provider ?? ""));
+        setProviderQuery(canonicalModelAuthProviderId(data.provider ?? ""));
       }
       core.invalidate();
       routeDataObserved = true;
@@ -431,7 +429,7 @@ export function createModelProviders(
     closeKeyEditor();
     logoutConfirmation?.abort();
     profileActions.resetOrders();
-    setState("addProviderOpen", false);
+    setAddProviderOpen(false);
     setState("addProviderId", "");
     setState("addProviderKey", "");
   }
@@ -557,7 +555,7 @@ export function createModelProviders(
     }
     if (action === "add") {
       if (state.addProviderId === provider && state.addProviderKey.trim() === apiKey) {
-        setState("addProviderOpen", Boolean(result.warning));
+        setAddProviderOpen(Boolean(result.warning));
         if (!result.warning) {
           setState("addProviderId", "");
         }
@@ -670,8 +668,8 @@ export function createModelProviders(
     const pageLogin = login.pageActions;
     const props: ModelProvidersViewProps = {
       installedAgents: undefined,
-      providerQuery: state.providerQuery,
-      onProviderQueryChange: (value) => setState("providerQuery", value),
+      providerQuery: providerQuery(),
+      onProviderQueryChange: setProviderQuery,
       onConnectProvider: () => void login.connectProvider(values.configuredModels),
       usageClient: !mutationBlockedReason() && usageAvailable ? gatewaySnapshot.client : null,
       usageAgentId: state.selectedAgentId,
@@ -710,7 +708,7 @@ export function createModelProviders(
       keyEditorProvider: state.keyEditorProvider,
       keyDraft: state.keyDraft,
       profileOrders: state.profileOrders,
-      addProviderOpen: state.addProviderOpen,
+      addProviderOpen: addProviderOpen(),
       addProviderId: state.addProviderId,
       addProviderKey: state.addProviderKey,
       onRefresh: () =>
@@ -735,7 +733,7 @@ export function createModelProviders(
       onProfileOrderChange: (cardId, provider, profileIds) =>
         profileActions.setOrder(cardId, provider, profileIds),
       onAddProviderToggle: () => {
-        setState("addProviderOpen", !state.addProviderOpen);
+        setAddProviderOpen((open) => !open);
         setState("addProviderKey", "");
         setMessage("add", null);
       },
@@ -757,7 +755,7 @@ export function createModelProviders(
       scope: {
         agentLabel,
         onConnect: pageLogin.onConnect,
-        connectDisabled: pageLogin.connectDisabled || discovery.busy || state.addProviderOpen,
+        connectDisabled: pageLogin.connectDisabled || discovery.busy || addProviderOpen(),
       },
       loginMessage: state.messages.connection ?? pageLogin.loginMessage,
       discovery: {

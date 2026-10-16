@@ -427,10 +427,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
         authCalls += 1;
         return authCalls === 1
           ? staleAuth.promise
-          : createAuthStatus(
-              [{ provider: "fresh", displayName: "Fresh provider", profiles: [] }],
-              2,
-            );
+          : createAuthStatus([{ provider: "openai", displayName: "Fresh provider" }], 2);
       }
       if (method === "models.list") {
         return { models: [] };
@@ -472,9 +469,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       expect(page.view.props.cards.map((card) => card.displayName)).toContain("Fresh provider"),
     );
 
-    staleAuth.resolve(
-      createAuthStatus([{ provider: "retired", displayName: "Retired provider", profiles: [] }]),
-    );
+    staleAuth.resolve(createAuthStatus([{ provider: "openai", displayName: "Retired provider" }]));
     await drainPageUpdates(page);
     expect(page.view.props.cards.map((card) => card.displayName)).toContain("Fresh provider");
     expect(page.view.props.cards.map((card) => card.displayName)).not.toContain("Retired provider");
@@ -483,10 +478,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
   it("rejects Model Providers route data from an earlier same-client gateway epoch", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "models.authStatus") {
-        return createAuthStatus(
-          [{ provider: "fresh", displayName: "Fresh provider", profiles: [] }],
-          2,
-        );
+        return createAuthStatus([{ provider: "openai", displayName: "Fresh provider" }], 2);
       }
       if (method === "models.list") {
         return { models: [] };
@@ -509,9 +501,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     });
     const staleData = {
       ...EMPTY_MODEL_PROVIDERS_DATA,
-      authStatus: createAuthStatus([
-        { provider: "retired", displayName: "Retired provider", profiles: [] },
-      ]),
+      authStatus: createAuthStatus([{ provider: "openai", displayName: "Retired provider" }]),
     };
     const page = createModelProvidersPage(context);
     page.routeData = {

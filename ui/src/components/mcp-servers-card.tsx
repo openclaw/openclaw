@@ -1,4 +1,4 @@
-import { createMemo, createRenderEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
@@ -85,7 +85,8 @@ export function McpServersCard(props: McpServersCardProps) {
     invalidate();
   });
   const hello = createMemo(() => gateway.read().snapshot.hello);
-  createRenderEffect(hello, () => {
+  // A new transport retires the previous sign-in before another interaction can start one.
+  createEffect(hello, () => {
     login.reset();
   });
   const stopSelection = context.agentSelection.subscribe(() => login.reset());
