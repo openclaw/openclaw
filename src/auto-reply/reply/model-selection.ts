@@ -1,4 +1,5 @@
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   assertAdmittedRunOperatorAuthority,
   assertOperatorModelAllowed,
@@ -248,9 +249,21 @@ export async function createModelSelectionState(params: {
       primaryProvider: params.primaryProvider,
       primaryModel: params.primaryModel,
     });
+    const originProvider = normalizeOptionalString(entry?.modelOverrideFallbackOriginProvider);
+    const originModel = normalizeOptionalString(entry?.modelOverrideFallbackOriginModel);
+    const overrideProvider = normalizeOptionalString(entry?.providerOverride);
+    const overrideModel = normalizeOptionalString(entry?.modelOverride);
+    // Compare explicit stored refs: a missing provider falls back to defaultProvider here,
+    // so the provenance helper's origin-provider fallback would be too broad.
+    const selfOriginAutoSelection =
+      entry?.modelOverrideSource === "auto" &&
+      Boolean(overrideProvider && overrideModel) &&
+      overrideProvider === originProvider &&
+      overrideModel === originModel;
     const staleLegacyOpenAICodexAutoOverride =
       override?.source === "session" &&
       entry?.modelOverrideSource === "auto" &&
+      !selfOriginAutoSelection &&
       normalizeProviderId(override.provider ?? "") === OPENAI_CODEX_PROVIDER_ID &&
       normalizeProviderId(primaryProvider) === OPENAI_PROVIDER_ID &&
       primaryHarnessPolicy.runtime === "codex" &&
